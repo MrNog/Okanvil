@@ -7,7 +7,9 @@
 -- Tabbed UI: Text / Settings / Filters / Whispers / Summary. Minimap button.
 -- ============================================================
 
-local ADDON = "Okanvil-Recruit" -- must match the folder/.toc name (ADDON_LOADED arg)
+-- Native Okanvil module (lives in the host folder). ADDON is only the module
+-- key registered in Okanvil_Plugins / IsModuleEnabled -- NOT a separate addon.
+local ADDON = "Okanvil-Recruit"
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 
 -- ------------------------------------------------------------
@@ -293,7 +295,10 @@ core:RegisterEvent("CHAT_MSG_WHISPER")
 core:RegisterEvent("CHAT_MSG_SYSTEM")
 
 core:SetScript("OnEvent", function(self, event, arg1, arg2)
-	if event == "ADDON_LOADED" and arg1 == ADDON then
+	-- Recruit is now a NATIVE module of Okanvil (it lives in the host folder and is
+	-- loaded by Okanvil.toc, so Okanvil.W is always present). It initialises on the
+	-- HOST's ADDON_LOADED -- there's no separate "Okanvil-Recruit" addon anymore.
+	if event == "ADDON_LOADED" and arg1 == "Okanvil" then
 		RecruitDB = RecruitDB or {}
 		for k, v in pairs(defaults) do
 			if RecruitDB[k] == nil then
@@ -316,6 +321,7 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 		Okanvil_Plugins = Okanvil_Plugins or {}
 		Okanvil_Plugins[ADDON] = {
 			title = "Recruit",
+			desc = "Recruitment/pug advertiser with auto-reply and auto-invite. For officers & pug leaders.",
 			icon = "Interface\\Icons\\Ability_Warrior_BattleShout",
 			build = function(panel)
 				Rec_BuildUI(panel)
@@ -331,13 +337,11 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 		if not db then
 			return
 		end
+		-- native module: always hosted. Okanvil builds the UI lazily when you open
+		-- the Recruit tab (and Modules lets you toggle it off).
 		if Okanvil and Okanvil.Register then
-			Okanvil:Register(ADDON) -- hosted: UI builds when you open the Recruit tab
-			Print("loaded -- hosted by Okanvil. |cff00ff00/recruit|r opens it.")
-		else
-			Rec_BuildUI() -- no Okanvil: standalone window + minimap
-			Rec_BuildMinimap()
-			Print("loaded (standalone). |cff00ff00/recruit|r or the minimap button.")
+			Okanvil:Register(ADDON)
+			Print("loaded. |cff00ff00/recruit|r opens it.")
 		end
 		return
 	end
@@ -494,96 +498,100 @@ local function nameColor(name, classFile)
 	return "|cff" .. ((classFile and CLASS_COLORS[classFile]) or "F1C40F")
 end
 
+-- ---- UI helpers: prefer the shared Okanvil.W widgets (gold design system);
+-- keep a lightweight standalone fallback for when the addon runs without the host.
+local W = Okanvil and Okanvil.W
+
 local function flatBackdrop(frame, r, g, b, a, br, bgc, bb)
+	if Okanvil and Okanvil.Skin then Okanvil:Skin(frame, "input"); return end
 	frame:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
 	frame:SetBackdropColor(r, g, b, a)
 	frame:SetBackdropBorderColor(br or 0.35, bgc or 0.35, bb or 0.4, 1)
 end
 
 local function makeLabel(parent, text, x, y)
-	local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	local fs
+	if W then fs = W.Text(parent, text, nil, "dim")
+	else fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal"); fs:SetText(text) end
 	fs:SetPoint("TOPLEFT", x, y)
-	fs:SetText(text)
 	return fs
 end
 
+-- single-line edit box; returns the EditBox (with .bd = the bordered frame) so
+-- existing call-sites (SetText/GetText/hooks) keep working.
 local function makeBox(parent, name, x, y, w, h)
+	if W and W.EditBox then
+		local box = W.EditBox(parent)
+		box:SetSize(w, h); box:SetPoint("TOPLEFT", x, y)
+		local e = box.edit
+		e.bd = box
+		return e
+	end
 	local bd = CreateFrame("Frame", nil, parent)
-	bd:SetPoint("TOPLEFT", x, y)
-	bd:SetSize(w, h)
+	bd:SetPoint("TOPLEFT", x, y); bd:SetSize(w, h)
 	flatBackdrop(bd, 0.1, 0.1, 0.12, 0.9, 0.4, 0.4, 0.45)
 	local e = CreateFrame("EditBox", "Rec_" .. name, bd)
-	e:SetMultiLine(false)
-	e:SetMaxLetters(255)
-	e:SetFontObject(ChatFontNormal)
-	e:SetTextInsets(5, 5, 3, 3)
-	e:SetPoint("TOPLEFT", 2, -2)
-	e:SetPoint("BOTTOMRIGHT", -2, 2)
-	e:SetAutoFocus(false)
-	e.bd = bd
-	e:SetScript("OnEscapePressed", function(s)
-		s:ClearFocus()
-	end)
-	e:SetScript("OnEnterPressed", function(s)
-		s:ClearFocus()
-	end)
-	e:SetScript("OnEditFocusGained", function()
-		bd:SetBackdropBorderColor(0.95, 0.78, 0.2, 1)
-	end)
+	e:SetMultiLine(false); e:SetMaxLetters(255); e:SetFontObject(ChatFontNormal)
+	e:SetTextInsets(5, 5, 3, 3); e:SetPoint("TOPLEFT", 2, -2); e:SetPoint("BOTTOMRIGHT", -2, 2)
+	e:SetAutoFocus(false); e.bd = bd
+	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
+	e:SetScript("OnEnterPressed", function(s) s:ClearFocus() end)
 	return e
 end
 
 -- responsive multi-line box: stretches to the parent's right edge (minus rightMargin)
 local function makeScrollBox(parent, name, x, y, rightMargin, h)
+	if W and W.MultiEdit then
+		local box = W.MultiEdit(parent)
+		box:SetPoint("TOPLEFT", x, y)
+		box:SetPoint("RIGHT", parent, "RIGHT", -(rightMargin or 12), 0)
+		box:SetHeight(h)
+		local e = box.edit
+		e.bd = box
+		-- shim: some call-sites do box:SetText via the returned EditBox — that works.
+		return e
+	end
 	local bd = CreateFrame("Frame", nil, parent)
-	bd:SetPoint("TOPLEFT", x, y)
-	bd:SetPoint("RIGHT", parent, "RIGHT", -(rightMargin or 12), 0)
-	bd:SetHeight(h)
+	bd:SetPoint("TOPLEFT", x, y); bd:SetPoint("RIGHT", parent, "RIGHT", -(rightMargin or 12), 0); bd:SetHeight(h)
 	flatBackdrop(bd, 0.1, 0.1, 0.12, 0.9, 0.4, 0.4, 0.45)
 	local sf = CreateFrame("ScrollFrame", "Rec_" .. name .. "SF", bd, "UIPanelScrollFrameTemplate")
-	sf:SetPoint("TOPLEFT", 5, -5)
-	sf:SetPoint("BOTTOMRIGHT", -28, 5)
+	sf:SetPoint("TOPLEFT", 5, -5); sf:SetPoint("BOTTOMRIGHT", -28, 5)
 	local e = CreateFrame("EditBox", "Rec_" .. name, sf)
-	e:SetMultiLine(true)
-	e:SetMaxLetters(255)
-	e:SetFontObject(ChatFontNormal)
-	e:SetAutoFocus(false)
-	e.bd = bd
-	local function fit()
-		e:SetWidth(math.max(40, sf:GetWidth() or 200))
-	end
-	sf:SetScript("OnSizeChanged", fit)
-	fit()
-	e:SetScript("OnEscapePressed", function(s)
-		s:ClearFocus()
-	end)
-	e:SetScript("OnEditFocusGained", function()
-		bd:SetBackdropBorderColor(0.95, 0.78, 0.2, 1)
-	end)
-	e:SetScript("OnCursorChanged", function(self, _, ypos, _, height)
-		local frame = self:GetParent()
-		local offset = frame:GetVerticalScroll()
-		local viewH = frame:GetHeight()
-		ypos = -ypos
-		if ypos < offset then
-			frame:SetVerticalScroll(ypos)
-		elseif (ypos + height) > (offset + viewH) then
-			frame:SetVerticalScroll(math.max(0, ypos + height - viewH))
-		end
-	end)
+	e:SetMultiLine(true); e:SetMaxLetters(255); e:SetFontObject(ChatFontNormal); e:SetAutoFocus(false); e.bd = bd
+	local function fit() e:SetWidth(math.max(40, sf:GetWidth() or 200)) end
+	sf:SetScript("OnSizeChanged", fit); fit()
+	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
 	sf:SetScrollChild(e)
 	return e
 end
 
-local function makeCheck(parent, name, label, x, y)
-	local c = CreateFrame("CheckButton", "Rec_" .. name, parent, "UICheckButtonTemplate")
-	c:SetPoint("TOPLEFT", x, y)
-	c:SetSize(24, 24)
+-- checkbox bound to a db key; W.Check reads/writes via getFn/setFn. onChange(v)
+-- runs after a toggle. Returns a frame with SetChecked/GetChecked shims so the
+-- existing Rec_RefreshUI (which calls :SetChecked) keeps working.
+local function makeCheck(parent, key, label, x, y, onChange)
+	if W and W.Check then
+		local c = W.Check(parent, label,
+			function() return db[key] end,
+			function(v) db[key] = v and true or false; if onChange then onChange(v) end end)
+		c:SetPoint("TOPLEFT", x, y)
+		c.SetChecked = function(_, v) db[key] = v and true or false; c.refresh() end
+		c.GetChecked = function() return db[key] end
+		return c
+	end
+	local c = CreateFrame("CheckButton", "Rec_" .. key, parent, "UICheckButtonTemplate")
+	c:SetPoint("TOPLEFT", x, y); c:SetSize(24, 24)
 	getglobal(c:GetName() .. "Text"):SetText(label)
 	return c
 end
 
-local function makeFlatButton(parent, text, w, h)
+-- Use the shared Okanvil widget button (gold RATS-Hub styling; honours ._active
+-- for tab highlighting) when embedded; fall back to a local flat button standalone.
+local function makeFlatButton(parent, text, w, h, kind)
+	if Okanvil and Okanvil.W and Okanvil.W.Button then
+		local b = Okanvil.W.Button(parent, text, kind)
+		b:SetSize(w, h)
+		return b
+	end
 	local b = CreateFrame("Button", nil, parent)
 	b:SetSize(w, h)
 	flatBackdrop(b, 0.2, 0.2, 0.24, 1, 0.4, 0.4, 0.45)
@@ -591,15 +599,10 @@ local function makeFlatButton(parent, text, w, h)
 	t:SetPoint("CENTER")
 	t:SetText(text)
 	b.text = t
-	b:SetScript("OnEnter", function(s)
-		s:SetBackdropColor(0.3, 0.3, 0.35, 1)
-	end)
+	b:SetScript("OnEnter", function(s) s:SetBackdropColor(0.3, 0.3, 0.35, 1) end)
 	b:SetScript("OnLeave", function(s)
-		if s._active then
-			s:SetBackdropColor(0.35, 0.28, 0.08, 1)
-		else
-			s:SetBackdropColor(0.2, 0.2, 0.24, 1)
-		end
+		if s._active then s:SetBackdropColor(0.35, 0.28, 0.08, 1)
+		else s:SetBackdropColor(0.2, 0.2, 0.24, 1) end
 	end)
 	return b
 end
@@ -737,13 +740,12 @@ function Rec_BuildUI(parent)
 	end
 
 	local embedded = parent ~= nil
-	local topInset = embedded and -8 or -36
 	local f
 	if embedded then
 		f = parent -- Okanvil gives us a content panel; it owns the window chrome
 	else
 		f = CreateFrame("Frame", "RecruitWindow", UIParent)
-		f:SetSize(480, 580)
+		f:SetSize(560, 460)
 		f:SetPoint("CENTER")
 		flatBackdrop(f, 0.11, 0.11, 0.13, 0.96, 0.85, 0.66, 0.2)
 		f:SetMovable(true)
@@ -753,75 +755,50 @@ function Rec_BuildUI(parent)
 		f:SetScript("OnDragStop", f.StopMovingOrSizing)
 		f:SetClampedToScreen(true)
 		f:Hide()
-
-		local hdr = f:CreateTexture(nil, "ARTWORK")
-		hdr:SetTexture(FLAT)
-		hdr:SetVertexColor(0.18, 0.18, 0.22, 1)
-		hdr:SetPoint("TOPLEFT", 2, -2)
-		hdr:SetPoint("TOPRIGHT", -2, -2)
-		hdr:SetHeight(28)
-
-		local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-		title:SetPoint("TOP", 0, -9)
-		title:SetText("|cffF1C40FRecruit|r")
-
-		local close = makeFlatButton(f, "X", 22, 22)
-		close:SetPoint("TOPRIGHT", -6, -5)
-		close:SetScript("OnClick", function()
-			f:Hide()
-		end)
-
-		local logo = f:CreateTexture(nil, "OVERLAY")
-		logo:SetSize(20, 20)
-		logo:SetPoint("TOPLEFT", 8, -5)
-		logo:SetTexture("Interface\\Icons\\Ability_Warrior_BattleShout")
-		logo:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	end
 
 	RecruitFrame = f
 
-	-- content panels sit below the top bar (status + START) and above the tabs.
-	-- Pass a content height -> the panel becomes vertically SCROLLABLE (ElvUI-style)
-	-- so it never overflows onto the tabs when the window is short. The boxes inside
-	-- already stretch horizontally, so the whole thing is responsive both ways.
-	local hosts = {} -- content frame -> the frame to Show/Hide (scrollframe or itself)
-	f._hosts = hosts
-	local function newPanel(key, contentHeight)
-		local host, content
-		if contentHeight then
-			host = CreateFrame("ScrollFrame", "Rec_panel_" .. key, f, "UIPanelScrollFrameTemplate")
-			host:SetPoint("TOPLEFT", 12, topInset - 26)
-			host:SetPoint("BOTTOMRIGHT", -30, 40) -- room for the scrollbar
-			content = CreateFrame("Frame", nil, host)
-			content:SetSize(10, contentHeight)
-			host:SetScrollChild(content)
-			content:SetWidth(host:GetWidth() or 400)
-			host:SetScript("OnSizeChanged", function(s, w)
-				content:SetWidth(w or s:GetWidth() or 400)
-			end)
-			host:EnableMouseWheel(true)
-			host:SetScript("OnMouseWheel", function(s, delta)
-				local maxs = s:GetVerticalScrollRange() or 0
-				local cur = s:GetVerticalScroll() or 0
-				s:SetVerticalScroll(math.max(0, math.min(maxs, cur - delta * 30)))
-			end)
-		else
-			host = CreateFrame("Frame", nil, f)
-			host:SetPoint("TOPLEFT", 12, topInset - 26)
-			host:SetPoint("BOTTOMRIGHT", -12, 40)
-			content = host
-		end
-		host:Hide()
-		hosts[content] = host
-		return content
-	end
-	local tp = newPanel("text", 350) -- Text
-	local stp = newPanel("settings", 410) -- Settings
-	local fp = newPanel("filters", 320) -- Filters
-	local lp = newPanel("log") -- Whispers (fills; has its own inner scrolls)
-	local sp2 = newPanel("summary", 260) -- Summary
-	f.textPanel, f.setPanel, f.filterPanel, f.logPanel, f.sumPanel = tp, stp, fp, lp, sp2
+	-- content region: everything below draws through a shared Dashboard shell
+	-- (header + toggleable stat drawer + config overlays + footer). The shell
+	-- comes from Okanvil.W; standalone (no host) still gets it because Widgets.lua
+	-- is loaded as a dependency. The X offset just pads inside each fill frame.
+	local X = 4
 
+	local afkTag = function() return db.afkMode and "  |cff88aaff(AFK reply active)|r" or "" end
+	local dash = W.Dashboard(f, {
+		title = "Recruit",
+		icon = "Interface\\Icons\\Ability_Warrior_BattleShout",
+		drawerWidth = 190,
+		drawerLabel = "contacts",
+		footerHeight = 0, -- no footer strip; contacts live in the right drawer now
+		primaryText = function() return db.active and "STOP advertising" or "START advertising" end,
+		onPrimary = function() Rec_ToggleActive() end,
+		statusText = function()
+			if db.active then return "|cff7cfc8aAdvertising ON|r" .. afkTag() end
+			return "|cffff5555Advertising OFF|r" .. afkTag()
+		end,
+		tabs = {
+			{ key = "text",     label = "Text",     height = 360, build = function(p) Rec_BuildText(p) end },
+			{ key = "settings", label = "Settings", height = 420, build = function(p) Rec_BuildSettings(p) end },
+			{ key = "filters",  label = "Filters",  height = 320, build = function(p) Rec_BuildFilters(p) end },
+		},
+	})
+	f.dash = dash
+	f.toggleBtn = dash.cta
+
+	-- fill the shell zones: main = live log + a compact stat bar across its top;
+	-- drawer = the vertical Contacts list (name + inv/+f) -- the thing you act on.
+	Rec_BuildLog(dash.main)        -- live whisper log + stats bar (landing view)
+	Rec_BuildContacts(dash.drawer) -- contacts invite list (right)
+
+	Rec_RefreshUI()
+	return
+end
+
+-- Config-tab page builders (each fills a fill-frame the Dashboard hands them).
+function Rec_BuildText(tp)
+	local f = RecruitFrame
 	local X = 4
 
 	-- ---------- TEXT panel ----------
@@ -838,6 +815,12 @@ function Rec_BuildUI(parent)
 	strHook(f.msg, "message")
 	strHook(f.reply, "reply")
 	strHook(f.afkReply, "afkReply")
+	Rec_ApplyText()
+end
+
+function Rec_BuildSettings(stp)
+	local f = RecruitFrame
+	local X = 4
 
 	-- ---------- SETTINGS panel ----------
 	makeLabel(stp, "Keywords -- whisper triggers invite (typos ok):", X, -10)
@@ -891,41 +874,23 @@ function Rec_BuildUI(parent)
 	cdNote:SetText("Give each channel a different interval to stagger spam (not all at once). Cooldown = silence per person after replying/inviting. 0 = off.")
 
 	f.cInvite = makeCheck(stp, "autoInvite", "Auto-invite (+ welcome)", X, -334)
-	f.cInvite:SetScript("OnClick", function(s)
-		db.autoInvite = s:GetChecked() and true or false
-	end)
-	f.cAfk = makeCheck(stp, "afkMode", "AFK mode", COL2, -334)
-	f.cAfk:SetScript("OnClick", function(s)
-		db.afkMode = s:GetChecked() and true or false
-		Rec_RefreshUI()
-	end)
+	f.cAfk = makeCheck(stp, "afkMode", "AFK mode", COL2, -334, function() Rec_RefreshUI() end)
 	f.cToast = makeCheck(stp, "toastOnJoin", "Toast on guild join", X, -362)
-	f.cToast:SetScript("OnClick", function(s)
-		db.toastOnJoin = s:GetChecked() and true or false
-	end)
 	f.cToastActive = makeCheck(stp, "toastOnlyActive", "only while advertising ON", COL2, -362)
-	f.cToastActive:SetScript("OnClick", function(s)
-		db.toastOnlyActive = s:GetChecked() and true or false
-	end)
-	f.cToastMove = makeCheck(stp, "toastMove", "Move toast (drag it, untick to lock)", X, -390)
-	f.cToastMove:SetScript("OnClick", function(s)
-		Rec_SetToastMove(s:GetChecked() and true or false)
-	end)
+	f.cToastMove = makeCheck(stp, "toastMove", "Move toast (drag it, untick to lock)", X, -390,
+		function(v) Rec_SetToastMove(v) end)
+	Rec_ApplySettings()
+end
+
+function Rec_BuildFilters(fp)
+	local f = RecruitFrame
+	local X = 4
 
 	-- ---------- FILTERS panel ----------
 	makeLabel(fp, "Don't auto-reply / invite if the whisperer is:", X, -8)
 	f.fGuild = makeCheck(fp, "filterGuild", "In my guild", X, -36)
-	f.fGuild:SetScript("OnClick", function(s)
-		db.filterGuild = s:GetChecked() and true or false
-	end)
 	f.fGroup = makeCheck(fp, "filterGroup", "In my party / raid", X, -66)
-	f.fGroup:SetScript("OnClick", function(s)
-		db.filterGroup = s:GetChecked() and true or false
-	end)
 	f.fFriends = makeCheck(fp, "filterFriends", "On my friends list", X, -96)
-	f.fFriends:SetScript("OnClick", function(s)
-		db.filterFriends = s:GetChecked() and true or false
-	end)
 	local note = fp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 	note:SetPoint("TOPLEFT", X, -136)
 	note:SetWidth(430)
@@ -940,164 +905,117 @@ function Rec_BuildUI(parent)
 	bnote:SetWidth(440)
 	bnote:SetJustifyH("LEFT")
 	bnote:SetText("Comma-separated. Beats keywords -- e.g. 'inv pls i pay 10 gold' is ignored because of 'gold'. Typos caught too.")
-
-	-- ---------- WHISPERS panel ----------
-	local function makeSMF(parent)
-		local s = CreateFrame("ScrollingMessageFrame", nil, parent)
-		s:SetPoint("TOPLEFT", 6, -6)
-		s:SetPoint("BOTTOMRIGHT", -6, 6)
-		s:SetFontObject(GameFontHighlightSmall)
-		s:SetJustifyH("LEFT")
-		s:SetMaxLines(120)
-		s:SetFading(false)
-		s:EnableMouseWheel(true)
-		s:SetScript("OnMouseWheel", function(self, delta)
-			if delta > 0 then
-				self:ScrollUp()
-			else
-				self:ScrollDown()
-			end
-		end)
-		return s
-	end
-	-- contacts column (fixed width, right side); log fills everything to its left
-	local namebg = CreateFrame("Frame", nil, lp)
-	namebg:SetPoint("TOPRIGHT", 0, -20)
-	namebg:SetPoint("BOTTOMRIGHT", 0, 30)
-	namebg:SetWidth(240)
-	flatBackdrop(namebg, 0.08, 0.08, 0.1, 0.85, 0.4, 0.4, 0.45)
-
-	local logbg = CreateFrame("Frame", nil, lp)
-	logbg:SetPoint("TOPLEFT", 0, -20)
-	logbg:SetPoint("BOTTOMRIGHT", namebg, "BOTTOMLEFT", -8, 0)
-	flatBackdrop(logbg, 0.08, 0.08, 0.1, 0.85, 0.4, 0.4, 0.45)
-	f.logBox = makeSMF(logbg)
-
-	local logsLbl = lp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	logsLbl:SetPoint("BOTTOMLEFT", logbg, "TOPLEFT", 2, 2)
-	logsLbl:SetText("Logs")
-	local contactsLbl = lp:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	contactsLbl:SetPoint("BOTTOMLEFT", namebg, "TOPLEFT", 2, 2)
-	contactsLbl:SetText("Contacts made")
-
-	local leg = namebg:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	leg:SetPoint("TOPLEFT", 6, -6)
-	leg:SetPoint("TOPRIGHT", -6, -6)
-	leg:SetJustifyH("LEFT")
-	leg:SetText("|cffffcc00+ sent|r\n|cff00ff00OK joined|r\n|cffff5555X declined|r\n|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_8:12:12|t|cffff5555 in guild|r\n|cffaaaaaaoff offline -- [+f] = friend & ping when online|r")
-	local div = namebg:CreateTexture(nil, "ARTWORK")
-	div:SetTexture(FLAT)
-	div:SetVertexColor(0.4, 0.4, 0.45, 1)
-	div:SetHeight(1)
-	div:SetPoint("TOPLEFT", 6, -78)
-	div:SetPoint("TOPRIGHT", -6, -78)
-
-	local csf = CreateFrame("ScrollFrame", "Rec_contactSF", namebg, "UIPanelScrollFrameTemplate")
-	csf:SetPoint("TOPLEFT", 6, -84)
-	csf:SetPoint("BOTTOMRIGHT", -24, 6)
-	local cchild = CreateFrame("Frame", nil, csf)
-	cchild:SetSize(196, 1)
-	csf:SetScrollChild(cchild)
-	f.contactChild = cchild
-	f.contactRows = {}
-	local clr = makeFlatButton(lp, "Clear log", 110, 22)
-	clr:SetPoint("BOTTOM", 0, 4)
-	clr:SetScript("OnClick", function()
-		wipe(db.log)
-		Rec_RefreshLog()
-	end)
-
-	lp:SetScript("OnUpdate", function(self, el)
-		self._t = (self._t or 0) + el
-		if self._t > 1 then
-			self._t = 0
-			Rec_RenderContacts()
-		end
-	end)
-
-	-- ---------- SUMMARY panel ----------
-	makeLabel(sp2, "Recruiting summary (this session):", X, -6)
-	f.summary = sp2:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-	f.summary:SetPoint("TOPLEFT", X, -34)
-	f.summary:SetPoint("TOPRIGHT", -X, -34)
-	f.summary:SetJustifyH("LEFT")
-	f.summary:SetJustifyV("TOP")
-	local sclr = makeFlatButton(sp2, "Clear summary", 140, 24)
-	sclr:SetPoint("BOTTOM", 0, 6)
-	sclr:SetScript("OnClick", function()
-		wipe(db.session)
-		Rec_RefreshSummary()
-	end)
-
-	-- ----- top bar: status + START (top-right, never overlaps content) -----
-	local btn = makeFlatButton(f, "START advertising", 150, 22)
-	btn:SetPoint("TOPRIGHT", -10, topInset)
-	btn:SetScript("OnClick", function()
-		Rec_ToggleActive()
-	end)
-	f.toggleBtn = btn
-
-	f.status = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-	f.status:SetPoint("RIGHT", btn, "LEFT", -10, 0)
-	f.status:SetJustifyH("RIGHT")
-
-	-- ----- tabs -----
-	local tabs = {}
-	local function showTab(which)
-		hosts[tp]:Hide()
-		hosts[stp]:Hide()
-		hosts[fp]:Hide()
-		hosts[lp]:Hide()
-		hosts[sp2]:Hide()
-		if which == "text" then
-			hosts[tp]:Show()
-		elseif which == "settings" then
-			hosts[stp]:Show()
-		elseif which == "filters" then
-			hosts[fp]:Show()
-		elseif which == "summary" then
-			hosts[sp2]:Show()
-			Rec_RefreshSummary()
-		else
-			hosts[lp]:Show()
-			Rec_RefreshLog()
-		end
-		for key, b in pairs(tabs) do
-			b._active = (key == which)
-			b:GetScript("OnLeave")(b)
-		end
-	end
-
-	local defs = { { "text", "Text" }, { "settings", "Settings" }, { "filters", "Filters" }, { "log", "Whispers" }, { "summary", "Summary" } }
-	local prev
-	for _, d in ipairs(defs) do
-		local b = makeFlatButton(f, d[2], 84, 24)
-		if prev then
-			b:SetPoint("LEFT", prev, "RIGHT", 5, 0)
-		else
-			b:SetPoint("BOTTOMLEFT", 12, 12)
-		end
-		b:SetScript("OnClick", function()
-			showTab(d[1])
-		end)
-		tabs[d[1]] = b
-		prev = b
-	end
-	f.showTab = showTab
-
-	showTab("text")
-	Rec_RefreshUI()
+	Rec_ApplyFilters()
 end
 
-function Rec_RefreshUI()
+-- ---------- MAIN: live whisper log (landing view) ----------
+function Rec_BuildLog(main)
 	local f = RecruitFrame
-	if not f then
-		return
+
+	local logsLbl = W.Text(main, "Live log", nil, "dim")
+	logsLbl:SetPoint("TOPLEFT", 8, -7)
+	local clr = W.Button(main, "Clear", "secondary")
+	clr:SetSize(56, 18); clr:SetPoint("TOPRIGHT", -8, -4)
+	clr:SetScript("OnClick", function() wipe(db.log); Rec_RefreshLog() end)
+
+	local s = CreateFrame("ScrollingMessageFrame", nil, main)
+	s:SetPoint("TOPLEFT", 8, -26)
+	s:SetPoint("BOTTOMRIGHT", -8, 8)
+	s:SetFontObject(GameFontHighlightSmall)
+	s:SetJustifyH("LEFT")
+	s:SetMaxLines(120)
+	s:SetFading(false)
+	s:EnableMouseWheel(true)
+	s:SetScript("OnMouseWheel", function(self, delta)
+		if delta > 0 then self:ScrollUp() else self:ScrollDown() end
+	end)
+	f.logBox = s
+	f.logPanel = main -- Rec_RefreshLog checks :IsShown() to know it's live
+	Rec_RefreshLog()
+end
+
+-- ---------- DRAWER: session summary cards + the Contacts invite list ----------
+-- Top: a 3-column grid of stat cards (this session). Below: the invite list
+-- (who to re-invite), vertical + scrollable. Both live in the right drawer.
+function Rec_BuildContacts(drawer)
+	local f = RecruitFrame
+
+	-- ----- session summary: 3 columns x 2 rows of small stat cards -----
+	local sHead = W.Text(drawer, "This session", nil, "accent")
+	sHead:SetPoint("TOPLEFT", 8, -8)
+	local sclr = W.Button(drawer, "clear", "secondary")
+	sclr:SetSize(44, 16); sclr:SetPoint("TOPRIGHT", -8, -6)
+	sclr:SetScript("OnClick", function() wipe(db.session); Rec_RefreshSummary() end)
+
+	local CARD_W, CARD_H, GAPX, GAPY = 56, 30, 4, 4
+	local grid = { { "reached", "Reached", "dcddde" }, { "joined", "Joined", "7cfc8a" }, { "declined", "Declined", "ff5555" },
+	               { "inguild", "In-guild", "ff8888" }, { "offline", "Offline", "aaaaaa" }, { "waiting", "Waiting", "ffcc00" } }
+	f.statCards = {}
+	for i, g in ipairs(grid) do
+		local col = (i - 1) % 3
+		local rowi = math.floor((i - 1) / 3)
+		local card = W.Frame(drawer, "input")
+		card:SetSize(CARD_W, CARD_H)
+		card:SetPoint("TOPLEFT", 8 + col * (CARD_W + GAPX), -26 - rowi * (CARD_H + GAPY))
+		local num = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		num:SetPoint("TOP", 0, -2); num:SetText("0")
+		num:SetTextColor(1, 1, 1)
+		local cap = W.Text(card, g[2], 9, "dim")
+		cap:SetPoint("BOTTOM", 0, 2)
+		cap:SetText("|cff" .. g[3] .. g[2] .. "|r")
+		f.statCards[g[1]] = num
 	end
+	-- list starts below the 2 card rows (26 + 2*(30+4) = 94) + a small gap
+	local listTop = -(26 + 2 * (CARD_H + GAPY) + 8)
+
+	local lbl = W.Text(drawer, "Contacts", nil, "accent")
+	lbl:SetPoint("TOPLEFT", 8, listTop + 2)
+
+	-- flat scroll (no Blizzard template): plain ScrollFrame + our own slider
+	local csf = CreateFrame("ScrollFrame", "Rec_contactSF", drawer)
+	csf:SetPoint("TOPLEFT", 6, listTop - 18); csf:SetPoint("BOTTOMRIGHT", -10, 6)
+	local cchild = CreateFrame("Frame", nil, csf)
+	cchild:SetSize(10, 1)
+	csf:SetScrollChild(cchild)
+	local csb = CreateFrame("Slider", nil, drawer)
+	csb:SetPoint("TOPRIGHT", -3, listTop - 18); csb:SetPoint("BOTTOMRIGHT", -3, 6); csb:SetWidth(4)
+	csb:SetOrientation("VERTICAL"); csb:SetValueStep(1)
+	local cth = csb:CreateTexture(nil, "OVERLAY"); cth:SetTexture(FLAT); cth:SetSize(4, 30)
+	if Okanvil and Okanvil.Colors then local a = Okanvil.Colors.accent; cth:SetVertexColor(a[1], a[2], a[3], 1)
+	else cth:SetVertexColor(0.75, 0.58, 0.23, 1) end
+	csb:SetThumbTexture(cth)
+	csb:SetScript("OnValueChanged", function(_, v) csf:SetVerticalScroll(v) end)
+	csf:EnableMouseWheel(true)
+	csf:SetScript("OnMouseWheel", function(_, d) csb:SetValue(csb:GetValue() - d * 24) end)
+	f.contactChild = cchild
+	f.contactSF = csf
+	f.contactSB = csb
+	f.contactRows = {}
+
+	drawer:SetScript("OnUpdate", function(self, el)
+		self._t = (self._t or 0) + el
+		if self._t > 1 then self._t = 0; Rec_RenderContacts(); Rec_RefreshSummary() end
+	end)
+	Rec_RenderContacts()
+	Rec_RefreshSummary()
+end
+
+-- Config pages are built LAZILY (only when the user opens that overlay tab), so
+-- each has its own apply-fn that pushes db values into its widgets. They're
+-- guarded (widgets may not exist yet). Rec_RefreshUI just fans out to all of them
+-- plus repaints the dashboard header.
+function Rec_ApplyText()
+	local f = RecruitFrame
+	if not f or not f.msg then return end
 	f.guildName:SetText(db.guildName or "")
 	f.msg:SetText(db.message or "")
 	f.reply:SetText(db.reply or "")
 	f.afkReply:SetText(db.afkReply or "")
+end
+
+function Rec_ApplySettings()
+	local f = RecruitFrame
+	if not f or not f.keywords then return end
 	f.keywords:SetText(db.keywords or "")
 	f.custom:SetText(db.customChannel or "")
 	f.customIv:SetText(db.customInterval or 0)
@@ -1107,21 +1025,29 @@ function Rec_RefreshUI()
 	f.cAfk:SetChecked(db.afkMode)
 	f.cToast:SetChecked(db.toastOnJoin)
 	f.cToastActive:SetChecked(db.toastOnlyActive)
+	if f.chInputs then
+		for name, box in pairs(f.chInputs) do
+			box:SetText(db.channelIntervals[name] or 0)
+		end
+	end
+end
+
+function Rec_ApplyFilters()
+	local f = RecruitFrame
+	if not f or not f.fGuild then return end
 	f.fGuild:SetChecked(db.filterGuild)
 	f.fGroup:SetChecked(db.filterGroup)
 	f.fFriends:SetChecked(db.filterFriends)
 	f.blacklist:SetText(db.blacklist or "")
-	for name, box in pairs(f.chInputs) do
-		box:SetText(db.channelIntervals[name] or 0)
-	end
-	local afkTag = db.afkMode and "  |cff88aaff(AFK reply active)|r" or ""
-	if db.active then
-		f.toggleBtn.text:SetText("STOP advertising")
-		f.status:SetText("|cff00ff00Advertising ON|r" .. afkTag)
-	else
-		f.toggleBtn.text:SetText("START advertising")
-		f.status:SetText("|cffff5555Advertising OFF|r" .. afkTag)
-	end
+end
+
+function Rec_RefreshUI()
+	local f = RecruitFrame
+	if not f then return end
+	if f.dash then f.dash:Refresh() end
+	Rec_ApplyText()
+	Rec_ApplySettings()
+	Rec_ApplyFilters()
 end
 
 local SKULL = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_8:12:12|t"
@@ -1192,6 +1118,8 @@ function Rec_AddWatchFriend(name)
 	Rec_RenderContacts()
 end
 
+-- Contacts render as a HORIZONTAL row of chips inside the footer strip. Each chip
+-- is name+state; invitable ones get a tiny inline [inv] button, offline ones [+f].
 function Rec_RenderContacts()
 	local f = RecruitFrame
 	if not f or not f.contactChild then
@@ -1210,53 +1138,57 @@ function Rec_RenderContacts()
 	end
 	local n = #list
 	local now = GetTime()
+	local ROWH = 20
+	local width = (f.contactSF and f.contactSF:GetWidth() or 176)
 	for k = 1, n do
-		local e = list[n - k + 1]
+		local e = list[k] -- most-recent first (log[1] is newest)
+		local who = e.who
 		local row = f.contactRows[k]
 		if not row then
 			row = CreateFrame("Frame", nil, f.contactChild)
-			row:SetSize(196, 18)
 			row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-			row.label:SetPoint("LEFT", 0, 0)
+			row.label:SetPoint("LEFT", 2, 0)
 			row.label:SetJustifyH("LEFT")
 			row.label:SetWordWrap(false)
-			row.btn = makeFlatButton(row, "inv", 34, 16)
-			row.btn:SetPoint("RIGHT", 0, 0)
-			row.fbtn = makeFlatButton(row, "+f", 28, 16)
-			row.fbtn:SetPoint("RIGHT", row.btn, "LEFT", -4, 0)
+			row.btn = W.Button(row, "inv", "secondary")
+			row.btn:SetSize(32, 16); row.btn:SetPoint("RIGHT", -2, 0)
+			row.fbtn = W.Button(row, "+f", "secondary")
+			row.fbtn:SetSize(24, 16); row.fbtn:SetPoint("RIGHT", row.btn, "LEFT", -3, 0)
 			f.contactRows[k] = row
 		end
-		row:SetPoint("TOPLEFT", 0, -(k - 1) * 20)
+		row:SetHeight(ROWH); row:SetWidth(width)
+		row:ClearAllPoints(); row:SetPoint("TOPLEFT", 0, -(k - 1) * ROWH)
 		row:Show()
 		row.label:SetText(nameColor(e.who, e.class) .. e.who .. "|r" .. stateMark(e.state))
-		local who = e.who
-		if e.state == "offline" and not (db.session[e.who] and db.session[e.who].watch) then
-			row.fbtn:Show()
-			row.fbtn:SetScript("OnClick", function()
-				Rec_AddWatchFriend(who)
-			end)
+
+		local showInv = not (e.state == "joined" or isInMyGuild(e.who))
+		local showF = (e.state == "offline") and not (db.session[e.who] and db.session[e.who].watch)
+		if showF then
+			row.fbtn:Show(); row.fbtn:SetScript("OnClick", function() Rec_AddWatchFriend(who) end)
 		else
 			row.fbtn:Hide()
 		end
-		if e.state == "joined" or isInMyGuild(e.who) then
-			row.btn:Hide()
-			row.label:SetWidth(160)
-		else
-			row.btn:Show()
+		if showInv then
 			local last = recentInvites[e.who]
 			local remain = last and ((db.inviteCooldown or 300) - (now - last)) or 0
 			row.btn.text:SetText(remain > 0 and fmtCD(remain) or "inv")
-			row.btn:SetScript("OnClick", function()
-				Rec_InviteContact(who)
-			end)
-			row.label:SetWidth(row.fbtn:IsShown() and 122 or 160)
+			row.btn:Show(); row.btn:SetScript("OnClick", function() Rec_InviteContact(who) end)
+		else
+			row.btn:Hide()
 		end
+
+		-- pin the name's RIGHT edge just left of whatever buttons are showing, so
+		-- long names truncate cleanly instead of running under the inv/+f buttons.
+		local rightPad = 4                       -- no buttons -> almost full width
+		if showInv then rightPad = rightPad + 36 end
+		if showF then rightPad = rightPad + 28 end
+		row.label:SetPoint("RIGHT", row, "RIGHT", -rightPad, 0)
 	end
-	local h = math.max(1, n * 20)
-	f.contactChild:SetHeight(h)
-	local sf = f.contactChild:GetParent()
-	if n > (f._lastContactCount or 0) then
-		sf:SetVerticalScroll(math.max(0, h - sf:GetHeight()))
+	local h = math.max(1, n * ROWH)
+	f.contactChild:SetHeight(h); f.contactChild:SetWidth(width)
+	if f.contactSF and f.contactSB then
+		local maxs = math.max(0, h - f.contactSF:GetHeight())
+		f.contactSB:SetMinMaxValues(0, maxs); f.contactSB:SetShown(maxs > 4)
 	end
 	f._lastContactCount = n
 end
@@ -1286,7 +1218,7 @@ end
 
 function Rec_RefreshSummary()
 	local f = RecruitFrame
-	if not f or not f.summary then
+	if not f or not f.statCards then
 		return
 	end
 	local contacts, joined, declined, failed, offline, sent, noState, replied = 0, 0, 0, 0, 0, 0, 0, 0
@@ -1309,18 +1241,15 @@ function Rec_RefreshSummary()
 			replied = replied + 1
 		end
 	end
-	f.summary:SetText(table.concat({
-		"|cffffffffContacts reached:|r  " .. contacts,
-		"|cffffffffInvited:|r  " .. (sent + joined + declined + failed + offline),
-		"   |cff00ff00joined guild:|r  " .. joined,
-		"   |cffff5555declined:|r  " .. declined,
-		"   " .. SKULL .. "|cffff5555 already in a guild:|r  " .. failed,
-		"   |cffaaaaaaoffline (retry):|r  " .. offline,
-		"   |cffffcc00sent, waiting:|r  " .. sent,
-		" ",
-		"|cff88aaffReplied to:|r  " .. replied,
-		"|cffffcc00To follow up later:|r  " .. (sent + noState + offline),
-	}, "\n"))
+	-- fill the 3-column stat cards in the drawer
+	local c = f.statCards
+	local function set(key, val) if c[key] then c[key]:SetText(tostring(val)) end end
+	set("reached", contacts)
+	set("joined", joined)
+	set("declined", declined)
+	set("inguild", failed)   -- "already in a guild"
+	set("offline", offline)
+	set("waiting", sent)
 end
 
 function Rec_Toggle()

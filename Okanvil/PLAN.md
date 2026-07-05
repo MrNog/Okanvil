@@ -1,122 +1,120 @@
 # Okanvil — plan / roadmap
 
-**Goal:** an ElvUI-style **host addon** (`Okanvil`) that is *empty by itself* and hosts
-**standalone plugins**. Each plugin (Okanvil-Recruit, a future Log addon, …) works **on its own**
-AND, when Okanvil is installed, embeds into Okanvil's config window as a list entry. No hard coupling
-— the plugin always falls back to its own window if Okanvil isn't present.
+**Okanvil** (say it: _"OK Anvil"_ — also **Okan**or+an**vil**) is an ElvUI/MRT-style **host addon**
+for WoW **3.3.5a / Warmane**. A single gold-themed window with a left nav; each tool is a **module
+you toggle on/off** (like DBM/BigWigs). The host has a **native core** (guild dashboard Home +
+Modules manager) so it's useful with zero plugins, and every plugin _also_ runs standalone.
+
+Forged by **Okanor** (main paladin; old rats knew him as Okanata). The product name **"Okanvil"**
+and the author credit are **fixed**; only the _guild skin_ (`db.brand`) is configurable — see
+**Branding** below.
+
+Monorepo: `Projects\OkanvilSuite\` — host `Okanvil\` + plugins `Okanvil-IDs / -Logs / -Recruit / -Guild`.
+Edit source here; the live `…\AddOns\` copies are synced separately (Fork GUI / manual copy).
+**New addon folder → full game RESTART; code-only change → `/reload`.**
 
 ---
 
-## ✅ DONE — Okanvil core (built, NOT yet tested in-game)
+## ✅ Host — Okanvil core (shipped)
 
-Folder: `Projects\Okanvil\` → synced to `…\AddOns\Okanvil\`. **New addon → needs a full game RESTART.**
+- `Okanvil.toc` → embedded libs → `Core.lua` → `Widgets.lua` → `UI.lua`. SavedVar: `Okanvil_DB`.
+- `Libs\` — embedded **LibStub**, **CallbackHandler-1.0**, **LibSharedMedia-3.0** (standalone-safe).
+- `Core.lua` — engine: DB+defaults, media API (`Font/Texture/NewText/ApplyFonts/Backdrop`),
+  plugin registry (`Register/ProcessPlugins/CountPlugins`), **module enable state**
+  (`IsModuleEnabled/SetModuleEnabled`, `db.modules[name].enabled`), `ShouldRecord()` (dungeon/raid
+  toggles), boot + `/okanvil`.
+- `Widgets.lua` — the **`Okanvil.W`** widget layer (mini-ELib, MRT-modelled): `Frame/Text/Button/
+Check/Slider/EditBox/MultiEdit/DropDown`, `Okanvil:Skin`, one global clamped **DropDown**,
+  `Okanvil:Popup` + `Okanvil:ShowExport` (shared multi-line copy dialog). Gold RATS-hub palette in
+  `Okanvil.Colors`.
+- `UI.lua` — shell: resizable+movable window; scroll-vs-fill panels (anti-spill); **Home** guild
+  dashboard (online roster w/ rank colors + per-row invite, tiles, web-hub card); **Settings**
+  (appearance / media / branding / loot & recording / background art / **About**); **Modules**
+  manager; minimap button.
 
-- `Okanvil.toc` — loads embedded libs → `Core.lua` → `UI.lua`. SavedVariables: `Okanvil_DB`.
-- `Libs\` — embedded **LibStub**, **CallbackHandler-1.0**, **LibSharedMedia-3.0** (so Okanvil works standalone).
-- `Core.lua` — engine:
-  - `Okanvil` global, DB + defaults (window pos/size, scale, font, fontSize, fontFlag, statusbar, bgAlpha, minimapAngle).
-  - Media API: `Okanvil:Font()`, `Okanvil:Texture()`, `Okanvil:NewText(parent,layer,template)` (auto-restyles on font change), `Okanvil:ApplyFonts()`, `Okanvil:Backdrop(frame,alpha,dark)`.
-  - Registry: `Okanvil:Register(name)`, `Okanvil:ProcessPlugins()`, `Okanvil:CountPlugins()`.
-  - Boot: ADDON_LOADED (db) + PLAYER_LOGIN (process plugins, minimap). Slash `/okanvil`.
-- `UI.lua` — shell:
-  - Resizable (corner grip) + movable (header drag); size/pos saved to DB.
-  - Left nav (scroll list) + content area (anchor-based, auto-reflows on resize).
-  - **Home** panel (presentation + installed-plugin list).
-  - **Okanvil Settings** tab: scale / bg opacity / font size sliders + **font** & **bar-texture** LSM dropdowns.
-  - Minimap button + `Okanvil:Toggle()`.
-
-### Test checklist (do first, after RESTART)
-- [ ] `/okanvil` opens the window; Home shows "No plugins installed yet".
-- [ ] Drag header to move; drag corner grip to resize; reopen → size/pos remembered.
-- [ ] Okanvil Settings → change scale / font / opacity → applies live & persists.
-- [ ] No Lua errors on login.
+**Wordmark:** `⚒ Okanvil` (anvil icon as logo on the left, name as one clean word). Guild skin
+shows as a dim suffix after the version. Author credit in the footer + About card.
 
 ---
 
-## ▶️ NEXT — Step 2: convert Okanvil-Recruit into a plugin
+## ✅ Modules (shipped, toggleable)
 
-Keep it 100% standalone; just make it Okanvil-aware.
+Each fills `Okanvil_Plugins[name] = { title, desc, icon, build(panel), refresh }`, registers via
+`Okanvil:Register`, and falls back to its own window if the host is absent. `## Dependencies: Okanvil`
+(or OptionalDeps) in each `.toc`.
 
-1. **Parent-agnostic UI:** change `Recruit_BuildUI()` → `Recruit_BuildUI(parent)` and build all widgets
-   as children of `parent` instead of the fixed `RecruitFrame`. (Standalone passes its own
-   window; Okanvil passes its content panel.)
-2. **Register + fallback** (run at PLAYER_LOGIN):
-   ```lua
-   Okanvil_Plugins = Okanvil_Plugins or {}
-   Okanvil_Plugins["Okanvil-Recruit"] = {
-       title = "Okanvil-Recruit",
-       icon  = "Interface\\Icons\\Ability_Warrior_BattleShout",
-       build = function(panel) Recruit_BuildUI(panel) end,
-       refresh = function() Recruit_RefreshUI() end,
-   }
-   if Okanvil and Okanvil.Register then
-       Okanvil:Register("Okanvil-Recruit")     -- embed; skip own window
-   else
-       RRec_CreateStandaloneWindow()      -- own window + minimap (current behaviour)
-   end
-   ```
-3. **`.toc`:** add `## OptionalDeps: Okanvil` (never a hard dependency).
-4. Optional: when embedded, hide the Okanvil-Recruit minimap button (or make it open Okanvil).
-5. Optional: use `Okanvil:Backdrop`/`Okanvil:NewText` when `Okanvil` exists so it inherits the theme/font.
-
----
-
-## ▶️ Step 3: new Log addon (standalone + consumable)
-
-- A standalone combat-log helper (since no auto-log addon exists for 3.3.5a). Likely: auto `/combatlog`
-  on entering a raid instance (ZONE/PLAYER_ENTERING_WORLD), toggle, status display.
-- Born with the **same plugin contract** so Okanvil hosts it for free.
+- **ID Finder** (`Okanvil-IDs`) — find a spell/item **ID by name** for WeakAuras. Refactored into a
+  **library + thin UI**: `Okanvil.IDs.*` public API (`EnsureSpells / SpellID / FindSpell / FindItem /
+ItemSpell / RecordItem / SweepLoaded / FullScan / MergeSeed / ExportItems` + item↔spell link store)
+  that other addons can call. Spells = offline client scan (`GetSpellInfo 1..80000`). Items =
+  harvested (tooltip-hover, bags/bank/merchant, chat links) + Sweep; **Full scan** brute-force is
+  risky and tucked behind an "advanced" footer. **Seed/Export:** scan once → _Export DB_ → paste into
+  `Okanvil-IDs-Data.lua` (`OkanvilIDs_Seed`, loaded before the main file) so the shared addon ships
+  pre-filled; `MergeSeed` folds it in at boot (new ids only). 2 columns (**Spells/Auras · Items** —
+  auras ARE spells, no separate column), id read off the row, no copy bar. Slash `/okid`.
+  _(Removed: the live aura-catcher, the copy/pick/related/link UI — dead weight.)_
+- **Combat Logs** (`Okanvil-Logs`) — one-click `/combatlog` with a movable/lockable **REC timer**,
+  "log this instance?" prompt, combat-drop watchdog, and a **session history** that names the bosses
+  you killed (raid list by NPC id/name + loot-confirmed for dungeon bosses via the Loot module).
+  Card-based page (Start CTA + live status card + settings cards + inline-expandable past sessions).
+  Slash `/oklog`.
+- **Loot** (`Okanvil-Loot`, in the host) — per-boss loot capture with itemID de-dupe (double-opened
+  corpses) + emblem/gem/mat filtering; inline session viewer with internal scroll; fair-loot Priority
+  tab (attendance × items won, officer-only).
+- **Guild** (host `Guild.lua`) — guild dashboard + JSON roster export for the web hub; inline snapshot
+  viewer.
+- **Invite** — native mass-invite: whole guild online, by rank, saved lists; keyword whisper + guild-
+  chat invites; auto-invite on login; roster picker (grouped by rank, class-colored toggles).
+- **Recruit** (host `Recruit.lua` + `RecruitLogic.lua`) — recruitment advertiser (auto-reply +
+  auto-invite), dashboard + drawer layout. **Native module** (uses `W.Dashboard` heavily, so it can't
+  be standalone) — toggle it off in Modules like the others.
 
 ---
 
-## ✅ Plugin: Okanvil-IDs (built, NOT yet tested in-game)
+## ▶️ NEXT / open
 
-`Projects\Okanvil-IDs\` → junction in `…\AddOns\Okanvil-IDs`. **New addon → full game RESTART.**
-
-- **Goal:** find a spell/item **ID by NAME** (for WeakAuras), without owning the item.
-- **Spells:** scanned fully offline from the client (`GetSpellInfo(1..80000)`) — complete, no server hits.
-- **Items:** the 3.3.5a client has **no offline item-name table**, so items are **harvested** —
-  every item the client loads (tooltip hover incl. AtlasLoot, bags, bank, merchant, chat links) +
-  a "Sweep loaded items" button + auto-sweep gear/bags on login. Stored in `OkanvilIDsDB` (account-wide).
-- **Full scan (risky):** optional brute-force `GetItemInfo(1..56000)`, throttled (~1k ids/s) + Stop button.
-  Fires a server request per uncached id → may throttle/disconnect on a private server. Test once.
-- **Auras tab:** catches every buff/debuff that lands on you/target/focus/pet (`select(11, UnitBuff...)`,
-  account-wide `OkanvilIDsDB.auras`). Empty search = "caught this session, newest first" → proc a trinket,
-  the buff is at the top. This is the only reliable item→proc-buff bridge (client has no API for it).
-- **Link library (`OkanvilIDsDB.links`):** the whole point — a personal offline Wowhead. Pick an item, pick a
-  spell/buff, hit **⇄ Link** → saved forever. Picking the item then lists its linked buffs (click=copy,
-  right-click=unlink); picking a buff shows "comes from items". e.g. Soul Preserver 37111 ⇄ Healing Trance 60513.
-- Picking an item also shows `↳ use/proc spell` via `GetItemSpell` (gives the equip spell, e.g. 60510).
-- Click a result → ID drops into a **Ctrl+C-ready box**; toggle raw-id ↔ `GetItemCount(id)` snippet.
-- Slash `/cid` (or `/idfind`); `/cid sweep`. Standalone window or embeds into Okanvil as "ID Finder".
-- **Test:** RESTART → `/cid` → Items: Sweep, search "potion of speed" → 40211; open an AtlasLoot page,
-  hover items, search them. Spells: search "bloodlust"/"heroism". Verify Ctrl+C copies the box.
-
-## 🎨 Polish / later
-
-- Swap placeholder icons (`INV_Misc_Rabbit_2`) for your own logo (header, minimap, nav).
-- Per-fontstring size multipliers (titles bigger) — `_cifSize` hook already in `ApplyFonts`.
-- Content scroll if a plugin panel overflows.
-- Remember last open panel across sessions (save `_current` to DB).
-- Optional shared **profiles** (copy Okanvil + plugin settings between chars).
-- Optional: Okanvil exposes `Okanvil:GetDB(pluginName)` so plugins can store settings in Okanvil's DB when embedded.
-- Version-check/“plugin list” niceties (ElvUI's EP does this).
+- **Seed the shipped item DB:** run Full scan once on a live client → Export DB → commit the result
+  into `Okanvil-IDs-Data.lua` so guildmates open the finder already full.
+- **Event-gating for disabled modules:** a toggled-off module still registers events; make deeper
+  gating opt-in per plugin (don't hook combat log / roster when off).
+- **PNG art alpha:** okanor.png / anvil.png have black backgrounds (README ok on dark GitHub; edge-
+  flood-fill if transparency wanted). rat1.png already keyed to transparent.
+- **Remember last open panel** across sessions (save `_current` to DB).
+- **`Okanvil:GetDB(pluginName)`** so embedded plugins can store settings in the host DB.
+- Version-check / plugin-list niceties.
 
 ---
 
-## Design rules (don't break these)
-- **Okanvil stays empty** — all features are standalone plugins.
-- Plugins **never hard-depend** on Okanvil; always have a standalone fallback.
-- One **shared media** source (`Okanvil.db` font/texture/alpha) so the whole suite themes from one place.
+## 🎨 Branding rules (don't break these)
+
+- **Product name "Okanvil" is FIXED** — a wordmark, not editable. It's the "Method Raid Tools" of
+  this app; the pun ("OK Anvil") is deliberate.
+- **Guild skin = `db.brand`** — the ONLY editable branding, shown as a suffix after the wordmark and
+  as a Home subtitle. `""` or `"Okanvil"` = no suffix. Repaint via `Okanvil.headerPaintBrand()`,
+  never SetText the wordmark. Default `"RATS Guild Hub"`.
+- **Author = Okanor** — fixed credit in the footer + About card. Never editable.
+- `db.hubURL` (web hub) is editable next to the guild skin.
+
+## 🏗️ Architecture rules (don't break these)
+
+- Host has a **native core** (Home + Modules) — it is NOT empty; the 4 tools are optional modules.
+- Plugins **never hard-depend** on Okanvil; always keep a standalone fallback + own minimap button.
+- One **shared media** source (`Okanvil.db` font/texture/alpha) themes the whole suite.
 - Registration is **load-order safe** via the shared `Okanvil_Plugins` global.
+- Use **`Okanvil.W.*`** — never hand-roll `CreateFrame`+`SetBackdrop` buttons in plugins.
+- 3.3.5a target (Interface 30300): guard retail APIs (`SetClipsChildren`→`Okanvil.Clip`,
+  `SetResizeBounds`, `SetObeyStepOnDrag`); no `BackdropTemplate`/`Mixin`.
+- No local Lua interpreter → validate with the block-balancer (depth 0), then load in-game.
 
 ## File map
+
 ```
-Projects\Okanvil\
-  Okanvil.toc
-  Core.lua      (engine, DB, media, registry, slash)
-  UI.lua        (window, nav, Home, Settings, minimap)
-  Libs\         (LibStub, CallbackHandler-1.0, LibSharedMedia-3.0)
-  PLAN.md       (this file)
+Projects\OkanvilSuite\
+  README.md                     (forge-themed, RATS-hub style)
+  Okanvil\                      host
+    Okanvil.toc  Core.lua  Widgets.lua  UI.lua
+    Guild.lua  Loot.lua  Invite.lua  RecruitLogic.lua  Recruit.lua   (native modules)
+    Libs\        Media\ (anvil.png, okanor.png, rat1.png/.blp)  PLAN.md (this file)
+  Okanvil-IDs\    Okanvil-IDs.lua  Okanvil-IDs-Data.lua (seed)  .toc   (standalone plugin)
+  Okanvil-Logs\   Okanvil-Logs.lua  .toc                              (standalone plugin)
 ```
-Sync to game: `Copy-Item -Recurse Projects\Okanvil → …\AddOns\Okanvil` (RESTART after first install).

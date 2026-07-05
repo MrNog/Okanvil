@@ -1,9 +1,10 @@
-name: Package addons
+name: Package addon
 
-# Monorepo for the Okanvil suite. On every push to main, build one clean
-# <Addon>.zip per top-level addon folder (each zip contains a folder named exactly
-# after the addon, so it's install-ready) and publish them all to the rolling
-# "Latest" release — users download just the folders they want.
+# On every push to main, build one clean install-ready <Addon>.zip per top-level
+# folder that contains a .toc (currently just "Okanvil"). The zip holds a folder
+# named exactly after the addon, so users just unzip it straight into AddOns\.
+# Dev-only files (README, PLAN, docs, backups, skills) are STRIPPED from the zip
+# so the download is nothing but the addon itself.
 
 on:
   push:
@@ -19,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build per-addon zips (only folders that contain a .toc)
+      - name: Build install-ready zip(s) (only folders with a .toc)
         run: |
           mkdir -p out
           for d in */ ; do
@@ -27,8 +28,18 @@ jobs:
             if ls "$name"/*.toc >/dev/null 2>&1; then
               mkdir -p "staging/$name"
               cp -r "$name/." "staging/$name/"
+              # strip dev-only files so the download is JUST the addon
+              ( cd "staging/$name" && \
+                rm -f README.md PLAN.md CHANGELOG.md .editorconfig && \
+                find . -type d -name '.git' -prune -exec rm -rf {} + && \
+                find . -type d -name '.github' -prune -exec rm -rf {} + && \
+                find . -type d -name '.claude' -prune -exec rm -rf {} + && \
+                rm -f Media/README.md && \
+                rm -f Media/*.png && \
+                find . -name '*.bak' -delete && \
+                find . -name '*~' -delete )
               ( cd staging && zip -r "../out/$name.zip" "$name" )
-              echo "packaged $name"
+              echo "packaged $name (dev files stripped)"
             fi
           done
 
@@ -40,5 +51,5 @@ jobs:
           # in one go — no pre-existing assets to collide with (fixes "ReleaseAsset already exists")
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
           gh release create latest --title "Latest" --latest \
-            --notes "Rolling latest builds of every Okanvil addon — download the folder(s) you want." \
+            --notes "Latest build of Okanvil. Download Okanvil.zip and unzip it into World of Warcraft\\Interface\\AddOns\\, then restart WoW." \
             out/*.zip

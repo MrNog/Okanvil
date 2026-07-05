@@ -6,3 +6,11 @@ desktop.ini
 *.zip
 staging/
 out/
+
+# third-party agent skills installed via `npx skills` (machine-local; restore
+# with `npx skills experimental_install` from skills-lock.json). The project's
+# own skill (.claude/skills/okanvil-ui) and skills-lock.json ARE committed.
+.agents/
+agent/
+.claude/skills/lua
+.claude/settings.local.json

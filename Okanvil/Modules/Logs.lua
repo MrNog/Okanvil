@@ -1,10 +1,10 @@
 -- ============================================================
---   ██████╗██╗███████╗███████╗██████╗
---  ██╔════╝██║██╔════╝██╔════╝██╔══██╗
---  ██║     ██║█████╗  █████╗  ██████╔╝
---  ██║     ██║██╔══╝  ██╔══╝  ██╔══██╗
---  ╚██████╗██║██║     ███████╗██║  ██║
---   ╚═════╝╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝
+--   ██████╗ ██╗  ██╗ █████╗ ███╗   ██╗██╗   ██╗██╗██╗
+--  ██╔═══██╗██║ ██╔╝██╔══██╗████╗  ██║██║   ██║██║██║
+--  ██║   ██║█████╔╝ ███████║██╔██╗ ██║██║   ██║██║██║
+--  ██║   ██║██╔═██╗ ██╔══██║██║╚██╗██║╚██╗ ██╔╝██║██║
+--  ╚██████╔╝██║  ██╗██║  ██║██║ ╚████║ ╚████╔╝ ██║███████╗
+--   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝  ╚═══╝  ╚═╝╚══════╝
 --  Okanvil-Logs -- combat-log control + a movable/lockable REC timer
 --  + session tracker. Works standalone OR embeds into Okanvil.
 --  (Addons can't read/write files, so SLICING + EXPORT live in the
@@ -20,6 +20,7 @@ local defaults = {
 	recLocked = false, -- lock the REC timer (click-through, no drag)
 	rec = { point = "TOP", x = 0, y = -140 },
 	minimapAngle = 205, -- standalone minimap button position
+	sessions = {}, -- persisted history of logging sessions (zone, start, stop, bosses)
 }
 local db
 local rec, toastF, askLogF -- frames
@@ -43,7 +44,7 @@ local function newText(parent, layer, size)
 	if Okanvil and Okanvil.NewText then
 		local fs = Okanvil:NewText(parent, layer)
 		if size then
-			fs._cifSize = size
+			fs._okSize = size
 			fs:SetFont(Okanvil:Font(), size)
 		end
 		return fs
@@ -65,19 +66,22 @@ local function fmtTime(s)
 	return string.format("%d:%02d", math.floor(s / 60), s % 60)
 end
 
-local function flatButton(parent, text, w, h)
+-- Use the shared Okanvil widget button (gold RATS-Hub styling) when embedded;
+-- fall back to a local flat button when run standalone.
+local function flatButton(parent, text, w, h, kind)
+	if Okanvil and Okanvil.W and Okanvil.W.Button then
+		local b = Okanvil.W.Button(parent, text, kind)
+		b:SetSize(w, h)
+		return b
+	end
 	local b = CreateFrame("Button", nil, parent)
 	b:SetSize(w, h)
 	flat(b, 1)
 	b.text = newText(b, "OVERLAY")
 	b.text:SetPoint("CENTER")
 	b.text:SetText(text)
-	b:SetScript("OnEnter", function(s)
-		s:SetBackdropColor(0.2, 0.2, 0.25, 1)
-	end)
-	b:SetScript("OnLeave", function(s)
-		s:SetBackdropColor(0.10, 0.10, 0.12, 1)
-	end)
+	b:SetScript("OnEnter", function(s) s:SetBackdropColor(0.2, 0.2, 0.25, 1) end)
+	b:SetScript("OnLeave", function(s) s:SetBackdropColor(0.10, 0.10, 0.12, 1) end)
 	return b
 end
 
@@ -104,6 +108,35 @@ local function toggleRow(parent, label, x, y, getFn, setFn)
 	return b
 end
 
+-- A full-width settings card: title (+ optional sub) on the left, an ON/OFF pill
+-- right-aligned INSIDE the card. Nothing can overlap regardless of label width.
+local function cardToggle(parent, title, sub, getFn, setFn)
+	local W = Okanvil and Okanvil.W
+	local card = W and W.Frame(parent, "panel") or CreateFrame("Frame", nil, parent)
+	if not W then flat(card, 0.9) end
+	card:SetHeight(sub and 42 or 30)
+
+	local t = newText(card, "OVERLAY")
+	t:SetPoint("LEFT", 12, sub and 8 or 0)
+	t:SetText(title)
+
+	if sub then
+		local s = newText(card, "OVERLAY", 10)
+		s:SetPoint("TOPLEFT", t, "BOTTOMLEFT", 0, -3)
+		s:SetText("|cff8a8d93" .. sub .. "|r")
+	end
+
+	local b = flatButton(card, "", 48, 20)
+	b:SetPoint("RIGHT", -10, 0)
+	local function paint()
+		b.text:SetText(getFn() and "|cff7cfc8aON|r" or "|cff8a8d93OFF|r")
+	end
+	paint()
+	b:SetScript("OnClick", function() setFn(not getFn()); paint() end)
+	card.pill, card._paint = b, paint
+	return card
+end
+
 -- ------------------------------------------------------------
 -- logging state + sessions
 -- ------------------------------------------------------------
@@ -111,17 +144,36 @@ local function isLogging()
 	return LoggingCombat()
 end
 
--- the desktop tool slices WoWCombatLog.txt itself, so we only keep a tiny
--- in-flight marker (start time) for the REC timer -- no persisted session list.
+-- We keep a small history of logging sessions (zone, times, bosses killed) so the
+-- Combat Logs page is a real log, not just a live toggle. The desktop tool still
+-- does the actual WoWCombatLog.txt slicing; this is the in-game reference index.
+local MAX_LOG_SESSIONS = 30
 local function beginSession()
-	db._cur = { start = time(), bosses = {} }
+	local zone = GetRealZoneText()
+	if not zone or zone == "" then zone = GetZoneText() end
+	db._cur = { start = time(), zone = zone or "", bosses = {} }
 end
 
 local function endSession()
-	if db._cur and db._cur.bosses then
-		db._lastBosses = db._cur.bosses -- keep the last session's kills visible after Stop
+	if db._cur then
+		db._cur.stop = time()
+		db._cur.recentDeaths = nil          -- transient, don't persist
+		db._lastBosses = db._cur.bosses     -- keep last session's kills visible after Stop
+		-- persist into the history list (newest first)
+		db.sessions = db.sessions or {}
+		table.insert(db.sessions, 1, db._cur)
+		while #db.sessions > MAX_LOG_SESSIONS do table.remove(db.sessions) end
 	end
 	db._cur = nil
+	if OkanvilLogs.Refresh then OkanvilLogs.Refresh() end
+end
+
+function OkanvilLogs.DeleteSession(sess)
+	if not db or not db.sessions then return end
+	for i = #db.sessions, 1, -1 do
+		if db.sessions[i] == sess then table.remove(db.sessions, i); break end
+	end
+	if OkanvilLogs.Refresh then OkanvilLogs.Refresh() end
 end
 
 -- ------------------------------------------------------------
@@ -237,26 +289,51 @@ local GROUP = {
 	["Gormok the Impaler"] = "Northrend Beasts", ["Acidmaw"] = "Northrend Beasts", ["Dreadscale"] = "Northrend Beasts", ["Icehowl"] = "Northrend Beasts",
 }
 
-local function recordBoss(guid, name)
-	local id = npcID(guid)
-	if not ((id and BOSS_IDS[id]) or (name and BOSSES[name])) then
-		return
-	end
+-- add a boss to the current session (deduped). Shared by the combat-log death
+-- path and the loot-confirmation path.
+local function addBoss(label, id)
 	local cur = db and db._cur
-	if not cur then
-		return
-	end
-	local label = (id and GROUP[id]) or (name and GROUP[name]) or ((name and name ~= "") and name) or ("NPC " .. tostring(id))
+	if not cur or not label or label == "" then return end
 	cur.bosses = cur.bosses or {}
 	for i = 1, #cur.bosses do
-		if cur.bosses[i].name == label then
-			return -- already logged this session
-		end
+		if cur.bosses[i].name == label then return end -- already logged this session
 	end
 	cur.bosses[#cur.bosses + 1] = { name = label, id = id, at = time() - cur.start }
 	toast("Boss logged: " .. label, "00ddff")
-	if OkanvilLogs.Refresh then
-		OkanvilLogs.Refresh()
+	if OkanvilLogs.Refresh then OkanvilLogs.Refresh() end
+end
+
+local function recordBoss(guid, name)
+	local id = npcID(guid)
+	local known = (id and BOSS_IDS[id]) or (name and BOSSES[name])
+	-- Dungeon bosses aren't in the raid list -- but if the Loot module already
+	-- recorded a drop from this name, it's a real boss (loot-confirmed). Also
+	-- remember recent NPC deaths so a kill can be promoted when its loot arrives.
+	if not known then
+		if Okanvil.Loot and Okanvil.Loot.SessionHasBoss and Okanvil.Loot.SessionHasBoss(name) then
+			known = true
+		else
+			-- stash as a candidate; loot arriving later promotes it (NoteBossFromLoot)
+			if name and name ~= "" and db and db._cur then
+				db._cur.recentDeaths = db._cur.recentDeaths or {}
+				db._cur.recentDeaths[name] = time() - db._cur.start
+			end
+			return
+		end
+	end
+	local label = (id and GROUP[id]) or (name and GROUP[name]) or ((name and name ~= "") and name) or ("NPC " .. tostring(id))
+	addBoss(label, id)
+end
+
+-- Called by the Loot module when it records a drop from `bossName`. If we saw
+-- that NPC die this session (recentDeaths), promote it to a logged boss -- this
+-- is how dungeon bosses get named without a hardcoded 5-man list.
+function OkanvilLogs.NoteBossFromLoot(bossName)
+	if not bossName or bossName == "" then return end
+	local cur = db and db._cur
+	if not cur then return end
+	if cur.recentDeaths and cur.recentDeaths[bossName] then
+		addBoss(bossName)
 	end
 end
 
@@ -272,7 +349,7 @@ local function askToLog(zone)
 		flat(askLogF, 0.97, true)
 		askLogF.txt = newText(askLogF, "OVERLAY")
 		askLogF.txt:SetPoint("TOP", 0, -12)
-		local yes = flatButton(askLogF, "|cff00ff00Start log|r", 116, 24)
+		local yes = flatButton(askLogF, "Start log", 116, 24, "primary")
 		yes:SetPoint("BOTTOMLEFT", 12, 12)
 		yes:SetScript("OnClick", function()
 			askLogF:Hide()
@@ -340,6 +417,12 @@ local function buildRec()
 		s._t = 0
 		if db._cur then
 			s.label:SetText(fmtTime(time() - db._cur.start))
+			-- live-tick the panel's status sub-line if the page is open
+			local pn = OkanvilLogs.panel
+			if pn and pn._stSub and pn:IsVisible() then
+				local nb = db._cur.bosses and #db._cur.bosses or 0
+				pn._stSub:SetText("|cff8a8d93" .. fmtTime(time() - db._cur.start) .. "  |  " .. nb .. " boss" .. (nb == 1 and "" or "es") .. " logged|r")
+			end
 			-- WATCHDOG: a session is open, but is the client log ACTUALLY on? A zone change,
 			-- death or ghost re-enter can silently switch LoggingCombat off while the timer
 			-- keeps ticking. Detect that, self-heal, and make it visible.
@@ -396,47 +479,172 @@ end
 -- ------------------------------------------------------------
 function OkanvilLogs.BuildUI(parent)
 	local X = 16
+	local W = Okanvil and Okanvil.W
 
-	-- single Start/Stop button (its label doubles as the status)
-	local toggle = flatButton(parent, "", 200, 30)
+	-- ---- Row 1: big Start/Stop CTA (left) + live status card (right) ----
+	local toggle = flatButton(parent, "", 190, 46, "primary")
 	toggle:SetPoint("TOPLEFT", X, -16)
 	toggle:SetScript("OnClick", function()
 		OkanvilLogs.SetLogging(not isLogging())
 	end)
 	parent._toggle = toggle
 
-	toggleRow(parent, "Ask to log when entering an instance", X, -60, function()
-		return db.askOnEnter
-	end, function(v)
-		db.askOnEnter = v
-	end)
+	-- status card: shows REC state + elapsed while a session is open
+	local status = W and W.Frame(parent, "dark") or CreateFrame("Frame", nil, parent)
+	if not W then flat(status, 0.9, true) end
+	status:SetPoint("TOPLEFT", toggle, "TOPRIGHT", 10, 0)
+	status:SetPoint("RIGHT", parent, "RIGHT", -14, 0)
+	status:SetHeight(46)
+	local stTop = newText(status, "OVERLAY")
+	stTop:SetPoint("TOPLEFT", 12, -8)
+	local stSub = newText(status, "OVERLAY", 10)
+	stSub:SetPoint("BOTTOMLEFT", 12, 8)
+	parent._stTop, parent._stSub = stTop, stSub
 
-	toggleRow(parent, "Lock REC timer (click-through)", X, -86, function()
-		return db.recLocked
-	end, function(v)
-		db.recLocked = v
-		applyRecLock()
-	end)
+	-- ---- Row 2/3: settings cards (label left, pill right -- no clipping) ----
+	local c1 = cardToggle(parent, "Ask to log when entering an instance",
+		"Pops a Start log / No prompt on the first zone-in.",
+		function() return db.askOnEnter end,
+		function(v) db.askOnEnter = v end)
+	c1:SetPoint("TOPLEFT", X, -74)
+	c1:SetPoint("RIGHT", parent, "RIGHT", -14, 0)
 
-	local hint = newText(parent, "OVERLAY")
-	hint:SetPoint("TOPLEFT", X, -120)
-	hint:SetWidth(380)
+	local c2 = cardToggle(parent, "Lock REC timer (click-through)",
+		"Stops accidental drags mid-fight. Stop still works.",
+		function() return db.recLocked end,
+		function(v) db.recLocked = v; applyRecLock() end)
+	c2:SetPoint("TOPLEFT", X, -122)
+	c2:SetPoint("RIGHT", parent, "RIGHT", -14, 0)
+
+	local hint = newText(parent, "OVERLAY", 11)
+	hint:SetPoint("TOPLEFT", X, -172)
+	hint:SetPoint("RIGHT", parent, "RIGHT", -14, 0)
 	hint:SetJustifyH("LEFT")
 	hint:SetText(
-		"|cff888888Logging writes to WoWCombatLog.txt. Slice/export it with the Okanvil-Logs desktop tool. Drag the REC box to move it; lock it to avoid mid-fight drags.|r"
+		"|cff6f7176Logging writes to WoWCombatLog.txt -- slice/export it with the desktop tool. Bosses that drop loot are named automatically.|r"
 	)
 
-	local blbl = newText(parent, "OVERLAY")
-	blbl:SetPoint("TOPLEFT", X, -166)
-	blbl:SetText("|cffc0943aBosses logged this session|r")
-	local blist = newText(parent, "OVERLAY")
-	blist:SetPoint("TOPLEFT", X, -186)
-	blist:SetWidth(380)
-	blist:SetJustifyH("LEFT")
-	blist:SetJustifyV("TOP")
+	-- ---- live "this session" boss list (only while a session is open) ----
+	-- Its header+list live in a container we can hide/collapse; PAST SESSIONS
+	-- and the scroll re-anchor under it so there is no dead space when idle.
+	local live = CreateFrame("Frame", nil, parent)
+	live:SetPoint("TOPLEFT", X, -200)
+	live:SetPoint("RIGHT", parent, "RIGHT", -14, 0)
+	live:SetHeight(20)
+	local blbl = newText(live, "OVERLAY")
+	blbl:SetPoint("TOPLEFT", 0, 0)
+	blbl:SetText("|cffffd200THIS SESSION|r")
+	parent._blbl = blbl
+	local blist = newText(live, "OVERLAY")
+	blist:SetPoint("TOPLEFT", 0, -18)
+	blist:SetWidth(420); blist:SetJustifyH("LEFT"); blist:SetJustifyV("TOP")
 	parent._blist = blist
+	parent._live = live
+
+	-- ---- session history: a scrollable, inline-expandable list ----
+	-- Anchored just below the live block (which collapses to 0 height when idle).
+	local hh = newText(parent, "OVERLAY")
+	hh:SetPoint("TOPLEFT", live, "BOTTOMLEFT", 0, -14)
+	hh:SetText("|cff8a8d93PAST SESSIONS|r")
+	parent._histHdr = hh
+
+	-- flat scroll (no Blizzard template): plain ScrollFrame + our own slider
+	local sf = CreateFrame("ScrollFrame", nil, parent)
+	sf:SetPoint("TOPLEFT", hh, "BOTTOMLEFT", 0, -8); sf:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -14, 8)
+	local child = CreateFrame("Frame", nil, sf); child:SetSize(10, 1); sf:SetScrollChild(child)
+	local sb = CreateFrame("Slider", nil, parent)
+	sb:SetPoint("TOPRIGHT", sf, "TOPRIGHT", 8, 0); sb:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", 8, 0); sb:SetWidth(4)
+	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
+	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetSize(4, 40)
+	if Okanvil and Okanvil.Colors then local a = Okanvil.Colors.accent; th:SetVertexColor(a[1], a[2], a[3], 1)
+	else th:SetVertexColor(0.75, 0.58, 0.23, 1) end
+	sb:SetThumbTexture(th)
+	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
+	sf:EnableMouseWheel(true)
+	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
+	sf:SetScript("OnSizeChanged", function() child:SetWidth(sf:GetWidth()) end)
+	parent._histSF, parent._histChild, parent._histSB = sf, child, sb
+	parent._histRows, parent._histDetail = {}, {}
+	parent._expanded = nil
 
 	OkanvilLogs.Refresh()
+	OkanvilLogs.RebuildHistory()
+end
+
+-- build the past-sessions list (rows + inline expansion), like the Loot tab.
+function OkanvilLogs.RebuildHistory()
+	local p = OkanvilLogs.panel
+	if not p or not p._histChild then return end
+	local W = Okanvil and Okanvil.W
+	local child = p._histChild
+	for _, r in ipairs(p._histRows) do r:Hide() end
+	for _, t in ipairs(p._histDetail) do t:Hide() end
+	local sessions = (db and db.sessions) or {}
+
+	if #sessions == 0 then
+		p._histEmpty = p._histEmpty or newText(child, "OVERLAY")
+		p._histEmpty:SetPoint("TOPLEFT", 2, -4)
+		p._histEmpty:SetText("|cff888888No past sessions yet. Start a log and kill a boss.|r")
+		p._histEmpty:Show()
+		child:SetHeight(30)
+		return
+	end
+	if p._histEmpty then p._histEmpty:Hide() end
+
+	local di, y = 0, 0
+	for i, s in ipairs(sessions) do
+		local r = p._histRows[i]
+		if not r then
+			r = W and W.Frame(child, "input") or CreateFrame("Frame", nil, child)
+			if not W then flat(r, 0.9) end
+			r.title = newText(r, "OVERLAY"); r.title:SetPoint("TOPLEFT", 8, -5)
+			r.sub = newText(r, "OVERLAY", 10); r.sub:SetPoint("BOTTOMLEFT", 8, 5)
+			r.del = (W and W.Button(r, "X", "danger")) or flatButton(r, "X", 22, 20)
+			r.del:SetSize(22, 20); r.del:SetPoint("RIGHT", -6, 0)
+			r:EnableMouse(true)
+			p._histRows[i] = r
+		end
+		r:ClearAllPoints(); r:SetPoint("TOPLEFT", 0, -y); r:SetPoint("RIGHT", child, "RIGHT", 0, 0); r:SetHeight(38)
+		local where = (s.zone ~= "" and s.zone) or "World"
+		local dateStr = date("%b %d  %H:%M", s.start)
+		local dur = (s.stop and s.stop > s.start) and fmtTime(s.stop - s.start) or "?"
+		local nb = s.bosses and #s.bosses or 0
+		local isOpen = (p._expanded == s)
+		r.title:SetText((isOpen and "|cffffd200v|r  " or "|cff8a8d93>|r  ") .. where)
+		r.sub:SetText("|cff8a8d93" .. dateStr .. "  |  " .. dur .. "  |  " .. nb .. " boss" .. (nb == 1 and "" or "es") .. "|r")
+		local function toggle()
+			if p._expanded == s then p._expanded = nil else p._expanded = s end
+			OkanvilLogs.RebuildHistory()
+		end
+		r:SetScript("OnMouseUp", toggle)
+		r.del:SetScript("OnClick", function()
+			if p._expanded == s then p._expanded = nil end
+			OkanvilLogs.DeleteSession(s)
+		end)
+		r:Show()
+		y = y + 44
+
+		if isOpen then
+			di = di + 1
+			local t = p._histDetail[di]
+			if not t then t = newText(child, "OVERLAY"); t:SetJustifyH("LEFT"); t:SetJustifyV("TOP"); p._histDetail[di] = t end
+			t:ClearAllPoints(); t:SetPoint("TOPLEFT", 14, -y); t:SetPoint("RIGHT", child, "RIGHT", -8, 0)
+			if s.bosses and #s.bosses > 0 then
+				local lines = {}
+				for k = 1, #s.bosses do
+					lines[k] = string.format("|cff66dd66+|r %s  |cff888888%s|r", s.bosses[k].name, fmtTime(s.bosses[k].at or 0))
+				end
+				t:SetText(table.concat(lines, "\n"))
+			else
+				t:SetText("|cff888888No bosses recorded this session.|r")
+			end
+			t:Show()
+			y = y + (t:GetStringHeight() or 12) + 10
+		end
+	end
+	child:SetHeight(math.max(1, y))
+	local maxs = math.max(0, y - p._histSF:GetHeight())
+	p._histSB:SetMinMaxValues(0, maxs); p._histSB:SetShown(maxs > 4)
 end
 
 function OkanvilLogs.Refresh()
@@ -445,24 +653,52 @@ function OkanvilLogs.Refresh()
 		return
 	end
 	if isLogging() then
-		p._toggle.text:SetText("|cffff5555STOP logging|r")
+		p._toggle.text:SetText("STOP logging")
 	else
-		p._toggle.text:SetText("|cff00ff00START logging|r")
+		p._toggle.text:SetText("START logging")
+	end
+	-- status card (right of the CTA)
+	if p._stTop then
+		local cur = db and db._cur
+		if cur then
+			p._stTop:SetText("|cffff3333REC|r  |cffdcddde" .. ((cur.zone ~= "" and cur.zone) or "World") .. "|r")
+			local nb = cur.bosses and #cur.bosses or 0
+			p._stSub:SetText("|cff8a8d93" .. fmtTime(time() - cur.start) .. "  |  " .. nb .. " boss" .. (nb == 1 and "" or "es") .. " logged|r")
+		else
+			p._stTop:SetText("|cff8a8d93Not logging|r")
+			p._stSub:SetText("|cff6f7176Press START to begin a session.|r")
+		end
 	end
 	if p._blist then
 		local cur = db and db._cur
-		local list = (cur and cur.bosses) or (db and db._lastBosses)
-		local header = (cur and "this session") or "last session"
-		if list and #list > 0 then
-			local lines = {}
-			for i = 1, #list do
-				lines[i] = string.format("|cff66dd66+|r %s  |cff888888%s|r", list[i].name, fmtTime(list[i].at or 0))
+		if cur then
+			if p._blbl then p._blbl:Show() end
+			if p._live then p._live:Show() end
+			local list = cur.bosses
+			local n = list and #list or 0
+			if n > 0 then
+				local lines = {}
+				for i = 1, n do
+					lines[i] = string.format("|cff66dd66+|r %s  |cff888888%s|r", list[i].name, fmtTime(list[i].at or 0))
+				end
+				p._blist:SetText(table.concat(lines, "\n"))
+			else
+				p._blist:SetText("|cff888888Recording... boss kills appear here as they happen.|r")
 			end
-			p._blist:SetText("|cff666666(" .. header .. ")|r\n" .. table.concat(lines, "\n"))
+			-- grow the live block so PAST SESSIONS sits below it
+			if p._live then
+				local h = 18 + (p._blist:GetStringHeight() or 12) + 6
+				p._live:SetHeight(math.max(20, h))
+			end
 		else
-			p._blist:SetText("|cff888888(none yet -- boss kills appear here as they happen)|r")
+			-- no open session: COLLAPSE the live block so the history list pulls
+			-- right up under the hint (no dead space).
+			if p._blbl then p._blbl:Hide() end
+			p._blist:SetText("")
+			if p._live then p._live:SetHeight(1); p._live:Hide() end
 		end
 	end
+	if OkanvilLogs.RebuildHistory then OkanvilLogs.RebuildHistory() end
 end
 
 -- ------------------------------------------------------------
@@ -588,7 +824,7 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		end
 		return
 	end
-	if event == "ADDON_LOADED" and arg1 == ADDON then
+	if event == "ADDON_LOADED" and arg1 == "Okanvil" then -- native module: host's load
 		OkanvilLogsDB = OkanvilLogsDB or {}
 		for k, v in pairs(defaults) do
 			if OkanvilLogsDB[k] == nil then
@@ -606,10 +842,11 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		-- client log (reload/teleport turn it off) without losing or splitting it.
 	elseif event == "PLAYER_LOGIN" then
 		buildRec()
-		-- register with Okanvil if present, else run standalone
+		-- native module: register into the host (toggle in Modules to hide it)
 		Okanvil_Plugins = Okanvil_Plugins or {}
 		Okanvil_Plugins[ADDON] = {
 			title = "Combat Logs",
+			desc = "Combat-log control, REC timer and session tracker.",
 			icon = "Interface\\Icons\\INV_Misc_Note_01",
 			build = function(panel)
 				OkanvilLogs.panel = panel
@@ -621,10 +858,7 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		}
 		if Okanvil and Okanvil.Register then
 			Okanvil:Register(ADDON)
-			Print("loaded -- hosted by Okanvil. |cff00ff00/oklog|r toggles logging.")
-		else
-			buildMinimap() -- only standalone gets its own button
-			Print("loaded (standalone). |cff00ff00/oklog|r or the minimap button.")
+			Print("loaded. |cff00ff00/oklog|r toggles logging.")
 		end
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		if not db then

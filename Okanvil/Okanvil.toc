@@ -1,13 +1,24 @@
 ## Interface: 30300
 ## Title: Okanvil
-## Notes: Host shell for standalone addons (ElvUI-style plugins). The void in your stack trace.
-## Author: Okanata
+## Notes: Raid & guild toolkit -- forged by Okanor. The void in your stack trace.
+## Author: Okanor
 ## Version: 1.0
-## SavedVariables: Okanvil_DB
+## SavedVariables: Okanvil_DB, RecruitDB, OkanvilIDsDB
+## SavedVariablesPerCharacter: OkanvilLogsDB, Okanvil_CharDB
 
 Libs\LibStub\LibStub.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
 Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
 
-Core.lua
-UI.lua
+Core\Core.lua
+Core\Widgets.lua
+Core\UI.lua
+
+Modules\Guild.lua
+Modules\Loot.lua
+Modules\Invite.lua
+Modules\RecruitLogic.lua
+Modules\Recruit.lua
+Modules\IDs-Data.lua
+Modules\IDs.lua
+Modules\Logs.lua
