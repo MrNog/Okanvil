@@ -1064,6 +1064,174 @@ local function maybeAskML()
 	StaticPopup_Show("OKANVIL_ML_CONFIRM")
 end
 
+-- ============================================================
+-- ML RE-SYNC AUTO-FLIP (the "RCLootCouncil master-loot bug").
+--
+-- On 3.3.5a the master-loot CANDIDATE LIST is server-populated only at the
+-- moment you BECOME the ML. If the ML then DCs or uses a teleport (e.g. the
+-- Ulduar port), they KEEP the ML title but their client LOSES the candidate
+-- list -- GetMasterLootCandidate() returns nothing, so GiveMasterLoot finds no
+-- one ("player offline?"). There is NO client API to re-request the list. The
+-- only real fix is a fresh SetLootMethod, which ONLY the raid leader can call.
+--
+-- So the fix is split across two clients, over Okanvil.Comms:
+--   * BROKEN ML (e.g. Kobe): detects "I'm the ML but my candidate list is
+--     empty" and asks the group to re-sync   -> Comms.Send("MLFIX").
+--   * RAID LEADER (e.g. Rellik): receives MLFIX, verifies the sender really IS
+--     the current ML, then flips loot method to himself and back to that ML on
+--     the next frame -> the server re-sends the candidate list. ACKs "MLFIXED".
+--
+-- Trust is by ROLE, not by the message: the leader re-checks live game state
+-- before flipping (a spoofed MLFIX from a non-ML is ignored).
+-- ============================================================
+
+-- raid index of a player by name (1..MAX_RAID_MEMBERS), or nil. Used to build
+-- the "raidN" unit token SetLootMethod wants.
+local function raidIndexOf(name)
+	if not (name and GetNumRaidMembers and GetRaidRosterInfo) then return nil end
+	local short = name:gsub("%-.*$", "")
+	for i = 1, GetNumRaidMembers() do
+		local n = GetRaidRosterInfo(i)
+		if n and n:gsub("%-.*$", "") == short then return i end
+	end
+	return nil
+end
+
+-- Is the master-loot candidate list HEALTHY for us right now? We're the ML but
+-- can the game name at least one candidate? One hit = healthy.
+--
+-- CAVEAT (3.3.5a): GetMasterLootCandidate is only RELIABLE while a loot window is
+-- open -- with no corpse open it can legitimately return nothing even when the
+-- list is fine. So an empty result is only TRUSTWORTHY as "broken" when a loot
+-- window is actually open (GetNumLootItems > 0). Callers that probe while idle
+-- must treat a "false" as INCONCLUSIVE, not proof of breakage -- otherwise we'd
+-- flip the ML needlessly. This function only reports raw list emptiness; the
+-- `lootWindowOpen` helper below is what makes the signal trustworthy.
+local function mlCandidateListOK()
+	if not GetMasterLootCandidate then return true end   -- API missing -> don't cry wolf
+	-- a live raid always has the player themself as a candidate; one hit = healthy
+	for c = 1, 40 do
+		if GetMasterLootCandidate(c) then return true end
+	end
+	return false
+end
+
+-- Is a loot window open right now? Only then is an empty candidate list a
+-- RELIABLE "broken" signal (see the caveat above).
+local function lootWindowOpen()
+	return GetNumLootItems and GetNumLootItems() > 0
+end
+
+-- Who is the current master looter (name), or nil if loot method isn't master.
+local function currentMasterLooterName()
+	if not GetLootMethod then return nil end
+	local method, partyML, raidML = GetLootMethod()
+	if method ~= "master" then return nil end
+	if raidML and raidML > 0 and GetRaidRosterInfo then
+		return (GetRaidRosterInfo(raidML))
+	end
+	if partyML == 0 then return UnitName("player") end
+	if partyML and partyML > 0 then
+		return UnitName("party" .. partyML)
+	end
+	return nil
+end
+
+-- ----- BROKEN-ML side: detect + ask for a re-sync ----------------------------
+local MLFIX_COOLDOWN = 15    -- seconds between our own re-sync requests (anti-flood)
+local lastFixRequest = 0
+local resyncPending = false  -- waiting for a leader ACK / a healthy list
+
+-- Probe our ML health and, if RELIABLY broken, ask the group to re-sync us.
+-- `requireWindow` (default true) makes us only ACT on the trustworthy signal --
+-- an empty candidate list WHILE a loot window is open. When called on a zone-in
+-- (requireWindow=false) with no loot open, an empty list is inconclusive, so we
+-- don't request a flip; we just wait for the next LOOT_OPENED to confirm.
+-- Debounced so a zone-in storm of events can't spam the request.
+local function checkMLHealth(requireWindow)
+	if requireWindow == nil then requireWindow = true end
+	if not iAmMasterLooter() then resyncPending = false; return end
+	if not (GetNumRaidMembers and GetNumRaidMembers() > 0) then return end  -- flip needs a raid leader
+	if mlCandidateListOK() then
+		-- healthy (maybe the leader just fixed us): clear any pending state
+		if resyncPending then
+			resyncPending = false
+			Okanvil:Print("|cff7cfc8aMaster-loot re-synced.|r Candidate list restored.")
+		end
+		return
+	end
+	-- Empty list. Only TRUST it as "broken" when a loot window is open; otherwise
+	-- it's just the API being quiet with no corpse open -> don't flip needlessly.
+	if requireWindow and not lootWindowOpen() then return end
+	-- BROKEN: we're ML but have no candidates. Ask the leader to flip us.
+	local now = GetTime() or 0
+	if now - lastFixRequest < MLFIX_COOLDOWN then return end
+	lastFixRequest = now
+	resyncPending = true
+	local me = UnitName("player")
+	if Okanvil.Comms and Okanvil.Comms.Send("MLFIX", me) then
+		Okanvil:Print("|cffffd200Master-loot desynced|r (lost candidate list after DC/teleport). "
+			.. "Asking the raid leader's Okanvil to re-sync...")
+	else
+		-- no comms channel or send failed -> degrade to the old social workaround
+		Okanvil:Print("|cffff5555Master-loot desynced|r and no Okanvil leader answered -- "
+			.. "ask the raid leader to reassign you as master looter.")
+	end
+end
+
+-- ----- LEADER side: receive MLFIX, verify, flip, ACK -------------------------
+local FLIP_COOLDOWN = 8     -- seconds we won't re-flip the SAME target (dedupe bursts)
+local lastFlipFor = {}      -- name -> GetTime() of last flip we did for them
+
+local function doMLFlip(mlName)
+	-- ONLY the raid leader can SetLootMethod. Gate hard on role -- this is the
+	-- anti-spoof check: a MLFIX from anyone is worthless unless WE are the leader.
+	if not (IsRaidLeader and IsRaidLeader()) then return end
+	if (GetLootMethod and GetLootMethod()) ~= "master" then return end   -- not on master loot; nothing to fix
+	-- Verify the requester REALLY is the current ML (don't hand loot control to a
+	-- random spoofer). If they aren't the ML the server reports, ignore.
+	local realML = currentMasterLooterName()
+	if not realML or realML:gsub("%-.*$", "") ~= mlName:gsub("%-.*$", "") then return end
+	-- dedupe: don't re-flip the same person within the cooldown (MLFIX may repeat)
+	local now = GetTime() or 0
+	if lastFlipFor[mlName] and now - lastFlipFor[mlName] < FLIP_COOLDOWN then return end
+	lastFlipFor[mlName] = now
+
+	local myIdx = raidIndexOf(UnitName("player"))
+	local mlIdx = raidIndexOf(mlName)
+	if not (myIdx and mlIdx) then return end
+	if myIdx == mlIdx then return end   -- the ML asking is us? nothing to flip against
+
+	-- Flip: take ML for an instant, then give it back on a LATER frame so the
+	-- server registers two distinct "set master looter" events and re-sends the
+	-- candidate list to the original ML.
+	SetLootMethod("master", "raid" .. myIdx)
+	Okanvil.Comms.After(0.4, function()
+		-- re-check we're still leader & still on master loot before handing back
+		if not (IsRaidLeader and IsRaidLeader()) then return end
+		SetLootMethod("master", "raid" .. mlIdx)
+		Okanvil:Print("Re-synced master loot for |cffffd200" .. mlName .. "|r "
+			.. "(ML flipped and restored).")
+		-- tell their client we did it, so it re-probes and clears its warning
+		Okanvil.Comms.Whisper("MLFIXED", mlName, UnitName("player"))
+	end)
+end
+
+-- register the Comms handlers (load-order safe: Comms loaded before Modules)
+if Okanvil.Comms then
+	-- a broken ML asks us (the group) to re-sync them
+	Okanvil.Comms.On("MLFIX", function(sender, mlName)
+		-- The SENDER name comes from the server (CHAT_MSG_ADDON) and can't be forged,
+		-- so trust it as the identity -- not the self-claimed mlName in the payload.
+		-- doMLFlip still re-checks that this player really IS the current ML.
+		doMLFlip(sender)
+	end)
+	-- the leader tells us they re-synced us -> re-probe our own list
+	Okanvil.Comms.On("MLFIXED", function(sender)
+		checkMLHealth()
+	end)
+end
+
 -- ------------------------------------------------------------
 -- Events
 -- ------------------------------------------------------------
@@ -1083,6 +1251,9 @@ ev:RegisterEvent("PLAYER_LEAVING_WORLD")
 ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 	if event == "LOOT_OPENED" then
 		captureLoot()
+		-- if we're the ML and the candidate list is empty right when a corpse is
+		-- open, giving would fail HERE -- request a re-sync immediately (debounced).
+		if iAmMasterLooter() and not mlCandidateListOK() then checkMLHealth() end
 	elseif event == "START_LOOT_ROLL" then
 		captureRollStart(arg1)   -- arg1 = rollID; record the item + pop the mini roll NOW
 	elseif event == "CHAT_MSG_LOOT" then
@@ -1112,6 +1283,10 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 			end
 		end
 		maybeAskML()
+		-- NOTE: we DON'T probe ML health on zone-in -- with no loot window open the
+		-- candidate list reads empty even when it's fine (see mlCandidateListOK's
+		-- caveat), so it can't be trusted yet. The reliable detection happens on the
+		-- next LOOT_OPENED (ML + open corpse + empty list = genuinely broken).
 	elseif event == "PLAYER_LEAVING_WORLD" then
 		askedMLZone = nil   -- ask again next instance
 		closeRoll()   -- commit any open roll-off before we lose the session context
@@ -1120,6 +1295,10 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 		wipe(seenCorpses)
 		wipe(lastLoggedAt)
 		lastBossName = nil
+		-- reset ML re-sync state so a pending request / cooldown can't leak into the
+		-- next instance (fresh ML context each time we zone).
+		resyncPending = false
+		lastFixRequest = 0
 	end
 end)
 
