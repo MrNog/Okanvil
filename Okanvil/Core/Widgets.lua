@@ -516,12 +516,12 @@ function W.Dashboard(parent, cfg)
 	header:SetPoint("TOPLEFT", 0, 0); header:SetPoint("TOPRIGHT", 0, 0); header:SetHeight(30)
 	D.header = header
 
-	local ix = 8
+	local ix = 10
 	if cfg.icon then
 		local ic = header:CreateTexture(nil, "OVERLAY")
-		ic:SetSize(18, 18); ic:SetPoint("LEFT", 8, 0)
+		ic:SetSize(18, 18); ic:SetPoint("LEFT", 10, 0)
 		ic:SetTexture(cfg.icon); ic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-		ix = 30
+		ix = 32
 	end
 	local htitle = W.Text(header, cfg.title, nil, "accent")
 	htitle:SetPoint("LEFT", ix, 0)
@@ -530,7 +530,7 @@ function W.Dashboard(parent, cfg)
 	local cta
 	if cfg.onPrimary then
 		cta = W.Button(header, cfg.primaryText and cfg.primaryText() or "", "primary")
-		cta:SetSize(150, 22); cta:SetPoint("RIGHT", -6, 0)
+		cta:SetSize(150, 22); cta:SetPoint("RIGHT", -10, 0)
 		cta:SetScript("OnClick", function() cfg.onPrimary() end)
 		D.cta = cta
 	end
@@ -542,10 +542,13 @@ function W.Dashboard(parent, cfg)
 	status:SetPoint("LEFT", htitle, "RIGHT", 10, 0)
 	D.statusFS = status
 
+	-- horizontal breathing room so tab buttons / Back aren't glued to the edges
+	local PAD = 10
+
 	-- ---- toolbar row (config tabs + drawer toggle) ----
 	local toolbar = W.Frame(parent, "bare")
-	toolbar:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -4)
-	toolbar:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", 0, -4)
+	toolbar:SetPoint("TOPLEFT", header, "BOTTOMLEFT", PAD, -4)
+	toolbar:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", -PAD, -4)
 	toolbar:SetHeight(22)
 	D.toolbar = toolbar
 
@@ -554,22 +557,37 @@ function W.Dashboard(parent, cfg)
 	body:SetPoint("TOPLEFT", toolbar, "BOTTOMLEFT", 0, -4)
 	body:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, footerH + 4)
 
-	local drawer = W.Frame(body, "dark")
-	drawer:SetPoint("TOPRIGHT", 0, 0); drawer:SetPoint("BOTTOMRIGHT", 0, 0)
-	drawer:SetWidth(drawerW)
+	-- drawerWidth = 0 -> single-panel page: no side drawer, no toggle button.
+	-- main fills the whole content region. (Guild/Modules/Settings use this.)
+	local hasDrawer = drawerW > 0
+
+	local drawer
+	if hasDrawer then
+		drawer = W.Frame(body, "dark")
+		drawer:SetPoint("TOPRIGHT", 0, 0); drawer:SetPoint("BOTTOMRIGHT", 0, 0)
+		drawer:SetWidth(drawerW)
+	end
 	D.drawer = drawer
 
 	local main = W.Frame(body, "dark")
 	main:SetPoint("TOPLEFT", 0, 0); main:SetPoint("BOTTOMLEFT", 0, 0)
-	main:SetPoint("TOPRIGHT", drawer, "TOPLEFT", -6, 0)
-	main:SetPoint("BOTTOMRIGHT", drawer, "BOTTOMLEFT", -6, 0)
+	if hasDrawer then
+		main:SetPoint("TOPRIGHT", drawer, "TOPLEFT", -6, 0)
+		main:SetPoint("BOTTOMRIGHT", drawer, "BOTTOMLEFT", -6, 0)
+	else
+		main:SetPoint("TOPRIGHT", 0, 0); main:SetPoint("BOTTOMRIGHT", 0, 0)
+	end
 	D.main = main
+	-- The rat watermark lives on the HOST's background, but main/drawer (opaque
+	-- "dark" panels) sit on top and hide it -> mount it on `main` so every
+	-- Dashboard page shows the same faint rat in its corner.
+	if Okanvil.MountBgArt then Okanvil:MountBgArt(main) end
 
-	local drawerShown = true
+	local drawerShown = hasDrawer
 	local function layoutMain()
 		main:ClearAllPoints()
 		main:SetPoint("TOPLEFT", 0, 0); main:SetPoint("BOTTOMLEFT", 0, 0)
-		if drawerShown then
+		if hasDrawer and drawerShown then
 			main:SetPoint("TOPRIGHT", drawer, "TOPLEFT", -6, 0)
 			main:SetPoint("BOTTOMRIGHT", drawer, "BOTTOMLEFT", -6, 0)
 		else
@@ -578,6 +596,7 @@ function W.Dashboard(parent, cfg)
 	end
 	local drawerLabel = cfg.drawerLabel or "panel"
 	function D:ToggleDrawer()
+		if not hasDrawer then return end
 		drawerShown = not drawerShown
 		drawer:SetShown(drawerShown)
 		layoutMain()
@@ -601,7 +620,7 @@ function W.Dashboard(parent, cfg)
 	D.overlay = overlay
 
 	local back = W.Button(overlay, "< Back", "secondary")
-	back:SetSize(64, 20); back:SetPoint("TOPLEFT", 8, -8)
+	back:SetSize(64, 20); back:SetPoint("TOPLEFT", PAD, -8)
 	local otitle = W.Text(overlay, "", nil, "accent")
 	otitle:SetPoint("LEFT", back, "RIGHT", 12, 0)
 
@@ -622,13 +641,13 @@ function W.Dashboard(parent, cfg)
 		-- tab.height gives the content height; the child scrolls if it exceeds the view.
 		if not D.pages[key] then
 			local sf = CreateFrame("ScrollFrame", nil, overlay)
-			sf:SetPoint("TOPLEFT", 8, -34); sf:SetPoint("BOTTOMRIGHT", -12, 8)
+			sf:SetPoint("TOPLEFT", PAD, -34); sf:SetPoint("BOTTOMRIGHT", -(PAD + 6), 8)
 			local page = W.Frame(sf, "bare")
 			page:SetSize(10, tab.height or 400)
 			sf:SetScrollChild(page)
 
 			local sb = CreateFrame("Slider", nil, overlay)
-			sb:SetPoint("TOPRIGHT", -4, -34); sb:SetPoint("BOTTOMRIGHT", -4, 8); sb:SetWidth(4)
+			sb:SetPoint("TOPRIGHT", -PAD, -34); sb:SetPoint("BOTTOMRIGHT", -PAD, 8); sb:SetWidth(4)
 			sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
 			local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetSize(4, 40)
 			th:SetVertexColor(unpack3(C.accent)); sb:SetThumbTexture(th)
@@ -653,22 +672,35 @@ function W.Dashboard(parent, cfg)
 	end
 	D.OpenPage = openPage
 
-	-- lay the tab buttons + drawer toggle onto the toolbar
+	-- lay the tab buttons + drawer toggle onto the toolbar. Width auto-fits the
+	-- label (min 60) so longer labels like "Appearance"/"Collectors" never clip.
 	local prev
 	for _, t in ipairs(cfg.tabs or {}) do
 		local b = W.Button(toolbar, t.label, "secondary")
-		b:SetSize(76, 20); b._key = t.key
+		local tw = (b.text and b.text:GetStringWidth() or 60) + 22
+		b:SetSize(math.max(60, tw), 20); b._key = t.key
 		if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0)
 		else b:SetPoint("LEFT", 0, 0) end
 		b:SetScript("OnClick", function() openPage(t.key) end)
 		D.tabBtns[t.key] = b
 		prev = b
 	end
-	-- drawer toggle (right end of toolbar)
-	local dbtn = W.Button(toolbar, "Hide " .. drawerLabel, "secondary")
-	dbtn:SetSize(96, 20); dbtn:SetPoint("RIGHT", 0, 0)
-	dbtn:SetScript("OnClick", function() D:ToggleDrawer() end)
-	D.drawerBtn = dbtn
+	-- drawer toggle (right end of toolbar) -- only when the page has a drawer
+	if hasDrawer then
+		local dbtn = W.Button(toolbar, "Hide " .. drawerLabel, "secondary")
+		dbtn:SetSize(96, 20); dbtn:SetPoint("RIGHT", 0, 0)
+		dbtn:SetScript("OnClick", function() D:ToggleDrawer() end)
+		D.drawerBtn = dbtn
+	end
+
+	-- No tabs and no drawer -> nothing lives on the toolbar. Collapse it and pull
+	-- the content region up under the header so the page starts flush.
+	if (not cfg.tabs or #cfg.tabs == 0) and not hasDrawer then
+		toolbar:Hide()
+		body:ClearAllPoints()
+		body:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -6)
+		body:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, footerH + 4)
+	end
 
 	function D:Refresh()
 		if cta and cfg.primaryText then cta.text:SetText(cfg.primaryText()) end

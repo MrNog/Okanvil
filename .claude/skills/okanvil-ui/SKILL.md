@@ -1,17 +1,20 @@
 ---
 name: okanvil-ui
-description: Build and restyle Okanvil addon UI (WoW 3.3.5a Lua) for the OkanvilSuite host and its plugins. Use when adding/editing frames, buttons, dropdowns, sliders, panels, or any in-game UI in Okanvil / Okanvil-Guild / Okanvil-IDs / Okanvil-Logs / Okanvil-Recruit. Enforces the shared widget layer (Okanvil.W), the gold RATS-Hub palette, 3.3.5a API safety, and the anti-spill window structure modelled on Method Raid Tools (MRT/ExLib).
+description: Build and restyle the Okanvil addon UI (WoW 3.3.5a Lua). Use when adding/editing frames, buttons, dropdowns, sliders, panels, or any in-game UI in Okanvil's Core or Modules (Guild / Invite / Recruit / Loot / LootRoll / IDs / Logs). Enforces the shared widget layer (Okanvil.W) and W.Dashboard shell, the gold RATS-Hub palette, 3.3.5a API safety, and the anti-spill window structure modelled on Method Raid Tools (MRT/ExLib).
 metadata:
-  author: Okanata
-  version: "1.0"
+  author: Okanor
+  version: "1.1"
 ---
 
 # Okanvil UI
 
-Okanvil is an ElvUI-style **host addon** for WoW 3.3.5a: a single window with a
-left nav; optional plugins (Okanvil-IDs/Logs/Recruit) register and draw into a
-content panel. The structure is modelled on **Method Raid Tools' ExLib** so
-components never spill out of the main window.
+Okanvil is an MRT-style **single addon** for WoW 3.3.5a: one window with a left
+nav. It's **all one addon** — a native core (Home + Modules) plus built-in
+modules (Guild/Invite/Recruit/Loot/LootRoll/IDs/Logs) that register and draw into
+a content panel. **There are no standalone plugins.** Every module page is built
+on **`W.Dashboard`** (gold header + optional tabs + optional drawer). The
+structure is modelled on **Method Raid Tools' ExLib** so components never spill
+out of the main window.
 
 ## Non-negotiables
 
@@ -22,12 +25,13 @@ components never spill out of the main window.
    - `SetObeyStepOnDrag` — guard it.
    - `BackdropTemplate`/`Mixin` — NOT needed on 3.3.5 (all frames have `SetBackdrop` natively). Don't add them.
 2. **Use the shared widget layer `Okanvil.W`** (Widgets.lua). Do NOT hand-roll
-   `CreateFrame`+`SetBackdrop` buttons in plugins — that's the "old button style".
-   Available: `W.Frame/Text/Button/Check/Slider/EditBox/DropDown`, plus
-   `Okanvil:Skin(frame, kind)`, `Okanvil:Popup(title)`, `Okanvil:ReskinAll(alpha)`.
-3. **Edit source in `Projects\OkanvilSuite`, never the live WoW AddOns copy.** They
-   are separate copies; the user syncs via the Fork GUI.
-4. **Preserve the plugin-facing API:** `Okanvil:NewText/Backdrop/Font/Texture/Register/Toggle`.
+   `CreateFrame`+`SetBackdrop` buttons — that's the "old button style".
+   Available: `W.Frame/Text/Button/Check/Slider/EditBox/DropDown/MultiEdit` +
+   **`W.Dashboard`**, plus `Okanvil:Skin(frame, kind)`, `Okanvil:Popup(title)`,
+   `Okanvil:ReskinAll(alpha)`.
+3. **Edit source in `Projects\Okanvil` (repo root = the addon), never the live WoW
+   AddOns copy.** They are separate copies; the user syncs via the Fork GUI.
+4. **Preserve the module-facing API:** `Okanvil:NewText/Backdrop/Font/Texture/Register/Toggle`.
 
 ## Palette (mirror the RATS Hub — gold on neutral dark)
 
@@ -56,18 +60,21 @@ Never introduce a new accent colour (the old cyan is gone). Toggle "ON" = `ok`, 
 Plugins that still use a local `makeFlatButton`/`makeButton` should be migrated to
 `Okanvil.W.Button`. Same for ON/OFF pills → use a two-colour `W.Button` toggle.
 
-## Product model (host is NOT empty)
+## Product model (core is NOT empty)
 
 Okanvil has a **native core** (a guild dashboard Home + a Modules manager) so it's
-useful with zero plugins. The 4 tools (Logs/IDs/Guild/Recruit) are **optional
-modules you toggle on/off** — like DBM/BigWigs. Recruit especially is officer/pug-only,
-so nobody should be forced to have it on.
+useful with zero modules on. The tools (Guild/Invite/Recruit/Loot/LootRoll/IDs/Logs)
+are **optional modules you toggle on/off** — like DBM/BigWigs. It's all one addon;
+there are no standalone plugins.
 
-- **Enable state** lives in `Okanvil.db.modules[name].enabled` (absent = enabled).
-  API: `Okanvil:IsModuleEnabled(name)`, `Okanvil:SetModuleEnabled(name, bool)`.
+- **Enable state is PER CHARACTER** — `Okanvil_CharDB.modules[name].enabled`
+  (absent = enabled). API: `Okanvil:IsModuleEnabled(name)`,
+  `Okanvil:SetModuleEnabled(name, bool)`. Content settings stay account-wide.
 - Disabled = **hidden from the nav** (instant, no /reload). Deeper event-gating
-  (a plugin not registering its events when off) is opt-in inside each plugin, TODO.
-- Plugins add `desc = "..."` to their `Okanvil_Plugins[name]` table for the Modules list.
+  (a module not registering its events when off) is opt-in inside each module, TODO.
+- Modules add `desc = "..."` to their `Okanvil_Plugins[name]` table for the Modules list.
+- **Nav order** is one editable list (`Okanvil.NAV_ORDER`, by title); the shared
+  **icon set** is `Okanvil.ICONS` (keep a module's nav icon == its Dashboard header icon).
 - Home is a **guild dashboard** (online count/members/rank tiles, online list, web-hub
   card). Uses 3.3.5a guild API: `IsInGuild`, `GuildRoster`, `GetNumGuildMembers`,
   `GetGuildRosterInfo`.
@@ -89,10 +96,10 @@ vs `end/until/elseif`) must report depth 0. Then the user loads in-game.
 
 ## Window / panel structure (anti-spill, from MRT)
 
-- **Plugins receive a full-size fill panel** (real BOTTOMRIGHT) via `newFillPanel()`.
-  They anchor their own widgets/scrollframes to it. Do NOT hand plugins a tiny
-  scroll-child — that collapses their `BOTTOMRIGHT` anchors (this broke Recruit).
-- **Shell-owned long pages** (Home, Settings) use `newScrollPanel()` (internal clipped scroll).
+- **Module pages receive a full-size fill panel** (real BOTTOMRIGHT) via
+  `newFillPanel()`, then build a `W.Dashboard` into it. Do NOT hand a module a tiny
+  scroll-child — that collapses its `BOTTOMRIGHT` anchors (this broke Recruit once).
+- **Shell-owned long pages** (Home) use `newScrollPanel()` (internal clipped scroll).
 - **Dropdowns use the ONE global menu** (`W.DropDown`): parented to UIParent, strata
   `TOOLTIP`, `SetClampedToScreen`, flips up when no room below. Never build a
   dropdown list as a child of the button (it gets trapped/clipped by the window).
@@ -101,16 +108,16 @@ vs `end/until/elseif`) must report depth 0. Then the user loads in-game.
 
 ## Workflow
 
-1. Read the relevant file(s) under `Projects\OkanvilSuite`. Match surrounding style.
-2. Prefer `Okanvil.W.*`; extend Widgets.lua if a needed widget is missing (keep the chained `:Point/:Size` API and register skins for alpha re-tint).
+1. Read the relevant file(s) under `Projects\Okanvil` (repo root = the addon). Match surrounding style.
+2. Prefer `Okanvil.W.*` and `W.Dashboard`; extend Widgets.lua if a needed widget is missing (keep the chained `:Point/:Size` API and register skins for alpha re-tint).
 3. There is **no local Lua interpreter** — validate structurally: block balance
    (`function/if/for/do` vs `end`), paren balance, and cross-file symbols. Then the
    user loads in-game and reports any Lua error line.
-4. Keep changes small and incremental; one plugin at a time when migrating buttons.
+4. Keep changes small and incremental; one module at a time when migrating buttons.
 
 ## Files
 
-- `Okanvil/Core.lua` — boot, DB, media, plugin registry, legacy `:Backdrop`.
-- `Okanvil/Widgets.lua` — the `Okanvil.W` widget layer + palette + global dropdown + Popup.
-- `Okanvil/UI.lua` — shell: window, nav, panels (fill vs scroll), Home, Settings, minimap.
-- `Okanvil-*/` — plugins; each fills `Okanvil_Plugins[name] = { title, icon, build(panel), refresh }`.
+- `Core/Core.lua` — boot, DB, media, module registry, legacy `:Backdrop`.
+- `Core/Widgets.lua` — the `Okanvil.W` widget layer + `W.Dashboard` + palette + global dropdown + Popup.
+- `Core/UI.lua` — shell: window, nav (`NAV_ORDER`/`ICONS`), panels (fill vs scroll), Home, Settings, Modules, minimap.
+- `Modules/*.lua` — each fills `Okanvil_Plugins[name] = { title, icon, desc, build(panel), refresh }` and draws a `W.Dashboard`.

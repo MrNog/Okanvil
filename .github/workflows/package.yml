@@ -1,14 +1,23 @@
 name: Package addon
 
-# On every push to main, build one clean install-ready <Addon>.zip per top-level
-# folder that contains a .toc (currently just "Okanvil"). The zip holds a folder
-# named exactly after the addon, so users just unzip it straight into AddOns\.
-# Dev-only files (README, PLAN, docs, backups, skills) are STRIPPED from the zip
-# so the download is nothing but the addon itself.
+# Two ways this runs:
+#   * push a TAG  vX.Y.Z  ->  builds a VERSIONED release (kept forever) + refreshes Latest.
+#   * push to main        ->  refreshes only the rolling "Latest" (a dev/bleeding-edge build).
+#
+# The VERSION is derived automatically:
+#   - on a tag  -> the tag minus the leading "v"  (v1.2.0 -> 1.2.0)
+#   - on main   -> "<latest tag>-dev+<short sha>" (or 0.0.0-dev if no tags yet)
+# It is stamped into Okanvil/Okanvil.toc's `## Version:` line before zipping, so you
+# NEVER edit the .toc by hand -- the tag is the single source of truth.
+#
+# Bumping: new module / feature = MINOR (1.1 -> 1.2). Breaking change (e.g. wiping
+# SavedVariables) = MAJOR (1.x -> 2.0). Bug-fix only = PATCH (1.2.0 -> 1.2.1).
+# To cut a release:  git tag v1.2.0 && git push --tags
 
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 permissions:
@@ -19,37 +28,59 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need tags for the dev-version fallback
 
-      - name: Build install-ready zip(s) (only folders with a .toc)
+      - name: Derive version
+        id: ver
         run: |
-          mkdir -p out
-          for d in */ ; do
-            name="${d%/}"
-            if ls "$name"/*.toc >/dev/null 2>&1; then
-              mkdir -p "staging/$name"
-              cp -r "$name/." "staging/$name/"
-              # strip dev-only files so the download is JUST the addon
-              ( cd "staging/$name" && \
-                rm -f README.md PLAN.md CHANGELOG.md .editorconfig && \
-                find . -type d -name '.git' -prune -exec rm -rf {} + && \
-                find . -type d -name '.github' -prune -exec rm -rf {} + && \
-                find . -type d -name '.claude' -prune -exec rm -rf {} + && \
-                rm -f Media/README.md && \
-                rm -f Media/*.png && \
-                find . -name '*.bak' -delete && \
-                find . -name '*~' -delete )
-              ( cd staging && zip -r "../out/$name.zip" "$name" )
-              echo "packaged $name (dev files stripped)"
-            fi
-          done
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF#refs/tags/v}"
+            echo "tagged=true" >> "$GITHUB_OUTPUT"
+          else
+            LAST="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+            V="${LAST#v}-dev+$(git rev-parse --short HEAD)"
+            echo "tagged=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building version: $V"
 
-      - name: Publish / refresh the Latest release
+      - name: Build install-ready Okanvil.zip (addon = the Okanvil/ subfolder)
+        run: |
+          name="Okanvil"
+          if [ ! -f "$name/$name.toc" ]; then
+            echo "No $name/$name.toc -- nothing to package."; exit 1
+          fi
+          mkdir -p out staging
+          cp -r "$name" "staging/$name"
+          # stamp the version into the staged .toc (single source of truth = the tag)
+          sed -i "s/^## Version:.*/## Version: ${{ steps.ver.outputs.version }}/" "staging/$name/$name.toc"
+          # strip dev-only files so the download is JUST the addon
+          ( cd "staging/$name" && \
+            rm -f PLAN.md CHANGELOG.md .editorconfig && \
+            rm -f Media/README.md && \
+            rm -f Media/*.png && \
+            find . -name '*.bak' -delete && \
+            find . -name '*~' -delete )
+          ( cd staging && zip -r "../out/$name.zip" "$name" )
+          echo "packaged $name v${{ steps.ver.outputs.version }} (dev files stripped)"
+
+      - name: Publish versioned release (only on a tag)
+        if: steps.ver.outputs.tagged == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # wipe the old rolling release + its tag, then recreate it with the fresh zips attached
-          # in one go — no pre-existing assets to collide with (fixes "ReleaseAsset already exists")
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            --title "Okanvil ${{ steps.ver.outputs.version }}" \
+            --generate-notes \
+            out/*.zip
+
+      - name: Refresh the rolling Latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # wipe + recreate the "latest" pointer so it always holds the newest zip
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
           gh release create latest --title "Latest" --latest \
-            --notes "Latest build of Okanvil. Download Okanvil.zip and unzip it into World of Warcraft\\Interface\\AddOns\\, then restart WoW." \
+            --notes "Latest build of Okanvil (${{ steps.ver.outputs.version }}). Download Okanvil.zip and unzip it into World of Warcraft\\Interface\\AddOns\\, then restart WoW." \
             out/*.zip

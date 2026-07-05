@@ -4,7 +4,8 @@
 -- (AFK mode) + auto-invite, keyword + known-contact filters.
 -- Guild name is configurable (default "Guild"); use {guild} in any
 -- message and it is replaced with the guild name at send time.
--- Tabbed UI: Text / Settings / Filters / Whispers / Summary. Minimap button.
+-- Dashboard UI: Text / Settings / Filters tabs + a contacts drawer.
+-- A native Okanvil module (no standalone window / minimap).
 -- ============================================================
 
 -- Native Okanvil module (lives in the host folder). ADDON is only the module
@@ -32,11 +33,10 @@ local defaults = {
 	filterGroup = true,
 	filterFriends = true,
 	-- per-channel spam interval in seconds (0 = off). All off by default.
-	channelIntervals = { Global = 0, Trade = 0, LookingForGroup = 0, General = 0, GUILD = 0 },
+	channelIntervals = { Global = 0, LookingForGroup = 0, General = 0 },
 	customChannel = "",
 	customInterval = 0,
 	blacklist = "", -- block words (gold sellers / ads); user fills it in
-	minimapAngle = 210,
 	log = {},
 	session = {}, -- per-name recruiting tally (uncapped); cleared from the Summary tab
 }
@@ -458,6 +458,13 @@ function Rec_ToggleActive(state)
 	db.active = state
 	chElapsed = {}
 	if db.active then
+		-- MUTUAL EXCLUSION with the Invite module's keyword-invite: both grab the
+		-- same "inv" whisper, so only one runs. Turning Recruit ON stands it down.
+		if Okanvil and Okanvil.Invite and Okanvil.Invite.KeywordEnabled
+			and Okanvil.Invite.KeywordEnabled() then
+			Okanvil.Invite.SetKeywordEnabled(false)
+			Print("Invite keyword-invite turned OFF (can't share the invite keyword).")
+		end
 		local i = 0
 		for name, iv in pairs(db.channelIntervals) do
 			if iv and iv > 0 then
@@ -469,7 +476,6 @@ function Rec_ToggleActive(state)
 	if RecruitFrame then
 		Rec_RefreshUI()
 	end
-	Rec_UpdateMinimap()
 	if db.active then
 		Print("advertising |cff00ff00ON|r.")
 	else
@@ -480,7 +486,7 @@ end
 -- ============================================================
 -- UI
 -- ============================================================
-local CH_LIST = { "Global", "Trade", "LookingForGroup", "General", "GUILD" }
+local CH_LIST = { "Global", "LookingForGroup", "General" }
 
 local CLASS_COLORS = {
 	DEATHKNIGHT = "C41F3B",
@@ -499,20 +505,16 @@ local function nameColor(name, classFile)
 end
 
 -- ---- UI helpers: prefer the shared Okanvil.W widgets (gold design system);
--- keep a lightweight standalone fallback for when the addon runs without the host.
-local W = Okanvil and Okanvil.W
+-- UI helpers: thin wrappers over the shared Okanvil.W widget layer (the host is
+-- always present -- this is a native module, no standalone).
+local W = Okanvil.W
 
-local function flatBackdrop(frame, r, g, b, a, br, bgc, bb)
-	if Okanvil and Okanvil.Skin then Okanvil:Skin(frame, "input"); return end
-	frame:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
-	frame:SetBackdropColor(r, g, b, a)
-	frame:SetBackdropBorderColor(br or 0.35, bgc or 0.35, bb or 0.4, 1)
-end
+-- flat panel backdrop for the few floating frames (toast) that live on UIParent,
+-- not inside a W.Dashboard. Extra args are ignored -- Okanvil:Skin owns the look.
+local function flatBackdrop(frame) Okanvil:Skin(frame, "input") end
 
 local function makeLabel(parent, text, x, y)
-	local fs
-	if W then fs = W.Text(parent, text, nil, "dim")
-	else fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal"); fs:SetText(text) end
+	local fs = W.Text(parent, text, nil, "dim")
 	fs:SetPoint("TOPLEFT", x, y)
 	return fs
 end
@@ -520,48 +522,21 @@ end
 -- single-line edit box; returns the EditBox (with .bd = the bordered frame) so
 -- existing call-sites (SetText/GetText/hooks) keep working.
 local function makeBox(parent, name, x, y, w, h)
-	if W and W.EditBox then
-		local box = W.EditBox(parent)
-		box:SetSize(w, h); box:SetPoint("TOPLEFT", x, y)
-		local e = box.edit
-		e.bd = box
-		return e
-	end
-	local bd = CreateFrame("Frame", nil, parent)
-	bd:SetPoint("TOPLEFT", x, y); bd:SetSize(w, h)
-	flatBackdrop(bd, 0.1, 0.1, 0.12, 0.9, 0.4, 0.4, 0.45)
-	local e = CreateFrame("EditBox", "Rec_" .. name, bd)
-	e:SetMultiLine(false); e:SetMaxLetters(255); e:SetFontObject(ChatFontNormal)
-	e:SetTextInsets(5, 5, 3, 3); e:SetPoint("TOPLEFT", 2, -2); e:SetPoint("BOTTOMRIGHT", -2, 2)
-	e:SetAutoFocus(false); e.bd = bd
-	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
-	e:SetScript("OnEnterPressed", function(s) s:ClearFocus() end)
+	local box = W.EditBox(parent)
+	box:SetSize(w, h); box:SetPoint("TOPLEFT", x, y)
+	local e = box.edit
+	e.bd = box
 	return e
 end
 
 -- responsive multi-line box: stretches to the parent's right edge (minus rightMargin)
 local function makeScrollBox(parent, name, x, y, rightMargin, h)
-	if W and W.MultiEdit then
-		local box = W.MultiEdit(parent)
-		box:SetPoint("TOPLEFT", x, y)
-		box:SetPoint("RIGHT", parent, "RIGHT", -(rightMargin or 12), 0)
-		box:SetHeight(h)
-		local e = box.edit
-		e.bd = box
-		-- shim: some call-sites do box:SetText via the returned EditBox — that works.
-		return e
-	end
-	local bd = CreateFrame("Frame", nil, parent)
-	bd:SetPoint("TOPLEFT", x, y); bd:SetPoint("RIGHT", parent, "RIGHT", -(rightMargin or 12), 0); bd:SetHeight(h)
-	flatBackdrop(bd, 0.1, 0.1, 0.12, 0.9, 0.4, 0.4, 0.45)
-	local sf = CreateFrame("ScrollFrame", "Rec_" .. name .. "SF", bd, "UIPanelScrollFrameTemplate")
-	sf:SetPoint("TOPLEFT", 5, -5); sf:SetPoint("BOTTOMRIGHT", -28, 5)
-	local e = CreateFrame("EditBox", "Rec_" .. name, sf)
-	e:SetMultiLine(true); e:SetMaxLetters(255); e:SetFontObject(ChatFontNormal); e:SetAutoFocus(false); e.bd = bd
-	local function fit() e:SetWidth(math.max(40, sf:GetWidth() or 200)) end
-	sf:SetScript("OnSizeChanged", fit); fit()
-	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
-	sf:SetScrollChild(e)
+	local box = W.MultiEdit(parent)
+	box:SetPoint("TOPLEFT", x, y)
+	box:SetPoint("RIGHT", parent, "RIGHT", -(rightMargin or 12), 0)
+	box:SetHeight(h)
+	local e = box.edit
+	e.bd = box
 	return e
 end
 
@@ -569,41 +544,19 @@ end
 -- runs after a toggle. Returns a frame with SetChecked/GetChecked shims so the
 -- existing Rec_RefreshUI (which calls :SetChecked) keeps working.
 local function makeCheck(parent, key, label, x, y, onChange)
-	if W and W.Check then
-		local c = W.Check(parent, label,
-			function() return db[key] end,
-			function(v) db[key] = v and true or false; if onChange then onChange(v) end end)
-		c:SetPoint("TOPLEFT", x, y)
-		c.SetChecked = function(_, v) db[key] = v and true or false; c.refresh() end
-		c.GetChecked = function() return db[key] end
-		return c
-	end
-	local c = CreateFrame("CheckButton", "Rec_" .. key, parent, "UICheckButtonTemplate")
-	c:SetPoint("TOPLEFT", x, y); c:SetSize(24, 24)
-	getglobal(c:GetName() .. "Text"):SetText(label)
+	local c = W.Check(parent, label,
+		function() return db[key] end,
+		function(v) db[key] = v and true or false; if onChange then onChange(v) end end)
+	c:SetPoint("TOPLEFT", x, y)
+	c.SetChecked = function(_, v) db[key] = v and true or false; c.refresh() end
+	c.GetChecked = function() return db[key] end
 	return c
 end
 
--- Use the shared Okanvil widget button (gold RATS-Hub styling; honours ._active
--- for tab highlighting) when embedded; fall back to a local flat button standalone.
+-- shared gold RATS-Hub button (honours ._active for tab highlighting)
 local function makeFlatButton(parent, text, w, h, kind)
-	if Okanvil and Okanvil.W and Okanvil.W.Button then
-		local b = Okanvil.W.Button(parent, text, kind)
-		b:SetSize(w, h)
-		return b
-	end
-	local b = CreateFrame("Button", nil, parent)
+	local b = W.Button(parent, text, kind)
 	b:SetSize(w, h)
-	flatBackdrop(b, 0.2, 0.2, 0.24, 1, 0.4, 0.4, 0.45)
-	local t = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	t:SetPoint("CENTER")
-	t:SetText(text)
-	b.text = t
-	b:SetScript("OnEnter", function(s) s:SetBackdropColor(0.3, 0.3, 0.35, 1) end)
-	b:SetScript("OnLeave", function(s)
-		if s._active then s:SetBackdropColor(0.35, 0.28, 0.08, 1)
-		else s:SetBackdropColor(0.2, 0.2, 0.24, 1) end
-	end)
 	return b
 end
 
@@ -739,30 +692,13 @@ function Rec_BuildUI(parent)
 		return
 	end
 
-	local embedded = parent ~= nil
-	local f
-	if embedded then
-		f = parent -- Okanvil gives us a content panel; it owns the window chrome
-	else
-		f = CreateFrame("Frame", "RecruitWindow", UIParent)
-		f:SetSize(560, 460)
-		f:SetPoint("CENTER")
-		flatBackdrop(f, 0.11, 0.11, 0.13, 0.96, 0.85, 0.66, 0.2)
-		f:SetMovable(true)
-		f:EnableMouse(true)
-		f:RegisterForDrag("LeftButton")
-		f:SetScript("OnDragStart", f.StartMoving)
-		f:SetScript("OnDragStop", f.StopMovingOrSizing)
-		f:SetClampedToScreen(true)
-		f:Hide()
-	end
-
+	-- Okanvil always gives us a content panel (it owns the window chrome).
+	local f = parent
 	RecruitFrame = f
 
 	-- content region: everything below draws through a shared Dashboard shell
-	-- (header + toggleable stat drawer + config overlays + footer). The shell
-	-- comes from Okanvil.W; standalone (no host) still gets it because Widgets.lua
-	-- is loaded as a dependency. The X offset just pads inside each fill frame.
+	-- (header + toggleable contacts drawer + config overlays). The X offset just
+	-- pads inside each fill frame.
 	local X = 4
 
 	local afkTag = function() return db.afkMode and "  |cff88aaff(AFK reply active)|r" or "" end
@@ -839,7 +775,7 @@ function Rec_BuildSettings(stp)
 			end
 		end)
 	end
-	local CH_LABELS = { Global = "Global", Trade = "Trade", LookingForGroup = "LFG", General = "General", GUILD = "Guild" }
+	local CH_LABELS = { Global = "Global", LookingForGroup = "LFG", General = "General" }
 	local COL2 = X + 224
 	local cols = { { lx = X, bx = X + 70 }, { lx = COL2, bx = COL2 + 70 } }
 	local rowY = -124
@@ -1252,105 +1188,6 @@ function Rec_RefreshSummary()
 	set("waiting", sent)
 end
 
-function Rec_Toggle()
-	if not RecruitFrame then
-		Rec_BuildUI()
-	end
-	if RecruitFrame:IsShown() then
-		RecruitFrame:Hide()
-	else
-		Rec_RefreshUI()
-		RecruitFrame:Show()
-	end
-end
-
--- ============================================================
--- Minimap button
--- ============================================================
-function Rec_UpdateMinimap()
-	if not Recruit_MinimapButton or not Recruit_MinimapButton.icon then
-		return
-	end
-	local icon = Recruit_MinimapButton.icon
-	if db and db.active then
-		icon:SetDesaturated(false)
-		icon:SetVertexColor(1, 1, 1)
-	else
-		icon:SetDesaturated(true)
-		icon:SetVertexColor(0.5, 0.5, 0.5)
-	end
-end
-
-function Rec_BuildMinimap()
-	if Recruit_MinimapButton then
-		return
-	end
-	local b = CreateFrame("Button", "Recruit_MinimapButton", Minimap)
-	b:SetSize(31, 31)
-	b:SetFrameStrata("MEDIUM")
-	b:SetFrameLevel(8)
-	b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-	b:RegisterForDrag("LeftButton")
-
-	local overlay = b:CreateTexture(nil, "OVERLAY")
-	overlay:SetSize(53, 53)
-	overlay:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-	overlay:SetPoint("TOPLEFT")
-
-	local icon = b:CreateTexture(nil, "BACKGROUND")
-	icon:SetSize(20, 20)
-	icon:SetTexture("Interface\\Icons\\Ability_Warrior_BattleShout")
-	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	icon:SetPoint("CENTER", 1, 1)
-	b.icon = icon
-
-	local function updatePos()
-		local angle = math.rad(db.minimapAngle or 210)
-		local r = 80
-		b:SetPoint("CENTER", Minimap, "CENTER", r * math.cos(angle), r * math.sin(angle))
-	end
-	updatePos()
-
-	b:SetScript("OnDragStart", function(self)
-		self:SetScript("OnUpdate", function()
-			local mx, my = Minimap:GetCenter()
-			local px, py = GetCursorPosition()
-			local scale = Minimap:GetEffectiveScale()
-			px, py = px / scale, py / scale
-			db.minimapAngle = math.deg(math.atan2(py - my, px - mx))
-			updatePos()
-		end)
-	end)
-	b:SetScript("OnDragStop", function(self)
-		self:SetScript("OnUpdate", nil)
-	end)
-
-	b:SetScript("OnClick", function(self, button)
-		if IsShiftKeyDown() then
-			Rec_Toggle()
-		elseif button == "RightButton" then
-			Rec_ToggleActive()
-		else
-			Rec_Toggle()
-		end
-	end)
-
-	b:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-		GameTooltip:AddLine("|cffF1C40FRecruit|r")
-		GameTooltip:AddLine("Left-click / Shift-click: open", 1, 1, 1)
-		GameTooltip:AddLine("Right-click: toggle advertising", 1, 1, 1)
-		GameTooltip:AddLine("Drag: move button", 1, 1, 1)
-		GameTooltip:AddLine(db.active and "|cff00ff00Status: ON|r" or "|cffff5555Status: OFF|r")
-		GameTooltip:Show()
-	end)
-	b:SetScript("OnLeave", function()
-		GameTooltip:Hide()
-	end)
-
-	Rec_UpdateMinimap()
-end
-
 -- ============================================================
 -- Slash
 -- ============================================================
@@ -1385,8 +1222,8 @@ SlashCmdList["RECRUIT"] = function(arg)
 			end
 		end
 	elseif Okanvil and Okanvil.Toggle then
-		Okanvil:Toggle() -- hosted: open the Okanvil window (pick Recruit in the list)
+		Okanvil:Toggle() -- open the Okanvil window (Recruit is a module in it)
 	else
-		Rec_Toggle() -- standalone window
+		Print("Okanvil host not loaded.")
 	end
 end

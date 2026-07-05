@@ -21,6 +21,7 @@ local function db()
 	d.invite = d.invite or {}
 	local iv = d.invite
 	if iv.keyword == nil then iv.keyword = "inv" end
+	if iv.keywordEnabled == nil then iv.keywordEnabled = false end  -- MASTER switch for keyword-invite
 	if iv.whisperInvite == nil then iv.whisperInvite = false end
 	if iv.guildInvite == nil then iv.guildInvite = false end   -- keyword in /guild chat
 	if iv.retry == nil then iv.retry = true end
@@ -117,6 +118,47 @@ local function inMyGroup(name)
 	for i = 1, p do if UnitName("party" .. i) == name then return true end end
 	return name == UnitName("player")
 end
+
+-- Am I ALLOWED to auto-invite right now? Guards the automatic (on-login) path so
+-- the addon never starts pulling guildies "out of nowhere". Rules:
+--   * solo (no group)                    -> yes (I'll form the group)
+--   * in a party/raid but NOT leader/assist -> NO (someone else runs this group)
+--   * raid contains any non-guild member (a PUG) -> NO (don't drag guildies into a pug)
+-- The manual buttons are the user's explicit action and aren't gated here.
+local function canAutoInvite()
+	local nRaid = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+	local nParty = (GetNumPartyMembers and GetNumPartyMembers()) or 0
+	if nRaid == 0 and nParty == 0 then return true end          -- solo -> free to form a group
+
+	-- must be leader or assistant to legitimately invite into this group
+	local iAmLead = (IsRaidLeader and IsRaidLeader()) or (IsPartyLeader and IsPartyLeader())
+	local iAmAssist = (IsRaidOfficer and IsRaidOfficer())        -- raid assist
+	if not (iAmLead or iAmAssist) then return false end
+
+    -- Don't auto-invite guildies into a group that already has a PUG (non-guildie).
+	-- Build a set of my guild's member names, then check every group member.
+	if IsInGuild and IsInGuild() then
+		local guild = {}
+		local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
+		for i = 1, total do
+			local gname = GetGuildRosterInfo(i)
+			if gname then guild[(gname:gsub("%-.*$", ""))] = true end
+		end
+		if nRaid > 0 then
+			for i = 1, nRaid do
+				local rn = UnitName("raid" .. i)
+				if rn and not guild[rn] then return false end       -- a pug is in the raid
+			end
+		else
+			for i = 1, nParty do
+				local pn = UnitName("party" .. i)
+				if pn and not guild[pn] then return false end        -- a pug is in the party
+			end
+		end
+	end
+	return true
+end
+I.CanAutoInvite = canAutoInvite
 
 -- Send one invite (guarded). Tracks pending invites for retry. Auto-converts to
 -- raid when the group would exceed 5.
@@ -289,6 +331,27 @@ function I.RemoveFromList(listName, name)
 	if I.onChange then I.onChange() end
 end
 
+-- ---- saved-list helpers for the Invite UI's "SAVED LISTS" panel ----
+-- Lists ALREADY persist in the account DB (iv.lists) the moment you add a name,
+-- so these are thin conveniences: a name->members map, and clear aliases.
+function I.SavedLists()
+	local out = {}
+	local iv = db()
+	for name, l in pairs(iv.lists) do out[name] = (l and l.members) or {} end
+	return out
+end
+-- "Save list" is really just a confirmation the list exists (it already persists).
+function I.PersistList(listName)
+	if not listName or listName == "" then return end
+	local iv = db()
+	if not iv.lists[listName] then iv.lists[listName] = { members = {} } end
+	if I.onChange then I.onChange() end
+end
+-- Loading a saved list is just switching the working list name to it (the UI does
+-- that); provided as a named entry point for clarity / future hooks.
+function I.LoadSavedList(listName) return I.ListMembers(listName) end
+I.DeleteSavedList = function(listName) return I.DeleteList(listName) end
+
 function I.DeleteList(listName)
 	local iv = db()
 	iv.lists[listName] = nil
@@ -391,6 +454,26 @@ function I.ImportToList(listName, text, replace)
 	return #members
 end
 
+-- Master switch for keyword-invite. MUTUALLY EXCLUSIVE with Recruit: both listen
+-- for the same keyword ("inv") on whisper, so only one may run at a time -- turning
+-- this ON turns Recruit's advertising OFF, and vice-versa (Recruit calls us too).
+function I.KeywordEnabled() return db().keywordEnabled and true or false end
+function I.SetKeywordEnabled(on)
+	on = on and true or false
+	db().keywordEnabled = on
+	if on then
+		-- can't have both grabbing "inv" -- stand Recruit down.
+		if RecruitDB and RecruitDB.active and Rec_ToggleActive then
+			Rec_ToggleActive(false)
+			Print("Recruit advertising turned OFF (can't share the invite keyword).")
+		end
+		Print("keyword-invite |cff7cfc8aON|r.")
+	else
+		Print("keyword-invite |cffff5555OFF|r.")
+	end
+	if I.onChange then I.onChange() end
+end
+
 -- ------------------------------------------------------------
 -- events: keyword whisper-invite, decline/offline retry, on-login auto-invite
 -- ------------------------------------------------------------
@@ -399,13 +482,33 @@ local function mkPat(fmt) local p = (fmt or ""):gsub("[%(%)%.%+%-%*%?%[%]%^%$]",
 local PAT_DECLINE = ERR_INVITE_PLAYER_S and mkPat(ERR_DECLINE_GROUP_S or "%s declines your group invitation.")
 local PAT_GUILD_ONLINE = ERR_FRIEND_ONLINE_SS and mkPat(ERR_FRIEND_ONLINE_SS)
 
--- shared keyword-invite: if `sender` said the keyword, pull them into the group.
+-- Parse the keyword setting into a list. Multiple keywords are allowed, split on
+-- comma/space/semicolon -- e.g. "inv, invite, ginv" all trigger.
+local function keywordList(iv)
+	local out = {}
+	for w in (iv.keyword or "inv"):lower():gmatch("[^%s,;]+") do out[#out + 1] = w end
+	return out
+end
+
+-- Does the message contain any keyword as a WHOLE word? (so "inv" matches "inv"
+-- and "inv pls" but NOT "invisible"). Frontier pattern %f guards word edges.
+local function msgHasKeyword(msg, list)
+	local lc = " " .. msg:lower() .. " "
+	for _, kw in ipairs(list) do
+		if kw ~= "" and lc:find("%f[%w]" .. kw:gsub("(%W)", "%%%1") .. "%f[%W]") then
+			return true
+		end
+	end
+	return false
+end
+
+-- shared keyword-invite: if `sender` said ANY keyword, pull them into the group.
 local function keywordInvite(msg, sender, where)
 	local iv = db()
 	if not sender or not msg then return end
-	local kw = (iv.keyword or "inv"):lower()
-	if kw == "" then return end
-	if not msg:lower():find(kw, 1, true) then return end
+	local list = keywordList(iv)
+	if #list == 0 then return end
+	if not msgHasKeyword(msg, list) then return end
 	local clean = (sender:gsub("%-.*$", ""))
 	if inviteOne(clean) then
 		Print("Invited " .. clean .. " (" .. (where or "chat") .. " keyword).")
@@ -419,12 +522,15 @@ ev:RegisterEvent("CHAT_MSG_GUILD")     -- keyword in guild chat
 ev:RegisterEvent("CHAT_MSG_SYSTEM")
 ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 	local iv = db()
+	-- keyword-invite is gated by the MASTER switch (iv.keywordEnabled). The
+	-- per-channel toggles only matter when the master is on. This also keeps it
+	-- mutually exclusive with Recruit (see I.SetKeywordEnabled).
 	if event == "CHAT_MSG_WHISPER" then
-		if iv.whisperInvite then keywordInvite(arg1, arg2, "whisper") end
+		if iv.keywordEnabled and iv.whisperInvite then keywordInvite(arg1, arg2, "whisper") end
 		return
 	end
 	if event == "CHAT_MSG_GUILD" then
-		if iv.guildInvite then keywordInvite(arg1, arg2, "guild") end
+		if iv.keywordEnabled and iv.guildInvite then keywordInvite(arg1, arg2, "guild") end
 		return
 	end
 	if event == "CHAT_MSG_SYSTEM" then
@@ -487,6 +593,9 @@ gev:RegisterEvent("GUILD_ROSTER_UPDATE")
 gev:SetScript("OnEvent", function()
 	local iv = Okanvil.db and Okanvil.db.invite
 	if not iv or iv.autoLoginList == "" then return end
+	-- SAFETY: only auto-invite when it's legitimate (solo, or lead/assist of a
+	-- pure-guild group). Never when in someone else's group or a pug raid.
+	if not canAutoInvite() then return end
 	local l = iv.lists[iv.autoLoginList]
 	local members = l and l.members
 	if not members or #members == 0 then return end

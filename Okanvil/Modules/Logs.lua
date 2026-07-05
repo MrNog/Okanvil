@@ -6,7 +6,7 @@
 --  ╚██████╔╝██║  ██╗██║  ██║██║ ╚████║ ╚████╔╝ ██║███████╗
 --   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝  ╚═══╝  ╚═╝╚══════╝
 --  Okanvil-Logs -- combat-log control + a movable/lockable REC timer
---  + session tracker. Works standalone OR embeds into Okanvil.
+--  + session tracker. A native Okanvil module (no standalone).
 --  (Addons can't read/write files, so SLICING + EXPORT live in the
 --   desktop tool; this records start/stop/zone as a reference.)
 -- ============================================================
@@ -19,43 +19,29 @@ local defaults = {
 	autoLog = false, -- legacy: silently auto-log on raid entry (used only if askOnEnter is off)
 	recLocked = false, -- lock the REC timer (click-through, no drag)
 	rec = { point = "TOP", x = 0, y = -140 },
-	minimapAngle = 205, -- standalone minimap button position
 	sessions = {}, -- persisted history of logging sessions (zone, start, stop, bosses)
 }
 local db
-local rec, toastF, askLogF -- frames
+local rec, toastF, askLogF -- floating frames (live on UIParent, not in the host window)
 local askedZone -- last instance we already prompted for (avoid re-asking on repeat PLAYER_ENTERING_WORLD)
-OkanvilLogs = OkanvilLogs or {} -- tiny namespace for slash/standalone
+OkanvilLogs = OkanvilLogs or {} -- tiny namespace for slash / boot
 
 -- ------------------------------------------------------------
--- helpers (use Okanvil's shared media when embedded, else local)
+-- helpers -- thin wrappers over the shared Okanvil widget layer. The host is
+-- always loaded (this is a native module), so no local fallbacks. These are only
+-- used for the floating frames (REC timer, toast, ask-prompt); the in-window UI
+-- uses Okanvil.W.* directly.
 -- ------------------------------------------------------------
-local function flat(f, a, dark)
-	if Okanvil and Okanvil.Backdrop then
-		Okanvil:Backdrop(f, a, dark)
-		return
-	end
-	f:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
-	f:SetBackdropColor(dark and 0.06 or 0.10, dark and 0.06 or 0.10, dark and 0.08 or 0.12, a or 0.95)
-	f:SetBackdropBorderColor(0.32, 0.32, 0.38, 1)
-end
+local function flat(f, a, dark) Okanvil:Backdrop(f, a, dark) end
 
 local function newText(parent, layer, size)
-	if Okanvil and Okanvil.NewText then
-		local fs = Okanvil:NewText(parent, layer)
-		if size then
-			fs._okSize = size
-			fs:SetFont(Okanvil:Font(), size)
-		end
-		return fs
-	end
-	local fs = parent:CreateFontString(nil, layer or "OVERLAY")
-	fs:SetFont(STANDARD_TEXT_FONT, size or 12)
+	local fs = Okanvil:NewText(parent, layer)
+	if size then fs._okSize = size; fs:SetFont(Okanvil:Font(), size) end
 	return fs
 end
 
 local function Print(msg)
-	DEFAULT_CHAT_FRAME:AddMessage("|cff66ddff[Okanvil-Logs]|r " .. tostring(msg))
+	DEFAULT_CHAT_FRAME:AddMessage("|cffe0b860[Okanvil-Logs]|r " .. tostring(msg))
 end
 
 local function fmtTime(s)
@@ -66,54 +52,17 @@ local function fmtTime(s)
 	return string.format("%d:%02d", math.floor(s / 60), s % 60)
 end
 
--- Use the shared Okanvil widget button (gold RATS-Hub styling) when embedded;
--- fall back to a local flat button when run standalone.
+-- shared gold RATS-Hub button (host always present)
 local function flatButton(parent, text, w, h, kind)
-	if Okanvil and Okanvil.W and Okanvil.W.Button then
-		local b = Okanvil.W.Button(parent, text, kind)
-		b:SetSize(w, h)
-		return b
-	end
-	local b = CreateFrame("Button", nil, parent)
+	local b = Okanvil.W.Button(parent, text, kind)
 	b:SetSize(w, h)
-	flat(b, 1)
-	b.text = newText(b, "OVERLAY")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(text)
-	b:SetScript("OnEnter", function(s) s:SetBackdropColor(0.2, 0.2, 0.25, 1) end)
-	b:SetScript("OnLeave", function(s) s:SetBackdropColor(0.10, 0.10, 0.12, 1) end)
-	return b
-end
-
--- a label + ON/OFF flat toggle (no Blizzard checkbox)
-local function toggleRow(parent, label, x, y, getFn, setFn)
-	local fs = newText(parent, "OVERLAY")
-	fs:SetPoint("TOPLEFT", x, y)
-	fs:SetText(label)
-	local b = flatButton(parent, "", 46, 20)
-	b:SetPoint("TOPLEFT", x + 200, y + 4)
-	local function paint()
-		if getFn() then
-			b.text:SetText("|cff00ff00ON|r")
-		else
-			b.text:SetText("|cffff5555OFF|r")
-		end
-	end
-	paint()
-	b:SetScript("OnClick", function()
-		setFn(not getFn())
-		paint()
-	end)
-	b._paint = paint
 	return b
 end
 
 -- A full-width settings card: title (+ optional sub) on the left, an ON/OFF pill
 -- right-aligned INSIDE the card. Nothing can overlap regardless of label width.
 local function cardToggle(parent, title, sub, getFn, setFn)
-	local W = Okanvil and Okanvil.W
-	local card = W and W.Frame(parent, "panel") or CreateFrame("Frame", nil, parent)
-	if not W then flat(card, 0.9) end
+	local card = Okanvil.W.Frame(parent, "panel")
 	card:SetHeight(sub and 42 or 30)
 
 	local t = newText(card, "OVERLAY")
@@ -475,11 +424,28 @@ function OkanvilLogs.SetLogging(on)
 end
 
 -- ------------------------------------------------------------
--- UI panel (built into `parent`: standalone window OR Okanvil content)
+-- UI panel -- a native Okanvil module page (Dashboard shell)
 -- ------------------------------------------------------------
-function OkanvilLogs.BuildUI(parent)
+function OkanvilLogs.BuildUI(host)
 	local X = 16
-	local W = Okanvil and Okanvil.W
+	local W = Okanvil.W
+
+	-- Dashboard shell (MRT/Recruit-style gold header). The logger's own layout
+	-- (big Start/Stop, status card, settings, history) draws into dash.main; the
+	-- header carries the title + a REC status readout.
+	local dash = W.Dashboard(host, {
+		title = "Combat Logs",
+		icon = Okanvil.ICONS and Okanvil.ICONS.logs or "Interface\\Icons\\INV_Scroll_03",
+		drawerWidth = 0,
+		footerHeight = 0,
+		statusText = function()
+			if isLogging() then return "|cffff5555REC|r |cff8a8d93logging|r" end
+			return "|cff8a8d93idle|r"
+		end,
+	})
+	local parent = dash.main
+	OkanvilLogs._dash = dash
+	OkanvilLogs.panel = parent   -- RebuildHistory/Refresh read _hist* off this frame
 
 	-- ---- Row 1: big Start/Stop CTA (left) + live status card (right) ----
 	local toggle = flatButton(parent, "", 190, 46, "primary")
@@ -490,8 +456,7 @@ function OkanvilLogs.BuildUI(parent)
 	parent._toggle = toggle
 
 	-- status card: shows REC state + elapsed while a session is open
-	local status = W and W.Frame(parent, "dark") or CreateFrame("Frame", nil, parent)
-	if not W then flat(status, 0.9, true) end
+	local status = W.Frame(parent, "dark")
 	status:SetPoint("TOPLEFT", toggle, "TOPRIGHT", 10, 0)
 	status:SetPoint("RIGHT", parent, "RIGHT", -14, 0)
 	status:SetHeight(46)
@@ -502,8 +467,8 @@ function OkanvilLogs.BuildUI(parent)
 	parent._stTop, parent._stSub = stTop, stSub
 
 	-- ---- Row 2/3: settings cards (label left, pill right -- no clipping) ----
-	local c1 = cardToggle(parent, "Ask to log when entering an instance",
-		"Pops a Start log / No prompt on the first zone-in.",
+	local c1 = cardToggle(parent, "Ask to log when entering a raid",
+		"Pops a Start log / No prompt on the first raid zone-in. Dungeons never prompt.",
 		function() return db.askOnEnter end,
 		function(v) db.askOnEnter = v end)
 	c1:SetPoint("TOPLEFT", X, -74)
@@ -556,8 +521,7 @@ function OkanvilLogs.BuildUI(parent)
 	sb:SetPoint("TOPRIGHT", sf, "TOPRIGHT", 8, 0); sb:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", 8, 0); sb:SetWidth(4)
 	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
 	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetSize(4, 40)
-	if Okanvil and Okanvil.Colors then local a = Okanvil.Colors.accent; th:SetVertexColor(a[1], a[2], a[3], 1)
-	else th:SetVertexColor(0.75, 0.58, 0.23, 1) end
+	do local a = Okanvil.Colors.accent; th:SetVertexColor(a[1], a[2], a[3], 1) end
 	sb:SetThumbTexture(th)
 	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 	sf:EnableMouseWheel(true)
@@ -575,7 +539,7 @@ end
 function OkanvilLogs.RebuildHistory()
 	local p = OkanvilLogs.panel
 	if not p or not p._histChild then return end
-	local W = Okanvil and Okanvil.W
+	local W = Okanvil.W
 	local child = p._histChild
 	for _, r in ipairs(p._histRows) do r:Hide() end
 	for _, t in ipairs(p._histDetail) do t:Hide() end
@@ -595,11 +559,10 @@ function OkanvilLogs.RebuildHistory()
 	for i, s in ipairs(sessions) do
 		local r = p._histRows[i]
 		if not r then
-			r = W and W.Frame(child, "input") or CreateFrame("Frame", nil, child)
-			if not W then flat(r, 0.9) end
+			r = W.Frame(child, "input")
 			r.title = newText(r, "OVERLAY"); r.title:SetPoint("TOPLEFT", 8, -5)
 			r.sub = newText(r, "OVERLAY", 10); r.sub:SetPoint("BOTTOMLEFT", 8, 5)
-			r.del = (W and W.Button(r, "X", "danger")) or flatButton(r, "X", 22, 20)
+			r.del = W.Button(r, "X", "danger")
 			r.del:SetSize(22, 20); r.del:SetPoint("RIGHT", -6, 0)
 			r:EnableMouse(true)
 			p._histRows[i] = r
@@ -648,6 +611,7 @@ function OkanvilLogs.RebuildHistory()
 end
 
 function OkanvilLogs.Refresh()
+	if OkanvilLogs._dash then OkanvilLogs._dash:Refresh() end   -- header REC status
 	local p = OkanvilLogs.panel
 	if not p or not p._toggle then
 		return
@@ -702,109 +666,6 @@ function OkanvilLogs.Refresh()
 end
 
 -- ------------------------------------------------------------
--- standalone window (only when Okanvil isn't hosting us)
--- ------------------------------------------------------------
-local function buildStandalone()
-	if OkanvilLogs.win then
-		return
-	end
-	local f = CreateFrame("Frame", "OkanvilLogs_Window", UIParent)
-	f:SetSize(420, 460)
-	f:SetPoint("CENTER")
-	f:SetFrameStrata("HIGH")
-	flat(f, 0.96)
-	f:EnableMouse(true)
-	f:SetMovable(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	local title = newText(f, "OVERLAY", 14)
-	title:SetPoint("TOP", 0, -8)
-	title:SetText("|cff66ddffOkanvil-Logs|r")
-	local close = flatButton(f, "X", 22, 20)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close:SetScript("OnClick", function()
-		f:Hide()
-	end)
-	local body = CreateFrame("Frame", nil, f)
-	body:SetPoint("TOPLEFT", 4, -30)
-	body:SetPoint("BOTTOMRIGHT", -4, 4)
-	OkanvilLogs.panel = body
-	OkanvilLogs.BuildUI(body)
-	OkanvilLogs.win = f
-	f:Hide()
-end
-
-function OkanvilLogs.Toggle()
-	buildStandalone()
-	if OkanvilLogs.win:IsShown() then
-		OkanvilLogs.win:Hide()
-	else
-		OkanvilLogs.win:Show()
-		OkanvilLogs.Refresh()
-	end
-end
-
--- minimap button (standalone only — when hosted, use the Okanvil button instead)
-local function buildMinimap()
-	if OkanvilLogs.minimap then
-		return
-	end
-	local b = CreateFrame("Button", "OkanvilLogs_MinimapButton", Minimap)
-	b:SetSize(31, 31)
-	b:SetFrameStrata("MEDIUM")
-	b:SetFrameLevel(8)
-	b:RegisterForClicks("LeftButtonUp")
-	b:RegisterForDrag("LeftButton")
-
-	local overlay = b:CreateTexture(nil, "OVERLAY")
-	overlay:SetSize(53, 53)
-	overlay:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-	overlay:SetPoint("TOPLEFT")
-
-	local icon = b:CreateTexture(nil, "BACKGROUND")
-	icon:SetSize(20, 20)
-	icon:SetTexture("Interface\\Icons\\INV_Misc_Note_01")
-	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	icon:SetPoint("CENTER", 1, 1)
-
-	local function updatePos()
-		local a = math.rad(db.minimapAngle or 205)
-		b:SetPoint("CENTER", Minimap, "CENTER", 80 * math.cos(a), 80 * math.sin(a))
-	end
-	updatePos()
-
-	b:SetScript("OnDragStart", function(self)
-		self:SetScript("OnUpdate", function()
-			local mx, my = Minimap:GetCenter()
-			local px, py = GetCursorPosition()
-			local s = Minimap:GetEffectiveScale()
-			db.minimapAngle = math.deg(math.atan2(py / s - my, px / s - mx))
-			updatePos()
-		end)
-	end)
-	b:SetScript("OnDragStop", function(self)
-		self:SetScript("OnUpdate", nil)
-	end)
-
-	b:SetScript("OnClick", function()
-		OkanvilLogs.Toggle()
-	end)
-	b:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-		GameTooltip:AddLine("|cff66ddffOkanvil-Logs|r")
-		GameTooltip:AddLine("Click: open", 1, 1, 1)
-		GameTooltip:AddLine("Drag: move button", 1, 1, 1)
-		GameTooltip:Show()
-	end)
-	b:SetScript("OnLeave", function()
-		GameTooltip:Hide()
-	end)
-	OkanvilLogs.minimap = b
-end
-
--- ------------------------------------------------------------
 -- events / boot
 -- ------------------------------------------------------------
 local ev = CreateFrame("Frame")
@@ -847,7 +708,7 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		Okanvil_Plugins[ADDON] = {
 			title = "Combat Logs",
 			desc = "Combat-log control, REC timer and session tracker.",
-			icon = "Interface\\Icons\\INV_Misc_Note_01",
+			icon = (Okanvil and Okanvil.ICONS and Okanvil.ICONS.logs) or "Interface\\Icons\\INV_Scroll_03",
 			build = function(panel)
 				OkanvilLogs.panel = panel
 				OkanvilLogs.BuildUI(panel)
@@ -874,8 +735,10 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 				rec:Show()
 				toast("REC -- resumed (still logging)", "00ff00")
 			end
-		elseif inInstance and not LoggingCombat() then
-			-- No active session and we just entered an instance: ask once per zone.
+		elseif inInstance and itype == "raid" and not LoggingCombat() then
+			-- No active session and we just entered a RAID: ask once per zone. We only
+			-- prompt for raids -- 5-man dungeon combat logs are rarely wanted, so they
+			-- never nag (start those by hand with the Combat Logs page if needed).
 			local zone = GetRealZoneText()
 			if not zone or zone == "" then
 				zone = GetZoneText()
@@ -883,7 +746,7 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 			if db.askOnEnter and zone ~= askedZone then
 				askedZone = zone
 				askToLog(zone)
-			elseif db.autoLog and itype == "raid" then
+			elseif db.autoLog then
 				OkanvilLogs.SetLogging(true) -- legacy silent auto-log (askOnEnter off)
 			end
 		elseif not inInstance then
@@ -916,8 +779,8 @@ SlashCmdList["OkanvilLOGS"] = function(arg)
 	elseif arg == "off" then
 		OkanvilLogs.SetLogging(false)
 	elseif Okanvil and Okanvil.Toggle then
-		Okanvil:Toggle() -- embedded: open the Okanvil window
+		Okanvil:Toggle() -- open the Okanvil window (Combat Logs is a module in it)
 	else
-		OkanvilLogs.Toggle()
+		Print("Okanvil host not loaded.")
 	end
 end

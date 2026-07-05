@@ -13,8 +13,8 @@
 --      link store. Spells come from a fully-offline client scan (Spell.dbc);
 --      items are harvested from anything the client already cached (tooltips
 --      you hover, bags, bank, merchant, chat links) + a "Sweep loaded" pass.
---    * UI   a thin client of the lib (search box + 3 result columns + copy box).
---  Works standalone OR embeds into Okanvil.
+--    * UI   a thin client of the lib (search box + 2 result columns).
+--  A native Okanvil module (no standalone).
 -- ============================================================
 
 local ADDON = "Okanvil-IDs"
@@ -29,14 +29,13 @@ local ROW_H = 20 -- a touch of breathing room; names are clamped to one line
 local defaults = {
 	items = {}, -- [itemID] = name   (harvested; account-wide)
 	links = {}, -- [itemID] = { [spellID] = spellName }  -- item<->buff link store (lib API)
-	minimapAngle = 200, -- standalone minimap button position
 }
 local db
 
-OkanvilIDs = OkanvilIDs or {} -- namespace for slash / standalone / boot
+OkanvilIDs = OkanvilIDs or {} -- namespace for slash / boot
 
--- The public library table. Lives on Okanvil when hosted (Okanvil.IDs) so other
--- plugins can call it; also exposed as OkanvilIDs.Lib for standalone consumers.
+-- The public library table. Lives on Okanvil (Okanvil.IDs) so other plugins can
+-- call it; also exposed as OkanvilIDs.Lib.
 local IDs = {}
 OkanvilIDs.Lib = IDs
 if Okanvil then Okanvil.IDs = IDs end
@@ -356,34 +355,20 @@ end
 -- ============================================================
 
 -- ------------------------------------------------------------
--- helpers (use Okanvil's shared media when embedded, else local)
+-- helpers -- thin wrappers over the shared Okanvil widget layer. The host is
+-- always loaded (native module), so no local fallbacks. Used only for the
+-- floating toast; the in-window UI uses Okanvil.W.* directly.
 -- ------------------------------------------------------------
-local function flat(f, a, dark)
-	if Okanvil and Okanvil.Backdrop then
-		Okanvil:Backdrop(f, a, dark)
-		return
-	end
-	f:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
-	f:SetBackdropColor(dark and 0.06 or 0.10, dark and 0.06 or 0.10, dark and 0.08 or 0.12, a or 0.95)
-	f:SetBackdropBorderColor(0.32, 0.32, 0.38, 1)
-end
+local function flat(f, a, dark) Okanvil:Backdrop(f, a, dark) end
 
 local function newText(parent, layer, size)
-	if Okanvil and Okanvil.NewText then
-		local fs = Okanvil:NewText(parent, layer)
-		if size then
-			fs._okSize = size
-			fs:SetFont(Okanvil:Font(), size)
-		end
-		return fs
-	end
-	local fs = parent:CreateFontString(nil, layer or "OVERLAY")
-	fs:SetFont(STANDARD_TEXT_FONT, size or 12)
+	local fs = Okanvil:NewText(parent, layer)
+	if size then fs._okSize = size; fs:SetFont(Okanvil:Font(), size) end
 	return fs
 end
 
 local function Print(msg)
-	DEFAULT_CHAT_FRAME:AddMessage("|cff66ddff[Okanvil-IDs]|r " .. tostring(msg))
+	DEFAULT_CHAT_FRAME:AddMessage("|cffe0b860[Okanvil-IDs]|r " .. tostring(msg))
 end
 
 -- transient toast (success/failure feedback)
@@ -413,31 +398,40 @@ local function toast(msg, color)
 	toastF:Show()
 end
 
--- Use the shared Okanvil widget button (gold RATS-Hub styling) when the host
--- is present; fall back to a local flat button when run standalone.
+-- shared gold RATS-Hub button (host always present)
 local function flatButton(parent, text, w, h, kind)
-	if Okanvil and Okanvil.W and Okanvil.W.Button then
-		local b = Okanvil.W.Button(parent, text, kind)
-		b:SetSize(w, h)
-		return b
-	end
-	local b = CreateFrame("Button", nil, parent)
+	local b = Okanvil.W.Button(parent, text, kind)
 	b:SetSize(w, h)
-	flat(b, 1)
-	b.text = newText(b, "OVERLAY")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(text)
-	b:SetScript("OnEnter", function(s) s:SetBackdropColor(0.2, 0.2, 0.25, 1) end)
-	b:SetScript("OnLeave", function(s) s:SetBackdropColor(0.10, 0.10, 0.12, 1) end)
 	return b
 end
 
 -- ------------------------------------------------------------
--- UI  (built into `parent`: standalone body OR Okanvil content panel)
+-- UI  -- a native Okanvil module page (Dashboard shell)
 -- ------------------------------------------------------------
-local function buildUI(parent)
+local function buildUI(host)
 	local X = 12
 	local statusFS, searchBox
+
+	-- Dashboard shell (MRT/Recruit-style gold header). The finder's own two-column
+	-- layout draws into dash.main; the header carries the title, DB count and the
+	-- safe "Sweep loaded" CTA.
+	local W = Okanvil.W
+	local dash = W.Dashboard(host, {
+		title = "ID Finder",
+		icon = (Okanvil.ICONS and Okanvil.ICONS.ids) or "Interface\\Icons\\INV_Misc_Spyglass_02",
+		drawerWidth = 0,
+		footerHeight = 0,
+		primaryText = function() return "Sweep loaded" end,
+		onPrimary = function()
+			local added = IDs.SweepLoaded()
+			if Okanvil.Print then Okanvil:Print("Swept " .. added .. " new item(s).") end
+			if OkanvilIDs._doRun then OkanvilIDs._doRun() end
+			if OkanvilIDs._paintStatus then OkanvilIDs._paintStatus() end
+		end,
+		statusText = function() return "|cff8a8d93" .. IDs.ItemCount() .. " items in DB|r" end,
+	})
+	local parent = dash.main
+	OkanvilIDs._dash = dash
 
 	local colSpell, colItem -- forward decl (the two result columns)
 
@@ -472,19 +466,17 @@ local function buildUI(parent)
 
 	-- build one result column: a dark card with a gold header + scrolling list
 	local COL_W, COL_ROWS = 320, 13
-	local W = Okanvil and Okanvil.W
 	local function makeColumn(x, header, key)
 		local col = { results = {} }
 		local rowW = COL_W - 20
 		-- the card that frames the whole column (header + list share it)
-		local card = W and W.Frame(parent, "dark") or CreateFrame("Frame", nil, parent)
-		if not W then flat(card, 0.4, true) end
-		card:SetPoint("TOPLEFT", x, -84)
+		local card = W.Frame(parent, "dark")
+		card:SetPoint("TOPLEFT", x, -64)
 		card:SetSize(COL_W, COL_ROWS * ROW_H + 30)
 		-- gold header sits INSIDE the card top
 		local h = newText(card, "OVERLAY", 12)
 		h:SetPoint("TOPLEFT", 8, -7)
-		if W then h:SetTextColor(1.0, 0.82, 0.0) else h:SetText("") end
+		h:SetTextColor(1.0, 0.82, 0.0)
 		h:SetText(header)
 		col.count = newText(card, "OVERLAY")
 		col.count:SetPoint("LEFT", h, "RIGHT", 6, 0)
@@ -582,28 +574,42 @@ local function buildUI(parent)
 		IDs.EnsureSpells(runSearch) -- build the index once (async), then search
 	end
 
-	-- ---- header: title + search + item-scan buttons ----
-	local title = newText(parent, "OVERLAY", 13)
-	title:SetPoint("TOPLEFT", X, -12)
-	title:SetTextColor(1.0, 0.82, 0.0)
-	title:SetText("Find an ID by name")
+	-- ---- header: hint + search + item-scan buttons ----
+	-- (the gold "ID Finder" title lives in the Dashboard header above; here we just
+	--  show the one-line usage hint, then the search box.)
 	local sub = newText(parent, "OVERLAY", 11)
-	sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -3)
+	sub:SetPoint("TOPLEFT", X, -8)
 	sub:SetTextColor(0.54, 0.55, 0.58)
 	sub:SetText("Type a name or id -> read the ID off the result. (Auras are spells -- same column.)")
 
 	searchBox = CreateFrame("EditBox", nil, parent)
-	searchBox:SetSize(300, 24)
-	searchBox:SetPoint("TOPLEFT", X, -52)
+	searchBox:SetSize(380, 26)
+	searchBox:SetPoint("TOPLEFT", X, -30)
 	searchBox:SetAutoFocus(false)
 	searchBox:SetFontObject("GameFontHighlight")
 	searchBox:SetTextInsets(6, 6, 0, 0)
 	flat(searchBox, 1, true)
 	searchBox:SetScript("OnEnterPressed", doRun)
 	searchBox:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
+	-- SHIFT-CLICK an item (bags/AtlasLoot/chat) while the box is focused -> drop the
+	-- item's NAME in and search it, instead of pasting the raw link. Hook the global
+	-- link inserter; only act when OUR box has focus so we don't hijack chat.
+	if not OkanvilIDs._linkHooked and hooksecurefunc then
+		OkanvilIDs._linkHooked = true
+		hooksecurefunc("ChatEdit_InsertLink", function(link)
+			local box = OkanvilIDs._searchBox
+			if not (box and box:HasFocus() and link) then return end
+			local name = link:match("|h%[(.-)%]|h") or link:match("item:%d+")
+			if name then
+				box:SetText(name)
+				if OkanvilIDs._doRun then OkanvilIDs._doRun() end
+			end
+		end)
+	end
+	OkanvilIDs._searchBox, OkanvilIDs._doRun = searchBox, doRun
 	local ghost = newText(searchBox, "OVERLAY")
 	ghost:SetPoint("LEFT", 6, 0)
-	ghost:SetText("|cff777777type a name, press Enter|r")
+	ghost:SetText("|cff777777type a name, or shift-click an item|r")
 	searchBox:SetScript("OnTextChanged", function(s)
 		if s:GetText() == "" then ghost:Show() else ghost:Hide() end
 	end)
@@ -632,7 +638,7 @@ local function buildUI(parent)
 	--  result row to read. Export DB below is the only copy dialog left.)
 
 	statusFS = newText(parent, "OVERLAY")
-	statusFS:SetPoint("TOPLEFT", X, -384)
+	statusFS:SetPoint("TOPLEFT", X, -364)
 	statusFS:SetWidth(660)
 	statusFS:SetJustifyH("LEFT")
 
@@ -675,14 +681,8 @@ local function buildUI(parent)
 	exportBtn:Hide()
 	exportBtn:SetScript("OnClick", function()
 		local chunk, n = IDs.ExportItems()
-		if Okanvil and Okanvil.ShowExport then
-			-- shell's shared multi-line copy dialog (Ctrl+C, pre-highlighted)
-			Okanvil:ShowExport(chunk, "Item DB seed (" .. n .. " items) -> Okanvil-IDs-Data.lua")
-		else
-			-- standalone fallback: dump to chat (Ctrl+C from there)
-			Print("--- paste into Okanvil-IDs-Data.lua (" .. n .. " items) ---")
-			DEFAULT_CHAT_FRAME:AddMessage(chunk)
-		end
+		-- shell's shared multi-line copy dialog (Ctrl+C, pre-highlighted)
+		Okanvil:ShowExport(chunk, "Item DB seed (" .. n .. " items) -> Okanvil-IDs-Data.lua")
 	end)
 
 	advToggle:SetScript("OnClick", function()
@@ -694,104 +694,15 @@ local function buildUI(parent)
 	end)
 
 	-- route lib status (index build / scan progress) into this panel's status line
+	OkanvilIDs._paintStatus = function() if dash then dash:Refresh() end end
 	IDs.OnStatus = function(msg)
 		if statusFS then statusFS:SetText("|cffaaaaaa" .. msg .. "|r") end
 		if dbInfo then paintDbInfo() end
+		if dash then dash:Refresh() end
 	end
 
 	searchBox:SetFocus()
 	runSearch() -- initial: empty box shows the helper line
-end
-
--- ------------------------------------------------------------
--- standalone window (only when Okanvil isn't hosting us)
--- ------------------------------------------------------------
-local function buildStandalone()
-	if OkanvilIDs.win then return end
-	local f = CreateFrame("Frame", "OkanvilIDs_Window", UIParent)
-	f:SetSize(700, 512)
-	f:SetPoint("CENTER")
-	f:SetFrameStrata("HIGH")
-	flat(f, 0.96)
-	f:EnableMouse(true)
-	f:SetMovable(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	local titlefs = newText(f, "OVERLAY", 14)
-	titlefs:SetPoint("TOP", 0, -8)
-	titlefs:SetText("|cff66ddffOkanvil-IDs|r")
-	local close = flatButton(f, "X", 22, 20)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close:SetScript("OnClick", function() f:Hide() end)
-	local body = CreateFrame("Frame", nil, f)
-	body:SetPoint("TOPLEFT", 4, -30)
-	body:SetPoint("BOTTOMRIGHT", -4, 4)
-	buildUI(body)
-	OkanvilIDs.win = f
-	f:Hide()
-end
-
-function OkanvilIDs.Toggle()
-	buildStandalone()
-	if OkanvilIDs.win:IsShown() then
-		OkanvilIDs.win:Hide()
-	else
-		OkanvilIDs.win:Show()
-	end
-end
-
--- minimap button (standalone only — when hosted, use the Okanvil button instead)
-local function buildMinimap()
-	if OkanvilIDs.minimap then return end
-	local b = CreateFrame("Button", "OkanvilIDs_MinimapButton", Minimap)
-	b:SetSize(31, 31)
-	b:SetFrameStrata("MEDIUM")
-	b:SetFrameLevel(8)
-	b:RegisterForClicks("LeftButtonUp")
-	b:RegisterForDrag("LeftButton")
-
-	local overlay = b:CreateTexture(nil, "OVERLAY")
-	overlay:SetSize(53, 53)
-	overlay:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-	overlay:SetPoint("TOPLEFT")
-
-	local icon = b:CreateTexture(nil, "BACKGROUND")
-	icon:SetSize(20, 20)
-	icon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_02")
-	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	icon:SetPoint("CENTER", 1, 1)
-
-	local function updatePos()
-		local a = math.rad(db.minimapAngle or 200)
-		b:SetPoint("CENTER", Minimap, "CENTER", 80 * math.cos(a), 80 * math.sin(a))
-	end
-	updatePos()
-
-	b:SetScript("OnDragStart", function(self)
-		self:SetScript("OnUpdate", function()
-			local mx, my = Minimap:GetCenter()
-			local px, py = GetCursorPosition()
-			local s = Minimap:GetEffectiveScale()
-			db.minimapAngle = math.deg(math.atan2(py / s - my, px / s - mx))
-			updatePos()
-		end)
-	end)
-	b:SetScript("OnDragStop", function(self)
-		self:SetScript("OnUpdate", nil)
-	end)
-
-	b:SetScript("OnClick", function() OkanvilIDs.Toggle() end)
-	b:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-		GameTooltip:AddLine("|cff66ddffOkanvil-IDs|r")
-		GameTooltip:AddLine("Click: open the finder", 1, 1, 1)
-		GameTooltip:AddLine("Drag: move button", 1, 1, 1)
-		GameTooltip:Show()
-	end)
-	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
-	OkanvilIDs.minimap = b
 end
 
 -- ------------------------------------------------------------
@@ -842,7 +753,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
 		Okanvil_Plugins[ADDON] = {
 			title = "ID Finder",
 			desc = "Search spells & items by name to get their ID (a lookup library for WeakAuras).",
-			icon = "Interface\\Icons\\INV_Misc_Spyglass_02",
+			icon = (Okanvil and Okanvil.ICONS and Okanvil.ICONS.ids) or "Interface\\Icons\\INV_Misc_Spyglass_02",
 			build = function(panel) buildUI(panel) end,
 		}
 		if Okanvil and Okanvil.Register then
@@ -864,8 +775,8 @@ SlashCmdList["OkanvilIDS"] = function(arg)
 		local added = IDs.SweepLoaded()
 		Print("swept " .. added .. " new item(s). DB now holds " .. IDs.ItemCount() .. ".")
 	elseif Okanvil and Okanvil.Toggle then
-		Okanvil:Toggle() -- embedded: open the Okanvil window
+		Okanvil:Toggle() -- open the Okanvil window (ID Finder is a module in it)
 	else
-		OkanvilIDs.Toggle()
+		Print("Okanvil host not loaded.")
 	end
 end

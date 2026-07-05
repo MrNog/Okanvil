@@ -5,8 +5,11 @@
 --  ██║   ██║██╔═██╗ ██╔══██║██║╚██╗██║╚██╗ ██╔╝██║██║
 --  ╚██████╔╝██║  ██╗██║  ██║██║ ╚████║ ╚████╔╝ ██║███████╗
 --   ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝  ╚═══╝  ╚═╝╚══════╝
---  Okanvil -- a host shell for standalone addons (ElvUI-style plugins).
---  Plugins register into Okanvil_Plugins; Okanvil gives them a home + shared media.
+--  Okanvil -- a single raid & guild toolkit (MRT-style), by Okanor. One addon
+--  with a native core (guild dashboard + module manager) and a set of built-in
+--  modules (Guild / Invite / Recruit / Loot / ID Finder / Combat Logs) you toggle
+--  on/off per character. Modules register into Okanvil_Plugins and share one media
+--  layer. No standalone plugins -- it's all one addon.
 -- ============================================================
 
 Okanvil = Okanvil or {}

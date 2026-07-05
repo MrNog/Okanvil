@@ -16,6 +16,7 @@ Core\UI.lua
 
 Modules\Guild.lua
 Modules\Loot.lua
+Modules\LootRoll.lua
 Modules\Invite.lua
 Modules\RecruitLogic.lua
 Modules\Recruit.lua
