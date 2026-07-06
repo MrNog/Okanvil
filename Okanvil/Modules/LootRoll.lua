@@ -120,25 +120,53 @@ local function buildWindow()
 	body:SetPoint("TOPLEFT", 0, -52); body:SetPoint("BOTTOMRIGHT", 0, 0)
 	f.body = body
 
-	-- "Rolling..." animation: while a roll-off is open, cycle dots + a pulsing gold
-	-- and show a shrinking countdown, so the window feels alive during a roll.
+	-- "Roll open" animation: while a roll-off is open, cycle dots + a pulsing gold
+	-- so the window feels alive. NO countdown: a roll never auto-closes here (the
+	-- item is often handed out by master loot outside the addon), so a shrinking
+	-- "110s" timer just got stuck at "Rolling.." forever after the item was given.
+	-- We show which item is up for roll, no timer.
 	f._anim = 0
 	f:SetScript("OnUpdate", function(self, e)
+		if not self:IsShown() then return end
+		-- Shrinking roll-timer bars on the item rows (ElvUI M:statusbarOnUpdate style):
+		-- read GetLootRollTimeLeft(rollID) each frame and scale the row-width bar.
+		if self.itemRows then
+			self._dots = (self._dots or 0) + e
+			local dots = ("."):rep(1 + (math.floor(self._dots * 2) % 3))   -- . / .. / ...
+			for _, r in ipairs(self.itemRows) do
+				local d = r._d
+				if r:IsShown() and r._rolling and d then
+					-- shrinking bar
+					local frac
+					if d.rollID then
+						local left = GetLootRollTimeLeft and GetLootRollTimeLeft(d.rollID) or 0
+						local dur = (d.rollDur and d.rollDur > 0) and (d.rollDur * 1000) or 60000
+						frac = left / dur
+					elseif d.rollStart and d.rollDur then
+						frac = 1 - ((GetTime() - d.rollStart) / d.rollDur)
+					end
+					if frac then
+						if frac < 0 then frac = 0 elseif frac > 1 then frac = 1 end
+						if frac <= 0 then r.bar:Hide()
+						else r.bar:SetWidth(math.max(1, r:GetWidth() * frac)) end
+					end
+					-- animated "- rolling ..." suffix on the row text
+					if r._baseTxt then
+						r.txt:SetText(r._baseTxt .. "  |cffffd200- rolling " .. dots .. "|r")
+					end
+				end
+			end
+		end
+		-- "Roll open" pulsing label (only when a managed roll-off is active)
 		local ar = L and L.ActiveRoll and L.ActiveRoll()
-		if not (ar and self.rollState and self:IsShown()) then return end
+		if not (ar and self.rollState) then return end
 		self._anim = self._anim + e
 		local dots = ("."):rep(1 + (math.floor(self._anim * 2) % 3))   -- . / .. / ...
-		-- pulse the gold between bright and normal
 		local pulse = 0.7 + 0.3 * math.abs(math.sin(self._anim * 3))
 		local g = string.format("|cff%02xd200", math.floor(0xff * pulse))
 		local m = (ar.mode == "ms" and "MS") or (ar.mode == "os" and "OS") or "FREE"
 		local nm = (ar.name ~= "" and ar.name) or "item"
-		local left = ""
-		if ar.opened then
-			local rem = math.max(0, 120 - (GetTime() - ar.opened))
-			left = "  |cff5e6166" .. math.floor(rem) .. "s|r"
-		end
-		self.rollState:SetText(g .. "Rolling" .. dots .. "|r " .. nm .. "  |cff8a8d93[" .. m .. "]|r" .. left)
+		self.rollState:SetText(g .. "Roll open" .. dots .. "|r " .. nm .. "  |cff8a8d93[" .. m .. "]|r")
 	end)
 
 	win = f
@@ -199,15 +227,28 @@ function RM.Rebuild()
 	local LIST_H = ITEM_ROWS * ROW_H
 	local ibox = keep(W.Frame(body, "dark")); ibox:SetPoint("TOPLEFT", M, y); ibox:SetSize(INNER, LIST_H + 6)
 	f.ibox = ibox
+	-- mouse wheel pages the item list (raids drop more than ITEM_ROWS items)
+	ibox:EnableMouseWheel(true)
+	ibox:SetScript("OnMouseWheel", function(_, delta)
+		f.itemScroll = (f.itemScroll or 0) - delta   -- wheel up = earlier items
+		RM.Refresh()
+	end)
 	f.makeItemRow = function(i)
 		local r = f.itemRows[i]
 		if r then return r end
 		r = CreateFrame("Button", nil, ibox)
+		-- roll timer bar: the WHOLE ROW is the bar. It fills the row from the left and
+		-- shrinks as the Blizzard need/greed timer runs down (a reversed cast bar), so
+		-- you can watch the time left to choose. Sits at BACKGROUND, behind text/icon.
+		r.bar = r:CreateTexture(nil, "BACKGROUND")
+		r.bar:SetPoint("TOPLEFT", 0, 0); r.bar:SetPoint("BOTTOMLEFT", 0, 0)
+		r.bar:SetTexture(0.75, 0.58, 0.23, 0.30)   -- gold, translucent
+		r.bar:Hide()
 		r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(22, 22); r.icon:SetPoint("LEFT", 5, 0)
 		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 		r.txt = W.Text(r, "", FONT_SZ); r.txt:SetPoint("LEFT", r.icon, "RIGHT", 6, 0); r.txt:SetPoint("RIGHT", -6, 0); r.txt:SetJustifyH("LEFT")
 		if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
-		r.hl = r:CreateTexture(nil, "BACKGROUND"); r.hl:SetAllPoints(); r.hl:SetTexture(0.75, 0.58, 0.23, 0.22); r.hl:Hide()
+		r.hl = r:CreateTexture(nil, "BORDER"); r.hl:SetAllPoints(); r.hl:SetTexture(0.75, 0.58, 0.23, 0.22); r.hl:Hide()
 		r:SetScript("OnEnter", function(s)
 			if s._d and s._d.item then GameTooltip:SetOwner(s, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink(s._d.item); GameTooltip:Show() end
 		end)
@@ -331,9 +372,16 @@ function RM.Refresh()
 		f.bossIdx = math.max(1, math.min(f.bossIdx or 1, f.bossCount))
 		local g = groups[f.bossIdx]
 		if f.bossHd then f.bossHd:SetText(g.boss .. "  |cff8a8d93(" .. f.bossIdx .. "/" .. f.bossCount .. ")|r") end
+		-- SCROLL: a raid boss drops more than ITEM_ROWS items, so page the list with
+		-- the mouse wheel instead of the old "...and N more" dead-end. Clamp the
+		-- offset so we never scroll past the last full page.
+		local nItems = #g.items
+		local maxOff = math.max(0, nItems - ITEM_ROWS)
+		f.itemScroll = math.max(0, math.min(f.itemScroll or 0, maxOff))
+		local off = f.itemScroll
 		for _, r in ipairs(f.itemRows) do r._d = nil; r:Hide() end
 		for i = 1, ITEM_ROWS do
-			local d = g.items[i]
+			local d = g.items[i + off]
 			local r = f.makeItemRow(i)
 			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 4, -2 - (i - 1) * ROW_H); r:SetPoint("RIGHT", f.ibox, "RIGHT", -4, 0); r:SetHeight(ROW_H)
 			if d then
@@ -350,17 +398,31 @@ function RM.Refresh()
 				if d.receivedBy and d.receivedBy ~= "" then
 					who = "  |cff8a8d93->|r " .. classColorCode(d.receivedBy) .. d.receivedBy .. "|r"
 				end
-				r.txt:SetText(rcode .. nm .. "|r" .. who)
+				-- little up/down hint on the edge rows when there's more above/below
+				local more = ""
+				if i == 1 and off > 0 then more = "  |cff5e6166[+]|r"
+				elseif i == ITEM_ROWS and (off + ITEM_ROWS) < nItems then more = "  |cff5e6166[v]|r" end
+				local baseTxt = rcode .. nm .. "|r" .. who .. more
 				r.hl:SetShown(selected == d)
+				-- roll timer bar (ElvUI-style): show while a roll is live for this item
+				-- and not yet won. Live = a native need/greed roll (d.rollID) OR the
+				-- time-based fallback (d.rollStart). Master loot has neither, so no bar.
+				-- The row's OnUpdate shrinks it each frame + animates "rolling".
+				if (d.rollID or d.rollStart) and not d.receivedBy then
+					r.bar:Show()
+					r.bar:SetWidth(r:GetWidth())   -- start full; OnUpdate shrinks it
+					r.bar:SetTexture(cr * 0.6, cg * 0.6, cb * 0.6, 0.30)  -- tinted by rarity
+					r._rolling = true
+					r._baseTxt = baseTxt           -- OnUpdate appends " - rolling ..."
+				else
+					r.bar:Hide()
+					r._rolling = false
+				end
+				r.txt:SetText(baseTxt)
 				r:Show()
 			else
 				r._d = nil; r:Hide()
 			end
-		end
-		-- if this boss has more than ITEM_ROWS items, note it (rare in 5-man)
-		if #g.items > ITEM_ROWS and f.itemRows[ITEM_ROWS] then
-			f.itemRows[ITEM_ROWS].txt:SetText("|cff888888...and " .. (#g.items - ITEM_ROWS + 1) .. " more|r")
-			f.itemRows[ITEM_ROWS].icon:Hide()
 		end
 	end
 
@@ -413,18 +475,28 @@ local function showWin()
 	if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
 end
 
--- pop the window when eligible loot drops (if auto-show is on). New loot means a
--- new(er) boss may have appeared -> jump the pager to the NEWEST boss so the user
--- doesn't have to click the chevron after every kill.
+-- Only auto-pop when boss loot drops in the CURRENT run while we're inside the
+-- instance. The old code popped on any loot/chat event, which resurrected a stale
+-- session (a dungeon left hours ago) the moment you joined a new raid. Now: if
+-- we're not in a live run, never show it on our own -- just refresh if it's
+-- already open. New loot may mean a newer boss -> jump the pager to it.
+local function canAutoShow()
+	return db().autoShow and Okanvil.Loot and Okanvil.Loot.InLiveRun and Okanvil.Loot.InLiveRun()
+end
 local function onLoot()
 	if win then win._jumpNewest = true end
-	if db().autoShow then showWin() else RM.Refresh() end
+	if win and win:IsShown() then RM.Refresh()
+	elseif canAutoShow() then showWin()
+	else RM.Refresh() end
 end
 
--- also pop for a raider when a roll opens (so they see the Roll MS/OS buttons)
+-- also pop for a raider when a roll opens (so they see the Roll MS/OS buttons) --
+-- but only for a roll that's genuinely live now, and only inside a live run.
 function RM.OnRollOpen()
 	if win then win._jumpNewest = true end
-	if db().autoShow then showWin() else RM.Refresh() end
+	if win and win:IsShown() then RM.Refresh()
+	elseif canAutoShow() then showWin()
+	else RM.Refresh() end
 end
 
 function RM.Toggle()

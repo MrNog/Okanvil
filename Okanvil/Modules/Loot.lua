@@ -273,7 +273,7 @@ function L.DropsByBoss()
 	if not s then return {} end
 	local order, byBoss = {}, {}
 	for _, dp in ipairs(s.drops) do
-		local b = (dp.boss ~= "" and dp.boss) or "Need / Greed"
+		local b = (dp.boss ~= "" and dp.boss) or (GetInstanceInfo and GetInstanceInfo()) or "Trash"
 		if not byBoss[b] then byBoss[b] = { boss = b, items = {} }; order[#order + 1] = byBoss[b] end
 		table.insert(byBoss[b].items, dp)
 	end
@@ -334,6 +334,17 @@ local function lockoutKey()
 	return "day|" .. date("%Y-%m-%d") .. "|" .. name, name, diff, mapID or 0
 end
 
+-- True only when we're physically INSIDE an instance we should be recording (a
+-- live dungeon/raid run). The mini roll uses this so it never auto-pops from a
+-- stray chat line while you're standing in a city, nor resurrects an old session
+-- from a dungeon you left hours ago. "Inside now" is the gate the old code lacked.
+function L.InLiveRun()
+	if not (IsInInstance and IsInInstance()) then return false end
+	local _, itype = IsInInstance()
+	if itype ~= "party" and itype ~= "raid" then return false end
+	return Okanvil:ShouldRecord() and true or false
+end
+
 -- current session = the one matching this lockout key, else start a new one
 local function currentSession()
 	local d = db()
@@ -357,21 +368,42 @@ local function currentSession()
 	return s
 end
 
--- Last boss we captured a corpse from, so chat-only need/greed drops (which
--- carry no boss of their own) can inherit it instead of showing "Unknown".
-local lastBossName = nil
+-- BOSS ATTRIBUTION, MRT-style. MRT never guesses the boss from the loot corpse's
+-- target (which can be a player, or cleared) -- it listens to ENCOUNTER_START /
+-- ENCOUNTER_END and tags every drop with that encounter's NAME. That's why MRT
+-- never mislabels. We copy that: `encounterBoss` is the name from the WoW
+-- encounter event and is the PRIMARY source of truth. `lastBossName` (a corpse we
+-- looted) is only a secondary fallback for trash/rares with no encounter event.
+local encounterBoss = nil   -- set by ENCOUNTER_START/END -- the reliable one
+local lastBossName = nil    -- last looted corpse name -- fallback only
+
+-- Every drop belongs to a boss -- there is NO "Need / Greed" bucket. Order of
+-- trust mirrors MRT: current/last ENCOUNTER name, then the last looted corpse,
+-- then a targeted NPC, then the zone. Never returns "" or "Need / Greed".
+local function resolveBoss()
+	if encounterBoss and encounterBoss ~= "" then return encounterBoss end
+	if lastBossName and lastBossName ~= "" then return lastBossName end
+	local tname = UnitName("target")
+	if tname and tname ~= "" and guidIsNPC(UnitGUID("target")) then return tname end
+	if GetInstanceInfo then
+		local zn = GetInstanceInfo()
+		if zn and zn ~= "" then return zn end
+	end
+	return "Trash"   -- absolute last resort: still a real bucket, not "Need / Greed"
+end
 
 -- record all items on the currently-open corpse
 local function captureLoot()
 	if not Okanvil:ShouldRecord() then return end   -- dungeon/raid toggle
 	local guid = UnitGUID("target")
 	local tname = UnitName("target")
-	-- Trust the target's NAME when we have one (guidIsNPC is unreliable on this
-	-- server, so it only *upgrades* confidence, never discards a real name). If the
-	-- corpse has NO name (target got cleared when a second looter opened it), fall
-	-- back to the last real boss instead of writing "Unknown".
-	local boss = (tname and tname ~= "") and tname or (lastBossName or "Unknown")
-	if boss ~= "Unknown" then lastBossName = boss end
+	-- Boss name, MRT-style: the ENCOUNTER name wins (encounterBoss). Only fall to
+	-- the corpse's target if it's a real NPC (never a player we're looting), and
+	-- only remember it as the fallback. resolveBoss() guarantees a real bucket.
+	if tname and tname ~= "" and guidIsNPC(guid) and not encounterBoss then
+		lastBossName = tname
+	end
+	local boss = resolveBoss()
 	if guid and seenCorpses[guid] then return end     -- already logged this corpse
 	if guid then seenCorpses[guid] = true end
 
@@ -444,7 +476,7 @@ L.CaptureLoot = captureLoot
 -- record the item into the current session so DropsByBoss() shows it immediately,
 -- instead of waiting for the win to be logged. Deduped by itemID (a roll can fire
 -- alongside LOOT_OPENED for the same drop).
-local function captureRollStart(rollID)
+local function captureRollStart(rollID, rollTime)
 	if not Okanvil:ShouldRecord() then return end
 	if not (rollID and GetLootRollItemLink) then return end
 	local link = GetLootRollItemLink(rollID)
@@ -454,21 +486,43 @@ local function captureRollStart(rollID)
 	if r < (Okanvil.db.lootThreshold or 3) then return end
 	if isIgnoredItem(link, nil) then return end
 	local id = itemIDFromLink(link)
-	local boss = lastBossName or "Need / Greed"
+	-- Every drop belongs to a boss. resolveBoss() always returns a real bucket
+	-- (targeted NPC / last boss / zone) -- never "" and never "Need / Greed".
+	local boss = resolveBoss()
 	-- Dedup only the RECORDING (don't add the same physical drop twice). But ALWAYS
 	-- fire onLoot so the mini roll pops/refreshes for this roll -- otherwise closing
 	-- the window on boss 1 and killing boss 2 wouldn't re-open it when the 2nd item
 	-- happens to share an itemID with a recent one.
+	-- capture the Blizzard roll timer so the mini roll can draw a shrinking bar on
+	-- the item's row (like the native loot roll / a reversed cast bar). Prefer the
+	-- rollTime from the START_LOOT_ROLL event (what ElvUI uses); fall back to
+	-- GetLootRollTimeLeft. Both are in MS. WotLK need/greed windows are ~60s.
+	local now = GetTime and GetTime() or 0
+	local ms = rollTime or (GetLootRollTimeLeft and GetLootRollTimeLeft(rollID)) or 0
+	local dur = (ms and ms > 0) and (ms / 1000) or 60
+	local existing
 	if not recentlyLogged(id) then
 		local s = currentSession()
-		s.drops[#s.drops + 1] = {
+		local drop = {
 			t = time(), boss = boss, item = link, id = id,
 			name = (GetItemInfo(link)) or "", rarity = r, qty = qty or 1,
+			rollID = rollID, rollStart = now, rollDur = dur,
 		}
+		s.drops[#s.drops + 1] = drop
+	else
+		-- same item already logged (roll fired alongside LOOT_OPENED) -> just refresh
+		-- its roll timer so the bar is accurate, don't add a second row.
+		local s = currentSession()
+		for i = #s.drops, 1, -1 do
+			if s.drops[i].id == id then existing = s.drops[i]; break end
+		end
+		if existing then
+			existing.rollID = rollID; existing.rollStart = now; existing.rollDur = dur
+		end
 	end
 	-- no chat spam here -- the mini roll window IS the feedback (it pops with the item)
 	if L.onLoot then L.onLoot() end
-	if OkanvilLogs and OkanvilLogs.NoteBossFromLoot and boss ~= "Need / Greed" then
+	if OkanvilLogs and OkanvilLogs.NoteBossFromLoot and boss ~= "" then
 		OkanvilLogs.NoteBossFromLoot(boss)
 	end
 end
@@ -744,10 +798,20 @@ local function parseCandidates(tail)
 	return (n > 0) and set or nil
 end
 
--- scan a raid / raid-warning message for item links and open a roll-off for each
--- (usually one). Candidate names typed after the link restrict who can win.
+-- scan a raid / raid-warning message for item links and open a roll-off. CRUCIAL:
+-- a bare item link is NOT a roll -- people link gear to chat all the time just to
+-- talk about it ("[Gleaming Quel'Serrar]"). Opening a roll for every linked item
+-- popped the window during idle chatter. So we only treat a link as a roll
+-- announcement when the message actually SAYS roll (the word "roll", or the
+-- /roll instruction). Otherwise we ignore the link entirely.
+local function msgIsRollAnnounce(msg)
+	local low = msg:lower()
+	-- "roll", "/roll", "roll (1-100)", "ms/os", "mainspec/offspec" -> a real call
+	return low:find("roll") ~= nil
+end
 local function scanForLinkedItem(msg)
 	if not msg then return end
+	if not msgIsRollAnnounce(msg) then return end   -- a bare link is just chatter
 	for link, tail in msg:gmatch("(|c%x+|Hitem:.-|h.-|h|r)(.*)") do
 		-- IGNORE the manager's own announce echo: if we just opened a roll for this
 		-- exact item (StartRoll), don't re-open it with a bogus candidate list.
@@ -845,9 +909,12 @@ local PATTERNS = {
 	{ toPattern(LOOT_ITEM_PUSHED, "%s receives item: %s."), false },
 }
 
--- Disenchant byproducts to swallow: after a "won ... (Disenchant)" line we record
--- (player -> expiry time) here; the next "receives loot: [Dream Shard]" style line
--- for that player within the window is the shard from the DE and is suppressed.
+-- Disenchant handling. On THIS server "X won: item (Disenchant)" is emitted for
+-- ordinary need/greed wins too (the winner merely has the DE option) -- the item
+-- is NOT actually disenchanted, and MRT records those as normal wins. So we only
+-- mark de=true if the DE SHARD actually arrives right after. On a "(Disenchant)"
+-- line we record the item as a normal win but remember the drop; if the shard
+-- lands within the window we upgrade that drop to de=true and swallow the shard.
 local DE_SHARD_IDS = { [34057]=true, [22450]=true, [22449]=true, [11135]=true,
 	[10938]=true, [10940]=true, [10978]=true, [10998]=true, [11082]=true,
 	[11083]=true, [11084]=true, [11134]=true, [11137]=true, [11139]=true,
@@ -855,29 +922,52 @@ local DE_SHARD_IDS = { [34057]=true, [22450]=true, [22449]=true, [11135]=true,
 	[14343]=true, [14344]=true, [16202]=true, [16203]=true, [16204]=true,
 	[20725]=true, [22445]=true, [22446]=true, [22447]=true, [22448]=true,
 	[34052]=true, [34053]=true, [34054]=true, [34055]=true, [34056]=true }
-local pendingDE = {}   -- player -> expiry (GetTime seconds)
+local pendingDE = {}   -- player -> { drop=<dropTable>, exp=<GetTime seconds> }
+
+-- The roll never auto-closes on a timer (the item is often handed out by master
+-- loot OUTSIDE the addon, so no Award/Stop ever fires and "Rolling.." got stuck
+-- forever). Instead: the moment we detect the roll's item was actually received
+-- by someone, clear the roll -- the winner is now recorded on the drop, so the
+-- "Roll open" line drops away and the item just shows "-> winner".
+local function clearRollIfWon(id)
+	if activeRoll and id and activeRoll.id == id then
+		activeRoll = nil
+		if L.onRoll then L.onRoll() end
+	end
+end
 
 -- tag the newest untagged drop with this itemID as received by player.
 -- If no such drop exists (need/greed items you never open on the corpse),
 -- create the drop from the chat link so nothing is missed. Honors the
 -- rarity threshold.
-local function tagReceiver(player, itemLink, isDE)
+local function tagReceiver(player, itemLink)
 	if not itemLink or not player then return end
 	local id = itemIDFromLink(itemLink)
 	if id == 0 then return end
 	local s = currentSession()
-	local sawID = false
+	-- ONE drop per physical item. Scan the whole session for this itemID: if a drop
+	-- exists we reconcile INTO it (fill receivedBy, upgrade an empty boss to a real
+	-- one) instead of ever appending a second row. The old code could append a
+	-- chat-sourced copy under a different boss when timing made the corpse capture
+	-- and the "X won" line race -- that's what showed the same item under two bosses.
+	local sawID, untagged = false, nil
 	for i = #s.drops, 1, -1 do
 		local d = s.drops[i]
 		if d.id == id then
 			sawID = true
-			if not d.receivedBy then
-				d.receivedBy = player
-				if isDE then d.de = true end
-				if L.onLoot then L.onLoot() end
-				return
-			end
+			if not d.receivedBy and not untagged then untagged = d end
 		end
+	end
+	if untagged then
+		untagged.receivedBy = player
+		-- if the existing row had no boss yet, adopt the current real boss
+		if not untagged.boss or untagged.boss == "" then
+			untagged.boss = resolveBoss()
+		end
+		untagged.rollID, untagged.rollStart = nil, nil   -- roll done -> stop the bar
+		clearRollIfWon(id)           -- winner recorded -> stop showing "Roll open"
+		if L.onLoot then L.onLoot() end
+		return untagged              -- caller may mark de=true if the shard follows
 	end
 	-- The item was captured on a corpse (a drop with this ID exists) but every
 	-- copy is already tagged -> this is a duplicate/echoed loot line, NOT a new
@@ -892,27 +982,45 @@ local function tagReceiver(player, itemLink, isDE)
 	local name, _, rarity = GetItemInfo(itemLink)
 	rarity = rarity or 0
 	if rarity < (Okanvil.db.lootThreshold or 3) then return end
-	-- inherit the last real corpse boss so a won-but-never-opened item groups under
-	-- the right encounter. Prefer lastBossName over the live target: a "won/receives"
-	-- chat line usually follows the kill, and the target might now be a PLAYER (a
-	-- mate you're looting) -- which must NOT become the boss name.
-	local boss = lastBossName
-	if not boss or boss == "" then
-		local tname = UnitName("target")
-		if tname and tname ~= "" and guidIsNPC(UnitGUID("target")) then boss = tname else boss = "" end
-	end
-	s.drops[#s.drops + 1] = {
-		t = time(), boss = boss, item = itemLink, id = id,
+	-- Every drop belongs to a boss. resolveBoss() picks the targeted NPC / last
+	-- boss / zone -- never "" and never "Need / Greed".
+	local drop = {
+		t = time(), boss = resolveBoss(), item = itemLink, id = id,
 		name = name or "", rarity = rarity, qty = 1, receivedBy = player,
-		de = isDE or nil,
 	}
+	s.drops[#s.drops + 1] = drop
+	clearRollIfWon(id)               -- winner recorded -> stop showing "Roll open"
 	if L.onLoot then L.onLoot() end
+	return drop                      -- caller may mark de=true if the shard follows
 end
 
 -- Some servers emit the same "X receives loot" / "X won" line on BOTH
 -- CHAT_MSG_LOOT and CHAT_MSG_SYSTEM. Without this guard the line is processed
 -- twice, and the 2nd pass (no untagged drop left) invents a phantom drop.
 local lastReceiveMsg, lastReceiveT = nil, 0
+-- MRT-style loot de-dup (LootHistory.lua ShouldDedupe): the server often emits the
+-- SAME loot twice -- e.g. when YOU are the looter it sends both "You receive
+-- loot: X" and "Okanor receives loot: X". Keyed by player:itemID within 5s, a
+-- repeat is dropped. We normalise "You" -> the real player name first, so both
+-- forms collapse to one (this is where MRT itself still double-logged the looter).
+local lastLoot = {}
+local function shouldDedupeLoot(player, id)
+	if not player or not id then return false end
+	local key = player .. ":" .. id
+	local now = GetTime and GetTime() or 0
+	local prev = lastLoot[key]
+	if prev and (now - prev) < 5 then return true end
+	lastLoot[key] = now
+	-- prune old keys so the table doesn't grow forever (same cap MRT uses)
+	if (lastLoot.__n or 0) > 50 then
+		for k, v in pairs(lastLoot) do
+			if k ~= "__n" and (now - v) > 30 then lastLoot[k] = nil end
+		end
+		lastLoot.__n = 0
+	end
+	lastLoot.__n = (lastLoot.__n or 0) + 1
+	return false
+end
 local function captureReceive(msg)
 	if not msg or msg == "" then return end
 	if not Okanvil:ShouldRecord() then return end   -- dungeon/raid toggle
@@ -927,49 +1035,138 @@ local function captureReceive(msg)
 		else                               -- other: player then item
 			player, item = msg:match(p[1])
 		end
+		-- normalise "You"/"you" to the real player name so the self+other duplicate
+		-- the server sends for your own loot collapses to a single de-dup key.
+		if player and (player == "You" or player == "you") then player = UnitName("player") end
 		if player and item then
-			-- A DE byproduct (Dream Shard etc.) arrives as a plain "receives loot"
-			-- line right after the winner's "(Disenchant)" line. If this player just
-			-- disenchanted something and this is a known shard, swallow it so the one
-			-- physical drop isn't logged twice (the real item + its shard).
+			-- MRT-style de-dup: same player+item within 5s = the echoed second line.
+			local dupId = itemIDFromLink(item)
+			if shouldDedupeLoot(player:gsub("%-.*$", ""), dupId) then return end
+			-- If this is the SHARD that follows a "(Disenchant)" line for this player,
+			-- NOW we know the item was really disenchanted: mark that remembered drop
+			-- de=true and swallow the shard (don't log it as its own drop).
 			if not p[3] then
-				local exp = pendingDE[player]
-				if exp and now < exp and DE_SHARD_IDS[itemIDFromLink(item)] then
+				local pend = pendingDE[player]
+				if pend and now < pend.exp and DE_SHARD_IDS[itemIDFromLink(item)] then
+					if pend.drop then pend.drop.de = true; if L.onLoot then L.onLoot() end end
 					pendingDE[player] = nil
 					return
 				end
 			end
-			tagReceiver(player, item, p[3])
-			if p[3] then pendingDE[player] = now + 5 end   -- open shard-suppress window
+			-- Record the win. On a "(Disenchant)" line we DON'T set de yet -- this
+			-- server appends "(Disenchant)" to ordinary need/greed wins, so we treat it
+			-- as a normal win and only upgrade to de=true if the shard actually lands
+			-- (checked above). Remember the drop so that upgrade can find it.
+			local drop = tagReceiver(player, item)
+			if p[3] then pendingDE[player] = { drop = drop, exp = now + 5 } end
 			return
 		end
 	end
 end
 
 -- ------------------------------------------------------------
--- JSON export (type:"loot") -- separate from attendance
+-- JSON export (type:"loot") -- separate from attendance.
+-- Shape MATCHES the RATS hub loot contract (rats/public/loot/loot.js): each drop
+-- is { ts, player, class, itemId, name, icon, boss, raid, size, runId }. DE items
+-- export player:"Disenchant" (the hub's DISENCHANT sentinel) -- the hub then
+-- excludes them from win counts, so we DON'T name the disenchanter, only that it
+-- was DE (exactly what the hub needs).
 -- ------------------------------------------------------------
+
+-- class NAME ("Rogue", "Death Knight", ...) of a player, from raid/party/guild.
+-- Mirrors classColorName but returns the localised class name for the export.
+local function classNameOf(name)
+	if not name or name == "" then return "" end
+	local short = name:gsub("%-.*$", "")
+	local class
+	local function scan(prefix, n)
+		for i = 1, n do
+			local u = prefix .. i
+			if UnitExists(u) and UnitName(u) == short then class = UnitClass(u); return true end
+		end
+	end
+	if UnitName("player") == short then class = UnitClass("player")
+	elseif GetNumRaidMembers and GetNumRaidMembers() > 0 then scan("raid", GetNumRaidMembers())
+	elseif GetNumPartyMembers and GetNumPartyMembers() > 0 then scan("party", GetNumPartyMembers()) end
+	if not class and IsInGuild and IsInGuild() and GetNumGuildMembers then
+		for i = 1, GetNumGuildMembers() do
+			-- GetGuildRosterInfo: name, rank, rankIndex, level, CLASS(5th), zone(6th)...
+			-- the 6th field is the ZONE (a city) -- using it made class="Dalaran".
+			local gn, _, _, _, cls = GetGuildRosterInfo(i)
+			if gn and gn:gsub("%-.*$", "") == short then class = cls; break end
+		end
+	end
+	return class or ""
+end
+
+-- short icon token the hub wants ("inv_jewelry_ring_73"), from the full texture
+-- path Interface\Icons\INV_Jewelry_Ring_73 -> lowercase basename.
+local function iconToken(link)
+	local tex = select(10, GetItemInfo(link or ""))
+	if not tex or tex == "" then return "" end
+	return (tex:gsub(".*[\\/]", ""):lower())
+end
+
 function L.SessionJSON(s)
 	if not s then return "{}" end
 	local guildName = GetGuildInfo("player") or "Guild"
 	local realm = GetRealmName() or ""
+	-- runId groups a session: day + zone + difficulty (stable per run).
+	local runId = (s.day or "") .. "-" .. (s.zone or ""):lower():gsub("%s+", "-")
+		.. "-" .. (s.difficulty or 0)
+	local size = (s.difficulty and (s.difficulty == 2 or s.difficulty == 4)) and 25 or 10
 	local drops = {}
 	for _, d in ipairs(s.drops) do
+		-- DE -> the hub's "Disenchant" sentinel (no person; excluded from win counts).
+		local player = d.de and "Disenchant" or (d.receivedBy or "")
+		local class = d.de and "" or classNameOf(d.receivedBy)
 		drops[#drops + 1] = string.format(
-			'{"time":%d,"boss":"%s","itemID":%d,"name":"%s","rarity":%d,"qty":%d,"receivedBy":"%s",'
-			.. '"rolledBy":"%s","rollValue":%d,"rollSpec":"%s","de":%s,"link":"%s"}',
-			d.t, esc(d.boss), d.id, esc(d.name), d.rarity, d.qty, esc(d.receivedBy or ""),
-			esc(d.rolledBy or ""), d.rollValue or 0, esc(d.rollSpec or ""),
-			d.de and "true" or "false", esc(d.item)
+			'{"ts":%d,"player":"%s","class":"%s","itemId":%d,"name":"%s","icon":"%s",'
+			.. '"boss":"%s","raid":"%s","size":%d,"runId":"%s","de":%s}',
+			d.t, esc(player), esc(class), d.id, esc(d.name), esc(iconToken(d.item)),
+			esc(d.boss), esc(s.zone or ""), size, esc(runId),
+			d.de and "true" or "false"
 		)
 	end
 	return string.format(
 		'{"type":"loot","guildName":"%s","realm":"%s","capturedAt":%d,"day":"%s",'
-		.. '"zone":"%s","mapID":%d,"difficulty":%d,"drops":[%s]}',
+		.. '"zone":"%s","runId":"%s","size":%d,"loot":[%s]}',
 		esc(guildName), esc(realm), s.t, esc(s.day or ""),
-		esc(s.zone), s.mapID or 0, s.difficulty, table.concat(drops, ",")
+		esc(s.zone), esc(runId), size, table.concat(drops, ",")
 	)
 end
+
+-- Class-colour a player NAME -> "|cffRRGGBB". Finds their class from party/raid,
+-- else the guild roster, else a learned cache (same approach as the mini roll's
+-- classColorCode). Falls back to gold if the class is unknown. Used so history
+-- winners show in class colour (Dknutela red DK, Okanor pink paladin, ...).
+local classNameCache = {}
+local function classColorName(name)
+	if not name or name == "" then return "|cffffd200" end
+	local short = name:gsub("%-.*$", "")
+	local low = short:lower()
+	local class
+	local function scan(prefix, n)
+		for i = 1, n do
+			local u = prefix .. i
+			if UnitExists(u) and UnitName(u) == short then class = select(2, UnitClass(u)); return true end
+		end
+	end
+	if UnitName("player") == short then class = select(2, UnitClass("player"))
+	elseif GetNumRaidMembers and GetNumRaidMembers() > 0 then scan("raid", GetNumRaidMembers())
+	elseif GetNumPartyMembers and GetNumPartyMembers() > 0 then scan("party", GetNumPartyMembers()) end
+	if not class and IsInGuild and IsInGuild() and GetNumGuildMembers then
+		for i = 1, GetNumGuildMembers() do
+			local gn, _, _, _, _, _, _, _, _, _, gc = GetGuildRosterInfo(i)
+			if gn and gn:gsub("%-.*$", "") == short then class = gc; break end
+		end
+	end
+	if class then classNameCache[low] = class else class = classNameCache[low] end
+	local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+	if c then return string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255) end
+	return "|cffffd200"
+end
+L.ClassColorName = classColorName   -- exposed in case the UI wants it too
 
 -- ------------------------------------------------------------
 -- Inline session renderer -- draws a session's drops (grouped by boss)
@@ -981,7 +1178,7 @@ end
 function L.RenderInline(s, rowFn, idx, y)
 	local lastBoss = nil
 	for _, d in ipairs(s.drops) do
-		local header = (d.boss ~= "" and d.boss) or "Need / Greed"
+		local header = (d.boss ~= "" and d.boss) or (GetInstanceInfo and GetInstanceInfo()) or "Trash"
 		if header ~= lastBoss then
 			lastBoss = header
 			idx = idx + 1
@@ -998,7 +1195,7 @@ function L.RenderInline(s, rowFn, idx, y)
 		r.txt:ClearAllPoints(); r.txt:SetPoint("LEFT", r.icon, "RIGHT", 6, 0); r.txt:SetPoint("RIGHT", r, "RIGHT", -4, 0)
 		local qty = (d.qty and d.qty > 1) and ("  |cff8a8d93x" .. d.qty .. "|r") or ""
 		local who = d.receivedBy and d.receivedBy ~= ""
-			and ("  |cff5e6166->|r |cffffd200" .. d.receivedBy .. "|r") or ""
+			and ("  |cff5e6166->|r " .. classColorName(d.receivedBy) .. d.receivedBy .. "|r") or ""
 		-- roll-off winner marker: a dice + the roll, and "(off)" for an offspec roll
 		if d.rolledBy then
 			who = who .. "  |cff7cfc8a[roll " .. tostring(d.rollValue or "?")
@@ -1029,6 +1226,7 @@ end
 
 -- (The old popup viewer L.ShowSession was removed -- the Loot tab now renders
 -- each session inline via L.RenderInline, so no separate window opens.)
+
 
 -- ------------------------------------------------------------
 -- Master-loot confirmation popup: when you zone into an instance AS the master
@@ -1237,6 +1435,8 @@ end
 -- ------------------------------------------------------------
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("LOOT_OPENED")
+ev:RegisterEvent("ENCOUNTER_START")   -- MRT-style boss attribution: reliable name
+ev:RegisterEvent("ENCOUNTER_END")     -- from the WoW encounter event, not the corpse
 ev:RegisterEvent("START_LOOT_ROLL")   -- Blizzard need/greed/pass prompt just opened
 ev:RegisterEvent("CHAT_MSG_SYSTEM")   -- /roll results
 ev:RegisterEvent("CHAT_MSG_LOOT")     -- who received which item
@@ -1255,7 +1455,18 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 		-- open, giving would fail HERE -- request a re-sync immediately (debounced).
 		if iAmMasterLooter() and not mlCandidateListOK() then checkMLHealth() end
 	elseif event == "START_LOOT_ROLL" then
-		captureRollStart(arg1)   -- arg1 = rollID; record the item + pop the mini roll NOW
+		-- arg1=rollID, arg2=rollTime (ms). Same as ElvUI's M:START_LOOT_ROLL: the
+		-- rollTime is the timer duration for the shrinking bar on the item's row.
+		captureRollStart(arg1, arg2)
+	elseif event == "ENCOUNTER_START" or event == "ENCOUNTER_END" then
+		-- arg1=encounterID, arg2=encounterName. This is the boss name we trust for
+		-- attributing loot (exactly what MRT does). It stays set through the loot
+		-- that follows the kill, so need/greed items with no corpse still land right.
+		local encName = arg2
+		if encName and encName ~= "" then
+			encounterBoss = encName
+			lastBossName = encName   -- keep the fallback in sync too
+		end
 	elseif event == "CHAT_MSG_LOOT" then
 		captureReceive(arg1 or "")
 	elseif event == "CHAT_MSG_SYSTEM" then
