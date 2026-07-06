@@ -48,17 +48,45 @@ local IGNORE_IDS = {
 	[34053]=true, [34054]=true, [34055]=true, [34056]=true,
 }
 -- Localized item CLASS names that are never guild loot. GetItemInfo returns the
--- class as a localized string; on enUS these are "Gem" and "Trade Goods" (which
--- covers gems, enchanting mats, orbs). We match case-insensitively on substrings.
-local IGNORE_CLASS_HINTS = { "gem", "trade goods" }
+-- class as a localized string; on enUS these are "Gem" and "Trade Goods". Trade
+-- Goods covers enchanting dusts/essences AND valuable raid mats (crafting orbs,
+-- ToC trophies, patterns via subtype) -- so we canNOT blanket-ignore it. We keep
+-- "gem" as a catch-all, but for Trade Goods we ONLY ignore the enchant byproducts
+-- (already enumerated in IGNORE_IDS) and let everything else through.
+local IGNORE_CLASS_HINTS = { "gem" }
+
+-- Trade-Goods / craft loot that IS guild loot and must ALWAYS be recorded, even
+-- though its item class would otherwise look ignorable. Orbs (Runed/Crusader/
+-- Primordial), ToC Trophies, and Recipes/Patterns are rare, useful, and rolled --
+-- they belong in the loot history. Matched by id (exact) or name (robust fallback).
+-- Only ids I'm confident about are hardcoded; the ToC trophy + patterns rely on
+-- the (robust) name fallback below, so a wrong id can't silently drop them.
+local KEEP_IDS = {
+	[45087] = true, -- Runed Orb           (confirmed elsewhere in this file)
+	[47556] = true, -- Crusader Orb
+	[49908] = true, -- Primordial Saronite
+}
+local KEEP_NAME_HINTS = {
+	"runed orb", "crusader orb", "primordial saronite",
+	"trophy of the crusader", -- ToC set-token trophy
+	"pattern:", "plans:", "recipe:", "schematic:", "formula:", "design:", -- craft patterns
+}
 
 local function isIgnoredItem(link, itemName)
 	local id = itemIDFromLink(link)
 	if id ~= 0 and IGNORE_IDS[id] then return true end
 	if not link then return false end
-	-- class-based catch-all (localized). 3.3.5a: name, link, rarity, level, minL,
-	-- itemType(class), subType, ... -> the 6th return is the class string.
-	local _, _, _, _, _, itemClass = GetItemInfo(link)
+	-- 3.3.5a: name, link, rarity, level, minL, itemType(class), subType(9th) ...
+	local iname, _, _, _, _, itemClass = GetItemInfo(link)
+	local nm = (itemName or iname or ""):lower()
+	-- ALLOW-list wins over any class filter: valuable craft mats / trophies / patterns
+	-- are guild loot even though their class is "Trade Goods" / "Recipe".
+	if id ~= 0 and KEEP_IDS[id] then return false end
+	for _, h in ipairs(KEEP_NAME_HINTS) do
+		if nm:find(h, 1, true) then return false end
+	end
+	-- class-based catch-all (localized) -- gems only; Trade Goods is filtered by the
+	-- specific IGNORE_IDS above so orbs/trophies/patterns aren't swept up.
 	if itemClass then
 		local lc = itemClass:lower()
 		for _, hint in ipairs(IGNORE_CLASS_HINTS) do
@@ -66,7 +94,6 @@ local function isIgnoredItem(link, itemName)
 		end
 	end
 	-- name fallback: anything called "Emblem of ..." (currency tokens)
-	local nm = (itemName or ""):lower()
 	if nm:find("emblem of", 1, true) then return true end
 	return false
 end
@@ -1067,7 +1094,8 @@ end
 -- ------------------------------------------------------------
 -- JSON export (type:"loot") -- separate from attendance.
 -- Shape MATCHES the RATS hub loot contract (rats/public/loot/loot.js): each drop
--- is { ts, player, class, itemId, name, icon, boss, raid, size, runId }. DE items
+-- is { ts, player, class, itemId, name, icon, quality, boss, raid, size, runId }.
+-- quality = WoW item rarity 0-5 (hub colors the item name by it). DE items
 -- export player:"Disenchant" (the hub's DISENCHANT sentinel) -- the hub then
 -- excludes them from win counts, so we DON'T name the disenchanter, only that it
 -- was DE (exactly what the hub needs).
@@ -1122,9 +1150,9 @@ function L.SessionJSON(s)
 		local class = d.de and "" or classNameOf(d.receivedBy)
 		drops[#drops + 1] = string.format(
 			'{"ts":%d,"player":"%s","class":"%s","itemId":%d,"name":"%s","icon":"%s",'
-			.. '"boss":"%s","raid":"%s","size":%d,"runId":"%s","de":%s}',
+			.. '"quality":%d,"boss":"%s","raid":"%s","size":%d,"runId":"%s","de":%s}',
 			d.t, esc(player), esc(class), d.id, esc(d.name), esc(iconToken(d.item)),
-			esc(d.boss), esc(s.zone or ""), size, esc(runId),
+			d.rarity or 4, esc(d.boss), esc(s.zone or ""), size, esc(runId),
 			d.de and "true" or "false"
 		)
 	end
