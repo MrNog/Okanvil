@@ -701,7 +701,9 @@ local function buildUI(host)
 		if dash then dash:Refresh() end
 	end
 
-	searchBox:SetFocus()
+	-- NEVER auto-SetFocus: grabbing the keyboard the moment the page opens steals
+	-- W/A/S/D from the game -- if you open the addon mid-fight you can't move and
+	-- die. The user clicks the box themselves when they want to type.
 	runSearch() -- initial: empty box shows the helper line
 end
 

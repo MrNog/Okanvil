@@ -854,9 +854,15 @@ function Rec_BuildLog(main)
 	clr:SetSize(56, 18); clr:SetPoint("TOPRIGHT", -8, -4)
 	clr:SetScript("OnClick", function() wipe(db.log); Rec_RefreshLog() end)
 
-	local s = CreateFrame("ScrollingMessageFrame", nil, main)
-	s:SetPoint("TOPLEFT", 8, -26)
-	s:SetPoint("BOTTOMRIGHT", -8, 8)
+	-- Opaque dark well behind the log so the faded rat art mounted on the shell
+	-- panel doesn't bleed into the whisper text area (it stays visible elsewhere).
+	local well = W.Frame(main, "dark")
+	well:SetPoint("TOPLEFT", 8, -26)
+	well:SetPoint("BOTTOMRIGHT", -8, 8)
+
+	local s = CreateFrame("ScrollingMessageFrame", nil, well)
+	s:SetPoint("TOPLEFT", 4, -4)
+	s:SetPoint("BOTTOMRIGHT", -4, 4)
 	s:SetFontObject(GameFontHighlightSmall)
 	s:SetJustifyH("LEFT")
 	s:SetMaxLines(120)
@@ -893,6 +899,15 @@ function Rec_BuildContacts(drawer)
 		local card = W.Frame(drawer, "input")
 		card:SetSize(CARD_W, CARD_H)
 		card:SetPoint("TOPLEFT", 8 + col * (CARD_W + GAPX), -26 - rowi * (CARD_H + GAPY))
+		-- keep the stat cards OPAQUE (over the page rat), so the numbers read
+		-- clearly instead of the rat bleeding through the card. Fixed alpha,
+		-- independent of the background-opacity slider (so unregister it from the
+		-- reskin table, else ReskinAll would drop it back to the slider alpha).
+		if Okanvil._skinned then Okanvil._skinned[card] = nil end
+		if card.SetBackdropColor then
+			local d = Okanvil.Colors.panelD
+			card:SetBackdropColor(d[1], d[2], d[3], 1)
+		end
 		local num = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 		num:SetPoint("TOP", 0, -2); num:SetText("0")
 		num:SetTextColor(1, 1, 1)

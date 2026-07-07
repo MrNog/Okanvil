@@ -15,12 +15,68 @@
 Okanvil = Okanvil or {}
 local Okanvil = Okanvil
 
+-- ------------------------------------------------------------
+-- 3.3.5a API compat shim: SetShown was added in WoW 4.x (Cataclysm). On a stock
+-- 3.3.5a client the widget methods don't exist, so every `frame:SetShown(cond)`
+-- throws "attempt to call method 'SetShown' (a nil value)". Some custom/patched
+-- 3.3.5a cores backport it, which is why it works for some players and not
+-- others. Polyfill it onto the shared widget metatables here, BEFORE any UI is
+-- built (Core loads first in the .toc), so all 25+ call sites just work. Guarded
+-- so a client that already has SetShown (patched core) is left untouched.
+-- ------------------------------------------------------------
+do
+	local function polyfill(obj)
+		if not obj then return end
+		local mt = getmetatable(obj)
+		local idx = mt and mt.__index
+		if type(idx) ~= "table" then return end
+		if not idx.SetShown then
+			idx.SetShown = function(self, shown)
+				if shown then self:Show() else self:Hide() end
+			end
+		end
+	end
+	-- In 3.3.5a EVERY widget type (Frame, Button, Slider, EditBox, ScrollFrame,
+	-- CheckButton, ...) shares ONE method table -- getmetatable(x).__index is the
+	-- same for all -- so patching a single throwaway Frame covers them all.
+	-- CRITICAL: do NOT create an EditBox here to "also patch it". A fresh EditBox
+	-- defaults to autoFocus=true and, on creation, GRABS the keyboard -- an orphan
+	-- box left focused eats W/A/S/D for the whole session (this made the game
+	-- unplayable). One Frame + its Texture/FontString metatables is enough.
+	local f = CreateFrame("Frame")
+	polyfill(f)
+	polyfill(f:CreateTexture())
+	polyfill(f:CreateFontString())
+end
+
 local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
 Okanvil.LSM = LSM
 
 Okanvil.version = GetAddOnMetadata and GetAddOnMetadata("Okanvil", "Version") or "1.0"
 Okanvil.entries = {}          -- name -> plugin table (registered)
 Okanvil._fontStrings = {}     -- font strings to restyle when the font changes
+
+-- ------------------------------------------------------------
+-- KEYBOARD-FOCUS SAFETY
+-- An EditBox with keyboard focus swallows ALL keys -- including W/A/S/D -- so a
+-- focus we forget to release makes the game unplayable (the user lost all keybinds
+-- and had to delete the addon). Rules, per the user:
+--   * NEVER auto-SetFocus (opening the addon must not steal the keyboard -- you
+--     could be mid-fight and unable to move).
+--   * Clicking ANYWHERE outside a text box drops focus.
+--   * Entering combat / closing the window / switching page releases focus.
+-- We track every EditBox we make and clear them all on those events.
+-- ------------------------------------------------------------
+Okanvil._editBoxes = Okanvil._editBoxes or {}
+function Okanvil:TrackEditBox(e)
+	if not e then return end
+	self._editBoxes[e] = true
+end
+function Okanvil:ClearAllFocus()
+	for e in pairs(self._editBoxes) do
+		if e.HasFocus and e:HasFocus() then e:ClearFocus() end
+	end
+end
 
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 
@@ -43,6 +99,7 @@ local defaults = {
 	recordDungeon = true, -- capture attendance/loot in 5-man dungeons (party instances)
 	recordRaid = true,    -- capture attendance/loot in raids
 	ratArt = "on",         -- faded rat blacksmith art in the page corner: "on" | "off"
+	ratAlpha = 0.30,       -- rat watermark intensity (own slider; independent of bgAlpha)
 }
 
 local function applyDefaults(dst, src)
@@ -191,7 +248,13 @@ end
 local core = CreateFrame("Frame")
 core:RegisterEvent("ADDON_LOADED")
 core:RegisterEvent("PLAYER_LOGIN")
+core:RegisterEvent("PLAYER_REGEN_DISABLED")   -- entered combat -> release keyboard
 core:SetScript("OnEvent", function(_, event, arg1)
+	if event == "PLAYER_REGEN_DISABLED" then
+		-- combat started: never keep the keyboard captured (movement must work)
+		Okanvil:ClearAllFocus()
+		return
+	end
 	if event == "ADDON_LOADED" and arg1 == "Okanvil" then
 		Okanvil_DB = Okanvil_DB or {}
 		applyDefaults(Okanvil_DB, defaults)
@@ -231,4 +294,12 @@ end)
 SLASH_Okanvil1 = "/okanvil"
 SlashCmdList["Okanvil"] = function()
 	Okanvil:Toggle()
+end
+
+-- Emergency keyboard release: if anything ever traps the keyboard again, this
+-- clears our tracked boxes AND force-releases any lingering focus. Type /okfocus.
+SLASH_OKFOCUS1 = "/okfocus"
+SlashCmdList["OKFOCUS"] = function()
+	Okanvil:ClearAllFocus()
+	Okanvil:Print("released keyboard focus.")
 end
