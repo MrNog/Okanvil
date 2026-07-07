@@ -25,6 +25,13 @@ local function db()
 	return Okanvil.db.rollmgr
 end
 
+-- Icon resolver: delegates to the shared Core warmer (Okanvil:ItemIcon), which
+-- returns the icon now or nil + auto-queues a server query so a later tick fills
+-- it in. Fixes the "?" icons on a fresh client without any manual hovering.
+local function itemIcon(itemLink)
+	return itemLink and Okanvil:ItemIcon(itemLink) or nil
+end
+
 -- are we the loot master right now? (drives ML-vs-raider layout)
 local function amML()
 	return (GetLootMethod and GetLootMethod()) == "master"
@@ -128,6 +135,18 @@ local function buildWindow()
 	f._anim = 0
 	f:SetScript("OnUpdate", function(self, e)
 		if not self:IsShown() then return end
+		-- Fill in any "?" icons once the client has cached the item (fresh client:
+		-- GetItemInfo is nil at first). Throttled to ~2x/sec so it's cheap.
+		self._iconAcc = (self._iconAcc or 0) + e
+		if self._iconAcc >= 0.5 and self.itemRows then
+			self._iconAcc = 0
+			for _, r in ipairs(self.itemRows) do
+				if r:IsShown() and r._d and r._d.item then
+					local tex = itemIcon(r._d.item)
+					if tex then r.icon:SetTexture(tex) end
+				end
+			end
+		end
 		-- Shrinking roll-timer bars on the item rows (ElvUI M:statusbarOnUpdate style):
 		-- read GetLootRollTimeLeft(rollID) each frame and scale the row-width bar.
 		if self.itemRows then
@@ -386,7 +405,7 @@ function RM.Refresh()
 			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 4, -2 - (i - 1) * ROW_H); r:SetPoint("RIGHT", f.ibox, "RIGHT", -4, 0); r:SetHeight(ROW_H)
 			if d then
 				r._d = d
-				r.icon:Show(); r.icon:SetTexture(select(10, GetItemInfo(d.item)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+				r.icon:Show(); r.icon:SetTexture(itemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark")
 				-- item name in RARITY color; receiver in CLASS color; both inline so
 				-- one string can carry two colors. Long names get truncated with ...
 				r.txt:SetTextColor(1, 1, 1)   -- base; inline codes do the coloring

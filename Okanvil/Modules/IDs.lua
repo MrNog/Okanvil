@@ -28,6 +28,9 @@ local ROW_H = 20 -- a touch of breathing room; names are clamped to one line
 
 local defaults = {
 	items = {}, -- [itemID] = name   (harvested; account-wide)
+	icons = {}, -- [itemID] = iconPath  (harvested during Full scan; survives a
+	            -- client change so we render the real icon from the FILE instead
+	            -- of "?" when the fresh client hasn't cached the item yet)
 	links = {}, -- [itemID] = { [spellID] = spellName }  -- item<->buff link store (lib API)
 }
 local db
@@ -148,6 +151,16 @@ local function refreshItemLower()
 end
 
 function IDs.ItemName(id) return db and db.items[id] end
+
+-- Icon path for an item id, preferring the FILE-persisted one (survives a client
+-- change) and falling back to the live client cache. nil if we have neither yet.
+function IDs.ItemIcon(id)
+	id = tonumber(id)
+	if not id then return nil end
+	local saved = db and db.icons and db.icons[id]
+	if saved then return saved end
+	return select(10, GetItemInfo(id))
+end
 
 -- Record an item by link OR numeric id (only succeeds when the client already
 -- has it cached -- i.e. it just showed in a tooltip/bag/etc). Returns true if new.
@@ -297,8 +310,13 @@ function IDs.FullScan()
 		local stop = i + 100 -- 100 ids/batch -> ~1000 ids/sec
 		while i < stop and i < MAX_ITEM_ID do
 			i = i + 1
-			local name = GetItemInfo(i) -- nil for uncached -> queues a server request
+			-- GetItemInfo: name is #1, icon path is #10. nil for uncached -> queues
+			-- a server request (that's what the Full scan is for).
+			local name, _, _, _, _, _, _, _, _, icon = GetItemInfo(i)
 			if name and db.items[i] ~= name then db.items[i] = name end
+			-- persist the icon too, so a fresh client renders it from the FILE
+			-- (no more "?" after a client change).
+			if icon and icon ~= "" and db.icons and db.icons[i] ~= icon then db.icons[i] = icon end
 		end
 		if IDs.OnStatus then
 			IDs.OnStatus(string.format("Full scan %d%%  (id %d) -- watch for lag/disconnect", math.floor(i / MAX_ITEM_ID * 100), i))

@@ -1222,7 +1222,9 @@ function L.RenderInline(s, rowFn, idx, y)
 		idx = idx + 1
 		local r = rowFn(idx, y)
 		r.icon:Show()
-		local tex = select(10, GetItemInfo(d.item)) or "Interface\\Icons\\INV_Misc_QuestionMark"
+		-- shared warmer: shows the icon now, or "?" + auto-queues a server query
+		-- so a fresh client fills it in shortly (no manual hovering needed).
+		local tex = Okanvil:ItemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark"
 		r.icon:SetTexture(tex); r.icon:ClearAllPoints(); r.icon:SetPoint("LEFT", r, "LEFT", 2, 0)
 		r.txt:ClearAllPoints(); r.txt:SetPoint("LEFT", r.icon, "RIGHT", 6, 0); r.txt:SetPoint("RIGHT", r, "RIGHT", -4, 0)
 		local qty = (d.qty and d.qty > 1) and ("  |cff8a8d93x" .. d.qty .. "|r") or ""

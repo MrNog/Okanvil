@@ -81,6 +81,94 @@ end
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 
 -- ------------------------------------------------------------
+-- ITEM CACHE WARMER  (shared by Mini Roll / Loot / Raid Finder)
+-- On a fresh client, GetItemInfo returns nil for an item it has never seen, so
+-- icons show "?" and AtlasLoot draws a red border. The fix is exactly what
+-- AtlasLoot's "Query" button does: a hidden GameTooltip:SetHyperlink forces the
+-- client to request the item from the server; a moment later GetItemInfo works.
+--   * Okanvil:WarmItem(link|id)  -> queue a server request (deduped, throttled)
+--   * Okanvil:ItemIcon(link|id)  -> icon texture now, or nil + auto-warm for later
+-- Warming is throttled to a few items/sec on a ticker so it can't lag/disconnect
+-- you (AtlasLoot's busy-loop can; ours is async).
+-- ------------------------------------------------------------
+do
+	local tip                       -- hidden scanning tooltip (created on demand)
+	local queue, queued = {}, {}    -- pending item keys + dedupe set
+	local ticker                    -- OnUpdate driver (runs only while queue nonempty)
+	local acc = 0
+
+	local function keyOf(itemLinkOrId)
+		if type(itemLinkOrId) == "number" then return "item:" .. itemLinkOrId end
+		if type(itemLinkOrId) ~= "string" then return nil end
+		if itemLinkOrId:find("item:") then
+			-- extract the numeric id so links/ids dedupe to the same key
+			local id = itemLinkOrId:match("item:(%d+)")
+			return id and ("item:" .. id) or itemLinkOrId
+		end
+		local id = tonumber(itemLinkOrId)
+		return id and ("item:" .. id) or nil
+	end
+
+	local function pump()
+		if #queue == 0 then
+			if ticker then ticker:SetScript("OnUpdate", nil); ticker:Hide() end
+			return
+		end
+		if not tip then
+			tip = CreateFrame("GameTooltip", "OkanvilWarmTip", nil, "GameTooltipTemplate")
+			tip:SetOwner(WorldFrame, "ANCHOR_NONE")
+		end
+		-- process a few per tick (throttle -- server query is the risky part)
+		for _ = 1, 3 do
+			local key = table.remove(queue, 1)
+			if not key then break end
+			queued[key] = nil
+			GetItemInfo(key)                       -- triggers cache request
+			pcall(function() tip:SetHyperlink(key) end)
+		end
+	end
+
+	function Okanvil:WarmItem(itemLinkOrId)
+		local key = keyOf(itemLinkOrId)
+		if not key or queued[key] then return end
+		-- already cached? nothing to do.
+		if GetItemInfo(key) then return end
+		queued[key] = true
+		queue[#queue + 1] = key
+		if not ticker then
+			ticker = CreateFrame("Frame")
+		end
+		-- (re)arm the driver: it clears its own OnUpdate when the queue empties.
+		ticker:SetScript("OnUpdate", function(_, e)
+			acc = acc + e
+			if acc >= 0.1 then acc = 0; pump() end
+		end)
+		ticker:Show()
+	end
+
+	-- Return the icon texture NOW, or nil (and queue a warm so a later paint fills
+	-- it in). Order: (1) the ID Finder's FILE-persisted icon (survives a client
+	-- change -> no "?" after switching clients, IF you ran a Full scan), then
+	-- (2) the live client cache (select(10, GetItemInfo) = icon path in 3.3.5a).
+	function Okanvil:ItemIcon(itemLinkOrId)
+		if not itemLinkOrId then return nil end
+		-- try the saved DB first (needs a numeric id)
+		if Okanvil.IDs and Okanvil.IDs.ItemIcon then
+			local id = (type(itemLinkOrId) == "number") and itemLinkOrId
+				or tonumber(tostring(itemLinkOrId):match("item:(%d+)"))
+				or tonumber(itemLinkOrId)
+			if id then
+				local saved = Okanvil.IDs.ItemIcon(id)
+				if saved then return saved end
+			end
+		end
+		local tex = select(10, GetItemInfo(itemLinkOrId))
+		if not tex then self:WarmItem(itemLinkOrId) end
+		return tex
+	end
+end
+
+-- ------------------------------------------------------------
 -- Saved-variable defaults
 -- ------------------------------------------------------------
 local defaults = {
