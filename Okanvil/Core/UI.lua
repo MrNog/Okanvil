@@ -1232,7 +1232,32 @@ function Okanvil:BuildInvite()
 	-- everything down and forced the page to scroll).
 	-- ============================================================
 	local LEFT_W = 340
-	local left = W.Frame(p, "bare"); left:SetPoint("TOPLEFT", X, -10); left:SetWidth(LEFT_W); left:SetHeight(560)
+	-- The controls column can be TALLER than the window (many guild ranks + all the
+	-- keyword/list sections). Put it in its own ScrollFrame that stretches to the
+	-- page bottom, so the footer ("Pick raiders...") is reachable by scrolling
+	-- instead of being clipped. Mirrors the roster card on the right.
+	local lsf = CreateFrame("ScrollFrame", nil, p)
+	lsf:SetPoint("TOPLEFT", X, -10); lsf:SetWidth(LEFT_W + 8)
+	lsf:SetPoint("BOTTOM", p, "BOTTOM", 0, 10)
+	local left = W.Frame(lsf, "bare"); left:SetWidth(LEFT_W); left:SetHeight(560)
+	lsf:SetScrollChild(left)
+	local lsb = CreateFrame("Slider", nil, p)
+	lsb:SetPoint("TOPLEFT", lsf, "TOPRIGHT", -4, 0); lsb:SetPoint("BOTTOMLEFT", lsf, "BOTTOMRIGHT", -4, 0); lsb:SetWidth(4)
+	lsb:SetOrientation("VERTICAL"); lsb:SetValueStep(1)
+	local lth = lsb:CreateTexture(nil, "OVERLAY"); lth:SetTexture(FLAT); lth:SetSize(4, 30)
+	do local a = Okanvil.Colors.accent; lth:SetVertexColor(a[1], a[2], a[3], 1) end
+	lsb:SetThumbTexture(lth)
+	lsb:SetScript("OnValueChanged", function(_, v) lsf:SetVerticalScroll(v) end)
+	lsf:EnableMouseWheel(true)
+	lsf:SetScript("OnMouseWheel", function(_, d) lsb:SetValue(lsb:GetValue() - d * 28) end)
+	-- keep the scrollbar range in sync with the column's real content height
+	local function leftRelayout()
+		local maxS = math.max(0, left:GetHeight() - lsf:GetHeight())
+		lsb:SetMinMaxValues(0, maxS)
+		lsb:SetShown(maxS > 0)
+	end
+	lsf:SetScript("OnSizeChanged", leftRelayout)
+	wrap._leftRelayout = leftRelayout
 
 	-- ---- invite BY RANK ----
 	-- Two ways to invite: (1) BY RANK -- tick ranks, hit the button; (2) THIS LIST --
@@ -1280,7 +1305,7 @@ function Okanvil:BuildInvite()
 	bRank:SetScript("OnClick", function() I.InviteByRank() end)
 
 	-- ---- keyword invite (master switch + whisper/guild sub-toggles) ----
-	local whlbl = W.Text(left, "KEYWORD INVITE", 11, "accent"); whlbl:SetPoint("TOPLEFT", bRank, "BOTTOMLEFT", 0, -28)
+	local whlbl = W.Text(left, "KEYWORD INVITE", 11, "accent"); whlbl:SetPoint("TOPLEFT", bRank, "BOTTOMLEFT", 0, -18)
 	-- MASTER enable. Mutually exclusive with Recruit (both grab the "inv" whisper).
 	local kwEnable = W.Check(left, "Enable keyword-invite",
 		function() return I.KeywordEnabled() end,
@@ -1305,7 +1330,7 @@ function Okanvil:BuildInvite()
 	kwhint:SetPoint("TOPLEFT", kwBox, "BOTTOMLEFT", 0, -6)
 
 	-- ---- saved list (built by picking raiders on the right) ----
-	local llbl = W.Text(left, "RAID LIST", 11, "accent"); llbl:SetPoint("TOPLEFT", kwhint, "BOTTOMLEFT", 0, -28)
+	local llbl = W.Text(left, "RAID LIST", 11, "accent"); llbl:SetPoint("TOPLEFT", kwhint, "BOTTOMLEFT", 0, -18)
 	local nmLbl = W.Text(left, "List name", 10, "dim"); nmLbl:SetPoint("TOPLEFT", llbl, "BOTTOMLEFT", 0, -12)
 	local nmBox = W.EditBox(left); nmBox:Size(160, 22); nmBox:SetPoint("TOPLEFT", nmLbl, "BOTTOMLEFT", 0, -4)
 	nmBox.edit:SetText(curList)
@@ -1340,10 +1365,10 @@ function Okanvil:BuildInvite()
 			iv.autoLoginList = (v and curList ~= "") and curList or ""
 			if v and curList ~= "" then Okanvil:Print("Armed auto-invite for '" .. curList .. "' on login.") end
 		end)
-	alChk:SetPoint("TOPLEFT", bSave, "BOTTOMLEFT", 0, -16)
+	alChk:SetPoint("TOPLEFT", bSave, "BOTTOMLEFT", 0, -12)
 
 	local pinfo = W.Text(left, "Pick raiders on the right -- click a name to add/remove it. Saved lists live in the My Lists tab above.", 10, "dim")
-	pinfo:SetPoint("TOPLEFT", alChk, "BOTTOMLEFT", 0, -10); pinfo:SetWidth(LEFT_W); pinfo:SetJustifyH("LEFT")
+	pinfo:SetPoint("TOPLEFT", alChk, "BOTTOMLEFT", 0, -8); pinfo:SetWidth(LEFT_W); pinfo:SetJustifyH("LEFT")
 
 	-- ============================================================
 	-- RIGHT COLUMN = ROSTER PICKER: real guildies grouped by rank, class-coloured,
@@ -1485,6 +1510,14 @@ function Okanvil:BuildInvite()
 		cntLbl:SetText("|cff7cfc8a" .. n .. "|r |cff8a8d93in list|r")
 		if alChk.refresh then alChk.refresh() end        -- re-read the auto-invite toggle
 		if kwEnable.refresh then kwEnable.refresh() end   -- Recruit may have flipped this
+		-- Fit the left column to its ACTUAL content (the rank block grows with the
+		-- number of guild ranks). Measuring the last element and sizing the frame
+		-- from it stops the footer ("Pick raiders...") being clipped off the bottom
+		-- when there are many ranks -- the old fixed 560 height guessed wrong.
+		local top = left:GetTop()
+		local bot = pinfo:GetBottom()
+		if top and bot then left:SetHeight(math.max(1, top - bot + 6)) end
+		if wrap._leftRelayout then wrap._leftRelayout() end   -- refresh the scrollbar range
 	end
 	wrap._rebuild = rebuild
 

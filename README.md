@@ -90,6 +90,7 @@ Push to `main` → a GitHub Action builds a clean, install-ready **`Okanvil.zip`
 and rolls the **Latest** release.
 
 Design notes & roadmap → **[`Okanvil/PLAN.md`](Okanvil/PLAN.md)**.
+SavedVariables layout (account-wide vs per-character — read before wiping/debugging saved data) → **[`docs/STORAGE.md`](docs/STORAGE.md)**.
 
 <br>
 
