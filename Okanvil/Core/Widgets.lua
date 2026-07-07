@@ -60,6 +60,9 @@ Okanvil.Clip = Clip
 --   "dark"       recessed well (nav / content)
 --   "raise"      header / hovered raise
 --   "input"      edit boxes / dropdowns (slightly darker, focusable)
+--   "page"       page panel: BORDER only, transparent fill -- so the ONE content
+--                well (with the rat watermark) shows through uniformly behind
+--                every page. Its alpha is fixed 0 (ignores the opacity slider).
 -- Registers the frame so the Settings alpha slider can re-tint it.
 -- ------------------------------------------------------------
 function Okanvil:Skin(frame, kind)
@@ -71,6 +74,15 @@ function Okanvil:Skin(frame, kind)
 	local fill = C.panel
 	if kind == "dark" or kind == "input" then fill = C.panelD
 	elseif kind == "raise" then fill = C.panelHi end
+	if kind == "page" then
+		-- Fully invisible container: transparent body AND transparent border. The
+		-- outer `content` well already frames the page; drawing this panel's own
+		-- 1px border created a seam line that cut across the rat where main/drawer
+		-- meet. No fill, no edge => the single content rat reads as one clean
+		-- background behind the page. NOT registered for the opacity slider.
+		frame:SetBackdrop(nil)
+		return frame
+	end
 	local a = self.db and self.db.bgAlpha or 0.95
 	frame:SetBackdropColor(fill[1], fill[2], fill[3], a)
 	frame:SetBackdropBorderColor(unpack3(C.border))
@@ -264,6 +276,7 @@ function W.EditBox(parent, onEnter)
 	if onEnter then
 		e:SetScript("OnEnterPressed", function(s) onEnter(s:GetText()); s:ClearFocus() end)
 	end
+	Okanvil:TrackEditBox(e)   -- so the window can release keyboard focus on hide
 	box.edit = e
 	function box:Size(w, h) box:SetSize(w, h); return box end
 	function box:Point(...) box:SetPoint(...); return box end
@@ -287,6 +300,7 @@ function W.MultiEdit(parent, onDone)
 	e:SetFont(fp, 12)                 -- fixed size: the box height is fixed, so the
 	e:SetTextColor(unpack3(C.text))   -- global font slider must not overflow it
 	e:SetScript("OnEscapePressed", e.ClearFocus)
+	Okanvil:TrackEditBox(e)   -- so the window can release keyboard focus on hide
 	sf:SetScrollChild(e)
 
 	local sb = CreateFrame("Slider", nil, box)
@@ -563,13 +577,13 @@ function W.Dashboard(parent, cfg)
 
 	local drawer
 	if hasDrawer then
-		drawer = W.Frame(body, "dark")
+		drawer = W.Frame(body, "page")
 		drawer:SetPoint("TOPRIGHT", 0, 0); drawer:SetPoint("BOTTOMRIGHT", 0, 0)
 		drawer:SetWidth(drawerW)
 	end
 	D.drawer = drawer
 
-	local main = W.Frame(body, "dark")
+	local main = W.Frame(body, "page")
 	main:SetPoint("TOPLEFT", 0, 0); main:SetPoint("BOTTOMLEFT", 0, 0)
 	if hasDrawer then
 		main:SetPoint("TOPRIGHT", drawer, "TOPLEFT", -6, 0)
@@ -578,10 +592,9 @@ function W.Dashboard(parent, cfg)
 		main:SetPoint("TOPRIGHT", 0, 0); main:SetPoint("BOTTOMRIGHT", 0, 0)
 	end
 	D.main = main
-	-- The rat watermark lives on the HOST's background, but main/drawer (opaque
-	-- "dark" panels) sit on top and hide it -> mount it on `main` so every
-	-- Dashboard page shows the same faint rat in its corner.
-	if Okanvil.MountBgArt then Okanvil:MountBgArt(main) end
+	-- (rat art is a single shared overlay mounted once on Okanvil.content --
+	-- Dashboard pages no longer mount their own, which caused duplicate/misaligned
+	-- rats when main + drawer + inner scrolls each drew one.)
 
 	local drawerShown = hasDrawer
 	local function layoutMain()
@@ -759,6 +772,10 @@ function Okanvil:ShowExport(text, label)
 		eb:SetFontObject(GameFontHighlightSmall)
 		eb:SetTextColor(unpack3(C.text))
 		eb:SetScript("OnEscapePressed", function() f:Hide() end)
+		Okanvil:TrackEditBox(eb)
+		-- SAFETY: always release the keyboard when the popup closes, so a lingering
+		-- focus can never eat W/A/S/D in the game world.
+		f:HookScript("OnHide", function() eb:ClearFocus() end)
 		sf:SetScrollChild(eb)
 
 		local sb = CreateFrame("Slider", nil, box)
@@ -781,7 +798,11 @@ function Okanvil:ShowExport(text, label)
 	f.eb:SetText(text or "")
 	f:Show()
 	if f._range then f._range() end
-	f.eb:SetFocus()
-	f.eb:HighlightText()
+	-- Focus the box so Ctrl+A/Ctrl+C works -- but NEVER while in combat (grabbing
+	-- the keyboard mid-fight would eat your movement keys). Out of combat only.
+	if not (InCombatLockdown and InCombatLockdown()) then
+		f.eb:SetFocus()
+		f.eb:HighlightText()
+	end
 	f.eb:SetCursorPosition(0)
 end

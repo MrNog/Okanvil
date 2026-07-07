@@ -67,11 +67,22 @@ function Okanvil:BuildShell()
 	f:SetResizable(false)            -- no drag-resize: it broke layouts. Scale instead.
 	self:Skin(f)
 	self.win = f
+	-- ESC closes the window: register it as a special frame (WoW hides frames in
+	-- UISpecialFrames when Escape is pressed). Uses the frame's global name.
+	tinsert(UISpecialFrames, "Okanvil_Window")
+	-- SAFETY: closing the window must release any keyboard focus, so a text box can
+	-- never keep eating W/A/S/D after you close the addon.
+	f:HookScript("OnHide", function() Okanvil:ClearAllFocus() end)
+	-- Clicking a bare area of the window drops focus where it can (a focused 3.3.5a
+	-- EditBox captures input, so this won't fire in every case -- ESC and closing
+	-- the window are the reliable releases).
+	f:SetScript("OnMouseDown", function() Okanvil:ClearAllFocus() end)
 
 	-- header (drag)
 	local hdr = W.Frame(f, "raise")
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(HEADER_H)
 	hdr:EnableMouse(true); hdr:RegisterForDrag("LeftButton")
+	hdr:SetScript("OnMouseDown", function() Okanvil:ClearAllFocus() end)  -- click header = stop typing
 	hdr:SetScript("OnDragStart", function() f:StartMoving() end)
 	hdr:SetScript("OnDragStop", function()
 		f:StopMovingOrSizing()
@@ -134,6 +145,8 @@ function Okanvil:BuildShell()
 	content:SetPoint("TOPLEFT", nav, "TOPRIGHT", 6, 0)
 	content:SetPoint("BOTTOMRIGHT", -6, FOOTER_H + 4)
 	self.content = content
+	-- ONE shared rat behind every page (single mount; see MountPageRat).
+	self:MountPageRat()
 
 	-- footer: fixed author credit (Okanvil is by Okanor) + a flavor line
 	local footer = W.Text(f, "|cffe0b860Okanvil by Okanor|r  |cff55575b--  the void in your stack trace|r", 10, "dim")
@@ -258,7 +271,7 @@ Okanvil.NATIVE = {
 -- set where a module sits in the menu -- add a new feature's title here at the
 -- index you want. Home is always first; Modules + Settings are always last.
 -- Anything enabled but NOT listed here falls to the end (alphabetical).
-Okanvil.NAV_ORDER = { "Guild", "Invite", "Recruit", "Loot", "ID Finder", "Combat Logs" }
+Okanvil.NAV_ORDER = { "Guild", "Invite", "Recruit", "Raid Finder", "Loot", "ID Finder", "Combat Logs" }
 
 function Okanvil:RefreshNav()
 	if not self.navChild then return end
@@ -338,46 +351,65 @@ end
 --                       pages (Home, Settings).
 -- Both expose `.child` (draw target) and `.relayout()`.
 -- ------------------------------------------------------------
+-- Shared "rat art" watermark -- ONE faded image in the content's bottom-right
+-- corner, shown on every page. WoW 3.3.5a draws only BLP (DXT5) shipped in the
+-- addon -> Media\rat1.blp (the Okanor blacksmith). db.ratArt "off" hides it.
+-- Mounted once on Okanvil.content's ARTWORK layer (see MountPageRat), behind the
+-- transparent "page" panels, so it is ALWAYS visible -- independent of panel
+-- opacity, via its own db.ratAlpha slider -- and never duplicated.
 -- ------------------------------------------------------------
--- Shared "rat art" background -- a faded image pinned bottom-right of a panel,
--- behind the content, on EVERY page. WoW 3.3.5a draws only BLP (DXT5) shipped in
--- the addon -> Media\rat<N>.blp. db.ratArtPick (1..) chooses it; db.ratArt "off"
--- hides. One texture per host frame, tracked in Okanvil._bgArts so Settings can
--- refresh them all live.
--- single art file: Media\rat1.blp (the Okanor blacksmith). No picker.
 local RAT_TEX = "Interface\\AddOns\\Okanvil\\Media\\rat1"
 local function applyRatTex(tex)
 	tex:SetTexture(RAT_TEX); tex:SetTexCoord(0, 1, 0, 1)
 end
 
--- attach the faded bg art to `host` (a visible panel frame). Returns the texture.
-function Okanvil:MountBgArt(host)
-	local art = host:CreateTexture(nil, "BACKGROUND")
-	art:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -8, 8)
+-- ONE rat, once, on the shared content well -- NOT per panel.
+--
+-- Old design mounted a rat on every panel (main + drawer + each scroll/fill
+-- wrap), so a page with a drawer + inner scrolls showed 2-3 rats, each pinned to
+-- its OWN corner => duplicated + misaligned art, plus a stray small one in list
+-- columns. We now mount a SINGLE texture on `Okanvil.content` (the frame that
+-- hosts every page), on its ARTWORK layer -- above content's own dark fill but
+-- below the page panels, which are the transparent "page" skin -- so this one
+-- rat reads as a true, uniform background behind every page and NEVER moves.
+-- Its intensity is db.ratAlpha (its own Settings slider), so it stays visible
+-- even at full panel opacity (the old rat lived under opaque panels and vanished
+-- when bgAlpha hit 1).
+function Okanvil:MountPageRat()
+	if self._pageRat then return self._pageRat end
+	local host = self.content
+	if not host then return end
+	-- Single texture on the content well's ARTWORK layer -- ABOVE content's own
+	-- dark BACKGROUND fill, but BELOW the page panels (which are now transparent,
+	-- see the "page" skin) so it reads as a true background behind the content.
+	-- One draw, fixed corner, never duplicated. Intensity = db.ratAlpha (its own
+	-- Settings slider, independent of the panel opacity slider).
+	local art = host:CreateTexture(nil, "ARTWORK")
+	art:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -10, 10)
 	local function refresh()
 		if (Okanvil.db.ratArt or "on") == "off" then art:Hide(); return end
 		applyRatTex(art)
-		-- Keep it faint -- on Dashboard pages the dark main/drawer panels sit on top,
-		-- so the rat only peeks through gaps; a low alpha reads as a subtle watermark
-		-- instead of a loud, uneven blob. Scales gently with the bg-opacity slider.
-		art:SetAlpha(0.45 * (Okanvil.db.bgAlpha or 1))
+		art:SetAlpha(Okanvil.db.ratAlpha or 0.30)
 		local vw, vh = host:GetWidth() or 700, host:GetHeight() or 500
-		local s = math.max(200, math.min(vh * 0.55, vw * 0.4))
+		local s = math.max(220, math.min(vh * 0.62, vw * 0.46))
 		art:SetSize(s, s); art:Show()
 	end
 	art.refresh = refresh
 	host:HookScript("OnSizeChanged", refresh)
 	host:HookScript("OnShow", refresh)
 	refresh()
-	self._bgArts = self._bgArts or {}
-	self._bgArts[#self._bgArts + 1] = art
+	self._pageRat = art
 	return art
 end
 
--- refresh every mounted bg art (called from Settings when style/pick changes).
+-- Back-compat no-op: panels used to call this to get their own rat. Now the
+-- single content rat covers every page, so per-panel mounts do nothing. Kept so
+-- existing call sites don't error while we remove them.
+function Okanvil:MountBgArt() end
+
+-- refresh the single page rat (called from Settings when opacity/toggle changes).
 function Okanvil:RefreshRatArt()
-	if not self._bgArts then return end
-	for _, a in ipairs(self._bgArts) do if a.refresh then a:refresh() end end
+	if self._pageRat and self._pageRat.refresh then self._pageRat.refresh() end
 end
 
 local function newFillPanel()
@@ -386,7 +418,7 @@ local function newFillPanel()
 	wrap:Hide()
 	wrap.child = wrap                 -- plugins anchor straight to the panel
 	wrap.relayout = function() end
-	Okanvil:MountBgArt(wrap)          -- bg art on plugin pages too
+	-- (rat art is a single shared overlay on content -- no per-panel mount)
 	return wrap
 end
 
@@ -418,12 +450,13 @@ local function newScrollPanel()
 	end
 	sf:SetScript("OnSizeChanged", relayout)
 	wrap.scroll, wrap.child, wrap.relayout = sf, child, relayout
-	Okanvil:MountBgArt(wrap)          -- faded rat art bottom-right, behind content
+	-- (rat art is a single shared overlay on content -- no per-panel mount)
 	return wrap
 end
 
 function Okanvil:ShowPanel(key)
 	self:CloseDropdown()
+	self:ClearAllFocus()          -- switching pages releases any text-box focus
 	for _, b in ipairs(self._navButtons) do
 		b._active = (b._key == key)
 		if b._active then b.hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.10); b.bar:Show()
@@ -541,8 +574,7 @@ function Okanvil:BuildHome()
 	-- (The web-hub link now lives in the window FOOTER, WeakAuras-style -- always
 	-- visible, click to copy the URL. No card here anymore.)
 
-	-- (rat art background is mounted by newScrollPanel -> Okanvil:MountBgArt, on
-	-- every page; nothing to build here.)
+	-- (rat art is one shared overlay on Okanvil.content -- nothing to build here.)
 
 	local function refreshGuild()
 		if not (IsInGuild and IsInGuild()) then
@@ -600,7 +632,7 @@ function Okanvil:BuildHome()
 		end
 		for i = 1, total do
 			-- 3.3.5: name, rank, rankIndex, level, class, zone, publicnote, officernote, online
-			local name, rank, rankIndex, _, class, _, publicnote, officernote, isOnline = GetGuildRosterInfo(i)
+			local name, rank, rankIndex, _, class, zone, publicnote, officernote, isOnline = GetGuildRosterInfo(i)
 			if name then
 				local alt = isAlt(rank, rankIndex, officernote)
 				if not alt then mains = mains + 1 end
@@ -609,6 +641,7 @@ function Okanvil:BuildHome()
 					onlineList[#onlineList + 1] = {
 						name = name, rank = rank or "", rankIndex = rankIndex or 99, class = class,
 						col = rankColor(rank, rankIndex, alt), alt = alt,
+						zone = zone or "",
 						main = alt and mainOf(publicnote, officernote) or nil,
 					}
 				end
@@ -638,6 +671,7 @@ function Okanvil:BuildHome()
 		-- name left, rank at a fixed x, main right-aligned before the inv button.
 		local rows, ROWH = wrap.gRows, 20
 		local RANK_X = 130   -- fixed left edge of the rank column
+		local ZONE_W = 150   -- width of the right-aligned zone column
 		for _, r in ipairs(rows) do r:Hide() end
 		for k, m in ipairs(onlineList) do
 			local row = rows[k]
@@ -658,6 +692,16 @@ function Okanvil:BuildHome()
 				row.btn = W.Button(row, "inv", "secondary")
 				row.btn:SetSize(34, 15); row.btn:SetPoint("RIGHT", -4, 0)
 				row.btn:Tooltip("Invite to your group/raid")
+				-- zone column: current location, right-aligned just left of the inv
+				-- button (like the default Blizzard guild list's location column).
+				row.zone = row:CreateFontString(nil, "OVERLAY")
+				row.zone:SetFont(Okanvil:Font(), 11)
+				row.zone:SetPoint("RIGHT", row.btn, "LEFT", -8, 0)
+				row.zone:SetJustifyH("RIGHT"); row.zone:SetWordWrap(false)
+				row.zone:SetWidth(ZONE_W)
+				-- main column ends where the zone begins (avoids overlap on alts).
+				-- Set once here; the LEFT point is already fixed above.
+				row.main:SetPoint("RIGHT", row.zone, "LEFT", -8, 0)
 				rows[k] = row
 			end
 			row:SetWidth(wrap.gsf:GetWidth()); row:SetHeight(ROWH)
@@ -672,6 +716,8 @@ function Okanvil:BuildHome()
 			else
 				row.main:SetText("")
 			end
+			-- zone (current location), dim so the name/rank stay dominant
+			row.zone:SetText(m.zone ~= "" and ("|cff8a8d93" .. m.zone .. "|r") or "")
 			local who = m.name
 			row.btn.text:SetText("inv")
 			row.btn:SetScript("OnClick", function()
@@ -1600,7 +1646,7 @@ function Okanvil:BuildSettings()
 		local maxs = math.max(0, p:GetHeight() - sf:GetHeight())
 		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
 	end)
-	p:SetHeight(460)
+	p:SetHeight(500)
 	Okanvil:Settings_Options(p)
 
 	-- app credit -- a small badge in the bottom-right corner (anvil + wordmark),
@@ -1645,36 +1691,39 @@ function Okanvil:Settings_Options(p)
 		function() return (db.ratArt or "on") ~= "off" end,
 		function(v) db.ratArt = v and "on" or "off"; Okanvil:RefreshRatArt() end)
 	showChk:SetPoint("TOPLEFT", X, -170)
+	-- rat watermark intensity -- its OWN slider, independent of panel opacity.
+	W.Slider(p, "Rat art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
+		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -212)
 
 	-- MEDIA
-	local m = W.Text(p, "MEDIA", 10, "dim"); m:SetPoint("TOPLEFT", X, -206)
-	local fl = W.Text(p, "Font", 11, "dim"); fl:SetPoint("TOPLEFT", X, -228)
+	local m = W.Text(p, "MEDIA", 10, "dim"); m:SetPoint("TOPLEFT", X, -252)
+	local fl = W.Text(p, "Font", 11, "dim"); fl:SetPoint("TOPLEFT", X, -274)
 	W.DropDown(p, function() return (LSM and LSM:List("font")) or { db.font } end,
 		function() return db.font end, function(v) db.font = v; Okanvil:ApplyFonts() end, "font")
-		:Size(200, 22):Point("TOPLEFT", X + 90, -226)
-	local tl = W.Text(p, "Bar texture", 11, "dim"); tl:SetPoint("TOPLEFT", X, -258)
+		:Size(200, 22):Point("TOPLEFT", X + 90, -272)
+	local tl = W.Text(p, "Bar texture", 11, "dim"); tl:SetPoint("TOPLEFT", X, -304)
 	W.DropDown(p, function() return (LSM and LSM:List("statusbar")) or { db.statusbar } end,
 		function() return db.statusbar end, function(v) db.statusbar = v end, "statusbar")
-		:Size(200, 22):Point("TOPLEFT", X + 90, -256)
+		:Size(200, 22):Point("TOPLEFT", X + 90, -302)
 
 	-- BRANDING (product name is FIXED -- guilds only set their own skin)
-	local b = W.Text(p, "BRANDING", 10, "dim"); b:SetPoint("TOPLEFT", X, -298)
-	local nl = W.Text(p, "Guild skin (shown after Okanvil)", 11, "dim"); nl:SetPoint("TOPLEFT", X, -320)
+	local b = W.Text(p, "BRANDING", 10, "dim"); b:SetPoint("TOPLEFT", X, -344)
+	local nl = W.Text(p, "Guild skin (shown after Okanvil)", 11, "dim"); nl:SetPoint("TOPLEFT", X, -366)
 	local nameBox = W.EditBox(p, function(txt)
 		db.brand = txt or ""
 		if Okanvil.headerPaintBrand then Okanvil.headerPaintBrand() end
 		Okanvil.panels["__home"] = nil
 	end)
-	nameBox:SetSize(320, 22); nameBox:SetPoint("TOPLEFT", X, -338)
+	nameBox:SetSize(320, 22); nameBox:SetPoint("TOPLEFT", X, -384)
 	nameBox.edit:SetText((db.brand ~= "Okanvil" and db.brand) or "")
 	local nh = W.Text(p, "e.g. RATS Guild Hub -- leave empty for just \"Okanvil\".", 10, "dim")
-	nh:SetPoint("TOPLEFT", X, -364)
-	local ul = W.Text(p, "Web hub URL", 11, "dim"); ul:SetPoint("TOPLEFT", X, -388)
+	nh:SetPoint("TOPLEFT", X, -410)
+	local ul = W.Text(p, "Web hub URL", 11, "dim"); ul:SetPoint("TOPLEFT", X, -434)
 	local urlBox = W.EditBox(p, function(txt)
 		db.hubURL = txt
 		if Okanvil.footerPaintHub then Okanvil.footerPaintHub() end   -- live-update footer link
 	end)
-	urlBox:SetSize(320, 22); urlBox:SetPoint("TOPLEFT", X, -406)
+	urlBox:SetSize(320, 22); urlBox:SetPoint("TOPLEFT", X, -452)
 	urlBox.edit:SetText(db.hubURL or "")
 end
 
