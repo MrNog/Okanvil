@@ -482,6 +482,7 @@ local function captureLoot()
 					s.drops[#s.drops + 1] = {
 						t = time(), boss = boss, item = link, id = id,
 						name = lootName or "", rarity = r, qty = qty or 1,
+						boe = isBoE(link),
 					}
 					added = added + 1
 				end
@@ -533,6 +534,7 @@ local function captureRollStart(rollID, rollTime)
 		local drop = {
 			t = time(), boss = boss, item = link, id = id,
 			name = (GetItemInfo(link)) or "", rarity = r, qty = qty or 1,
+			boe = isBoE(link),
 			rollID = rollID, rollStart = now, rollDur = dur,
 		}
 		s.drops[#s.drops + 1] = drop
@@ -1014,6 +1016,7 @@ local function tagReceiver(player, itemLink)
 	local drop = {
 		t = time(), boss = resolveBoss(), item = itemLink, id = id,
 		name = name or "", rarity = rarity, qty = 1, receivedBy = player,
+		boe = isBoE(itemLink),
 	}
 	s.drops[#s.drops + 1] = drop
 	clearRollIfWon(id)               -- winner recorded -> stop showing "Roll open"
@@ -1150,10 +1153,11 @@ function L.SessionJSON(s)
 		local class = d.de and "" or classNameOf(d.receivedBy)
 		drops[#drops + 1] = string.format(
 			'{"ts":%d,"player":"%s","class":"%s","itemId":%d,"name":"%s","icon":"%s",'
-			.. '"quality":%d,"boss":"%s","raid":"%s","size":%d,"runId":"%s","de":%s}',
+			.. '"quality":%d,"boss":"%s","raid":"%s","size":%d,"runId":"%s","de":%s,"boe":%s}',
 			d.t, esc(player), esc(class), d.id, esc(d.name), esc(iconToken(d.item)),
 			d.rarity or 4, esc(d.boss), esc(s.zone or ""), size, esc(runId),
-			d.de and "true" or "false"
+			d.de and "true" or "false",
+			d.boe and "true" or "false"
 		)
 	end
 	return string.format(
