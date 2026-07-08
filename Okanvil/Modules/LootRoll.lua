@@ -33,8 +33,14 @@ local function itemIcon(itemLink)
 end
 
 -- are we the loot master right now? (drives ML-vs-raider layout)
+-- MUST match the Loot module's real check: master-loot method AND *we* are the ML.
+-- The old test only checked the method was "master" (true for EVERYONE in the raid,
+-- not just the ML), so it showed the "Loot Master" layout + Award button to plain
+-- raiders who can't actually give loot -- and disagreed with the Loot page's
+-- "not the Master Looter" banner. Delegate to L.IsMasterLooter so they always agree.
 local function amML()
-	return (GetLootMethod and GetLootMethod()) == "master"
+	if L and L.IsMasterLooter then return L.IsMasterLooter() end
+	return false
 end
 
 -- class-ish color for an item by rarity (falls back to white)
@@ -48,31 +54,38 @@ end
 -- party/raid, else the guild roster, else a learned cache. Falls back to gold if
 -- unknown -- but once we EVER see the player grouped, we remember their class, so
 -- the color shows up even later (like RaidRoll knowing you're a mage).
-local classCache = {}   -- [lowername] = "MAGE" etc.
+local classCache = {}   -- [lowername] = "MAGE" etc.  (fallback local)
 local function classColorCode(name)
 	if not name or name == "" then return "|cffffd200" end
 	local short = name:gsub("%-.*$", "")
 	local low = short:lower()
 	local class
-	-- party/raid units
-	local function scan(prefix, n)
-		for i = 1, n do
-			local u = prefix .. i
-			if UnitExists(u) and UnitName(u) == short then class = select(2, UnitClass(u)); return true end
-		end
+	-- Primary source: the PERSISTENT cache from the Loot module (L.ClassOf), shared
+	-- with the history -- so rolls and history use the SAME class color,
+	-- and it persists across sessions (remembered once seen grouped/in the guild).
+	if Okanvil.Loot and Okanvil.Loot.ClassOf then
+		local c0 = Okanvil.Loot.ClassOf(short)
+		if c0 and c0 ~= "" then class = c0 end
 	end
-	if UnitName("player") == short then class = select(2, UnitClass("player"))
-	elseif GetNumRaidMembers and GetNumRaidMembers() > 0 then scan("raid", GetNumRaidMembers())
-	elseif GetNumPartyMembers and GetNumPartyMembers() > 0 then scan("party", GetNumPartyMembers()) end
-	-- guild roster fallback
-	if not class and IsInGuild and IsInGuild() and GetNumGuildMembers then
-		for i = 1, GetNumGuildMembers() do
-			local gn, _, _, _, _, _, _, _, _, _, gc = GetGuildRosterInfo(i)
-			if gn and gn:gsub("%-.*$", "") == short then class = gc; break end
+	-- fallback: resolve here (party/raid/guild) if the cache doesn't know yet
+	if not class then
+		local function scan(prefix, n)
+			for i = 1, n do
+				local u = prefix .. i
+				if UnitExists(u) and UnitName(u) == short then class = select(2, UnitClass(u)); return true end
+			end
 		end
+		if UnitName("player") == short then class = select(2, UnitClass("player"))
+		elseif GetNumRaidMembers and GetNumRaidMembers() > 0 then scan("raid", GetNumRaidMembers())
+		elseif GetNumPartyMembers and GetNumPartyMembers() > 0 then scan("party", GetNumPartyMembers()) end
+		if not class and IsInGuild and IsInGuild() and GetNumGuildMembers then
+			for i = 1, GetNumGuildMembers() do
+				local gn, _, _, _, _, _, _, _, _, _, gc = GetGuildRosterInfo(i)
+				if gn and gn:gsub("%-.*$", "") == short then class = gc; break end
+			end
+		end
+		if class then classCache[low] = class else class = classCache[low] end
 	end
-	if class then classCache[low] = class          -- learn it for next time
-	else class = classCache[low] end               -- ... or reuse what we learned
 	local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
 	if c then return string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255) end
 	return "|cffffd200"   -- unknown class -> gold (shows up once they're grouped/guilded)
@@ -169,8 +182,15 @@ local function buildWindow()
 						if frac <= 0 then r.bar:Hide()
 						else r.bar:SetWidth(math.max(1, r:GetWidth() * frac)) end
 					end
-					-- animated "- rolling ..." suffix on the row text
-					if r._baseTxt then
+					-- TIMER ENDED: stop showing "rolling". The winner arrives via
+					-- CHAT_MSG_LOOT (recordRollWon) que limpa rollID + poe receivedBy;
+					-- mas se o roll expira sem esse evento chegar, limpamos aqui para a
+					-- bar doesn't stay stuck on "rolling..." forever.
+					if frac and frac <= 0 then
+						r._rolling = false
+						d.rollID = nil; d.rollStart = nil
+						if r._baseTxt then r.txt:SetText(r._baseTxt) end
+					elseif r._baseTxt then
 						r.txt:SetText(r._baseTxt .. "  |cffffd200- rolling " .. dots .. "|r")
 					end
 				end
@@ -252,6 +272,18 @@ function RM.Rebuild()
 		f.itemScroll = (f.itemScroll or 0) - delta   -- wheel up = earlier items
 		RM.Refresh()
 	end)
+	-- side scrollbar: a thin track on the right edge with a gold thumb whose size +
+	-- position reflect how much of the list is shown / where we are. Replaces the
+	-- old [+]/[v] end-row hints with a proper scroll indicator. Purely visual here
+	-- (the wheel still does the scrolling); RM.Refresh sizes it each rebuild.
+	local SB_W = 5
+	local track = ibox:CreateTexture(nil, "ARTWORK")
+	track:SetPoint("TOPRIGHT", -2, -3); track:SetPoint("BOTTOMRIGHT", -2, 3); track:SetWidth(SB_W)
+	track:SetTexture(1, 1, 1, 0.06)   -- faint track
+	local thumb = ibox:CreateTexture(nil, "OVERLAY")
+	thumb:SetPoint("TOPRIGHT", -2, -3); thumb:SetWidth(SB_W)
+	thumb:SetTexture(0.75, 0.58, 0.23, 0.9)   -- gold thumb
+	f.sbTrack, f.sbThumb, f.sbW = track, thumb, SB_W
 	f.makeItemRow = function(i)
 		local r = f.itemRows[i]
 		if r then return r end
@@ -272,8 +304,18 @@ function RM.Rebuild()
 			if s._d and s._d.item then GameTooltip:SetOwner(s, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink(s._d.item); GameTooltip:Show() end
 		end)
 		r:SetScript("OnLeave", function() GameTooltip:Hide() end)
-		-- only the ML picks an item to run a roll on; raiders can hover but not select
-		r:SetScript("OnClick", function(s) if ml and s._d then selected = s._d; RM.Refresh() end end)
+		-- clicking an item SELECTS it -> the Rolls panel below shows that item's
+		-- rolls (each person's need/greed). ANYONE can select (the
+		-- raider just watches; the ML can also start a roll on the selected item).
+		-- Clicking the same item again de-selects.
+		r:SetScript("OnClick", function(s)
+			if not s._d then return end
+			-- toggle: clicking the already-selected item DE-selects. (Don't use the
+			-- "a and nil or b" idiom -- nil is falsy in Lua, so "true and nil or s._d"
+			-- returns s._d and never de-selected.)
+			if selected == s._d then selected = nil else selected = s._d end
+			RM.Refresh()
+		end)
 		f.itemRows[i] = r
 		return r
 	end
@@ -384,6 +426,7 @@ function RM.Refresh()
 	if f.bossCount == 0 then
 		if f.bossHd then f.bossHd:SetText("|cff8a8d93No loot yet|r") end
 		for _, r in ipairs(f.itemRows) do r:Hide() end
+		if f.sbThumb then f.sbThumb:Hide(); if f.sbTrack then f.sbTrack:Hide() end end
 	else
 		-- auto-jump to the newest boss when fresh loot just arrived (a new kill).
 		-- DropsByBoss() lists bosses in arrival order, so newest = last.
@@ -391,6 +434,14 @@ function RM.Refresh()
 		f.bossIdx = math.max(1, math.min(f.bossIdx or 1, f.bossCount))
 		local g = groups[f.bossIdx]
 		if f.bossHd then f.bossHd:SetText(g.boss .. "  |cff8a8d93(" .. f.bossIdx .. "/" .. f.bossCount .. ")|r") end
+		-- VALIDAR a seleccao AQUI (antes de desenhar os itens/highlight): o `selected`
+		-- so vale se pertence ao boss ATUAL mostrado. Mudar de boss com <> limpa uma
+		-- seleccao de outro boss, e o highlight fica sincronizado.
+		if selected then
+			local inThisBoss = false
+			for _, d in ipairs(g.items) do if d == selected then inThisBoss = true; break end end
+			if not inThisBoss then selected = nil end
+		end
 		-- SCROLL: a raid boss drops more than ITEM_ROWS items, so page the list with
 		-- the mouse wheel instead of the old "...and N more" dead-end. Clamp the
 		-- offset so we never scroll past the last full page.
@@ -402,7 +453,8 @@ function RM.Refresh()
 		for i = 1, ITEM_ROWS do
 			local d = g.items[i + off]
 			local r = f.makeItemRow(i)
-			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 4, -2 - (i - 1) * ROW_H); r:SetPoint("RIGHT", f.ibox, "RIGHT", -4, 0); r:SetHeight(ROW_H)
+			-- leave room on the right for the scrollbar (track width + gaps)
+			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 4, -2 - (i - 1) * ROW_H); r:SetPoint("RIGHT", f.ibox, "RIGHT", -4 - (f.sbW or 5) - 3, 0); r:SetHeight(ROW_H)
 			if d then
 				r._d = d
 				r.icon:Show(); r.icon:SetTexture(itemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -412,16 +464,19 @@ function RM.Refresh()
 				local cr, cg, cb = rarityColor(d.rarity)
 				local rcode = string.format("|cff%02x%02x%02x", cr * 255, cg * 255, cb * 255)
 				local nm = d.name ~= "" and d.name or "?"
-				if #nm > 24 then nm = nm:sub(1, 23) .. "..." end
 				local who = ""
 				if d.receivedBy and d.receivedBy ~= "" then
 					who = "  |cff8a8d93->|r " .. classColorCode(d.receivedBy) .. d.receivedBy .. "|r"
+				elseif d.passed then
+					who = "  |cff8a8d93(passed)|r"
 				end
-				-- little up/down hint on the edge rows when there's more above/below
-				local more = ""
-				if i == 1 and off > 0 then more = "  |cff5e6166[+]|r"
-				elseif i == ITEM_ROWS and (off + ITEM_ROWS) < nItems then more = "  |cff5e6166[v]|r" end
-				local baseTxt = rcode .. nm .. "|r" .. who .. more
+				-- When there's a winner, truncate the NAME shorter so the "-> winner"
+				-- always fits (else long names like "Vambraces of Unholy Command"
+				-- pushed the winner off-screen and you couldn't see who won).
+				local maxNm = (who ~= "") and 16 or 26
+				if #nm > maxNm then nm = nm:sub(1, maxNm - 1) .. ".." end
+				-- (the side scrollbar now shows there's more above/below -- no [+]/[v])
+				local baseTxt = rcode .. nm .. "|r" .. who
 				r.hl:SetShown(selected == d)
 				-- roll timer bar (ElvUI-style): show while a roll is live for this item
 				-- and not yet won. Live = a native need/greed roll (d.rollID) OR the
@@ -443,40 +498,102 @@ function RM.Refresh()
 				r._d = nil; r:Hide()
 			end
 		end
-	end
 
-	-- roll state line
-	if f.rollState then
-		if ar then
-			-- animated "Rolling..." is painted by the window's OnUpdate; just seed it
-			f.rollState:SetText("|cffffd200Rolling...|r")
-		elseif selected then
-			f.rollState:SetText("|cff8a8d93Selected: " .. (selected.name ~= "" and selected.name or "item") .. "|r")
-		else
-			f.rollState:SetText("|cff5e6166Pick an item, then MS/OS/Free.|r")
+		-- size + place the side scrollbar thumb from the scroll position. Thumb
+		-- height = (visible / total) of the track; thumb top slides with `off`.
+		if f.sbThumb and f.sbTrack then
+			if nItems <= ITEM_ROWS then
+				f.sbThumb:Hide(); f.sbTrack:Hide()   -- everything fits -> no bar
+			else
+				f.sbTrack:Show(); f.sbThumb:Show()
+				local trackH = ITEM_ROWS * ROW_H       -- usable track height (approx)
+				local thumbH = math.max(16, trackH * (ITEM_ROWS / nItems))
+				local frac = (maxOff > 0) and (off / maxOff) or 0
+				local yOff = -3 - frac * (trackH - thumbH)
+				f.sbThumb:SetHeight(thumbH)
+				f.sbThumb:ClearAllPoints()
+				f.sbThumb:SetPoint("TOPRIGHT", f.ibox, "TOPRIGHT", -2, yOff)
+				f.sbThumb:SetWidth(f.sbW or 5)
+			end
 		end
 	end
 
-	-- rolls (main first, then roll desc)
-	local list = (ar and ar.list) or {}
-	local sorted = {}
-	for _, e in ipairs(list) do sorted[#sorted + 1] = e end
-	table.sort(sorted, function(a, b)
-		if a.spec ~= b.spec then return a.spec == "main" end
-		return a.roll > b.roll
-	end)
-	local best = ar and ar.best
+	-- (the selection was already validated against the current boss above, before drawing
+	-- the items -- so here `selected` is already valid or nil.)
+
+	-- The bottom panel (state + rolls) only shows something when an item is SELECTED.
+	-- No selection = empty (we don't auto-pick any item). "only when I select".
+	local rollItem = selected
+
+	-- roll state line
+	if f.rollState then
+		if rollItem then
+			local nm = (rollItem.name ~= "" and rollItem.name) or "item"
+			local won = ""
+			if rollItem.receivedBy and rollItem.receivedBy ~= "" then
+				won = "  |cff8a8d93won by|r " .. classColorCode(rollItem.receivedBy) .. rollItem.receivedBy .. "|r"
+			elseif rollItem.passed then
+				won = "  |cff8a8d93(all passed)|r"
+			end
+			f.rollState:SetText("|cffffd200" .. nm .. "|r" .. won)
+		elseif ar then
+			f.rollState:SetText("|cffffd200Rolling...|r")
+		else
+			f.rollState:SetText("|cff5e6166Click an item to see its rolls.|r")
+		end
+	end
+
+	-- ROLLS of the selected item (native need/greed in dp.rolls), OR the MANUAL roll
+	-- (activeRoll) if no item is selected but a /roll is in progress.
+	local sorted, best = {}, nil
+	local selRolls = rollItem and rollItem.rolls
+	local showingItemRolls = false
+	if selRolls and #selRolls > 0 then
+		-- item need/greed: need > greed > de; within a type, higher roll first.
+		local rank = { need = 3, greed = 2, de = 1 }
+		for _, e in ipairs(selRolls) do sorted[#sorted + 1] = e end
+		table.sort(sorted, function(a, b)
+			local ra, rb = rank[a.kind] or 0, rank[b.kind] or 0
+			if ra ~= rb then return ra > rb end
+			return (a.roll or 0) > (b.roll or 0)
+		end)
+		best = sorted[1]
+		showingItemRolls = true
+	elseif rollItem then
+		-- item selected but NO rolls yet -> empty list (don't fall to the manual
+		-- roll). showingItemRolls stays true so we show the right header.
+		showingItemRolls = true
+	else
+		-- nothing selected and nothing rolling -> MANUAL roll (activeRoll).
+		local list = (ar and ar.list) or {}
+		for _, e in ipairs(list) do sorted[#sorted + 1] = e end
+		table.sort(sorted, function(a, b)
+			if a.spec ~= b.spec then return a.spec == "main" end
+			return a.roll > b.roll
+		end)
+		best = ar and ar.best
+	end
 	for i = 1, ROLL_ROWS do
 		local r, e = f.rollRows[i], sorted[i]
 		if e then
 			r._roll = e
-			local tag = e.spec == "off" and " |cff8a5ad9(off)|r" or ""
-			local isBest = best and best.player == e.player and best.roll == e.roll
+			-- tag: spec (manual) OR need/greed/de type (native)
+			local tag = ""
+			if e.kind == "greed" then tag = " |cff8a8d93(greed)|r"
+			elseif e.kind == "de" then tag = " |cff8a5ad9(DE)|r"
+			elseif e.kind == "need" then tag = " |cff7cfc8a(need)|r"
+			elseif e.spec == "off" then tag = " |cff8a5ad9(off)|r" end
+			local isBest = best and best.player == e.player and (best.roll == e.roll)
 			local mark = isBest and "|cff7cfc8a> |r" or "  "
-			-- player name in CLASS color, roll value in gold
-			r.txt:SetText(mark .. classColorCode(e.player) .. e.player .. "|r  |cffffd200" .. e.roll .. "|r" .. tag)
+			r.txt:SetText(mark .. classColorCode(e.player) .. e.player .. "|r  |cffffd200" .. (e.roll or 0) .. "|r" .. tag)
 			r.hl:SetShown(isBest)
 			r:Show()
+		elseif i == 1 and showingItemRolls then
+			-- selected item with no captured rolls (e.g. master loot, or still
+			-- ongoing with nobody having rolled) -> a note instead of an empty panel.
+			r._roll = nil
+			r.txt:SetText("|cff5e6166   (no rolls captured for this item)|r")
+			r.hl:Hide(); r:Show()
 		else
 			r._roll = nil; r:Hide()
 		end
@@ -485,38 +602,80 @@ function RM.Refresh()
 	-- (collector tally intentionally not shown here -- it's on the Loot page)
 end
 
+-- pending "jump to the newest boss" request. Kept at MODULE scope (not on the
+-- maybe-nil `win` frame) so a loot event that arrives BEFORE the window is ever
+-- built is not lost -- showWin() applies it once the frame exists. This is what
+-- makes the pager auto-advance to boss 2's loot instead of staying on boss 1.
+local pendingJumpNewest = false
+
 -- show the window (building + rebuilding the mode-specific body)
 local function showWin()
 	buildWindow()
+	if pendingJumpNewest then win._jumpNewest = true; pendingJumpNewest = false end
 	win:Show()                       -- always show (idempotent)
 	win:Raise()                      -- bring to front in case something covers it
 	local ok, err = pcall(RM.Rebuild)  -- never let a rebuild error leave it half-open
 	if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
+	if OkanvilLootDebug and L and L.Dbg then
+		local p, _, _, x, y = win:GetPoint(1)
+		L.Dbg("  showWin: visible=" .. tostring(win:IsVisible())
+			.. " shown=" .. tostring(win:IsShown())
+			.. " strata=" .. tostring(win:GetFrameStrata())
+			.. " alpha=" .. string.format("%.2f", win:GetAlpha())
+			.. " @ " .. tostring(p) .. " " .. tostring(math.floor(x or 0)) .. "," .. tostring(math.floor(y or 0)))
+	end
 end
 
--- Only auto-pop when boss loot drops in the CURRENT run while we're inside the
--- instance. The old code popped on any loot/chat event, which resurrected a stale
--- session (a dungeon left hours ago) the moment you joined a new raid. Now: if
--- we're not in a live run, never show it on our own -- just refresh if it's
--- already open. New loot may mean a newer boss -> jump the pager to it.
+-- We auto-pop when boss loot drops in the CURRENT run (we never resurrect a stale
+-- session from a dungeon left hours ago -- that's the InLiveRun / current-drops gate).
+-- We auto-pop when either we're inside a live run OR the Loot module actually has
+-- drops for the current session right now. The InLiveRun() check alone raced with
+-- zoning (loot could fire a hair before IsInInstance/ShouldRecord settled), which
+-- swallowed the very first boss's auto-show. If real loot just landed, show it.
+local function haveCurrentDrops()
+	local g = Okanvil.Loot and Okanvil.Loot.DropsByBoss and Okanvil.Loot.DropsByBoss()
+	return g and #g > 0
+end
 local function canAutoShow()
-	return db().autoShow and Okanvil.Loot and Okanvil.Loot.InLiveRun and Okanvil.Loot.InLiveRun()
-end
-local function onLoot()
-	if win then win._jumpNewest = true end
-	if win and win:IsShown() then RM.Refresh()
-	elseif canAutoShow() then showWin()
-	else RM.Refresh() end
+	if not db().autoShow then return false end
+	if Okanvil.Loot and Okanvil.Loot.InLiveRun and Okanvil.Loot.InLiveRun() then return true end
+	return haveCurrentDrops()
 end
 
--- also pop for a raider when a roll opens (so they see the Roll MS/OS buttons) --
--- but only for a roll that's genuinely live now, and only inside a live run.
-function RM.OnRollOpen()
-	if win then win._jumpNewest = true end
-	if win and win:IsShown() then RM.Refresh()
-	elseif canAutoShow() then showWin()
-	else RM.Refresh() end
+-- shared handler: request a jump to the newest boss, then show/refresh. The jump
+-- flag lives at module scope so it survives even if `win` isn't built yet.
+-- `force` = we KNOW a loot window is open in front of us (the LOOT_OPENED trigger,
+-- RaidRoll/RCLootCouncil style) so show regardless of the InLiveRun timing race.
+local function popOrRefresh(force)
+	local dbg = OkanvilLootDebug and L and L.Dbg
+	if dbg then
+		L.Dbg("  |cffccccffpopOrRefresh|r force=" .. tostring(force)
+			.. " shown=" .. tostring(win and win:IsShown())
+			.. " autoShow=" .. tostring(db().autoShow)
+			.. " canAuto=" .. tostring(canAutoShow()))
+	end
+	if win and win:IsShown() then
+		-- only jump to the newest boss when this is a FORCED pop (NEW loot
+		-- coming in, force=true). A normal refresh (e.g. winner filled, roll
+		-- captured) must NOT change the page you're viewing -- just redraws.
+		if force then win._jumpNewest = true; pendingJumpNewest = false end
+		RM.Refresh()
+		if dbg then L.Dbg("  => refresh (already shown)") end
+	elseif (force and db().autoShow) or canAutoShow() then
+		pendingJumpNewest = true; showWin()        -- eligible (or forced) -> build, show, then jump
+		if dbg then L.Dbg("  => |cff7cfc8aSHOW|r") end
+	else
+		pendingJumpNewest = true                    -- hidden + not eligible -> remember for next open
+		if dbg then L.Dbg("  => |cffff5555NOT shown|r (not eligible)") end
+	end
 end
+local function onLoot() popOrRefresh(false) end
+
+-- also pop for a raider when a roll opens (so they see the Roll MS/OS buttons).
+function RM.OnRollOpen() popOrRefresh(false) end
+
+-- a loot window just opened with items in front of us -> always pop (forced).
+function RM.OnLootWindow() popOrRefresh(true) end
 
 function RM.Toggle()
 	local ok, err = pcall(function()
@@ -545,6 +704,11 @@ ev:SetScript("OnEvent", function()
 	local prevLoot = L.onLoot
 	L.onLoot = function() if prevLoot then prevLoot() end; onLoot() end
 	L.onRoll = function() RM.OnRollOpen() end
+	-- fired the instant a loot window opens with items (RaidRoll / RCLootCouncil
+	-- model) -- pop the mini roll even if the item is filtered from recording, and
+	-- regardless of the InLiveRun timing race (we KNOW a corpse is open).
+	local prevWin = L.onLootWindow
+	L.onLootWindow = function() if prevWin then prevWin() end; RM.OnLootWindow() end
 end)
 
 SLASH_OKROLL1 = "/okroll"
