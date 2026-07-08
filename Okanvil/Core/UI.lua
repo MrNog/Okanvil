@@ -909,6 +909,27 @@ function Okanvil:BuildLoot()
 			if Okanvil.RollMgr and Okanvil.RollMgr.Toggle then Okanvil.RollMgr.Toggle()
 			else Okanvil:Print("Roll manager not loaded.") end
 		end,
+		-- "Set me as ML" -- only shown when you're the leader and NOT already ML.
+		secondaryText = function() return "Set me as ML" end,
+		secondaryWidth = 110,
+		secondaryShown = function()
+			if not (L and L.CanSetLootMethod and L.CanSetLootMethod()) then return false end
+			return not (L.IsMasterLooter and L.IsMasterLooter())
+		end,
+		onSecondary = function()
+			if not (L and L.SetMeAsMasterLooter) then return end
+			local r = L.SetMeAsMasterLooter()
+			if r == "nogroup" then
+				Okanvil:Print("|cffff5555You're not in a party or raid -- nothing to set.|r")
+			elseif r == "notleader" then
+				Okanvil:Print("|cffff5555Only the group leader can set the loot method.|r")
+			elseif r == "noapi" then
+				Okanvil:Print("|cffff5555SetLootMethod unavailable.|r")
+			else
+				Okanvil:Print("Loot method set to |cff7cfc8amaster|r -- you are the Master Looter.")
+			end
+			if fill and fill.refreshAll then fill.refreshAll() end
+		end,
 		statusText = function()
 			if L and L.IsMasterLooter and L.IsMasterLooter() then
 				return "|cff7cfc8aMaster Looter|r"
@@ -938,6 +959,8 @@ function Okanvil:BuildLoot()
 		fill._mlEv = CreateFrame("Frame")
 		fill._mlEv:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
 		fill._mlEv:RegisterEvent("RAID_ROSTER_UPDATE")
+		fill._mlEv:RegisterEvent("PARTY_LEADER_CHANGED")
+		fill._mlEv:RegisterEvent("PARTY_MEMBERS_CHANGED")
 		fill._mlEv:SetScript("OnEvent", function() if fill:IsShown() then dash:Refresh() end end)
 	end
 	fill:SetScript("OnShow", refreshAll)
@@ -1519,7 +1542,6 @@ function Okanvil:BuildInvite()
 		if mem then n = #mem end
 		cntLbl:SetText("|cff7cfc8a" .. n .. "|r |cff8a8d93in list|r")
 		if alChk.refresh then alChk.refresh() end        -- re-read the auto-invite toggle
-		if kwEnable.refresh then kwEnable.refresh() end   -- Recruit may have flipped this
 		-- Fit the left column to its ACTUAL content (the rank block grows with the
 		-- number of guild ranks). Measuring the last element and sizing the frame
 		-- from it stops the footer ("Pick raiders...") being clipped off the bottom

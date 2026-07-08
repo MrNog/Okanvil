@@ -165,8 +165,9 @@ I.CanAutoInvite = canAutoInvite
 -- pending: name -> { t = last-invite time, tries = how many invites we've sent }.
 -- The `tries` cap is what stops the invite SPAM: we give up after MAX_TRIES instead
 -- of re-inviting the same person forever (they may be in another group / ignoring).
+-- MAX_TRIES = 1: invite each person EXACTLY ONCE, never retry (no re-invites).
 local pending = {}
-local MAX_TRIES = 3
+local MAX_TRIES = 1
 local function inviteOne(name)
 	if not name or name == "" then return false end
 	name = (name:gsub("%-.*$", ""))     -- strip realm

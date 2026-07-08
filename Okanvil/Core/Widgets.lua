@@ -548,10 +548,22 @@ function W.Dashboard(parent, cfg)
 		cta:SetScript("OnClick", function() cfg.onPrimary() end)
 		D.cta = cta
 	end
+	-- optional secondary header button (left of the primary CTA). Its label may be
+	-- dynamic (secondaryText fn) and Refresh() can hide it (secondaryShown fn).
+	local cta2
+	if cfg.onSecondary then
+		cta2 = W.Button(header, cfg.secondaryText and cfg.secondaryText() or "", "secondary")
+		cta2:SetSize(cfg.secondaryWidth or 130, 22)
+		if cta then cta2:SetPoint("RIGHT", cta, "LEFT", -6, 0)
+		else cta2:SetPoint("RIGHT", -10, 0) end
+		cta2:SetScript("OnClick", function() cfg.onSecondary() end)
+		D.cta2 = cta2
+	end
 	-- header status text (between title and CTA)
 	local status = W.Text(header, "", nil, "dim")
 	status:SetJustifyH("RIGHT")
-	if cta then status:SetPoint("RIGHT", cta, "LEFT", -10, 0)
+	if cta2 then status:SetPoint("RIGHT", cta2, "LEFT", -10, 0)
+	elseif cta then status:SetPoint("RIGHT", cta, "LEFT", -10, 0)
 	else status:SetPoint("RIGHT", -8, 0) end
 	status:SetPoint("LEFT", htitle, "RIGHT", 10, 0)
 	D.statusFS = status
@@ -717,6 +729,12 @@ function W.Dashboard(parent, cfg)
 
 	function D:Refresh()
 		if cta and cfg.primaryText then cta.text:SetText(cfg.primaryText()) end
+		if cta2 then
+			if cfg.secondaryText then cta2.text:SetText(cfg.secondaryText()) end
+			if cfg.secondaryShown then
+				if cfg.secondaryShown() then cta2:Show() else cta2:Hide() end
+			end
+		end
 		if cfg.statusText then status:SetText(cfg.statusText() or "") end
 	end
 	D:Refresh()
