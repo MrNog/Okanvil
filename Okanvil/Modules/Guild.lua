@@ -288,6 +288,8 @@ ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
 pcall(function() ev:RegisterEvent("ENCOUNTER_START"); haveEncounterEvent = true end)
 
 ev:SetScript("OnEvent", function(_, event, a1, a2)
+	-- Modulo Guild DESLIGADO = nao faz first-pull announce nem reage a grupo.
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive("__guild") then return end
 	if event == "ENCOUNTER_START" then
 		-- a1 = encounterID, a2 = encounterName
 		tryFirstPull(a2, "encounter-start")

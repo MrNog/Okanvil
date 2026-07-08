@@ -39,6 +39,12 @@ local function page_visible()
 	return Okanvil._current == ADDON and ui.count ~= nil
 end
 
+-- Modulo ligado? Um modulo DESLIGADO nos Modules deve ser como se nao existisse --
+-- nao scaneia chat, nao faz parse, nada. (Nao basta esconder a UI.)
+local function module_on()
+	return not Okanvil.IsModuleEnabled or Okanvil:IsModuleEnabled(ADDON)
+end
+
 -- active filters (nil = All)
 local filter = { instance = nil, size = nil, role = nil, weekly = nil }
 
@@ -1101,9 +1107,13 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
 		-- pre-warm reserve item links so they resolve on first hover
 		Okanvil.RaidFinder_WarmItemCache()
 	elseif event == "CHAT_MSG_CHANNEL" then
-		if db and db.scanChannels then record(arg2, arg1) end   -- arg1=text, arg2=sender
+		-- Modulo DESLIGADO = como se nao existisse: nao scaneia nada.
+		-- Ligado mas com a tab FECHADA = tambem nao scaneia (performance): antes
+		-- corria RF.parse() para CADA linha de chat sempre, dando lag/frame-drops
+		-- numa raid com muito trafego. So scaneia com o modulo ligado E a tab aberta.
+		if module_on() and page_visible() and db and db.scanChannels then record(arg2, arg1) end
 	elseif event == "CHAT_MSG_YELL" then
-		if db and db.scanYell then record(arg2, arg1) end
+		if module_on() and page_visible() and db and db.scanYell then record(arg2, arg1) end
 	end
 end)
 

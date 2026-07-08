@@ -676,6 +676,8 @@ ev:RegisterEvent("PLAYER_REGEN_DISABLED") -- entered combat -> guarantee the rai
 ev:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED") -- watch for boss deaths to list them per session
 ev:SetScript("OnEvent", function(_, event, arg1, ...)
 	if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+		-- Modulo Combat Logs DESLIGADO = nao regista nada (como se nao existisse).
+		if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 		-- cheap early-out unless a session is active; arg1 = timestamp, ... = subevent, src*, dest*
 		if not db or not db._cur then
 			return
@@ -725,6 +727,8 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		if not db then
 			return
 		end
+		-- Modulo desligado = nao faz auto-resume nem pergunta para gravar.
+		if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 		local inInstance, itype = IsInInstance()
 		if db._cur then
 			-- Session still open: a /reload, relog or in-instance teleport turns the
@@ -754,6 +758,8 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 			OkanvilLogs._suppressAuto = nil -- left the raid -> auto-log may kick in again next time
 		end
 	elseif event == "PLAYER_REGEN_DISABLED" then
+		-- Modulo desligado = nao inicia logging automatico ao entrar em combate.
+		if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 		-- Entered combat: guarantee a raid pull is always being logged.
 		if db then
 			if db._cur then

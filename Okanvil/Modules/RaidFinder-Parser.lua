@@ -145,8 +145,15 @@ local raids = {
 	  pats={ "rs%s*10", "ruby%s*sanctum" } },
 
 	-- Vault of Archavon (common weekly pug: Archavon/Emalon/Koralon/Toravon)
+	-- NOTE: "voa 18" means the 25-man instance done with only 18 toons (headcount,
+	-- not raid size). So ANY "voa <11-25>" is the 25-man. Only "voa 10" (or a bare
+	-- "voa"/boss name with no number) falls to the 10-man. These 11-25 patterns
+	-- match at the SAME position as the bare "voa", and voa25 is listed first, so it
+	-- wins the earliest-match tie over the generic voa10 entry.
 	{ id="voa25", instance="Vault of Archavon", size=25,
-	  pats={ "voa%s*25", "vault%s*of%s*archavon%s*25" } },
+	  pats={ "voa%s*25", "voa%s*2[0-4]", "voa%s*1[1-9]",
+	         "vault%s*of%s*archavon%s*25", "vault%s*of%s*archavon%s*2[0-4]",
+	         "vault%s*of%s*archavon%s*1[1-9]" } },
 	{ id="voa10", instance="Vault of Archavon", size=10,
 	  pats={ "voa%s*10", "%f[%w]voa%f[%W]", "vault%s*of%s*archavon",
 	         "%f[%w]archavon%f[%W]", "%f[%w]emalon%f[%W]", "%f[%w]koralon%f[%W]", "%f[%w]toravon%f[%W]" } },
@@ -392,8 +399,37 @@ local word_cats = {
 	-- "[Call of the Grand Crusade]") is the achievement the leader ASKS FOR as
 	-- proof, tracked separately as wantsAchiev -- not something they reserve. It
 	-- was polluting the reserved tooltip with a bogus "Achievement" pill.
+	--
+	-- "mount" CAN be reserved (VoA drops mounts), so we keep it -- BUT NOT when it's
+	-- part of "mount ress"/"mount res"/"mount rez" (a COMBAT-REZ type: battle rez /
+	-- DK raise ally / pala hand). is_mount_reserve() below rejects that phrasing so
+	-- "(mount+hand ress)" no longer shows a bogus "Reserved loot: Mount".
 	{ "mounts?",          "Mount" },
 }
+-- Guard: does "mount" here mean a RESERVED MOUNT (loot), or a combat-rez type?
+-- "mount" is a combat-rez when it sits in a rez-listing group, e.g.
+--   "(mount+Ppal hand ress)"  "(mount res + brez)"  "mount ress".
+-- We reject if the SAME parenthesised group (or, if none, the whole message) that
+-- contains "mount" also mentions a rez word (ress/res/rez/brez/battle rez/hand).
+-- Otherwise "mount" is a reserved drop (VoA mounts) and counts.
+local function is_mount_reserve(lower)
+	if not lower:find("mount") then return false end
+	-- gather the parenthesised group(s) that contain "mount"; if none, use whole msg
+	local groups = {}
+	for g in lower:gmatch("%b()") do groups[#groups + 1] = g end
+	local ctx
+	for _, g in ipairs(groups) do
+		if g:find("mount") then ctx = g; break end
+	end
+	ctx = ctx or lower
+	-- rez words in the same context -> it's a rez type, not reserved loot
+	if ctx:find("%f[%w]ress?%f[%W]") or ctx:find("%f[%w]re?z%f[%W]")
+		or ctx:find("brez") or ctx:find("battle%s*re") or ctx:find("hand%s*res")
+		or ctx:find("combat%s*re") then
+		return false
+	end
+	return true
+end
 -- single-letter categories, ONLY read inside a "(...res)" group like (P+O RES)
 local letter_cats = { b = "BoE", o = "Orb", p = "Patterns", f = "Fragments" }
 
@@ -468,7 +504,14 @@ function RF.lex_reserved(message)
 
 	-- 1. explicit words
 	for _, c in ipairs(word_cats) do
-		if lower:find(c[1]) then add(c[2]) end
+		if lower:find(c[1]) then
+			-- "Mount" needs the rez-vs-loot guard ("mount ress" != reserved mount).
+			if c[2] == "Mount" then
+				if is_mount_reserve(lower) then add(c[2]) end
+			else
+				add(c[2])
+			end
+		end
 	end
 
 	-- 2. category clusters. Leaders write them many ways, joined by + . / - or

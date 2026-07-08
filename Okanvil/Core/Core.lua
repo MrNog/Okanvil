@@ -318,6 +318,16 @@ function Okanvil:IsModuleEnabled(name)
 	return true
 end
 
+-- Should this module's PASSIVE behaviour run right now? A DISABLED module must be
+-- as if it didn't exist -- it must NOT scan chat, log combat, capture loot, or
+-- auto-invite. Every module gates its event handlers / OnUpdate ticks with this
+-- (return early when false). Safe before login (cdb nil -> treated as enabled, so
+-- boot events still register). This is the ONE rule for "off = off, not just hidden".
+function Okanvil:ModuleActive(name)
+	if not self.cdb then return true end   -- pre-login: let boot run
+	return self:IsModuleEnabled(name)
+end
+
 function Okanvil:SetModuleEnabled(name, enabled)
 	local cdb = self.cdb
 	cdb.modules = cdb.modules or {}

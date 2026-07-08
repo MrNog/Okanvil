@@ -346,6 +346,9 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 		return
 	end
 
+	-- Modulo Recruit DESLIGADO = nao responde a whispers nem reage a chat.
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
+
 	if event == "CHAT_MSG_WHISPER" then
 		if not db.active then
 			return -- only act / log while advertising is ON

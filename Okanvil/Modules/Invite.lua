@@ -162,7 +162,11 @@ I.CanAutoInvite = canAutoInvite
 
 -- Send one invite (guarded). Tracks pending invites for retry. Auto-converts to
 -- raid when the group would exceed 5.
-local pending = {}   -- name -> GetTime() when we last invited (retry cooldown)
+-- pending: name -> { t = last-invite time, tries = how many invites we've sent }.
+-- The `tries` cap is what stops the invite SPAM: we give up after MAX_TRIES instead
+-- of re-inviting the same person forever (they may be in another group / ignoring).
+local pending = {}
+local MAX_TRIES = 3
 local function inviteOne(name)
 	if not name or name == "" then return false end
 	name = (name:gsub("%-.*$", ""))     -- strip realm
@@ -174,7 +178,10 @@ local function inviteOne(name)
 		ConvertToRaid()
 	end
 	if InviteUnit then InviteUnit(name) else return false end
-	pending[name] = GetTime and GetTime() or 0
+	local p = pending[name] or { tries = 0 }
+	p.t = GetTime and GetTime() or 0
+	p.tries = (p.tries or 0) + 1
+	pending[name] = p
 	return true
 end
 I.InviteOne = inviteOne
@@ -516,11 +523,19 @@ local function keywordInvite(msg, sender, where)
 	end
 end
 
+-- Modulo DESLIGADO nos Modules = como se nao existisse: nao auto-invita, nao reage
+-- a chat, nada. (Nao basta esconder a UI -- estar numa dungeon com o modulo ligado
+-- "por baixo" fazia guildies entrarem na party sem querer.)
+local function module_on()
+	return not Okanvil.IsModuleEnabled or Okanvil:IsModuleEnabled("__invite")
+end
+
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("CHAT_MSG_WHISPER")
 ev:RegisterEvent("CHAT_MSG_GUILD")     -- keyword in guild chat
 ev:RegisterEvent("CHAT_MSG_SYSTEM")
 ev:SetScript("OnEvent", function(_, event, arg1, arg2)
+	if not module_on() then return end
 	local iv = db()
 	-- keyword-invite is gated by the MASTER switch (iv.keywordEnabled). The
 	-- per-channel toggles only matter when the master is on. This also keeps it
@@ -540,8 +555,13 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 			local who = m:match(PAT_DECLINE)
 			if who then
 				who = (who:gsub("%-.*$", ""))
-				-- re-arm: clear cooldown so the OnUpdate retry can re-invite
-				pending[who] = (GetTime and GetTime() or 0) - (iv.retryCooldown or 30) + 5
+				-- re-arm: back-date the cooldown so the OnUpdate retry fires soon, but
+				-- ONLY if this name is still pending and under the try cap (a decline
+				-- doesn't reset the counter -> a hard "no" won't loop forever).
+				local p = pending[who]
+				if p and (p.tries or 0) < MAX_TRIES then
+					p.t = (GetTime and GetTime() or 0) - (iv.retryCooldown or 30) + 5
+				end
 				return
 			end
 		end
@@ -571,16 +591,20 @@ ev:SetScript("OnUpdate", function(self, e)
 	self._t = (self._t or 0) + e
 	if self._t < 1 then return end
 	self._t = 0
+	if not module_on() then return end
 	local iv = Okanvil.db and Okanvil.db.invite
 	if not iv or not iv.retry then return end
 	local now = GetTime and GetTime() or 0
 	local cd = iv.retryCooldown or 30
-	for name, t in pairs(pending) do
+	for name, p in pairs(pending) do
 		if inMyGroup(name) then
-			pending[name] = nil
-		elseif (now - t) >= cd then
+			pending[name] = nil                       -- joined -> done
+		elseif (p.tries or 0) >= MAX_TRIES then
+			pending[name] = nil                       -- gave up -> STOP re-inviting (no spam)
+		elseif (now - (p.t or 0)) >= cd then
 			if InviteUnit then InviteUnit(name) end
-			pending[name] = now
+			p.t = now
+			p.tries = (p.tries or 0) + 1
 		end
 	end
 end)
@@ -591,6 +615,7 @@ local wasOnline = {}
 local gev = CreateFrame("Frame")
 gev:RegisterEvent("GUILD_ROSTER_UPDATE")
 gev:SetScript("OnEvent", function()
+	if not module_on() then return end
 	local iv = Okanvil.db and Okanvil.db.invite
 	if not iv or iv.autoLoginList == "" then return end
 	-- SAFETY: only auto-invite when it's legitimate (solo, or lead/assist of a

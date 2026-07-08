@@ -1194,6 +1194,19 @@ function Okanvil:BuildInvite()
 		icon = Okanvil.ICONS.invite,
 		drawerWidth = 0,
 		footerHeight = 0,
+		-- Header ON/OFF for AUTO-INVITE (like the Logs REC button) -- mais visivel
+		-- que a checkbox. Este e o master switch do keyword/on-login auto-invite:
+		-- OFF = nenhum auto-invite mesmo com listas armadas (nao deixa guildies cair
+		-- na tua party numa dungeon). A checkbox de baixo foi removida (era duplicada).
+		primaryText = function()
+			if not I then return "" end
+			return I.KeywordEnabled() and "|cff7cfc8aAuto-Invite: ON|r" or "|cff8a8d93Auto-Invite: OFF|r"
+		end,
+		onPrimary = function()
+			if not I then return end
+			I.SetKeywordEnabled(not I.KeywordEnabled())
+			if Okanvil.RefreshPanel then Okanvil:RefreshPanel() end
+		end,
 		statusText = function()
 			if not I then return "|cffff5555engine not loaded|r" end
 			return ""
@@ -1304,15 +1317,12 @@ function Okanvil:BuildInvite()
 	bRank:SetSize(150, 26); bRank:SetPoint("TOPLEFT", rankAnchor, "BOTTOMLEFT", 0, -10)
 	bRank:SetScript("OnClick", function() I.InviteByRank() end)
 
-	-- ---- keyword invite (master switch + whisper/guild sub-toggles) ----
+	-- ---- keyword invite (whisper/guild sub-toggles) ----
+	-- O MASTER enable ("Auto-Invite: ON/OFF") vive no header do Dashboard, nao aqui
+	-- (era duplicado). Mantemos so o aviso de exclusao com o Recruit + os sub-toggles.
 	local whlbl = W.Text(left, "KEYWORD INVITE", 11, "accent"); whlbl:SetPoint("TOPLEFT", bRank, "BOTTOMLEFT", 0, -18)
-	-- MASTER enable. Mutually exclusive with Recruit (both grab the "inv" whisper).
-	local kwEnable = W.Check(left, "Enable keyword-invite",
-		function() return I.KeywordEnabled() end,
-		function(v) I.SetKeywordEnabled(v); if wrap._rebuild then wrap._rebuild() end end)
-	kwEnable:SetPoint("TOPLEFT", whlbl, "BOTTOMLEFT", 0, -10)
 	local kwWarn = W.Text(left, "|cff8a8d93Can't run with Recruit (shared keyword) -- enabling one disables the other.|r", 10, "dim")
-	kwWarn:SetPoint("TOPLEFT", kwEnable, "BOTTOMLEFT", 0, -4); kwWarn:SetWidth(LEFT_W); kwWarn:SetJustifyH("LEFT")
+	kwWarn:SetPoint("TOPLEFT", whlbl, "BOTTOMLEFT", 0, -8); kwWarn:SetWidth(LEFT_W); kwWarn:SetJustifyH("LEFT")
 
 	local wChk = W.Check(left, "On whisper", function() return I.db().whisperInvite end,
 		function(v) I.db().whisperInvite = v end)
