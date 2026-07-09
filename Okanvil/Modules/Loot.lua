@@ -111,6 +111,10 @@ local function shouldRecordHere()
 	local ctx = currentContext()
 	if ctx == "raid" or RAID_ZONES[zone] then return Okanvil.db.recordRaid ~= false end
 	if ctx == "party" then return Okanvil.db.recordDungeon ~= false end
+	-- TEST MODE: /okdebug world lets open-world kills record so the loot/award
+	-- flow can be exercised without entering a dungeon. Default off; toggle off
+	-- again before real play so world drops don't pollute history.
+	if OkanvilLootWorldTest then return true end
 	return false
 end
 
@@ -377,11 +381,15 @@ end
 -- window. Only blocks if a drop with SAME item + SAME boss is still rolling
 -- (2 clients reporting the same START_LOOT_ROLL). Does NOT block 2 legit drops
 -- (esses vem com receive/roll distintos).
+-- Same item id from the same boss in the SAME session is the SAME drop -- no time
+-- window. Reopening the same corpse (e.g. after trading, minutes later) must NOT
+-- create a duplicate. (The old 40s window caused 4x "Head of Onyxia" when the ML
+-- reopened the corpse past the window.) A boss corpse is one corpse regardless of
+-- how many times it is opened.
 local function dropExists(s, id, boss)
-	local now = time()
 	for i = #s.drops, 1, -1 do
 		local dp = s.drops[i]
-		if dp.id == id and dp.boss == boss and (now - (dp.t or 0)) <= 40 then return dp end
+		if dp.id == id and dp.boss == boss then return dp end
 	end
 	return nil
 end
@@ -814,18 +822,65 @@ end
 -- ------------------------------------------------------------
 -- MASTER LOOT: resolver candidato + dar (RaidRoll RR_ReallyGiveLoot).
 -- ------------------------------------------------------------
-local function iAmMasterLooter()
-	if not GetLootMethod then return false end
+-- WHO is the master looter right now? Returns the ML's name, or nil.
+-- Order matters (copied from RCLootCouncil's GetML, the reference impl on 3.3.5a):
+-- check the RAID index FIRST. In a raid `partyML` comes back 0 for EVERYONE, so
+-- testing `partyML == 0` first made every raider think they were the ML -- that's
+-- the "raider got the Loot Master layout" bug.
+local function masterLooterName()
+	if not GetLootMethod then return nil end
 	local method, partyML, raidML = GetLootMethod()
-	if method ~= "master" then return false end
-	if partyML == 0 then return true end
-	if raidML and GetRaidRosterInfo then
-		local n = GetRaidRosterInfo(raidML)
-		return n and n == UnitName("player")
+	if method ~= "master" then return nil end
+	if raidML and raidML > 0 then                 -- someone in the raid
+		return GetRaidRosterInfo and (GetRaidRosterInfo(raidML))
+	elseif partyML == 0 then                      -- it's us, in a party
+		return UnitName("player")
+	elseif partyML and partyML > 0 then           -- someone else in the party
+		return UnitName("party" .. partyML)
 	end
-	return false
+	return nil
+end
+L.MasterLooterName = masterLooterName
+
+local function iAmMasterLooter()
+	local ml = masterLooterName()
+	if not ml then return false end
+	local me = UnitName("player")
+	-- never a raw == : private-server rosters can differ in case / append a realm
+	return me ~= nil and noRealm(ml):lower() == noRealm(me):lower()
 end
 function L.IsMasterLooter() return iAmMasterLooter() end
+
+-- Can the player even set the loot method? Only the party/raid LEADER may call
+-- SetLootMethod, AND there has to be a group at all -- solo has no loot method to
+-- set (SetLootMethod("master",...) alone does nothing but we'd wrongly print
+-- "you are the Master Looter"). So solo -> false.
+function L.CanSetLootMethod()
+	if not SetLootMethod then return false end
+	if GetNumRaidMembers and GetNumRaidMembers() > 0 then
+		return IsRaidLeader and IsRaidLeader() and true or false
+	end
+	if GetNumPartyMembers and GetNumPartyMembers() > 0 then
+		return IsPartyLeader and IsPartyLeader() and true or false
+	end
+	return false   -- solo: no group, nothing to set
+end
+
+-- Are we in a group at all (party or raid)?
+local function inGroup()
+	return (GetNumRaidMembers and GetNumRaidMembers() > 0)
+		or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+end
+
+-- Flip the group to master loot with YOU as the master looter.
+-- Returns true on the attempt, or a reason string when it can't.
+function L.SetMeAsMasterLooter()
+	if not SetLootMethod then return "noapi" end
+	if not inGroup() then return "nogroup" end
+	if not L.CanSetLootMethod() then return "notleader" end
+	SetLootMethod("master", UnitName("player"))
+	return true
+end
 
 local function mlCandidate(playerName)
 	if not (GetMasterLootCandidate and playerName) then return nil end
@@ -840,6 +895,9 @@ local function mlCandidate(playerName)
 end
 
 local function giveLootNow(id, winner)
+	L.Dbg("giveLootNow: id=" .. tostring(id) .. " winner=" .. tostring(winner)
+		.. " method=" .. tostring(GetLootMethod and GetLootMethod())
+		.. " lootItems=" .. tostring(GetNumLootItems and GetNumLootItems()))
 	if not (id and winner and GetNumLootItems and GiveMasterLoot) then return "noapi" end
 	if (GetLootMethod and GetLootMethod()) ~= "master" then return "notml" end
 	local n = GetNumLootItems() or 0
@@ -851,6 +909,8 @@ local function giveLootNow(id, winner)
 			if link and itemIDFromLink(link) == id then
 				saw = true
 				local cand = mlCandidate(winner)
+				L.Dbg("  slot " .. slot .. " bate item; candidato de " .. tostring(winner)
+					.. " = " .. tostring(cand))
 				if cand then GiveMasterLoot(slot, cand); return "ok" end
 			end
 		end
@@ -870,10 +930,14 @@ local function markWinner(id, winner)
 end
 
 local function commitAward(id, winner)
-	markWinner(id, winner)
+	-- RaidRoll-style: tenta DAR primeiro (GiveMasterLoot). So regista o vencedor
+	-- no historico quando o servidor confirma a entrega (res == "ok") -- assim o
+	-- receivedBy nunca fica preenchido para um item que a pessoa nao recebeu.
 	local res = giveLootNow(id, winner)
+	L.Dbg("commitAward: giveLootNow -> " .. tostring(res))
 	local nm = (GetItemInfo(id)) or "item"
 	if res == "ok" then
+		markWinner(id, winner)
 		Okanvil:Print("Dado (master loot): " .. nm .. " -> " .. winner .. ".")
 	else
 		local why = ({
@@ -881,8 +945,9 @@ local function commitAward(id, winner)
 			closed = "janela de loot fechada (item nos bags)", noitem = "item ja nao esta na janela",
 			nocand = winner .. " nao e candidato valido (fora de alcance/offline)",
 		})[res] or "razao desconhecida"
-		Okanvil:Print("|cffff5555Marcado " .. winner .. " como vencedor mas NAO deu " .. nm
-			.. " -- " .. why .. ". Passa por trade.|r")
+		-- give falhou: NAO marcamos (como o RaidRoll, que so regista entregas reais).
+		Okanvil:Print("|cffff5555NAO deu " .. nm .. " a " .. winner
+			.. " -- " .. why .. ". Passa por trade (nao registado).|r")
 	end
 	activeRoll = nil
 	if L.onLoot then L.onLoot() end
@@ -899,7 +964,12 @@ StaticPopupDialogs["OKANVIL_AWARD_CONFIRM"] = {
 	timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
 function L.AwardWinner(id, winner, topRoll, spec)
-	if not (id and winner and winner ~= "") then return end
+	L.Dbg("AwardWinner: id=" .. tostring(id) .. " winner=" .. tostring(winner)
+		.. " roll=" .. tostring(topRoll) .. " spec=" .. tostring(spec))
+	if not (id and winner and winner ~= "") then
+		L.Dbg("  ABORT: id/winner invalido")
+		return
+	end
 	local link
 	if activeRoll and activeRoll.id == id then link = activeRoll.link end
 	local itemStr = link or ("[" .. ((GetItemInfo(id)) or "item") .. "]")
@@ -950,6 +1020,8 @@ function L.SessionHasBoss(name)
 end
 
 function L.InLiveRun()
+	-- TEST MODE: open-world capture (see shouldRecordHere). Treat as a live run.
+	if OkanvilLootWorldTest then return true end
 	if not (IsInInstance and IsInInstance()) then return false end
 	local _, itype = IsInInstance()
 	if itype ~= "party" and itype ~= "raid" then return false end
@@ -1312,11 +1384,62 @@ end)
 
 -- UI hooks + debug
 L.onLoot, L.onRoll, L.onLootWindow = nil, nil, nil
-function L.Dbg() end
 
--- /okdebug -- liga/desliga os prints de diagnostico do loot (mais fiavel que /run).
+-- Debug log: acumula linhas num buffer em memoria (ate DBG_MAX) e, se o debug
+-- estiver ON, tambem imprime no chat. `/okdebug log` abre uma caixa copiavel com
+-- tudo -- e o que o utilizador cola aqui quando algo falha. Reusa ShowExport
+-- (AutoFocus=false, nao rouba o teclado). O buffer sobrevive entre /reload
+-- porque vive na SavedVariable OkanvilLootDbgLog.
+local DBG_MAX = 200
+-- o buffer vive no per-character DB (onde ja vive o loot) -> persiste entre
+-- /reload sem precisar de registar um global novo no .toc.
+local function dbgBuf()
+	local cdb = Okanvil.cdb or Okanvil.db
+	cdb.lootDbgLog = cdb.lootDbgLog or {}
+	return cdb.lootDbgLog
+end
+function L.Dbg(msg)
+	msg = tostring(msg)
+	local buf = dbgBuf()
+	local stamp = (date and date("%H:%M:%S")) or tostring(GetTime and GetTime() or "")
+	buf[#buf + 1] = stamp .. "  " .. msg
+	while #buf > DBG_MAX do table.remove(buf, 1) end
+	-- live output goes to the dedicated "Okanvil" chat tab (Core:Dev), which is a
+	-- no-op unless dev mode is on. /okdebug also mirrors it to the default chat.
+	if Okanvil.Dev then Okanvil:Dev(msg) end
+	if OkanvilLootDebug and not (Okanvil.db and Okanvil.db.devMode) then
+		DEFAULT_CHAT_FRAME:AddMessage("|cff8a8d93[Okanvil dbg]|r " .. msg)
+	end
+end
+
+-- /okdebug        -> liga/desliga os prints de diagnostico
+-- /okdebug log    -> abre a caixa copiavel com o log acumulado
+-- /okdebug clear  -> limpa o log
 SLASH_OKDEBUG1 = "/okdebug"
-SlashCmdList["OKDEBUG"] = function()
+SlashCmdList["OKDEBUG"] = function(arg)
+	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	if arg == "log" then
+		local buf = dbgBuf()
+		if #buf == 0 then Okanvil:Print("Log vazio. Liga com /okdebug e repete o award."); return end
+		local text = "Okanvil loot debug log (" .. #buf .. " linhas)\n"
+			.. "----------------------------------------\n"
+			.. table.concat(buf, "\n")
+		if Okanvil.ShowExport then Okanvil:ShowExport(text, "Loot debug log -- Ctrl+C para copiar")
+		else Okanvil:Print("ShowExport indisponivel.") end
+		return
+	elseif arg == "clear" then
+		wipe(dbgBuf())
+		Okanvil:Print("Loot debug log limpo.")
+		return
+	elseif arg == "world" then
+		OkanvilLootWorldTest = not OkanvilLootWorldTest
+		Okanvil:Print("Open-world loot capture (TESTE) = "
+			.. (OkanvilLootWorldTest and "|cff7cfc8aON|r -- mata mobs em master loot para testar; |cffffd200/okdebug world|r outra vez para desligar"
+			or "|cff8a8d93OFF|r"))
+		if L.onLoot then L.onLoot() end
+		return
+	end
 	OkanvilLootDebug = not OkanvilLootDebug
-	Okanvil:Print("Loot debug = " .. (OkanvilLootDebug and "|cff7cfc8aON|r" or "|cff8a8d93OFF|r"))
+	Okanvil:Print("Loot debug = " .. (OkanvilLootDebug and "|cff7cfc8aON|r" or "|cff8a8d93OFF|r")
+		.. "  (|cffffd200/okdebug log|r para copiar, |cffffd200/okdebug clear|r para limpar)")
 end

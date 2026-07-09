@@ -350,9 +350,14 @@ function RM.Rebuild()
 		r:SetSize(INNER - 8, ROW_H); r:SetPoint("TOPLEFT", 4, -2 - (i - 1) * ROW_H)
 		r.txt = W.Text(r, "", FONT_SZ); r.txt:SetPoint("LEFT", 4, 0); r.txt:SetPoint("RIGHT", -4, 0); r.txt:SetJustifyH("LEFT")
 		r.hl = r:CreateTexture(nil, "BACKGROUND"); r.hl:SetAllPoints(); r.hl:SetTexture(0.49, 0.99, 0.54, 0.16); r.hl:Hide()
-		-- only ML can award by clicking a roll
+		-- only ML can award by clicking a roll. Be LOUD about why a click no-ops
+		-- (RaidRoll-style: always say why loot couldn't be awarded) instead of
+		-- silently doing nothing -- that reads as "the button is broken".
 		r:SetScript("OnClick", function(s)
-			if ml and s._roll and selected then L.AwardWinner(selected.id, s._roll.player, s._roll.roll, s._roll.spec) end
+			if not ml then return end
+			if not s._roll then return end   -- empty roll row, ignore
+			if not selected then Okanvil:Print("|cffff5555Pick an item in the list first, then click a roll to award.|r"); return end
+			L.AwardWinner(selected.id, s._roll.player, s._roll.roll, s._roll.spec)
 		end)
 		f.rollRows[i] = r
 	end
@@ -363,8 +368,16 @@ function RM.Rebuild()
 		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER - 90, 26); award:SetPoint("TOPLEFT", M, y)
 		award:SetScript("OnClick", function()
 			local ar = L.ActiveRoll()
-			if ar and ar.best and selected then L.AwardWinner(selected.id, ar.best.player, ar.best.roll, ar.best.spec)
-			else Okanvil:Print("No rolls yet.") end
+			if not selected then Okanvil:Print("|cffff5555Pick an item in the list first.|r"); return end
+			if not ar then Okanvil:Print("|cffff5555No roll in progress -- press MS/OS/Free to start one.|r"); return end
+			if not ar.best then Okanvil:Print("|cffff5555No rolls captured yet for this item.|r"); return end
+			-- award the top roll for the item you actually started the roll on. If
+			-- the selected list item drifted off the rolled item, warn instead of
+			-- awarding the wrong drop.
+			if ar.id and selected.id and ar.id ~= selected.id then
+				Okanvil:Print("|cffff5555The active roll is for a different item than the one selected. Re-select the rolled item.|r"); return
+			end
+			L.AwardWinner(selected.id, ar.best.player, ar.best.roll, ar.best.spec)
 		end)
 		local clear = keep(W.Button(body, "Clear")); clear:SetSize(82, 26); clear:SetPoint("LEFT", award, "RIGHT", 8, 0)
 		clear:SetScript("OnClick", function() selected = nil; L.StopRoll(); RM.Refresh() end)
@@ -559,6 +572,21 @@ function RM.Refresh()
 		end)
 		best = sorted[1]
 		showingItemRolls = true
+	elseif rollItem and ar then
+		-- item selected AND a manual /roll (activeRoll) is running: show the manual
+		-- roll results so the ML can click a name to award. Without this, selecting
+		-- an item hid the /roll list and award silently no-oped ("no rolls captured"
+		-- even though people rolled). Match by id when we can, else show them anyway.
+		if (not ar.id) or (not rollItem.id) or (ar.id == rollItem.id) then
+			local list = (ar and ar.list) or {}
+			for _, e in ipairs(list) do sorted[#sorted + 1] = e end
+			table.sort(sorted, function(a, b)
+				if a.spec ~= b.spec then return a.spec == "main" end
+				return a.roll > b.roll
+			end)
+			best = ar and ar.best
+		end
+		showingItemRolls = true
 	elseif rollItem then
 		-- item selected but NO rolls yet -> empty list (don't fall to the manual
 		-- roll). showingItemRolls stays true so we show the right header.
@@ -697,9 +725,39 @@ end
 -- ------------------------------------------------------------
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("PLAYER_LOGIN")
-ev:SetScript("OnEvent", function()
+-- The ML can change mid-raid (leader reassigns it, or loot method flips). The
+-- window bakes the ML-vs-raider layout at Rebuild() time, so without these it
+-- stayed on whatever it was built with -- an ex-ML kept the Award/Start-roll
+-- controls, and a new ML never got them. Rebuild only when the flag ACTUALLY
+-- flips, so we don't thrash the frame on every roster tick.
+ev:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
+ev:RegisterEvent("RAID_ROSTER_UPDATE")
+ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
+ev:RegisterEvent("PARTY_LEADER_CHANGED")
+
+local lastML = nil
+local function mlChanged()
+	if not L then return end
+	local now = isML()
+	if now == lastML then return end     -- no flip -> nothing to redo
+	lastML = now
+	if win and win:IsShown() then
+		local ok, err = pcall(RM.Rebuild)
+		if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
+	end
+	local who = L.MasterLooterName and L.MasterLooterName()
+	if now then
+		Okanvil:Print("You are now the |cff7cfc8aMaster Looter|r.")
+	elseif who then
+		Okanvil:Print("Master Looter is now |cffffd200" .. who .. "|r.")
+	end
+end
+
+ev:SetScript("OnEvent", function(_, event)
+	if event ~= "PLAYER_LOGIN" then mlChanged(); return end
 	if not Okanvil.Loot then return end
 	L = Okanvil.Loot
+	lastML = isML()
 	-- chain onto Loot's callbacks without clobbering them
 	local prevLoot = L.onLoot
 	L.onLoot = function() if prevLoot then prevLoot() end; onLoot() end

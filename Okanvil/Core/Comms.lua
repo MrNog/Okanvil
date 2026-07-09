@@ -145,3 +145,75 @@ ev:SetScript("OnUpdate", function(self)
 	end
 end)
 ev:Hide()   -- OnUpdate only runs while timers are pending
+
+-- ------------------------------------------------------------
+-- VERSION CHECK (RCLootCouncil-style). Ask everyone in the group which Okanvil
+-- they run, so a stale client can be spotted before it causes "phantom" bugs
+-- (e.g. an old build that showed the ML layout to plain raiders).
+--
+--   VERQ            -> broadcast "who's out there?"
+--   VERR|<version>  -> whispered straight back to whoever asked
+--
+-- Anyone who does NOT reply within the timeout either has no Okanvil or a build
+-- too old to answer -- both are reported as "no reply".
+-- Note: replies only arrive from clients on the SAME protocol tag (OKV1); a
+-- client on a future/breaking protocol is invisible here by design.
+-- ------------------------------------------------------------
+local verReplies = {}      -- name -> version string
+local verRunning = false
+C.VersionReplies = function() return verReplies end
+C.VersionCheckRunning = function() return verRunning end
+
+-- someone asked -> whisper our version straight back
+C.On("VERQ", function(sender)
+	if not sender or sender == "" then return end
+	C.Whisper("VERR", sender, tostring(Okanvil.version or "?"))
+end)
+
+-- a reply came in -> record it and let the UI repaint
+C.On("VERR", function(sender, ver)
+	if not sender or sender == "" then return end
+	verReplies[sender] = (ver ~= nil and ver ~= "") and tostring(ver) or "?"
+	if C.onVersionReply then C.onVersionReply() end
+end)
+
+-- Kick off a check. `onDone(replies)` fires after `timeout` seconds (default 5).
+-- Returns false when solo (nothing to ask).
+function C.RequestVersions(onDone, timeout)
+	if verRunning then return false end
+	local chan = groupChannel()
+	if not chan then return false end        -- solo: nobody to ask
+	wipe(verReplies)
+	-- count ourselves immediately; we never whisper ourselves
+	local me = UnitName and UnitName("player")
+	if me then verReplies[me] = tostring(Okanvil.version or "?") end
+	verRunning = true
+	C.Send("VERQ")
+	C.After(timeout or 5, function()
+		verRunning = false
+		if C.onVersionReply then C.onVersionReply() end
+		if type(onDone) == "function" then onDone(verReplies) end
+	end)
+	return true
+end
+
+-- Everyone in the current group (raid or party), for "who didn't reply".
+function C.GroupRoster()
+	local out = {}
+	local nRaid = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+	if nRaid > 0 then
+		for i = 1, nRaid do
+			local n = GetRaidRosterInfo and GetRaidRosterInfo(i)
+			if n then out[#out + 1] = (n:gsub("%-.*$", "")) end
+		end
+		return out
+	end
+	local nParty = (GetNumPartyMembers and GetNumPartyMembers()) or 0
+	local me = UnitName and UnitName("player")
+	if me then out[#out + 1] = me end
+	for i = 1, nParty do
+		local n = UnitName and UnitName("party" .. i)
+		if n then out[#out + 1] = (n:gsub("%-.*$", "")) end
+	end
+	return out
+end

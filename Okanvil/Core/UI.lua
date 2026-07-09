@@ -934,7 +934,13 @@ function Okanvil:BuildLoot()
 			if L and L.IsMasterLooter and L.IsMasterLooter() then
 				return "|cff7cfc8aMaster Looter|r"
 			end
-			return "|cffff5555not the Master Looter|r"
+			-- name WHO the ML is, instead of only saying it isn't you -- that's the
+			-- useful half of the answer when loot won't auto-give.
+			local who = L and L.MasterLooterName and L.MasterLooterName()
+			if who and who ~= "" then
+				return "|cff8a8d93ML:|r |cffffd200" .. who .. "|r"
+			end
+			return "|cffff5555not master loot|r"
 		end,
 		tabs = {
 			{ key = "collectors", label = "Collectors", height = 330, build = function(pg) Okanvil:Loot_BuildCollectors(pg) end },
@@ -978,7 +984,9 @@ function Okanvil:Loot_BuildCollectors(p)
 		if L.IsMasterLooter and L.IsMasterLooter() then
 			warn:SetText("|cff7cfc8aYou are the Master Looter -- these apply.|r")
 		else
-			warn:SetText("|cffff5555You are NOT the Master Looter -- auto-loot is inactive (safe).|r")
+			local who = L.MasterLooterName and L.MasterLooterName()
+			warn:SetText("|cffff5555Auto-loot inactive (safe) -- the Master Looter is "
+				.. (who and who ~= "" and ("|r|cffffd200" .. who .. "|r") or "|cff8a8d93nobody (not master loot)|r") .. ".")
 		end
 	end
 	paintWarn()
@@ -1711,7 +1719,7 @@ function Okanvil:BuildSettings()
 		local maxs = math.max(0, p:GetHeight() - sf:GetHeight())
 		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
 	end)
-	p:SetHeight(500)
+	p:SetHeight(820)   -- grew with the DEV + VERSION CHECK sections at the bottom
 	Okanvil:Settings_Options(p)
 
 	-- app credit -- a small badge in the bottom-right corner (anvil + wordmark),
@@ -1790,6 +1798,81 @@ function Okanvil:Settings_Options(p)
 	end)
 	urlBox:SetSize(320, 22); urlBox:SetPoint("TOPLEFT", X, -452)
 	urlBox.edit:SetText(db.hubURL or "")
+
+	-- DEV MODE -- routes debug output to a dedicated "Okanvil" chat tab (next to
+	-- General / Combat Log) instead of spamming the default chat. Off by default,
+	-- so raiders never see it; the tab is only created when this is switched on.
+	local dv = W.Text(p, "DEV", 10, "dim"); dv:SetPoint("TOPLEFT", X, -486)
+	local devChk = W.Check(p, "Dev mode -- debug output to its own \"Okanvil\" chat tab",
+		function() return db.devMode and true or false end,
+		function(v) Okanvil:SetDevMode(v) end)
+	devChk:SetPoint("TOPLEFT", X + 2, -506)
+
+	-- VERSION CHECK -- ask the group which Okanvil everyone runs (RCLootCouncil-style).
+	-- A stale client is what makes "phantom" bugs (e.g. an old build showing the ML
+	-- layout to a plain raider), so this is the first thing to check on a bug report.
+	local vc = W.Text(p, "VERSION CHECK", 10, "dim"); vc:SetPoint("TOPLEFT", X, -540)
+	local vhint = W.Text(p, "Ask everyone in your group which Okanvil they run.", 10, "dim")
+	vhint:SetPoint("TOPLEFT", X, -560)
+
+	local vbtn = W.Button(p, "Check group versions", "primary")
+	vbtn:SetSize(170, 24); vbtn:SetPoint("TOPLEFT", X, -582)
+
+	-- results box: one line per player, newest render wins. Kept short (the panel
+	-- scrolls), so we cap the list and summarise the rest.
+	local vout = W.Text(p, "", 11); vout:SetPoint("TOPLEFT", X, -614)
+	vout:SetWidth(360); vout:SetJustifyH("LEFT")
+	if vout.SetJustifyV then vout:SetJustifyV("TOP") end
+
+	local function paintVersions()
+		local Comms = Okanvil.Comms
+		if not Comms then vout:SetText("|cffff5555Comms unavailable.|r"); return end
+		local replies = Comms.VersionReplies and Comms.VersionReplies() or {}
+		local roster = Comms.GroupRoster and Comms.GroupRoster() or {}
+		local mine = tostring(Okanvil.version or "?")
+		local lines, ok, old, none = {}, 0, 0, 0
+		for _, name in ipairs(roster) do
+			local v = replies[name]
+			if not v then
+				none = none + 1
+				lines[#lines + 1] = "|cff8a8d93" .. name .. "|r  |cffff5555no reply|r"
+			elseif v == mine then
+				ok = ok + 1
+				lines[#lines + 1] = name .. "  |cff7cfc8a" .. v .. "|r"
+			else
+				old = old + 1
+				lines[#lines + 1] = name .. "  |cffffd200" .. v .. "|r  |cff8a8d93(you: " .. mine .. ")|r"
+			end
+		end
+		if #lines == 0 then vout:SetText("|cff8a8d93No group.|r"); return end
+		local head = "|cff7cfc8a" .. ok .. " up to date|r  |cffffd200" .. old
+			.. " different|r  |cffff5555" .. none .. " no reply|r\n"
+		-- cap the visible list so the settings page never grows unbounded
+		local MAXL = 14
+		if #lines > MAXL then
+			local extra = #lines - MAXL
+			for i = #lines, MAXL + 1, -1 do table.remove(lines, i) end
+			lines[#lines + 1] = "|cff8a8d93... +" .. extra .. " more|r"
+		end
+		vout:SetText(head .. table.concat(lines, "\n"))
+	end
+
+	-- repaint live as whispers trickle in, and once more when the window closes
+	if Okanvil.Comms then Okanvil.Comms.onVersionReply = paintVersions end
+
+	vbtn:SetScript("OnClick", function()
+		local Comms = Okanvil.Comms
+		if not (Comms and Comms.RequestVersions) then
+			Okanvil:Print("|cffff5555Comms unavailable.|r"); return
+		end
+		if Comms.VersionCheckRunning and Comms.VersionCheckRunning() then
+			Okanvil:Print("Version check already running..."); return
+		end
+		vout:SetText("|cff8a8d93Asking the group...|r")
+		local sent = Comms.RequestVersions(function() paintVersions() end, 5)
+		if not sent then vout:SetText("|cffff5555You're not in a party or raid.|r") end
+	end)
+	paintVersions()
 end
 
 -- ---- Loot capture settings (used as a tab INSIDE the Loot module) ----

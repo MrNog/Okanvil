@@ -14,3 +14,6 @@ out/
 agent/
 .claude/skills/lua
 .claude/settings.local.json
+
+# scratch backups from refactors
+*.logic-bak

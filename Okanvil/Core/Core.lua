@@ -188,6 +188,7 @@ local defaults = {
 	recordRaid = true,    -- capture attendance/loot in raids
 	ratArt = "on",         -- faded rat blacksmith art in the page corner: "on" | "off"
 	ratAlpha = 0.30,       -- rat watermark intensity (own slider; independent of bgAlpha)
+	devMode = false,       -- dev output -> dedicated "Okanvil" chat tab (off for raiders)
 }
 
 local function applyDefaults(dst, src)
@@ -261,6 +262,63 @@ end
 
 function Okanvil:Print(msg)
 	DEFAULT_CHAT_FRAME:AddMessage("|cffffd200[Okanvil]|r " .. tostring(msg))
+end
+
+-- ------------------------------------------------------------
+-- DEV CHAT TAB -- a dedicated "Okanvil" chat window (like DBM's debug tab),
+-- sitting next to General / Combat Log. Debug output goes there instead of
+-- spamming the general chat. Created ON DEMAND (only when dev mode is turned
+-- on), so raiders never see it.
+--
+-- 3.3.5a API: FCF_OpenNewWindow(name) opens a new chat window and returns it in
+-- the global ChatFrameN; GetChatWindowInfo(i) gives each window's name. There is
+-- no C_ChatInfo here -- windows are plain frames we can AddMessage() to.
+-- ------------------------------------------------------------
+local DEV_TAB_NAME = "Okanvil"
+local devFrame                       -- cached ChatFrame we write into
+
+-- find an existing chat window called "Okanvil" (survives /reload -- the client
+-- persists chat windows, so we must re-find it rather than open a duplicate).
+local function findDevFrame()
+	for i = 1, (NUM_CHAT_WINDOWS or 10) do
+		local name = GetChatWindowInfo and GetChatWindowInfo(i)
+		if name == DEV_TAB_NAME then return _G["ChatFrame" .. i] end
+	end
+	return nil
+end
+
+-- Get the dev chat frame, creating the tab if asked to (and if we can).
+function Okanvil:DevFrame(createIfMissing)
+	if devFrame and devFrame.AddMessage then return devFrame end
+	devFrame = findDevFrame()
+	if devFrame or not createIfMissing then return devFrame end
+	if not FCF_OpenNewWindow then return nil end
+	-- opening a window can fail when all 10 slots are used
+	local ok = pcall(FCF_OpenNewWindow, DEV_TAB_NAME)
+	if ok then devFrame = findDevFrame() end
+	return devFrame
+end
+
+-- Write one line to the dev tab. Falls back to the default chat frame only when
+-- the tab could not be created, so a message is never silently lost.
+function Okanvil:Dev(msg)
+	if not self.db or not self.db.devMode then return end
+	local f = self:DevFrame(true) or DEFAULT_CHAT_FRAME
+	f:AddMessage("|cff8a8d93[dbg]|r " .. tostring(msg))
+end
+
+-- Turn dev mode on/off. Opening the tab is deferred to the first Dev() call, but
+-- we create it here too so the user immediately SEES where output will land.
+function Okanvil:SetDevMode(on)
+	self.db.devMode = on and true or false
+	if self.db.devMode then
+		local f = self:DevFrame(true)
+		self:Print("Dev mode |cff7cfc8aON|r"
+			.. (f and (" -- output goes to the |cffe0b860" .. DEV_TAB_NAME .. "|r chat tab.")
+			or " -- |cffff5555could not open a chat tab (all 10 in use); using default chat.|r"))
+	else
+		self:Print("Dev mode |cff8a8d93OFF|r")
+	end
 end
 
 -- Should we record attendance/loot right now? Respects the dungeon/raid toggles.
@@ -400,4 +458,10 @@ SLASH_OKFOCUS1 = "/okfocus"
 SlashCmdList["OKFOCUS"] = function()
 	Okanvil:ClearAllFocus()
 	Okanvil:Print("released keyboard focus.")
+end
+
+-- /okdev -- toggle dev mode (debug output -> the "Okanvil" chat tab).
+SLASH_OKDEV1 = "/okdev"
+SlashCmdList["OKDEV"] = function()
+	Okanvil:SetDevMode(not (Okanvil.db and Okanvil.db.devMode))
 end
