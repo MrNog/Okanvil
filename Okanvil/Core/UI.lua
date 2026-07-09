@@ -621,25 +621,6 @@ function Okanvil:BuildHome()
 		-- On the site those are the emoji crown/star/skull; here we use the game's
 		-- own textures so it reads native. Everyone below Fang gets no icon --
 		-- the rank column already spells it out, and a row of dots is just noise.
-		local RANK_ICON = {
-			gm      = "Interface\\GroupFrame\\UI-Group-LeaderIcon",
-			officer = "Interface\\GroupFrame\\UI-Group-AssistantIcon",
-			fang    = "Interface\\Icons\\Ability_Rogue_FeignDeath",
-		}
-		-- |T<texture>:<size>|t inlines a texture in a FontString.
-		local function rankIcon(rankName, rankIndex)
-			local rn = (rankName or ""):lower()
-			local tex
-			if rankIndex == 0 or rn:find("guild master", 1, true) or rn:find("king", 1, true) then
-				tex = RANK_ICON.gm
-			elseif rn:find("officer", 1, true) or rn:find("warchief rat", 1, true) then
-				tex = RANK_ICON.officer
-			elseif rn:find("fang", 1, true) then
-				tex = RANK_ICON.fang
-			end
-			return tex and ("|T" .. tex .. ":14|t ") or ""
-		end
-
 		-- Class colour for the NAME. GetGuildRosterInfo hands back the LOCALIZED
 		-- class name ("Paladin"), but RAID_CLASS_COLORS is keyed by TOKEN
 		-- ("PALADIN") -- look the token up instead of colouring everyone gold.
@@ -678,6 +659,7 @@ function Okanvil:BuildHome()
 					onlineList[#onlineList + 1] = {
 						name = name, rank = rank or "", rankIndex = rankIndex or 99, class = class,
 						col = rankColor(rank, rankIndex, alt), alt = alt,
+						nameCol = classHex(class),   -- NAME is class-coloured
 						zone = zone or "",
 						main = alt and mainOf(publicnote, officernote) or nil,
 					}
@@ -717,7 +699,9 @@ function Okanvil:BuildHome()
 				row:SetHeight(ROWH)
 				row.name = row:CreateFontString(nil, "OVERLAY")
 				row.name:SetFont(Okanvil:Font(), 12)
-				row.name:SetPoint("LEFT", 4, 0); row.name:SetJustifyH("LEFT"); row.name:SetWordWrap(false)
+				-- 10px in: the bullet that used to hold this gutter is gone, so the name
+				-- would otherwise sit flush against the card edge.
+				row.name:SetPoint("LEFT", 10, 0); row.name:SetJustifyH("LEFT"); row.name:SetWordWrap(false)
 				row.rank = row:CreateFontString(nil, "OVERLAY")
 				row.rank:SetFont(Okanvil:Font(), 12)
 				row.rank:SetPoint("LEFT", RANK_X, 0); row.rank:SetJustifyH("LEFT"); row.rank:SetWordWrap(false)
@@ -745,8 +729,10 @@ function Okanvil:BuildHome()
 			row:ClearAllPoints(); row:SetPoint("TOPLEFT", 0, -(k - 1) * ROWH); row:Show()
 			-- name column has a fixed right bound so it never runs into the rank column
 			row.name:SetPoint("RIGHT", row, "LEFT", RANK_X - 6, 0)
-			row.name:SetText("|cff5a5d63* |r|c" .. m.col .. m.name .. "|r")
-			row.rank:SetText("|cff8a8d93" .. m.rank .. "|r")
+			-- Just the name, class-coloured. No bullet, no icon: the rank is carried by
+			-- its own colour in the rank column, so the name column stays clean.
+			row.name:SetText("|c" .. m.nameCol .. m.name .. "|r")
+			row.rank:SetText("|c" .. m.col .. m.rank .. "|r")
 			-- alt -> show the main it belongs to, aligned in its own right column
 			if m.alt and m.main then
 				row.main:SetText("|cff6a6d73of |r|cffbfc4cc" .. m.main .. "|r")

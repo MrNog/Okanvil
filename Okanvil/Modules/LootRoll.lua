@@ -47,8 +47,9 @@ end
 -- Pixels from the window top to the body frame: the 26px header + the status line.
 -- ONE source of truth -- the body anchor and the final SetHeight both use it, so a
 -- mode switch can never leave them disagreeing (which clipped the bottom buttons).
-local function BODY_TOP() return db().compact and 40 or 52 end
-local function STATUS_Y() return db().compact and -28 or -34 end
+-- no status line (ML / Raider): the tabs already say which mode you're in, so the
+-- body starts straight under the title bar.
+local function BODY_TOP() return db().compact and 28 or 34 end
 
 -- Icon resolver: delegates to the shared Core warmer (Okanvil:ItemIcon), which
 -- returns the icon now or nil + auto-queues a server query so a later tick fills
@@ -164,11 +165,7 @@ local function buildWindow()
 		RM.ApplyMode()
 	end)
 
-	-- status line (ML / Raider, from the real loot method)
-	local status = W.Text(f, "", 12, "dim"); status:SetPoint("TOPLEFT", 12, STATUS_Y())
-	f.status = status
-
-	-- everything below the status is rebuilt when the ML state changes, so pack the
+	-- everything below the title is rebuilt when the ML state changes, so pack the
 	-- mode-specific widgets into a container we can wipe. Give it a FULL size
 	-- (TOPLEFT + BOTTOMRIGHT) -- a frame with height 0 doesn't render its children
 	-- reliably on 3.3.5a, which is why the body looked empty.
@@ -274,10 +271,7 @@ function RM.ApplyMode()
 	if win.sizeBtn then
 		win.sizeBtn.text:SetText(compact and "+" or "-")
 	end
-	-- body + status are built once, so re-anchor them for the new mode
-	if win.status then
-		win.status:ClearAllPoints(); win.status:SetPoint("TOPLEFT", 12, STATUS_Y())
-	end
+	-- body is built once, so re-anchor it for the new mode
 	if win.body then
 		win.body:ClearAllPoints()
 		win.body:SetPoint("TOPLEFT", 0, -BODY_TOP()); win.body:SetPoint("BOTTOMRIGHT", 0, 0)
@@ -322,19 +316,23 @@ function RM.Rebuild()
 	local y = compact and -4 or -6
 
 	-- boss pager header:  <  Boss Name (1/3)  >
+	-- The label is anchored BETWEEN the two buttons (not to the body with a hardcoded
+	-- -28 inset, which assumed the full-size 24px button and overflowed the name in
+	-- compact). Create `nxt` first so the label can anchor to it.
 	local pgH = compact and 18 or 22
-	local prev = keep(W.Button(body, "<")); prev:SetSize(compact and 20 or 24, pgH); prev:SetPoint("TOPLEFT", M, y)
+	local pgW = compact and 20 or 24
+	local prev = keep(W.Button(body, "<")); prev:SetSize(pgW, pgH); prev:SetPoint("TOPLEFT", M, y)
 	prev:SetScript("OnClick", function()
 		f.bossIdx = math.max(1, (f.bossIdx or 1) - 1); selected = nil; f.userCleared = false; RM.Refresh()
 	end)
-	local bossHd = keep(W.Text(body, "", FONT_SZ, "accent")); bossHd:Color(1, 0.82, 0)
-	bossHd:SetPoint("LEFT", prev, "RIGHT", 6, 0); bossHd:SetPoint("RIGHT", -M - 28, 0); bossHd:SetJustifyH("CENTER")
-	if bossHd.SetWordWrap then bossHd:SetWordWrap(false) end
-	f.bossHd = bossHd
-	local nxt = keep(W.Button(body, ">")); nxt:SetSize(compact and 20 or 24, pgH); nxt:SetPoint("TOPRIGHT", -M, y)
+	local nxt = keep(W.Button(body, ">")); nxt:SetSize(pgW, pgH); nxt:SetPoint("TOPRIGHT", -M, y)
 	nxt:SetScript("OnClick", function()
 		f.bossIdx = math.min(f.bossCount or 1, (f.bossIdx or 1) + 1); selected = nil; f.userCleared = false; RM.Refresh()
 	end)
+	local bossHd = keep(W.Text(body, "", FONT_SZ, "accent")); bossHd:Color(1, 0.82, 0)
+	bossHd:SetPoint("LEFT", prev, "RIGHT", 4, 0); bossHd:SetPoint("RIGHT", nxt, "LEFT", -4, 0); bossHd:SetJustifyH("CENTER")
+	if bossHd.SetWordWrap then bossHd:SetWordWrap(false) end
+	f.bossHd = bossHd
 	y = y - (pgH + 6)
 
 	-- item box (this boss's items) -------------------------------------------
@@ -519,13 +517,11 @@ function RM.Rebuild()
 end
 
 -- ------------------------------------------------------------
--- refresh -- paint items, rolls, status from the Loot module's live data
+-- refresh -- paint items, rolls from the Loot module's live data
 -- ------------------------------------------------------------
 function RM.Refresh()
 	if not win or not win:IsShown() then return end
 	local f = win
-	local ml = isML()
-	f.status:SetText(ml and "|cff7cfc8aLoot Master|r" or "|cff8a8d93Raider|r")
 
 	local ar = L.ActiveRoll()
 
@@ -542,7 +538,15 @@ function RM.Refresh()
 		if f._jumpNewest then f.bossIdx = f.bossCount; f._jumpNewest = nil end
 		f.bossIdx = math.max(1, math.min(f.bossIdx or 1, f.bossCount))
 		local g = groups[f.bossIdx]
-		if f.bossHd then f.bossHd:SetText(g.boss .. "  |cff8a8d93(" .. f.bossIdx .. "/" .. f.bossCount .. ")|r") end
+		if f.bossHd then
+			-- Truncate the BOSS NAME, never the counter. SetWordWrap(false) clips the
+			-- tail, so "Argent Confessor Paletress (2/3)" lost the "/3)" -- you could no
+			-- longer see how many bosses there were. Cut the name, keep "(2/3)" whole.
+			local bn = g.boss or "?"
+			local maxB = db().compact and 20 or 28
+			if #bn > maxB then bn = bn:sub(1, maxB - 1) .. ".." end
+			f.bossHd:SetText(bn .. "  |cff8a8d93(" .. f.bossIdx .. "/" .. f.bossCount .. ")|r")
+		end
 		-- VALIDAR a seleccao AQUI (antes de desenhar os itens/highlight): o `selected`
 		-- so vale se pertence ao boss ATUAL mostrado. Mudar de boss com <> limpa uma
 		-- seleccao de outro boss, e o highlight fica sincronizado.
@@ -600,7 +604,19 @@ function RM.Refresh()
 				-- When there's a winner, truncate the NAME shorter so the "-> winner"
 				-- always fits (else long names like "Vambraces of Unholy Command"
 				-- pushed the winner off-screen and you couldn't see who won).
-				local maxNm = (who ~= "") and 16 or 26
+				-- Budget scales with the window: the compact layout is 250px at font 11,
+				-- so the full-size 16/26 char limits overflowed the row. Subtract the
+				-- winner's own length -- a long name like "Mojobimbo" eats the budget a
+				-- short one doesn't.
+				-- TOTAL budget for the row, then the winner's name is carved out of it.
+				-- (Compact is narrower but the font is smaller, so it fits ~the same
+				-- character count; the old fixed 16/26 was tuned for 340px only.)
+				local cpt = db().compact
+				local budget = cpt and 30 or 38
+				if who ~= "" then
+					budget = budget - #(d.receivedBy or "(passed)") - 3   -- room for "-> X"
+				end
+				local maxNm = math.max(cpt and 10 or 14, budget)
 				if #nm > maxNm then nm = nm:sub(1, maxNm - 1) .. ".." end
 				-- (the side scrollbar now shows there's more above/below -- no [+]/[v])
 				local baseTxt = rcode .. nm .. "|r" .. who

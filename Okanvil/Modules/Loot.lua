@@ -58,6 +58,29 @@ local DENY_IDS = {
 	[44990] = true, -- Champion's Seal
 	[47242] = true, -- Trophy of the Crusade (token de moeda)
 	[20725] = true, [22450] = true, -- crystals de DE
+	-- Crafting mats. Frozen Orb is EPIC, so the rarity gate never caught it; the
+	-- skinning/cloth mats ride in because skinning a boss corpse fires the same
+	-- LOOT_OPENED that captureCorpse() scans, so they get labelled with the boss name.
+	[43102] = true, -- Frozen Orb
+	[44128] = true, -- Arctic Fur
+	[38425] = true, -- Heavy Borean Leather
+	[33568] = true, -- Borean Leather
+	[38557] = true, -- Icy Dragonscale
+	[38558] = true, -- Nerubian Chitin
+	[33470] = true, -- Frostweave Cloth
+	[41510] = true, -- Bolt of Frostweave
+	[34052] = true, [34053] = true, -- Dream Shard, Small Dream Shard
+	[34054] = true, [34055] = true, -- Infinite Dust, Greater Cosmic Essence
+	[35622] = true, [35623] = true, [35624] = true, -- Eternal Water/Air/Earth
+	[35625] = true, [35627] = true, [36860] = true, -- Eternal Life/Shadow/Fire
+	[37700] = true, [37701] = true, [37704] = true, [37705] = true, -- Crystallized
+}
+-- deny por NOME EXACTO: mats whose id we may not have (Crystallized Fire/Shadow,
+-- Jormungar Scale). Exact match, never substring -- "eternal " would have eaten
+-- Eternal Observer's Legplates, and "crystallized " the Crystallized Ebony Wand.
+local DENY_NAME_EXACT = {
+	["crystallized fire"] = true, ["crystallized shadow"] = true,
+	["jormungar scale"] = true, ["frozen orb"] = true, ["arctic fur"] = true,
 }
 -- allow por NOME (robusto): patterns/plans/recipes + orbs + fragmentos.
 local ACCEPT_NAME = {
@@ -78,6 +101,7 @@ end
 -- tudo azul). Agora respeita a setting: Rare+ apanha os azuis.
 local function acceptItem(id, rarity, name)
 	if id ~= 0 and DENY_IDS[id] then return false end
+	if name and name ~= "" and DENY_NAME_EXACT[name:lower()] then return false end
 	if id ~= 0 and ACCEPT_IDS[id] then return true end
 	if nameHasAny(name, ACCEPT_NAME) then return true end
 	local threshold = (Okanvil.db and Okanvil.db.lootThreshold) or 3
@@ -1299,7 +1323,18 @@ end
 -- run's loot until the first item of the new run dropped. Skips `hidden` drops
 -- (the mini roll's "Clear list" button), which remain in the history and the export.
 function L.DropsByBoss()
-	local s = activeBucket(); if not s then return {} end
+	-- Inside a live run: that run's drops. OUTSIDE one (you hearthed out and opened the
+	-- mini roll to review): fall back to the MOST RECENT session instead of the empty
+	-- pending buffer -- otherwise stepping out of the dungeon made the window look like
+	-- it had wiped your loot. Nothing was ever deleted; activeBucket() just could not
+	-- match a runKey outside the instance and returned the empty buffer.
+	local s
+	if shouldRecordHere() then
+		s = activeBucket()
+	else
+		s = currentSession() or sessions()[1]
+	end
+	if not s then return {} end
 	local order, byBoss = {}, {}
 	for _, dp in ipairs(s.drops) do
 		if not dp.hidden then
@@ -1769,9 +1804,22 @@ local function onEnterWorld()
 		return
 	end
 	if itype ~= "party" then return end
-	local name = (GetRealZoneText and GetRealZoneText()) or (GetInstanceInfo and (GetInstanceInfo())) or ""
+	-- Name from GetInstanceInfo -- the SAME source runKey() uses. It used to read
+	-- GetRealZoneText() first, which still returns the OLD zone on the first of the two
+	-- PLAYER_ENTERING_WORLD events an instance fires. So we bumped the token twice
+	-- (once on "", once on the real name) and minted TWO sessions for one dungeon --
+	-- the first one empty, the second holding the drops. That is the "Trial of the
+	-- Champion / 0 drops" ghost.
+	local name = (GetInstanceInfo and (GetInstanceInfo())) or (GetRealZoneText and GetRealZoneText()) or ""
+	-- A blank name means the zone has not settled yet: do NOT bump on it (that is the
+	-- phantom run). Wait for the event that knows where we are.
+	if name == "" then return end
 	-- entering a different dungeon than last (or re-entering after leaving) = new run
 	if name ~= lastPartyInstance then
+		-- Anything still sitting in the buffer belongs to the PREVIOUS run and will
+		-- never be drained (its session is gone). Drop it, or resolveSession() would
+		-- pour the last dungeon's loot into this one.
+		if #pendingDrops > 0 then wipe(pendingDrops) end
 		runToken(true)               -- bump -> currentSession abre uma sessao nova
 		lastPartyInstance = name
 	end
