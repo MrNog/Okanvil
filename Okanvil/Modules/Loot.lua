@@ -158,6 +158,34 @@ local currentBoss = nil       -- nome do boss atualmente engajado
 local encounterBoss = nil     -- ultimo boss confirmado (para rotular loot depois da morte)
 local lastCorpseBoss = nil    -- ultimo corpo NPC lootado (fallback)
 local inCombatCid = nil       -- creatureID do boss em combate (para casar o UNIT_DIED)
+-- creatureIDs known to be bosses. Two sources, in order of trust:
+--   1. OkanvilBosses (Modules/Bosses-Data.lua) -- a verified id list, seeded below.
+--      Exact and locale-proof. Currently raids only.
+--   2. tryEngage() -- whatever the isBossLike() HP heuristic accepted WHILE ALIVE.
+--      A corpse is always dead, so the heuristic cannot be asked at loot time; we
+--      cache its verdict here. This is what still covers 5-man dungeons.
+-- Without either, opening ANY trash corpse set lastCorpseBoss and that name then
+-- labelled every later drop (Ulduar trash would file boss loot under an add).
+local bossCids = {}
+if OkanvilBosses then
+	for cid, name in pairs(OkanvilBosses) do bossCids[cid] = name end
+end
+
+-- A boss's DISPLAY name: multi-NPC fights collapse to one label (the three Iron
+-- Council NPCs all read "Iron Council"), so their loot lands on one page.
+--
+-- The id is authoritative. Only fall back to the NAME when we have no id, because
+-- names are ambiguous across instances: Utgarde Keep's Prince Keleseth (23953) and
+-- Ahn'kahet's Prince Taldaram (29308) share their names with the ICC Blood Princes.
+-- A name lookup would file that dungeon loot under "Blood Prince Council".
+local function bossLabel(cid, name)
+	local g = OkanvilBossGroups
+	if g then
+		if cid then return g[cid] or name end     -- id known -> trust it, never the name
+		if name and g[name] then return g[name] end
+	end
+	return name
+end
 
 -- creatureID a partir do GUID (MRT cidFromGUID): valida o triplet F13 (NPC) / F15
 -- (vehicle) do 3.3.5a e extrai o id.
@@ -208,12 +236,17 @@ local function tryEngage(unit)
 	local guid = UnitGUID and UnitGUID(unit)
 	local cid = cidFromGUID(guid)
 	if not cid then return end
-	-- only treat as an encounter inside an instance (raid/party) and if boss-like.
+	-- only treat as an encounter inside an instance (raid/party).
 	local ctxOK = IsInInstance and IsInInstance()
-	if not (ctxOK and isBossLike(unit)) then return end
+	if not ctxOK then return end
+	-- A KNOWN boss id is trusted outright -- skip the HP heuristic, which would miss a
+	-- low-HP boss. Everything else has to convince isBossLike() while still alive.
+	if not (bossCids[cid] or isBossLike(unit)) then return end
 	local name = (UnitName and UnitName(unit)) or ""
 	if name == "" then return end
+	name = bossLabel(cid, name)   -- Iron Council etc. -> one page, not three
 	inCombatCid = cid
+	bossCids[cid] = name          -- remember the verdict: its corpse may be looted later
 	-- a new boss only changes the current NAME (the run page via dp.boss/DropsByBoss).
 	-- does NOT open a new session -- bosses are pages WITHIN the same session/run.
 	if currentBoss ~= name then
@@ -243,13 +276,26 @@ local function onUnitDied(destGUID)
 	end
 end
 
+-- Who to credit this loot to. Only `encounterBoss` is authoritative (the scanner
+-- confirmed a boss). The rest are guesses, in decreasing confidence: the corpse we
+-- just looted, then the current target.
+--
+-- When nothing is known we return "Trash" -- NOT the instance name. The old fallback
+-- returned GetInstanceInfo(), so trash loot was filed under a fake boss called
+-- "Ulduar"/"Gundrak" and the "Trash" group in DropsByBoss() was effectively dead code.
+-- An elite that trips the HP heuristic still keeps its own name (Drakkari Rhino), which
+-- is wanted; this only changes the case where we know nothing at all.
 local function resolveBoss()
 	if encounterBoss and encounterBoss ~= "" then return encounterBoss end
 	if lastCorpseBoss and lastCorpseBoss ~= "" then return lastCorpseBoss end
-	local t = UnitName("target")
-	if t and t ~= "" and guidIsNPC(UnitGUID("target")) then return t end
-	local zn = GetInstanceInfo and (GetInstanceInfo()) or ""
-	return (zn ~= "" and zn) or "Trash"
+	-- current target, but only if it was vetted as a boss (else a selected add would
+	-- get the credit). Anything unvetted is trash.
+	local guid, t = UnitGUID("target"), UnitName("target")
+	if t and t ~= "" and guidIsNPC(guid) then
+		local cid = cidFromGUID(guid)
+		if cid and bossCids[cid] then return bossLabel(cid, t) end
+	end
+	return "Trash"
 end
 
 -- ------------------------------------------------------------
@@ -344,11 +390,17 @@ end
 local pendingDrops = {}
 
 -- The CURRENT run session. Finds the one with the same runKey (even if not the
--- newest -- you re-entered the raid after another instance), else creates one.
+-- newest -- you re-entered the raid after another instance).
 -- Does NOT open a new session per boss or on a silence gap -- only per different RUN.
 -- Returns nil while a raid's lockout info has not arrived (key is nil) -- callers
 -- must buffer instead of writing to the wrong session.
-local function currentSession()
+--
+-- `create` gates minting a NEW session. Only the WRITE paths (storeDrop, and the
+-- zone-in resolveSession) pass it. A plain READ must never mint: DropsByBoss() runs
+-- on every mini-roll repaint, and standing in Orgrimmar made runKey() return
+-- "day|<today>|Kalimdor", which then created an empty "Kalimdor / 0 drops" session
+-- out of nothing but a redraw.
+local function currentSession(create)
 	local key, name, diff, mapID = runKey()
 	if not key then return nil end          -- lockout pending: no session yet
 	local list = sessions()
@@ -363,12 +415,14 @@ local function currentSession()
 			return list[1]
 		end
 	end
+	if not create then return nil end       -- read-only: do not mint a session
 	return newSession(key, name, diff, mapID)
 end
 
 -- The drop list to read/write RIGHT NOW: the current session's, or the pending
 -- buffer while a raid's lockout is still unknown. Shaped like a session ({drops=...})
 -- so it can be passed straight to dropExists/findOpenDrop.
+-- READ-ONLY: never mints a session (see currentSession's `create`).
 local function activeBucket()
 	local s = currentSession()
 	if s then return s end
@@ -383,7 +437,12 @@ end
 -- accessors read sessions()[1], which used to only be corrected by the first
 -- storeDrop() of the new run.
 local function resolveSession()
-	local s = currentSession()
+	-- Only mint where we would actually RECORD. UPDATE_INSTANCE_INFO also fires on
+	-- zoning into a city, where runKey() falls back to "day|<today>|<continent>" -- a
+	-- valid key, so currentSession(true) happily created an empty "Kalimdor / 0 drops"
+	-- session on every hearth back to Orgrimmar. Outside a recorded run we may still
+	-- ADOPT an existing session (read-only), never open a new one.
+	local s = currentSession(shouldRecordHere())
 	if not s then return nil end
 	if #pendingDrops > 0 then
 		for i = 1, #pendingDrops do s.drops[#s.drops + 1] = pendingDrops[i] end
@@ -455,7 +514,9 @@ local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur)
 	-- No session yet (raid lockout still unknown) -> park the drop in pendingDrops.
 	-- resolveSession() moves them into the real session once the key is known, so
 	-- nothing is lost and nothing lands in the previous run's session.
-	local s = currentSession()
+	-- Real loot landed: this is a write, so mint the session if it does not exist.
+	-- (Gated by shouldRecordHere() upstream, so world drops never reach here.)
+	local s = currentSession(true)
 	local bucket = s and s.drops or pendingDrops
 	local existing = dropExists({ drops = bucket }, id, boss)
 	if existing then
@@ -513,8 +574,14 @@ end
 local function captureCorpse()
 	if not shouldRecordHere() then return end
 	fireScan()   -- atualiza o boss atual ANTES de rotular o loot (timing do scanner)
+	-- Only remember a corpse as the "boss" if tryEngage() vetted it as boss-like while
+	-- it was alive (bossCids). It used to accept ANY NPC corpse, so looting a trash mob
+	-- made its name stick and label everything after it.
 	local guid, tname = UnitGUID("target"), UnitName("target")
-	if tname and tname ~= "" and guidIsNPC(guid) and not encounterBoss then lastCorpseBoss = tname end
+	if tname and tname ~= "" and guidIsNPC(guid) and not encounterBoss then
+		local cid = cidFromGUID(guid)
+		if cid and bossCids[cid] then lastCorpseBoss = bossLabel(cid, tname) end
+	end
 	local boss = resolveBoss()
 	local n = (GetNumLootItems and GetNumLootItems()) or 0
 	if n == 0 then return end
@@ -614,11 +681,19 @@ local function noRealm(name) return name and name:gsub("%-.*$", "") or name end
 -- calls it so a CHAT_MSG_LOOT naming the winner confirms a pending master-loot give.
 local noteReceivedForAward
 
+-- forward decls: the disenchant filter lives with the need/greed handlers below,
+-- but tagReceiver (defined first) has to consult it.
+local isDEProduct, consumeDEWinner
+
 local function tagReceiver(player, link)
 	local id = itemIDFromLink(link)
 	if id == 0 then return end
 	player = noRealm(player)
 	if recvDedupe(player, id) then return end
+	-- Shard from a Disenchant roll this player just won -> not boss loot, skip it.
+	-- (The gauntlets were DE'd; the Dream Shard that follows is the product, and was
+	-- being recorded as a fresh drop under the current boss.)
+	if isDEProduct(id) and consumeDEWinner(player) then return end
 	local rarity = select(3, GetItemInfo(shortLink(link) or link)) or 0
 	local name = (GetItemInfo(link))
 	if not acceptItem(id, rarity, name) then return end
@@ -711,6 +786,56 @@ local function recordNeedGreed(msg)
 	end
 end
 
+-- Enchanting products of a Disenchant roll. When someone WINS a roll with
+-- Disenchant, the server destroys the item and mails them one of these -- and it
+-- arrives as a plain "X receives loot: [Dream Shard]" CHAT_MSG_LOOT, indistinguishable
+-- from a real drop. It is NOT boss loot and must not be recorded (a Dream Shard was
+-- showing up under Gal'darah because the gauntlets were DE'd).
+--
+-- These are the DE products only. Raid fragments (Val'anyr, Shadowmourne) are NOT
+-- here -- they are real drops and stay in ACCEPT_NAME.
+local DE_PRODUCTS = {
+	[34052] = true, -- Dream Shard
+	[34053] = true, -- Small Dream Shard
+	[22449] = true, -- Large Prismatic Shard
+	[22448] = true, -- Small Prismatic Shard
+	[20725] = true, -- Nexus Crystal
+	[22450] = true, -- Void Crystal
+	[34057] = true, -- Abyss Crystal
+}
+
+-- Players who just won a Disenchant roll -> [lowername] = GetTime(). Any DE product
+-- they receive in the next few seconds is the shard from that roll, not a drop.
+local deWinners = {}
+local DE_WINDOW = 15
+
+-- NOTE: no `local` -- these fill the forward decls above tagReceiver, which calls
+-- them. Re-declaring them here would shadow those and leave tagReceiver seeing nil.
+function isDEProduct(id) return (id and DE_PRODUCTS[id]) and true or false end
+
+-- Is `player` owed a shard from a Disenchant roll they just won? Consumes the mark
+-- (one shard per DE win) and expires stale ones, so a player who legitimately loots
+-- a Dream Shard minutes later still gets it recorded.
+function consumeDEWinner(player)
+	if not player then return false end
+	local low = player:lower()
+	local at = deWinners[low]
+	if not at then return false end
+	local now = GetTime and GetTime() or 0
+	deWinners[low] = nil                      -- consume either way
+	return (now - at) <= DE_WINDOW
+end
+
+-- Did `player` win this item with a Disenchant roll? (checks the captured rolls)
+local function wonByDisenchant(dp, player)
+	if not (dp and dp.rolls and player) then return false end
+	local low = player:lower()
+	for _, e in ipairs(dp.rolls) do
+		if e.player and e.player:lower() == low then return e.kind == "de" end
+	end
+	return false
+end
+
 -- need/greed winner: fills receivedBy and CLOSES the rolling (clears rollID).
 local function recordRollWon(player, link)
 	local id = itemIDFromLink(link)
@@ -721,6 +846,12 @@ local function recordRollWon(player, link)
 	if dp then
 		dp.receivedBy = player
 		dp.rollID = nil; dp.rollStart = nil   -- para de mostrar "rolling"
+		-- Won via Disenchant: the item is about to be shattered into a shard. Remember
+		-- the winner so the incoming shard is not recorded as a fresh boss drop.
+		if wonByDisenchant(dp, player) then
+			dp.disenchanted = true
+			deWinners[player:lower()] = GetTime and GetTime() or 0
+		end
 		if L.onLoot then L.onLoot() end
 		return
 	end
@@ -903,6 +1034,14 @@ local function iAmMasterLooter()
 	return me ~= nil and noRealm(ml):lower() == noRealm(me):lower()
 end
 function L.IsMasterLooter() return iAmMasterLooter() end
+
+-- Is the group on MASTER LOOT at all (regardless of who the ML is)? Under group
+-- loot / need-before-greed you roll in Blizzard's own roll frame, so our manual
+-- "Roll MS / Roll OS" buttons (which just /roll into chat) are meaningless there.
+function L.IsMasterLootMethod()
+	if not GetLootMethod then return false end
+	return (GetLootMethod()) == "master"
+end
 
 -- Can the player even set the loot method? Only the party/raid LEADER may call
 -- SetLootMethod, AND there has to be a group at all -- solo has no loot method to

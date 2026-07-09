@@ -14,16 +14,41 @@ local L = Okanvil.Loot
 local RM = {}
 Okanvil.RollMgr = RM
 
--- roomier than before: bigger rows, bigger text (user asked for more spacing).
-local ROW_H = 26
-local FONT_SZ = 13
-local ITEM_ROWS, ROLL_ROWS = 5, 6
-local WIN_W = 340   -- wider: long item names + player names fit
+-- Two layouts, toggled by the [-]/[+] button in the header and remembered in the DB.
+--   full    -- roomy rows/text, the default.
+--   compact -- RaidRoll-density (its roll frame is 185x180): tighter rows, smaller
+--              font, fewer visible rows, narrower window. Same sections, no features
+--              removed -- it just takes about a quarter of the screen area.
+local SIZES = {
+	full    = { ROW_H = 26, FONT_SZ = 13, ITEM_ROWS = 5, ROLL_ROWS = 6, WIN_W = 340 },
+	compact = { ROW_H = 18, FONT_SZ = 11, ITEM_ROWS = 3, ROLL_ROWS = 4, WIN_W = 250 },
+}
+-- Live geometry, re-pointed at one of the SIZES tables by applySize(). Seeded from
+-- `full` at LOAD time: Okanvil.db does not exist yet here (Core.lua only assigns it
+-- on VARIABLES_LOADED, after every file has run), so calling db() at this scope
+-- would index a nil table. applySize() is called from showWin()/the toggle instead,
+-- both of which run long after the DB is up.
+local ROW_H, FONT_SZ, ITEM_ROWS, ROLL_ROWS, WIN_W do
+	local s = SIZES.full
+	ROW_H, FONT_SZ, ITEM_ROWS, ROLL_ROWS, WIN_W = s.ROW_H, s.FONT_SZ, s.ITEM_ROWS, s.ROLL_ROWS, s.WIN_W
+end
 
 local function db()
 	Okanvil.db.rollmgr = Okanvil.db.rollmgr or { point = "RIGHT", x = -30, y = 60, autoShow = true }
 	return Okanvil.db.rollmgr
 end
+
+-- pull the geometry for the currently-selected mode into the locals above
+local function applySize()
+	local s = SIZES[db().compact and "compact" or "full"]
+	ROW_H, FONT_SZ, ITEM_ROWS, ROLL_ROWS, WIN_W = s.ROW_H, s.FONT_SZ, s.ITEM_ROWS, s.ROLL_ROWS, s.WIN_W
+end
+
+-- Pixels from the window top to the body frame: the 26px header + the status line.
+-- ONE source of truth -- the body anchor and the final SetHeight both use it, so a
+-- mode switch can never leave them disagreeing (which clipped the bottom buttons).
+local function BODY_TOP() return db().compact and 40 or 52 end
+local function STATUS_Y() return db().compact and -28 or -34 end
 
 -- Icon resolver: delegates to the shared Core warmer (Okanvil:ItemIcon), which
 -- returns the icon now or nil + auto-queues a server query so a later tick fills
@@ -124,12 +149,23 @@ local function buildWindow()
 	ico:SetSize(16, 16); ico:SetPoint("LEFT", 8, 0)
 	ico:SetTexture("Interface\\Icons\\Trade_BlackSmithing")   -- anvil, like the shell
 	ico:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local title = W.Text(hdr, "Okanvil - Mini Roll Manager", 13, "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0); title:Color(1, 0.82, 0)
+	local title = W.Text(hdr, "", 13, "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0); title:Color(1, 0.82, 0)
+	f.title = title
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 
+	-- compact toggle: [-] shrinks to the tight layout, [+] restores the roomy one.
+	local size = W.Button(hdr, ""); size:SetSize(22, 20); size:SetPoint("RIGHT", close, "LEFT", -2, 0)
+	f.sizeBtn = size
+	size:SetScript("OnClick", function()
+		local d = db()
+		d.compact = not d.compact
+		applySize()
+		RM.ApplyMode()
+	end)
+
 	-- status line (ML / Raider, from the real loot method)
-	local status = W.Text(f, "", 12, "dim"); status:SetPoint("TOPLEFT", 12, -34)
+	local status = W.Text(f, "", 12, "dim"); status:SetPoint("TOPLEFT", 12, STATUS_Y())
 	f.status = status
 
 	-- everything below the status is rebuilt when the ML state changes, so pack the
@@ -137,7 +173,7 @@ local function buildWindow()
 	-- (TOPLEFT + BOTTOMRIGHT) -- a frame with height 0 doesn't render its children
 	-- reliably on 3.3.5a, which is why the body looked empty.
 	local body = CreateFrame("Frame", nil, f)
-	body:SetPoint("TOPLEFT", 0, -52); body:SetPoint("BOTTOMRIGHT", 0, 0)
+	body:SetPoint("TOPLEFT", 0, -BODY_TOP()); body:SetPoint("BOTTOMRIGHT", 0, 0)
 	f.body = body
 
 	-- "Roll open" animation: while a roll-off is open, cycle dots + a pulsing gold
@@ -165,36 +201,49 @@ local function buildWindow()
 		if self.itemRows then
 			self._dots = (self._dots or 0) + e
 			local dots = ("."):rep(1 + (math.floor(self._dots * 2) % 3))   -- . / .. / ...
+			local needRefresh = false
 			for _, r in ipairs(self.itemRows) do
 				local d = r._d
 				if r:IsShown() and r._rolling and d then
-					-- shrinking bar
-					local frac
-					if d.rollID then
-						local left = GetLootRollTimeLeft and GetLootRollTimeLeft(d.rollID) or 0
-						local dur = (d.rollDur and d.rollDur > 0) and (d.rollDur * 1000) or 60000
-						frac = left / dur
-					elseif d.rollStart and d.rollDur then
-						frac = 1 - ((GetTime() - d.rollStart) / d.rollDur)
-					end
-					if frac then
-						if frac < 0 then frac = 0 elseif frac > 1 then frac = 1 end
-						if frac <= 0 then r.bar:Hide()
-						else r.bar:SetWidth(math.max(1, r:GetWidth() * frac)) end
-					end
-					-- TIMER ENDED: stop showing "rolling". The winner arrives via
-					-- CHAT_MSG_LOOT (recordRollWon) que limpa rollID + poe receivedBy;
-					-- mas se o roll expira sem esse evento chegar, limpamos aqui para a
-					-- bar doesn't stay stuck on "rolling..." forever.
-					if frac and frac <= 0 then
+					-- SETTLED: the roll is over the moment the item has an owner (or
+					-- everyone passed). recordRollWon() clears rollID *and* rollStart, which
+					-- left `frac` nil below -- so the "timer ended" branch never fired and
+					-- this loop kept re-appending "- rolling" from a STALE _baseTxt (captured
+					-- before the winner was known). That is why an awarded item stayed
+					-- "rolling ..." until you clicked it and forced a Refresh.
+					if d.receivedBy or d.passed or not (d.rollID or d.rollStart) then
 						r._rolling = false
-						d.rollID = nil; d.rollStart = nil
-						if r._baseTxt then r.txt:SetText(r._baseTxt) end
-					elseif r._baseTxt then
-						r.txt:SetText(r._baseTxt .. "  |cffffd200- rolling " .. dots .. "|r")
+						r.bar:Hide()
+						needRefresh = true    -- repaint once after the loop, not per row
+					else
+						-- shrinking bar
+						local frac
+						if d.rollID then
+							local left = GetLootRollTimeLeft and GetLootRollTimeLeft(d.rollID) or 0
+							local dur = (d.rollDur and d.rollDur > 0) and (d.rollDur * 1000) or 60000
+							frac = left / dur
+						elseif d.rollStart and d.rollDur then
+							frac = 1 - ((GetTime() - d.rollStart) / d.rollDur)
+						end
+						if frac then
+							if frac < 0 then frac = 0 elseif frac > 1 then frac = 1 end
+							if frac <= 0 then r.bar:Hide()
+							else r.bar:SetWidth(math.max(1, r:GetWidth() * frac)) end
+						end
+						-- TIMER EXPIRED with no winner event: stop showing "rolling" so the
+						-- bar doesn't stay stuck forever.
+						if frac and frac <= 0 then
+							r._rolling = false
+							d.rollID = nil; d.rollStart = nil
+							if r._baseTxt then r.txt:SetText(r._baseTxt) end
+						elseif r._baseTxt then
+							r.txt:SetText(r._baseTxt .. "  |cffffd200- rolling " .. dots .. "|r")
+						end
 					end
 				end
 			end
+			-- one repaint per frame, after the loop (not once per settled row)
+			if needRefresh then RM.Refresh() end
 		end
 		-- "Roll open" pulsing label (only when a managed roll-off is active)
 		local ar = L and L.ActiveRoll and L.ActiveRoll()
@@ -211,6 +260,30 @@ local function buildWindow()
 	win = f
 	f:Hide()
 	return f
+end
+
+-- Re-apply the current size mode to the frame chrome, then rebuild the body.
+-- Called by the [-]/[+] toggle and on every show (the DB may have changed).
+function RM.ApplyMode()
+	if not win then return end
+	local compact = db().compact
+	win:SetWidth(WIN_W)
+	if win.title then
+		win.title:SetText(compact and "Okanvil - Roll" or "Okanvil - Mini Roll Manager")
+	end
+	if win.sizeBtn then
+		win.sizeBtn.text:SetText(compact and "+" or "-")
+	end
+	-- body + status are built once, so re-anchor them for the new mode
+	if win.status then
+		win.status:ClearAllPoints(); win.status:SetPoint("TOPLEFT", 12, STATUS_Y())
+	end
+	if win.body then
+		win.body:ClearAllPoints()
+		win.body:SetPoint("TOPLEFT", 0, -BODY_TOP()); win.body:SetPoint("BOTTOMRIGHT", 0, 0)
+	end
+	local ok, err = pcall(RM.Rebuild)
+	if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
 end
 
 -- (re)build the mode-specific body: full manager for ML, just roll buttons for a
@@ -238,29 +311,31 @@ function RM.Rebuild()
 	local function keep(w) f.bodyKids[#f.bodyKids + 1] = w; return w end
 
 	local ml = isML()
+	local compact = db().compact and true or false
 	local ac = Okanvil.Colors and Okanvil.Colors.accent or { 0.75, 0.58, 0.23 }
 
 	-- UNIFIED layout: raider and ML share the same look (boss pager, item box,
 	-- rolls box, "Your roll"). The ML additionally gets the management controls
 	-- (Start roll MS/OS/Free/Stop + Award/Clear). Raider just watches + rolls.
-	local M = 12
+	local M = compact and 8 or 12
 	local INNER = WIN_W - M * 2
-	local y = -6
+	local y = compact and -4 or -6
 
 	-- boss pager header:  <  Boss Name (1/3)  >
-	local prev = keep(W.Button(body, "<")); prev:SetSize(24, 22); prev:SetPoint("TOPLEFT", M, y)
+	local pgH = compact and 18 or 22
+	local prev = keep(W.Button(body, "<")); prev:SetSize(compact and 20 or 24, pgH); prev:SetPoint("TOPLEFT", M, y)
 	prev:SetScript("OnClick", function()
-		f.bossIdx = math.max(1, (f.bossIdx or 1) - 1); selected = nil; RM.Refresh()
+		f.bossIdx = math.max(1, (f.bossIdx or 1) - 1); selected = nil; f.userCleared = false; RM.Refresh()
 	end)
-	local bossHd = keep(W.Text(body, "", 13, "accent")); bossHd:Color(1, 0.82, 0)
+	local bossHd = keep(W.Text(body, "", FONT_SZ, "accent")); bossHd:Color(1, 0.82, 0)
 	bossHd:SetPoint("LEFT", prev, "RIGHT", 6, 0); bossHd:SetPoint("RIGHT", -M - 28, 0); bossHd:SetJustifyH("CENTER")
 	if bossHd.SetWordWrap then bossHd:SetWordWrap(false) end
 	f.bossHd = bossHd
-	local nxt = keep(W.Button(body, ">")); nxt:SetSize(24, 22); nxt:SetPoint("TOPRIGHT", -M, y)
+	local nxt = keep(W.Button(body, ">")); nxt:SetSize(compact and 20 or 24, pgH); nxt:SetPoint("TOPRIGHT", -M, y)
 	nxt:SetScript("OnClick", function()
-		f.bossIdx = math.min(f.bossCount or 1, (f.bossIdx or 1) + 1); selected = nil; RM.Refresh()
+		f.bossIdx = math.min(f.bossCount or 1, (f.bossIdx or 1) + 1); selected = nil; f.userCleared = false; RM.Refresh()
 	end)
-	y = y - 28
+	y = y - (pgH + 6)
 
 	-- item box (this boss's items) -------------------------------------------
 	local LIST_H = ITEM_ROWS * ROW_H
@@ -295,7 +370,8 @@ function RM.Rebuild()
 		r.bar:SetPoint("TOPLEFT", 0, 0); r.bar:SetPoint("BOTTOMLEFT", 0, 0)
 		r.bar:SetTexture(0.75, 0.58, 0.23, 0.30)   -- gold, translucent
 		r.bar:Hide()
-		r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(22, 22); r.icon:SetPoint("LEFT", 5, 0)
+		local icoSz = ROW_H - 4          -- icon hugs the row height (22 full / 14 compact)
+		r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(icoSz, icoSz); r.icon:SetPoint("LEFT", 5, 0)
 		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 		r.txt = W.Text(r, "", FONT_SZ); r.txt:SetPoint("LEFT", r.icon, "RIGHT", 6, 0); r.txt:SetPoint("RIGHT", -6, 0); r.txt:SetJustifyH("LEFT")
 		if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
@@ -313,20 +389,27 @@ function RM.Rebuild()
 			-- toggle: clicking the already-selected item DE-selects. (Don't use the
 			-- "a and nil or b" idiom -- nil is falsy in Lua, so "true and nil or s._d"
 			-- returns s._d and never de-selected.)
-			if selected == s._d then selected = nil else selected = s._d end
+			if selected == s._d then
+				selected = nil
+				f.userCleared = true    -- deliberate de-select: don't auto-pick again
+			else
+				selected = s._d
+				f.userCleared = false
+			end
 			RM.Refresh()
 		end)
 		f.itemRows[i] = r
 		return r
 	end
-	y = y - (LIST_H + 6) - 10
+	y = y - (LIST_H + 6) - (compact and 6 or 10)
 
 	-- ML-only: Start Roll row (4 equal buttons) ------------------------------
 	if ml then
-		local sr = keep(W.Text(body, "Start roll (announces)", 11, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - 16
+		local srH = compact and 22 or 26
+		local sr = keep(W.Text(body, "Start roll (announces)", compact and 10 or 11, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - (compact and 13 or 16)
 		local gap, bw = 6, (INNER - 3 * 6) / 4
 		local function srBtn(label, kind, idx, fn)
-			local b = keep(W.Button(body, label, kind)); b:SetSize(bw, 26)
+			local b = keep(W.Button(body, label, kind)); b:SetSize(bw, srH)
 			b:SetPoint("TOPLEFT", M + (idx - 1) * (bw + gap), y)
 			b:SetScript("OnClick", fn); return b
 		end
@@ -338,12 +421,13 @@ function RM.Rebuild()
 		srBtn("OS", nil, 2, function() startSel("os") end)
 		srBtn("Free", nil, 3, function() startSel("free") end)
 		srBtn("Stop", "danger", 4, function() L.StopRoll() end)
-		y = y - 32
+		y = y - (srH + 6)
 	end
 
 	-- rolls: state line + list (both modes see the rolls) --------------------
-	local rs = keep(W.Text(body, "", 11, "dim")); rs:SetPoint("TOPLEFT", M, y); f.rollState = rs; y = y - 16
-	local rl = keep(W.Text(body, ml and "Rolls -- click to pick winner" or "Rolls", 10, "dim")); rl:SetPoint("TOPLEFT", M, y); y = y - 16
+	local lnH = compact and 13 or 16
+	local rs = keep(W.Text(body, "", compact and 10 or 11, "dim")); rs:SetPoint("TOPLEFT", M, y); f.rollState = rs; y = y - lnH
+	local rl = keep(W.Text(body, ml and "Rolls -- click to pick winner" or "Rolls", 10, "dim")); rl:SetPoint("TOPLEFT", M, y); y = y - lnH
 	local rbox = keep(W.Frame(body, "dark")); rbox:SetPoint("TOPLEFT", M, y); rbox:SetSize(INNER, ROLL_ROWS * ROW_H + 4)
 	for i = 1, ROLL_ROWS do
 		local r = CreateFrame("Button", nil, rbox)
@@ -361,11 +445,12 @@ function RM.Rebuild()
 		end)
 		f.rollRows[i] = r
 	end
-	y = y - (ROLL_ROWS * ROW_H + 4) - 10
+	y = y - (ROLL_ROWS * ROW_H + 4) - (compact and 6 or 10)
 
 	-- ML-only: award / clear -------------------------------------------------
 	if ml then
-		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER - 90, 26); award:SetPoint("TOPLEFT", M, y)
+		local awH = compact and 22 or 26
+		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER - 90, awH); award:SetPoint("TOPLEFT", M, y)
 		award:SetScript("OnClick", function()
 			local ar = L.ActiveRoll()
 			if not selected then Okanvil:Print("|cffff5555Pick an item in the list first.|r"); return end
@@ -379,9 +464,9 @@ function RM.Rebuild()
 			end
 			L.AwardWinner(selected.id, ar.best.player, ar.best.roll, ar.best.spec)
 		end)
-		local clear = keep(W.Button(body, "Clear")); clear:SetSize(82, 26); clear:SetPoint("LEFT", award, "RIGHT", 8, 0)
+		local clear = keep(W.Button(body, "Clear")); clear:SetSize(82, awH); clear:SetPoint("LEFT", award, "RIGHT", 8, 0)
 		clear:SetScript("OnClick", function() selected = nil; L.StopRoll(); RM.Refresh() end)
-		y = y - 36
+		y = y - (awH + 10)
 
 		-- Hide this run's items from THIS list. Does not delete: the history and the
 		-- export keep everything (use the Loot page to actually delete a session).
@@ -407,22 +492,28 @@ function RM.Rebuild()
 			end
 			StaticPopup_Show("OKANVIL_ROLL_CLEAR")
 		end)
-		y = y - 28
+		y = y - (compact and 24 or 28)
 	end
 
-	-- Your roll (both modes) -------------------------------------------------
-	local yrl = keep(W.Text(body, "Your roll", 11, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - 18
-	local hw = (INNER - 8) / 2
-	local myms = keep(W.Button(body, "Roll MS (100)", "primary")); myms:SetSize(hw, 28); myms:SetPoint("TOPLEFT", M, y)
-	myms:SetScript("OnClick", function() L.SelfRoll("ms") end)
-	local myos = keep(W.Button(body, "Roll OS (99)")); myos:SetSize(hw, 28); myos:SetPoint("LEFT", myms, "RIGHT", 8, 0)
-	myos:SetScript("OnClick", function() L.SelfRoll("os") end)
-	y = y - 32
+	-- Your roll -- MASTER LOOT ONLY ------------------------------------------
+	-- Under group loot / need-before-greed the game shows its own roll frame and
+	-- these buttons would just spam a /roll nobody reads. Only a master-loot run
+	-- decides by a chat roll-off, so that's the only place they belong.
+	if L.IsMasterLootMethod and L.IsMasterLootMethod() then
+		local yrl = keep(W.Text(body, "Your roll", compact and 10 or 11, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - (compact and 15 or 18)
+		local hw = (INNER - 8) / 2
+		local bh = compact and 22 or 28
+		local myms = keep(W.Button(body, "Roll MS (100)", "primary")); myms:SetSize(hw, bh); myms:SetPoint("TOPLEFT", M, y)
+		myms:SetScript("OnClick", function() L.SelfRoll("ms") end)
+		local myos = keep(W.Button(body, "Roll OS (99)")); myos:SetSize(hw, bh); myos:SetPoint("LEFT", myms, "RIGHT", 8, 0)
+		myos:SetScript("OnClick", function() L.SelfRoll("os") end)
+		y = y - (bh + 4)
+	end
 	-- (fragment/BoE collector tally is NOT shown here -- it lives on the Loot page's
 	--  COLLECTED panel. The mini manager stays focused on rolling.)
 	f.colInfo = nil
 
-	f:SetHeight(52 + (-y) + 8)
+	f:SetHeight(BODY_TOP() + (-y) + 8)
 
 	RM.Refresh()
 end
@@ -459,6 +550,18 @@ function RM.Refresh()
 			local inThisBoss = false
 			for _, d in ipairs(g.items) do if d == selected then inThisBoss = true; break end end
 			if not inThisBoss then selected = nil end
+		end
+		-- AUTO-SELECT: with nothing picked, show the first item's rolls straight away
+		-- instead of an empty "Click an item" panel. Prefer an item still being rolled
+		-- (that's the actionable one); otherwise fall back to the first drop. Clicking
+		-- an item still toggles it off -- `userCleared` remembers that so we don't
+		-- immediately re-select it on the next repaint.
+		if not selected and not f.userCleared and #g.items > 0 then
+			local pick
+			for _, d in ipairs(g.items) do
+				if (d.rollID or d.rollStart) and not d.receivedBy and not d.passed then pick = d; break end
+			end
+			selected = pick or g.items[1]
 		end
 		-- SCROLL: a raid boss drops more than ITEM_ROWS items, so page the list with
 		-- the mouse wheel instead of the old "...and N more" dead-end. Clamp the
@@ -573,15 +676,33 @@ function RM.Refresh()
 	local selRolls = rollItem and rollItem.rolls
 	local showingItemRolls = false
 	if selRolls and #selRolls > 0 then
-		-- item need/greed: need > greed > de; within a type, higher roll first.
-		local rank = { need = 3, greed = 2, de = 1 }
+		-- item need/greed: Need beats everything; Greed and Disenchant compete at the
+		-- SAME level (the game awards the highest roll between them -- a greed 14 does
+		-- NOT beat a DE 35), so they share a rank and the number decides. Ties break on
+		-- name: table.sort is not stable, so equal rolls would otherwise swap places
+		-- between refreshes.
+		local rank = { need = 2, greed = 1, de = 1 }
 		for _, e in ipairs(selRolls) do sorted[#sorted + 1] = e end
 		table.sort(sorted, function(a, b)
 			local ra, rb = rank[a.kind] or 0, rank[b.kind] or 0
 			if ra ~= rb then return ra > rb end
-			return (a.roll or 0) > (b.roll or 0)
+			local va, vb = a.roll or 0, b.roll or 0
+			if va ~= vb then return va > vb end
+			return (a.player or "") < (b.player or "")
 		end)
+		-- Once the item HAS an owner, the winner is whoever actually received it --
+		-- not the top roll. The two disagree whenever the game awards on a rule we
+		-- don't model, or when the winner never appears in the captured rolls (you
+		-- won an item and the green marker sat on the top greed roll instead).
 		best = sorted[1]
+		if rollItem.receivedBy and rollItem.receivedBy ~= "" then
+			local low = rollItem.receivedBy:lower()
+			local owner
+			for _, e in ipairs(sorted) do
+				if e.player and e.player:lower() == low then owner = e; break end
+			end
+			best = owner        -- nil when the receiver never rolled -> nothing highlighted
+		end
 		showingItemRolls = true
 	elseif rollItem and ar then
 		-- item selected AND a manual /roll (activeRoll) is running: show the manual
@@ -622,7 +743,10 @@ function RM.Refresh()
 			elseif e.kind == "de" then tag = " |cff8a5ad9(DE)|r"
 			elseif e.kind == "need" then tag = " |cff7cfc8a(need)|r"
 			elseif e.spec == "off" then tag = " |cff8a5ad9(off)|r" end
-			local isBest = best and best.player == e.player and (best.roll == e.roll)
+			-- match on the ENTRY, not on player+roll: two people rolling the same number
+			-- both matched, so the winner marker lit up on two rows at once. The manual
+			-- roll's `best` is a separate table, so fall back to comparing the player.
+			local isBest = best and (best == e or best.player == e.player)
 			local mark = isBest and "|cff7cfc8a> |r" or "  "
 			r.txt:SetText(mark .. classColorCode(e.player) .. e.player .. "|r  |cffffd200" .. (e.roll or 0) .. "|r" .. tag)
 			r.hl:SetShown(isBest)
@@ -653,7 +777,8 @@ local function showWin()
 	if pendingJumpNewest then win._jumpNewest = true; pendingJumpNewest = false end
 	win:Show()                       -- always show (idempotent)
 	win:Raise()                      -- bring to front in case something covers it
-	local ok, err = pcall(RM.Rebuild)  -- never let a rebuild error leave it half-open
+	applySize()                      -- DB may have changed since the last show
+	local ok, err = pcall(RM.ApplyMode)  -- never let a rebuild error leave it half-open
 	if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
 	if OkanvilLootDebug and L and L.Dbg then
 		local p, _, _, x, y = win:GetPoint(1)
@@ -697,7 +822,10 @@ local function popOrRefresh(force)
 		-- only jump to the newest boss when this is a FORCED pop (NEW loot
 		-- coming in, force=true). A normal refresh (e.g. winner filled, roll
 		-- captured) must NOT change the page you're viewing -- just redraws.
-		if force then win._jumpNewest = true; pendingJumpNewest = false end
+		if force then
+			win._jumpNewest = true; pendingJumpNewest = false
+			win.userCleared = false   -- new loot -> auto-select it even if you'd cleared
+		end
 		RM.Refresh()
 		if dbg then L.Dbg("  => refresh (already shown)") end
 	elseif (force and db().autoShow) or canAutoShow() then
@@ -752,15 +880,23 @@ ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
 ev:RegisterEvent("PARTY_LEADER_CHANGED")
 
 local lastML = nil
+local lastMethod = nil
+local function isMLMethod() return L and L.IsMasterLootMethod and L.IsMasterLootMethod() or false end
 local function mlChanged()
 	if not L then return end
 	local now = isML()
-	if now == lastML then return end     -- no flip -> nothing to redo
-	lastML = now
+	local method = isMLMethod()
+	-- Rebuild on EITHER flip. Tracking only `isML` was not enough: switching the raid
+	-- from group loot to master loot with SOMEONE ELSE as the ML leaves isML() false
+	-- both sides, yet the "Your roll" buttons must appear (they are master-loot only).
+	if now == lastML and method == lastMethod then return end
+	local mlFlipped = (now ~= lastML)
+	lastML, lastMethod = now, method
 	if win and win:IsShown() then
 		local ok, err = pcall(RM.Rebuild)
 		if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
 	end
+	if not mlFlipped then return end     -- method-only change: no need to announce
 	local who = L.MasterLooterName and L.MasterLooterName()
 	if now then
 		Okanvil:Print("You are now the |cff7cfc8aMaster Looter|r.")
@@ -774,6 +910,7 @@ ev:SetScript("OnEvent", function(_, event)
 	if not Okanvil.Loot then return end
 	L = Okanvil.Loot
 	lastML = isML()
+	lastMethod = isMLMethod()
 	-- chain onto Loot's callbacks without clobbering them
 	local prevLoot = L.onLoot
 	L.onLoot = function() if prevLoot then prevLoot() end; onLoot() end

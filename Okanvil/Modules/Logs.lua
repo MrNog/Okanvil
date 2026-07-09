@@ -154,62 +154,24 @@ local function toast(msg, color)
 end
 
 -- ------------------------------------------------------------
--- raid boss recognition -- record which bosses died during a session
--- (no encounter API in 3.3.5a, so we match UNIT_DIED against known names)
+-- boss recognition -- record which bosses died during a session
+-- (no encounter API in 3.3.5a: we match UNIT_DIED by creatureID, name as fallback)
 -- ------------------------------------------------------------
-local BOSSES = {}
+-- Both tables are DERIVED from the shared list in
+-- Modules/Bosses-Data.lua (loaded first via the .toc), so Logs and Loot agree on what
+-- a boss is and there is one place to add one.
+--
+-- This replaced a hand-written local BOSS_IDS that was mis-keyed across ICC: it called
+-- 37813 "Deathbringer Saurfang", but that id is the Alliance Gunship (real Saurfang is
+-- 37215, which the list lacked). Kills still registered only because the NAME table
+-- below caught them. Ids are now correct, and dungeon bosses are covered too.
+local BOSS_IDS = {}   -- [creatureID] = true
+local BOSSES   = {}   -- [name]       = true  (fallback when the GUID gives no id)
 do
-	local names = {
-		-- Ulduar
-		"Flame Leviathan", "Ignis the Furnace Master", "Razorscale", "XT-002 Deconstructor",
-		"Steelbreaker", "Runemaster Molgeim", "Stormcaller Brundir", "Kologarn", "Auriaya",
-		"Hodir", "Thorim", "Freya", "Mimiron", "General Vezax", "Yogg-Saron", "Algalon the Observer",
-		-- Icecrown Citadel
-		"Lord Marrowgar", "Lady Deathwhisper", "Deathbringer Saurfang", "Festergut", "Rotface",
-		"Professor Putricide", "Prince Keleseth", "Prince Taldaram", "Prince Valanar",
-		"Blood-Queen Lana'thel", "Sindragosa", "The Lich King",
-		-- Trial of the (Grand) Crusader
-		"Gormok the Impaler", "Acidmaw", "Dreadscale", "Icehowl", "Lord Jaraxxus",
-		"Eydis Darkbane", "Fjola Lightbane", "Anub'arak",
-		-- Naxxramas
-		"Anub'Rekhan", "Grand Widow Faerlina", "Maexxna", "Noth the Plaguebringer",
-		"Heigan the Unclean", "Loatheb", "Instructor Razuvious", "Gothik the Harvester",
-		"Patchwerk", "Grobbulus", "Gluth", "Thaddius", "Sapphiron", "Kel'Thuzad",
-		-- Other WotLK raids
-		"Malygos", "Sartharion", "Onyxia",
-		"Archavon the Stone Watcher", "Emalon the Storm Watcher", "Koralon the Flame Watcher", "Toravon the Ice Watcher",
-		"Halion", "Baltharus the Warborn", "General Zarithrian", "Saviana Ragefire",
-	}
-	for i = 1, #names do
-		BOSSES[names[i]] = true
-	end
-end
-
--- Boss NPC IDs -- locale-proof and more reliable than names. Either an ID match OR a
--- name match counts, so a wrong/missing ID still gets caught by the name list above.
-local BOSS_IDS = {}
-do
-	local ids = {
-		-- Ulduar
-		33113, 33118, 33186, 33293,            -- Flame Leviathan, Ignis, Razorscale, XT-002
-		32867, 32927, 32857,                   -- Assembly: Steelbreaker, Molgeim, Brundir
-		32930, 33515, 32845, 32865, 32906,     -- Kologarn, Auriaya, Hodir, Thorim, Freya
-		33350, 33271, 33288, 32871,            -- Mimiron, General Vezax, Yogg-Saron, Algalon
-		-- Icecrown Citadel
-		36612, 36855, 37813, 36626, 36627, 36678, -- Marrowgar, Deathwhisper, Saurfang, Festergut, Rotface, Putricide
-		37972, 37973, 37970, 37955, 36853, 36597, -- Keleseth, Taldaram, Valanar, Lana'thel, Sindragosa, Lich King
-		-- Trial of the (Grand) Crusader
-		34796, 35144, 34799, 34797, 34780, 34496, 34497, 34564, -- Gormok, Acidmaw, Dreadscale, Icehowl, Jaraxxus, Twins, Anub
-		-- Naxxramas
-		15956, 15953, 15952, 15954, 15936, 16011, 16061, 16060, -- Anub'Rekhan..Gothik
-		16028, 15931, 15932, 15928, 15989, 15990,               -- Patchwerk..Kel'Thuzad
-		-- Other WotLK raids
-		28859, 28860, 10184,                   -- Malygos, Sartharion, Onyxia
-		31125, 33993, 35013, 38433,            -- VoA: Archavon, Emalon, Koralon, Toravon
-		39863, 39751, 39746, 39747,            -- Ruby Sanctum: Halion, Baltharus, Zarithrian, Saviana
-	}
-	for i = 1, #ids do
-		BOSS_IDS[ids[i]] = true
+	local src = OkanvilBosses or {}
+	for cid, name in pairs(src) do
+		BOSS_IDS[cid] = true
+		if name and name ~= "" then BOSSES[name] = true end
 	end
 end
 
@@ -223,20 +185,10 @@ local function npcID(guid)
 end
 
 -- Multi-NPC encounters: collapse their members into one line (by id or name).
-local GROUP = {
-	-- Iron Council (Assembly of Iron)
-	[32867] = "Iron Council", [32927] = "Iron Council", [32857] = "Iron Council",
-	["Steelbreaker"] = "Iron Council", ["Runemaster Molgeim"] = "Iron Council", ["Stormcaller Brundir"] = "Iron Council",
-	-- Blood Prince Council
-	[37972] = "Blood Prince Council", [37973] = "Blood Prince Council", [37970] = "Blood Prince Council",
-	["Prince Keleseth"] = "Blood Prince Council", ["Prince Taldaram"] = "Blood Prince Council", ["Prince Valanar"] = "Blood Prince Council",
-	-- Twin Val'kyr
-	[34496] = "Twin Val'kyr", [34497] = "Twin Val'kyr",
-	["Eydis Darkbane"] = "Twin Val'kyr", ["Fjola Lightbane"] = "Twin Val'kyr",
-	-- Northrend Beasts
-	[34796] = "Northrend Beasts", [35144] = "Northrend Beasts", [34799] = "Northrend Beasts", [34797] = "Northrend Beasts",
-	["Gormok the Impaler"] = "Northrend Beasts", ["Acidmaw"] = "Northrend Beasts", ["Dreadscale"] = "Northrend Beasts", ["Icehowl"] = "Northrend Beasts",
-}
+-- Shared with Loot.lua via Modules/Bosses-Data.lua. The old local copy here also had
+-- the ICC ids wrong (it put 37973 -- Lana'thel -- in the Blood Prince Council and left
+-- Keleseth's 37955 out entirely).
+local GROUP = OkanvilBossGroups or {}
 
 -- add a boss to the current session (deduped). Shared by the combat-log death
 -- path and the loot-confirmation path.
@@ -270,7 +222,13 @@ local function recordBoss(guid, name)
 			return
 		end
 	end
-	local label = (id and GROUP[id]) or (name and GROUP[name]) or ((name and name ~= "") and name) or ("NPC " .. tostring(id))
+	-- The id is authoritative; only match by NAME when there is no id. Names repeat
+	-- across instances (Utgarde Keep's Prince Keleseth, Ahn'kahet's Prince Taldaram),
+	-- so a name lookup would file those dungeon kills as "Blood Prince Council".
+	local label
+	if id then label = GROUP[id] or ((name and name ~= "") and name)
+	else label = (name and GROUP[name]) or ((name and name ~= "") and name) end
+	label = label or ("NPC " .. tostring(id))
 	addBoss(label, id)
 end
 

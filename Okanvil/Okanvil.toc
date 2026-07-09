@@ -16,6 +16,7 @@ Core\Widgets.lua
 Core\UI.lua
 
 Modules\Guild.lua
+Modules\Bosses-Data.lua
 Modules\Loot.lua
 Modules\LootRoll.lua
 Modules\Invite.lua
