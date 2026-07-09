@@ -616,9 +616,46 @@ function Okanvil:BuildHome()
 			end
 			return nil
 		end
-		-- rank colour so the online list is scannable at a glance. RATS ladder
-		-- (rankIndex 0 = top): Warchief Rat / Warchief's Fangs = officers (red-gold),
-		-- Raider Rat = orange, Sewer Rat = yellow, Alt = grey-blue, Pug/other = grey.
+		-- Rank ICON, mirroring the web hub's hierarchy (rats CLAUDE.md):
+		--   "One hierarchy icon per member, highest wins: GM > Officer > Fang."
+		-- On the site those are the emoji crown/star/skull; here we use the game's
+		-- own textures so it reads native. Everyone below Fang gets no icon --
+		-- the rank column already spells it out, and a row of dots is just noise.
+		local RANK_ICON = {
+			gm      = "Interface\\GroupFrame\\UI-Group-LeaderIcon",
+			officer = "Interface\\GroupFrame\\UI-Group-AssistantIcon",
+			fang    = "Interface\\Icons\\Ability_Rogue_FeignDeath",
+		}
+		-- |T<texture>:<size>|t inlines a texture in a FontString.
+		local function rankIcon(rankName, rankIndex)
+			local rn = (rankName or ""):lower()
+			local tex
+			if rankIndex == 0 or rn:find("guild master", 1, true) or rn:find("king", 1, true) then
+				tex = RANK_ICON.gm
+			elseif rn:find("officer", 1, true) or rn:find("warchief rat", 1, true) then
+				tex = RANK_ICON.officer
+			elseif rn:find("fang", 1, true) then
+				tex = RANK_ICON.fang
+			end
+			return tex and ("|T" .. tex .. ":14|t ") or ""
+		end
+
+		-- Class colour for the NAME. GetGuildRosterInfo hands back the LOCALIZED
+		-- class name ("Paladin"), but RAID_CLASS_COLORS is keyed by TOKEN
+		-- ("PALADIN") -- look the token up instead of colouring everyone gold.
+		local classToken = {}
+		for token, localized in pairs(LOCALIZED_CLASS_NAMES_MALE or {}) do classToken[localized] = token end
+		for token, localized in pairs(LOCALIZED_CLASS_NAMES_FEMALE or {}) do classToken[localized] = token end
+		local function classHex(localizedClass)
+			local tok = classToken[localizedClass or ""] or (localizedClass or ""):upper()
+			local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[tok]
+			if not c then return "ffdcddde" end       -- unknown class: plain text colour
+			return string.format("ff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
+		end
+
+		-- rank colour, still used for the RANK column + the "your rank" tile. The
+		-- NAME is class-coloured instead (far easier to read at a glance), and the
+		-- rank is conveyed by the icon in front of it.
 		local function rankColor(rankName, rankIndex, alt)
 			if alt then return "ff8fb4d9" end            -- alt: muted blue-grey
 			local rn = (rankName or ""):lower()

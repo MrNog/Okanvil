@@ -253,10 +253,12 @@ local role_words = {
 	healer = { "%f[%w]heals?%f[%W]", "%f[%w]healers?%f[%W]",
 	           "%f[%w]hpal%a*", "%f[%w]hpaly?%a*", "holy%s?pala",   -- hpala/hpaladin/hpally
 	           "%f[%w]rdru?id%f[%W]", "%f[%w]rsham%f[%W]", "%f[%w]tree%f[%W]",
-	           "%f[%w]disc%f[%W]", "%f[%w]resto%f[%W]" },
+	           "%f[%w]disc%f[%W]", "%f[%w]resto%f[%W]",
+	           "%f[%w]dd%f[%W]", "%f[%w]dudu%f[%W]" },              -- dd/dudu = resto druid (this realm's slang)
 	dps    = { "%f[%w]dps%f[%W]", "%f[%w]rdps%f[%W]", "%f[%w]mdps%f[%W]",
 	           "%f[%w]boom%a*", "%f[%w]moonkin%f[%W]",              -- boomy/boomie/boomkin/moonkin
 	           "%f[%w]spriest%f[%W]", "shadow%s?priest", "%f[%w]spri%a*",
+	           "%f[%w]sp%f[%W]", "%f[%w]spd%f[%W]",                 -- sp/spd = shadow priest
 	           "%f[%w]ele%f[%W]", "%f[%w]elem%a*",                 -- ele / elemental
 	           "%f[%w]mage%a*", "%f[%w]lock%a*", "%f[%w]hunt%a*",
 	           "%f[%w]rogue%a*", "%f[%w]fury%a*",

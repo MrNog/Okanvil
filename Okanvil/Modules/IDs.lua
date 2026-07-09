@@ -59,7 +59,11 @@ local builder = CreateFrame("Frame")
 local function fireSpellDone()
 	for i = 1, #spellDoneCbs do
 		local cb = spellDoneCbs[i]
-		if cb then pcall(cb) end
+		-- one bad callback must not stop the others; surface it in the dev tab
+		if cb then
+			local ok, err = pcall(cb)
+			if not ok and Okanvil.Err then Okanvil:Err("IDs spellDone callback", err) end
+		end
 	end
 	spellDoneCbs = {}
 end

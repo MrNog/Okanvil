@@ -1424,6 +1424,19 @@ SlashCmdList["OKDEBUG"] = function(arg)
 		local text = "Okanvil loot debug log (" .. #buf .. " linhas)\n"
 			.. "----------------------------------------\n"
 			.. table.concat(buf, "\n")
+		-- append every silent error caught this session, with its repeat count --
+		-- a failure that fired 200x inside an OnUpdate only printed once, so this
+		-- is the only place the frequency shows up.
+		if Okanvil.ErrorSummary then
+			local errs = Okanvil:ErrorSummary()
+			if #errs > 0 then
+				local lines = { "", "---------------- ERRORS ----------------" }
+				for _, e in ipairs(errs) do
+					lines[#lines + 1] = "(x" .. e.count .. ")  " .. e.context .. ": " .. e.msg
+				end
+				text = text .. table.concat(lines, "\n")
+			end
+		end
 		if Okanvil.ShowExport then Okanvil:ShowExport(text, "Loot debug log -- Ctrl+C para copiar")
 		else Okanvil:Print("ShowExport indisponivel.") end
 		return

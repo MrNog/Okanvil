@@ -715,8 +715,13 @@ function RM.Toggle()
 	end)
 	if not ok then
 		Okanvil:Print("|cffff5555Roll manager error:|r " .. tostring(err))
-		-- recover: force a clean show so a transient error can't wedge it closed
-		if win then pcall(function() win:Show(); RM.Rebuild() end) end
+		-- recover: force a clean show so a transient error can't wedge it closed.
+		-- If even the recovery fails the window really is broken -- say so in the
+		-- dev tab rather than leaving a dead frame behind with no trace.
+		if win then
+			local ok2, err2 = pcall(function() win:Show(); RM.Rebuild() end)
+			if not ok2 and Okanvil.Err then Okanvil:Err("RollMgr recover", err2) end
+		end
 	end
 end
 

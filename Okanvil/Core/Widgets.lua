@@ -710,10 +710,25 @@ function W.Dashboard(parent, cfg)
 		D.tabBtns[t.key] = b
 		prev = b
 	end
-	-- drawer toggle (right end of toolbar) -- only when the page has a drawer
+	-- drawer toggle (right end of toolbar) -- only when the page has a drawer.
+	-- Width follows the LABEL, never a magic number: "Show collected" is wider
+	-- than "Hide collected", and a fixed 96px glued the text to the border.
 	if hasDrawer then
 		local dbtn = W.Button(toolbar, "Hide " .. drawerLabel, "secondary")
-		dbtn:SetSize(96, 20); dbtn:SetPoint("RIGHT", 0, 0)
+		dbtn:SetHeight(20); dbtn:SetPoint("RIGHT", 0, 0)
+		-- size to the WIDER of the two states so the button never resizes on click
+		D.fitDrawerBtn = function()
+			local t = dbtn.text
+			local shown = t:GetText()
+			local w = 0
+			for _, s in ipairs({ "Hide " .. drawerLabel, "Show " .. drawerLabel }) do
+				t:SetText(s)
+				w = math.max(w, t:GetStringWidth() or 0)
+			end
+			t:SetText(shown)                       -- restore the live label
+			dbtn:SetWidth(math.max(96, w + 20))    -- 10px padding each side
+		end
+		D.fitDrawerBtn()
 		dbtn:SetScript("OnClick", function() D:ToggleDrawer() end)
 		D.drawerBtn = dbtn
 	end

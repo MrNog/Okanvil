@@ -307,6 +307,114 @@ function Okanvil:Dev(msg)
 	f:AddMessage("|cff8a8d93[dbg]|r " .. tostring(msg))
 end
 
+-- ------------------------------------------------------------
+-- SILENT-ERROR REPORTER. Wrap a pcall's failure with this instead of dropping
+-- it: `if not ok then Okanvil:Err("Comms.After", err) end`.
+--
+-- Rules that keep it from ever becoming spam:
+--   * dev mode OFF -> PRINTS nothing anywhere (raiders never see it),
+--   * ...but it is still RECORDED, so a bug that happened mid-raid is waiting
+--     for you afterwards even though you never had dev mode on,
+--   * the same error at the same site prints ONCE per session; repeats only
+--     bump a counter (an error inside OnUpdate would otherwise print 60x/sec).
+--
+-- The record lives in the per-character DB, which WoW flushes to
+-- SavedVariables\Okanvil.lua on logout/reload -- so nothing is lost if you
+-- forget to run `/okdebug log` before quitting. Read it back with
+-- `/okdebug errors`, or straight out of the .lua file.
+-- ------------------------------------------------------------
+-- A WoW addon cannot write files (no `io` in the sandbox). The ONLY file we get
+-- is a SavedVariable, which the client flushes on logout/reload. `OkanvilBugDB`
+-- is declared in the .toc purely for this, so the crash history sits in its own
+-- top-level table inside:
+--     WTF\Account\<ACCOUNT>\SavedVariables\Okanvil.lua
+-- A raider who hit a bug sends that file; you read the OkanvilBugDB block and
+-- ignore the rest. (BugSack persists its errors the same way.)
+--
+-- Layout: OkanvilBugDB.sessions = { {start=<unix>, ver=<addon ver>, errors={...}}, ... }
+-- newest session LAST. Each error: { context, msg, count, first, last }.
+local ERR_SESSIONS = 5    -- keep the last N play sessions
+local ERR_PER_SESS  = 40  -- distinct errors per session (bounds the SV file)
+
+local errSession          -- the session table for THIS login (created lazily)
+
+function Okanvil:ErrorLog()
+	-- The SV table only exists after ADDON_LOADED; an error can fire earlier, so
+	-- create it on demand rather than erroring inside the error reporter itself.
+	OkanvilBugDB = OkanvilBugDB or {}
+	OkanvilBugDB.sessions = OkanvilBugDB.sessions or {}
+	return OkanvilBugDB.sessions
+end
+
+-- The session record for this login, trimming old sessions on first use.
+local function currentErrSession(self)
+	if errSession then return errSession end
+	local log = self:ErrorLog()
+	errSession = {
+		start = time(), ver = self.version or "?",
+		char = (UnitName and UnitName("player")) or "?",
+		errors = {},
+	}
+	log[#log + 1] = errSession
+	while #log > ERR_SESSIONS do table.remove(log, 1) end
+	return errSession
+end
+
+-- Record a silent error. ALWAYS persisted (so you can ask a raider for their
+-- Okanvil.lua after a bug), but only PRINTED when dev mode is on -- and then
+-- only once per distinct error, so a failure inside OnUpdate can't spam.
+function Okanvil:Err(context, err)
+	local ctx, msg = tostring(context or "?"), tostring(err or "?")
+	local s = currentErrSession(self)
+	for _, e in ipairs(s.errors) do
+		if e.context == ctx and e.msg == msg then
+			e.count = (e.count or 1) + 1
+			e.last = time()
+			return                                -- already reported this session
+		end
+	end
+	if #s.errors >= ERR_PER_SESS then return end  -- full: drop rather than grow the SV
+	s.errors[#s.errors + 1] = { context = ctx, msg = msg, count = 1, first = time(), last = time() }
+	self:Dev("|cffff5555ERROR|r " .. ctx .. ": " .. msg)
+end
+
+-- This session's distinct errors, most frequent first (for /okdebug log).
+function Okanvil:ErrorSummary()
+	local out = {}
+	for _, e in ipairs(currentErrSession(self).errors) do out[#out + 1] = e end
+	table.sort(out, function(a, b) return (a.count or 0) > (b.count or 0) end)
+	return out
+end
+
+-- Whole history, formatted for the copy box (/okdebug errors). This is also what
+-- you read straight out of Okanvil.lua when a raider sends you their file.
+function Okanvil:ErrorReport()
+	local log = self:ErrorLog()
+	local total = 0
+	for _, s in ipairs(log) do total = total + #s.errors end
+	if total == 0 then return nil end
+	local out = { "Okanvil error log -- " .. #log .. " session" .. (#log ~= 1 and "s" or "")
+		.. ", " .. total .. " error" .. (total ~= 1 and "s" or "") }
+	for i = #log, 1, -1 do                        -- newest session first
+		local s = log[i]
+		out[#out + 1] = ""
+		out[#out + 1] = "=== " .. date("%Y-%m-%d %H:%M", s.start or 0)
+			.. "   " .. (s.char or "?") .. "   Okanvil v" .. (s.ver or "?")
+			.. "   (" .. #s.errors .. " error" .. (#s.errors ~= 1 and "s" or "") .. ")"
+		if #s.errors == 0 then out[#out + 1] = "    (none)" end
+		for _, e in ipairs(s.errors) do
+			out[#out + 1] = "  [x" .. (e.count or 1) .. "] " .. date("%H:%M", e.first or 0)
+				.. "  " .. (e.context or "?") .. ": " .. (e.msg or "?")
+		end
+	end
+	return table.concat(out, "\n")
+end
+
+function Okanvil:ClearErrors()
+	OkanvilBugDB = { sessions = {} }
+	errSession = nil
+end
+
 -- Turn dev mode on/off. Opening the tab is deferred to the first Dev() call, but
 -- we create it here too so the user immediately SEES where output will land.
 function Okanvil:SetDevMode(on)
@@ -464,6 +572,28 @@ end
 SLASH_OKDEV1 = "/okdev"
 SlashCmdList["OKDEV"] = function()
 	Okanvil:SetDevMode(not (Okanvil.db and Okanvil.db.devMode))
+end
+
+-- /okerr        -- show the persisted error log (copyable; survives logout)
+-- /okerr clear  -- wipe it
+SLASH_OKERR1 = "/okerr"
+SlashCmdList["OKERR"] = function(arg)
+	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	if arg == "clear" then
+		Okanvil:ClearErrors()
+		Okanvil:Print("Error log cleared.")
+		return
+	end
+	local report = Okanvil:ErrorReport()
+	if not report then
+		Okanvil:Print("No errors recorded. |cff7cfc8aNice.|r")
+		return
+	end
+	if Okanvil.ShowExport then
+		Okanvil:ShowExport(report, "Okanvil errors -- Ctrl+C to copy")
+	else
+		Okanvil:Print(report)
+	end
 end
 
 -- ------------------------------------------------------------

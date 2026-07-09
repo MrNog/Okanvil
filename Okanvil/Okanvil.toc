@@ -2,8 +2,8 @@
 ## Title: Okanvil
 ## Notes: Raid & guild toolkit -- forged by Okanor. The void in your stack trace.
 ## Author: Okanor
-## Version: 1.0
-## SavedVariables: Okanvil_DB, RecruitDB, OkanvilIDsDB, OkanvilRaidFinderDB
+## Version: 1.2.1
+## SavedVariables: Okanvil_DB, RecruitDB, OkanvilIDsDB, OkanvilRaidFinderDB, OkanvilBugDB
 ## SavedVariablesPerCharacter: OkanvilLogsDB, Okanvil_CharDB
 
 Libs\LibStub\LibStub.lua

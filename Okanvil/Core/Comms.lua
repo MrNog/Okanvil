@@ -139,8 +139,11 @@ ev:SetScript("OnUpdate", function(self)
 		if now >= pending[i].at then
 			local fn = pending[i].fn
 			table.remove(pending, i)
-			-- pcall so one bad callback can't wedge the timer loop
-			pcall(fn)
+			-- pcall so one bad callback can't wedge the timer loop. Report the
+			-- failure to the dev tab instead of dropping it -- a timer that dies
+			-- silently is exactly the kind of bug that takes a raid to find.
+			local ok, err = pcall(fn)
+			if not ok and Okanvil.Err then Okanvil:Err("Comms.After callback", err) end
 		end
 	end
 end)
