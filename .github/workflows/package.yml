@@ -84,3 +84,44 @@ jobs:
           gh release create latest --title "Latest" --latest \
             --notes "Latest build of Okanvil (${{ steps.ver.outputs.version }}). Download Okanvil.zip and unzip it into World of Warcraft\\Interface\\AddOns\\, then restart WoW." \
             out/*.zip
+
+      # Announce to Discord from INSIDE this job, not from a separate workflow
+      # listening for `release: published`. A release created with the default
+      # GITHUB_TOKEN does NOT trigger other workflows (GitHub's anti-recursion
+      # rule), so that never fired. Announcing here also guarantees the zip is
+      # already uploaded when the message goes out. Tags only -- never "latest".
+      - name: Announce the release to Discord
+        if: steps.ver.outputs.tagged == 'true'
+        env:
+          WEBHOOK: ${{ secrets.LOG_WEBHOOK }}      # #okanor-logs webhook
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::error::LOG_WEBHOOK secret is not set (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+          # release notes GitHub just generated; trimmed to fit the embed budget
+          gh release view "$TAG" --json body -q .body > notes.raw || echo "" > notes.raw
+          NOTES="$(head -c 1200 notes.raw)"
+          URL="https://github.com/$REPO/releases/tag/$TAG"
+          ZIP="https://github.com/$REPO/releases/download/$TAG/Okanvil.zip"
+          DESC="$(printf '%s\n\n**Install:** unzip into `World of Warcraft\\Interface\\AddOns\\`, then restart WoW.\n[Download Okanvil.zip](%s)' "$NOTES" "$ZIP")"
+
+          # 12686394 = #c1943a (RATS gold)
+          payload="$(jq -n --arg t "Okanvil $VERSION" --arg u "$URL" \
+                           --arg d "$DESC" --arg f "$REPO" \
+            '{embeds:[{author:{name:"Okanvil - new release"},title:$t,url:$u,
+                       description:$d,color:12686394,footer:{text:$f}}]}')"
+
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+                  -H 'Content-Type: application/json' -d "$payload" "$WEBHOOK")"
+          if [ "$code" = "204" ] || [ "$code" = "200" ]; then
+            echo "Announced $TAG to Discord (HTTP $code)"
+          else
+            echo "::error::Discord webhook failed (HTTP $code)"
+            exit 1
+          fi
