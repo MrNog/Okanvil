@@ -264,7 +264,7 @@ Okanvil.NATIVE = {
 	{ key = "__guild",  title = "Guild",  icon = Okanvil.ICONS.guild,
 	  desc = "Guild dashboard + JSON roster export for the web hub." },
 	{ key = "__loot",   title = "Loot",   icon = Okanvil.ICONS.loot,
-	  desc = "Per-boss loot tracking with a fair-loot priority tab." },
+	  desc = "Per-boss loot tracking + Mini Roll Manager (MS/OS roll-offs, award, speed-run sweep)." },
 }
 
 -- Nav display order (top to bottom), by module TITLE. This is the ONE place to
@@ -1012,11 +1012,28 @@ function Okanvil:BuildLoot()
 end
 
 -- ---- Collectors tab: Main/Frag/BoE targets + auto toggle + whisper toggle ----
+--
+-- Okanvil handles loot three ways; only the THIRD one lives on this tab:
+--   1. Need/Greed  -- the game's own roll. Okanvil just records what dropped.
+--   2. Master loot -- the normal flow: the Mini Roll Manager runs an MS/OS/Free
+--      roll-off, you press Award, confirm the popup, the item goes to the winner.
+--   3. Speed-run   -- THIS TAB. Skips rolling at the pull: the boss is swept into
+--      one bag so the raid keeps moving, and loot is settled afterwards by roll or
+--      loot council. Every drop is still recorded and broadcast to the raid.
+--
+-- The header below says this in-game, because arming the toggle silently ships
+-- every BoP drop to one player and that must never be a surprise.
 function Okanvil:Loot_BuildCollectors(p)
 	local L = Okanvil.Loot
 	local X = 8
 	if not (L and L.Collectors) then return end
-	local warn = W.Text(p, "", 11); warn:SetPoint("TOPLEFT", X, -6); warn:SetPoint("RIGHT", -X, 0); warn:SetJustifyH("LEFT")
+
+	-- What this tab IS (and what it is not) -- read before arming the toggle.
+	local intro = W.Text(p, "|cffe0b860Speed-run loot|r -- for pushing a raid fast. The boss is swept straight into one bag; you settle it later by roll or loot council.\n"
+		.. "|cff8a8d93This is NOT the normal flow.|r Leave the toggle OFF and loot works as usual: the Mini Roll Manager runs the MS/OS roll, you press Award, confirm, and the item goes to the winner.", 10, "dim")
+	intro:SetPoint("TOPLEFT", X, -6); intro:SetPoint("RIGHT", -X, 0); intro:SetJustifyH("LEFT")
+
+	local warn = W.Text(p, "", 11); warn:SetPoint("TOPLEFT", X, -50); warn:SetPoint("RIGHT", -X, 0); warn:SetJustifyH("LEFT")
 	local function paintWarn()
 		if L.IsMasterLooter and L.IsMasterLooter() then
 			warn:SetText("|cff7cfc8aYou are the Master Looter -- these apply.|r")
@@ -1027,16 +1044,20 @@ function Okanvil:Loot_BuildCollectors(p)
 		end
 	end
 	paintWarn()
-	local en = W.Check(p, "Auto master-loot (only when you're the Master Looter)",
+	local en = W.Check(p, "Speed-run auto master-loot (only when you're the Master Looter)",
 		function() return L.CollectorsEnabled() end,
 		function(v) L.SetCollectorsEnabled(v) end)
-	en:SetPoint("TOPLEFT", X + 2, -26)
-	local hint = W.Text(p, "Set a name to auto-give that bucket. |cffffd200Leave a field EMPTY and that loot is left on the corpse (roll it normally)|r -- the addon never sweeps loot to anyone unless you name them.", 10, "dim")
-	hint:SetPoint("TOPLEFT", X, -48); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
+	en:SetPoint("TOPLEFT", X + 2, -70)
+
+	-- Exactly what each row does. Kept next to the rows it describes.
+	local hint = W.Text(p, "|cffff8000BoP gear|r -> Main loot.   |cffffd200Orbs / patterns / BoE|r -> BoE (or Main, if BoE is empty).   |cffff5555Legendary fragments always ask first.|r\n"
+		.. "Leave a field |cffffd200EMPTY|r and that loot stays on the corpse to be rolled normally -- nothing is ever swept to anyone you did not name. "
+		.. "|cff7cfc8aEvery drop is still recorded in the history and shown to the raid.|r", 10, "dim")
+	hint:SetPoint("TOPLEFT", X, -94); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
 
 	local col = L.Collectors()
 	local function row(bucket, label, y)
-		local lb = W.Text(p, label, 11); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(92); lb:SetJustifyH("LEFT")
+		local lb = W.Text(p, label, 11); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(112); lb:SetJustifyH("LEFT")
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
 		local eb = W.EditBox(p, function(t) L.SetCollector(bucket, t) end)
 		eb:SetSize(150, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(col[bucket] or "")
@@ -1055,12 +1076,13 @@ function Okanvil:Loot_BuildCollectors(p)
 		local cl = W.Button(p, "Clear", "danger"); cl:SetSize(48, 24); cl:SetPoint("LEFT", tg, "RIGHT", 6, 0)
 		cl:SetScript("OnClick", function() eb.edit:SetText(""); L.SetCollector(bucket, "") end)
 	end
-	row("main", "Main loot", -92)
-	row("frag", "Fragments", -122)
-	row("boe", "BoE / orbs", -152)
+	-- vertical stack: intro (-6, 2 lines) / warn (-50) / toggle (-70) / hint (-94, 2 lines)
+	row("main", "Main loot (BoP)", -140)
+	row("frag", "Fragments", -170)
+	row("boe", "BoE / orbs", -200)
 	local wc = W.Check(p, "Whisper winner on Award (\"you won, trade me\")",
 		function() return L.WhisperWinner() end, function(v) L.SetWhisperWinner(v) end)
-	wc:SetPoint("TOPLEFT", X + 2, -188)
+	wc:SetPoint("TOPLEFT", X + 2, -236)
 end
 
 -- ---- Messages tab: editable MS/OS/Free/Whisper templates ([item] placeholder) --

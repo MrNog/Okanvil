@@ -607,10 +607,14 @@ local function captureCorpse()
 		Okanvil:Print("Loot: " .. added .. " item(s) de " .. boss .. ".")
 		if L.onLootWindow then L.onLootWindow() end
 	end
-	-- AUTO-GIVE: if you are the ML and the toggle is ON, hand the buckets (frag/boe) to the
-	-- collectors now that the loot window is open. BoP stays to roll; frag
-	-- with no collector stays on the boss; orb/boe with none falls to your bags. (Resolves L.
-	-- at runtime -> definition order does not matter.)
+	-- AUTO-GIVE ("speed-run mode"): if you are the ML and the toggle is ON, hand every
+	-- bucket to its collector now that the loot window is open. This runs AFTER the
+	-- storeDrop/broadcastDrop loop above, so the history and the mini manager have
+	-- already recorded every drop -- the raid can still see what fell and settle it by
+	-- roll or loot council later. BoP -> main collector (silent); orb/BoE/pattern ->
+	-- boe, else main, else your bags; legendary fragment -> queued CONFIRM popup, and
+	-- with no frag collector it stays on the boss. (Resolves L. at runtime -> definition
+	-- order does not matter.)
 	if L.RunAutoGive then
 		local dec = L.RunAutoGive()
 		if dec then
@@ -1522,8 +1526,9 @@ function L.SetWhisperMsg(text) collectorsDB().whisperMsg = (text ~= "" and text)
 -- fallback robusto.
 --   "frag" -> legendary fragments (Val'anyr, Shadowmourne). NOT transferable
 --             once given; NO collector -> LEAVE ON THE BOSS.
---   "boe"  -> orbs / patterns / any BoE. Transferable; NO collector -> your bags.
---   "main" -> the rest (BoP gear). Stays to ROLL -- never auto-bags.
+--   "boe"  -> orbs / patterns / any BoE.
+--   "main" -> the rest (BoP gear).
+-- With no name in a bucket, that loot stays in the window and is rolled normally.
 -- ------------------------------------------------------------
 local FRAGMENT_IDS = {
 	[45038] = true,  -- Fragment of Val'anyr
@@ -1562,29 +1567,123 @@ local function giveSlotTo(slot, who)
 end
 
 -- ------------------------------------------------------------
--- AUTO-GIVE: decides the fate of ONE loot-window slot (when you are ML and the
--- toggle is ON). Returns a DECISION: { action, who, bucket, name } without acting --
--- so callers can inspect it; the real path calls giveSlotTo.
---   action: "give" (who) | "bags" (auto-loot to you) | "leave" (stay on boss) | "roll" (BoP, stays to roll)
+-- AUTO-GIVE ("speed-run mode"): decides the fate of ONE loot-window slot (when you
+-- are ML and the toggle is ON). Returns a DECISION: { action, who, bucket, name }
+-- without acting -- so callers can inspect it; the real path calls giveSlotTo.
+--   action: "give" (who) | "confirm" (who, ask first)
+--         | "leave" (fragment, no collector: stay on boss)
+--         | "roll" (nobody named: leave it in the window, roll it normally)
+--
+-- The POINT of this mode is to skip rolling at the pull: everything is vacuumed into
+-- one bag so the raid keeps moving, and loot is settled afterwards by roll or loot
+-- council. Every drop is still RECORDED + broadcast (captureCorpse stores the whole
+-- window BEFORE this runs), so the history and the mini manager show it all.
+--
+--   main -> BoP gear. Also the fallback for BoE when `boe` is unset.
+--   frag -> legendary fragments. ALWAYS confirmed: the give is irreversible (binds,
+--           no trade window), so a stale name would destroy a legendary.
+--   boe  -> orbs / patterns / any BoE.
 -- ------------------------------------------------------------
 local function autoGiveDecision(link, name)
 	local c = collectorsDB()
+	local trim = function(s) return (tostring(s or ""):gsub("^%s*(.-)%s*$", "%1")) end
 	local bucket = collectorFor(link, name)   -- frag | boe | main
+	local main = trim(c.main)
 	if bucket == "frag" then
-		local who = (c.frag or ""):gsub("^%s*(.-)%s*$", "%1")
-		if who ~= "" then return { action = "give", who = who, bucket = "frag", name = name } end
+		local who = trim(c.frag)
+		-- CONFIRM, never silent: unlike gear, a misrouted legendary fragment cannot be
+		-- passed on afterwards. The popup is queued (see queueFragConfirm).
+		if who ~= "" then return { action = "confirm", who = who, bucket = "frag", name = name } end
 		-- fragment with no collector -> LEAVE ON THE BOSS (binds, not transferable)
 		return { action = "leave", bucket = "frag", name = name }
 	elseif bucket == "boe" then
-		local who = (c.boe or ""):gsub("^%s*(.-)%s*$", "%1")
+		local who = trim(c.boe)
 		if who ~= "" then return { action = "give", who = who, bucket = "boe", name = name } end
-		-- orb/BoE/pattern with no collector -> your bags (if a main collector name is set)
-		local main = (c.main or ""):gsub("^%s*(.-)%s*$", "%1")
+		-- no dedicated BoE collector -> the main collector sweeps orbs/patterns too
 		if main ~= "" then return { action = "give", who = main, bucket = "boe", name = name } end
-		return { action = "bags", bucket = "boe", name = name }   -- deixa cair nos teus bags (nao master-loota)
+		-- NOBODY named: speed-run is a no-op. Leave it in the window and roll it like
+		-- any other drop (do NOT sweep it into your bags -- that would quietly take
+		-- an orb the raid never got to roll on).
+		return { action = "roll", bucket = "boe", name = name }
 	end
-	-- main = BoP gear -> stays to roll (never auto-bags)
+	-- main = BoP gear -> straight to the main collector (speed-run). With no main
+	-- collector set there is nobody to give it to, so it stays in the window to roll.
+	if main ~= "" then return { action = "give", who = main, bucket = "main", name = name } end
 	return { action = "roll", bucket = "main", name = name }
+end
+
+-- ------------------------------------------------------------
+-- FRAGMENT CONFIRM QUEUE. runAutoGive() walks the slots synchronously, but a
+-- StaticPopup is async -- it returns at once and fires OnAccept later. Two fragments
+-- in one window would therefore stack two dialogs (3.3.5a reuses the same frame, so
+-- the second silently replaces the first and one fragment is skipped).
+--
+-- So fragment gives are QUEUED and shown one at a time: accepting/cancelling one pops
+-- the next. We re-resolve the slot by item ID at accept time -- the captured index is
+-- stale the moment any earlier slot is looted, and giving the wrong slot would hand
+-- over the wrong item.
+-- ------------------------------------------------------------
+local fragQueue = {}          -- { {id=, who=, name=}, ... }
+local fragShowing = false
+
+local function slotForItemID(id)
+	local n = (GetNumLootItems and GetNumLootItems()) or 0
+	for slot = 1, n do
+		if LootSlotIsItem and LootSlotIsItem(slot) then
+			local link = GetLootSlotLink(slot)
+			if link and itemIDFromLink(link) == id then return slot end
+		end
+	end
+	return nil
+end
+
+local showNextFrag   -- fwd decl (the popup's handlers call it again)
+
+StaticPopupDialogs = StaticPopupDialogs or {}
+StaticPopupDialogs["OKANVIL_FRAG_CONFIRM"] = {
+	text = "", button1 = "", button2 = CANCEL,
+	OnAccept = function(self)
+		local a = self.data
+		fragShowing = false
+		if a then
+			-- the window may have shifted (or closed) while the popup was up
+			local slot = slotForItemID(a.id)
+			if not slot then
+				Okanvil:Print("|cffff5555" .. a.name .. " is no longer in the loot window -- not given.|r")
+			elseif giveSlotTo(slot, a.who) then
+				Okanvil:Print("Auto-loot: " .. a.name .. " -> " .. a.who .. " (frag).")
+			else
+				Okanvil:Print("|cffff5555" .. a.who .. " is not a valid candidate (out of range/offline). "
+					.. a.name .. " stays on the boss.|r")
+			end
+		end
+		showNextFrag()
+	end,
+	OnCancel = function(self)
+		local a = self.data
+		fragShowing = false
+		if a then Okanvil:Print(a.name .. " left on the boss (not given).") end
+		showNextFrag()
+	end,
+	timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
+}
+
+showNextFrag = function()
+	if fragShowing then return end
+	local a = table.remove(fragQueue, 1)
+	if not a then return end
+	fragShowing = true
+	StaticPopupDialogs["OKANVIL_FRAG_CONFIRM"].button1 = "Give to " .. a.who
+	StaticPopupDialogs["OKANVIL_FRAG_CONFIRM"].text =
+		"|cffff8000LEGENDARY|r\n\nGive |cffffd200" .. a.name .. "|r to |cffffd200" .. a.who .. "|r?\n\n"
+		.. "|cffff5555This cannot be undone|r -- it binds on pickup and cannot be traded on."
+	local dlg = StaticPopup_Show("OKANVIL_FRAG_CONFIRM")
+	if dlg then dlg.data = a else fragShowing = false end   -- popup refused (another is up): re-arm
+end
+
+local function queueFragConfirm(id, who, name)
+	fragQueue[#fragQueue + 1] = { id = id, who = who, name = name or "fragment" }
+	showNextFrag()
 end
 
 -- Runs auto-give for ALL slots of the open loot window. Only runs if the
@@ -1606,7 +1705,7 @@ local function runAutoGive()
 				-- WARNING: an item that should go to a collector but is BELOW the ML
 				-- threshold (e.g. a blue orb, rarity 3, with an epic-4 threshold) does NOT go
 				-- through master loot -- the server lets anyone grab it (the Mojo bug).
-				if d.action == "give" and not warnedThreshold then
+				if (d.action == "give" or d.action == "confirm") and not warnedThreshold then
 					local rarity = select(3, GetItemInfo(link)) or 4
 					if rarity < thr then
 						Okanvil:Print("|cffff5555Aviso:|r ha loot (ex.: " .. (iname or "orb")
@@ -1617,9 +1716,13 @@ local function runAutoGive()
 				end
 				if d.action == "give" then
 					d.done = giveSlotTo(slot, d.who)   -- pode falhar (nao candidato)
+				elseif d.action == "confirm" then
+					-- legendary: don't touch the slot now. Queue a popup; it re-resolves
+					-- the slot by item ID when you accept (indexes shift as the silent
+					-- gives above empty earlier slots).
+					queueFragConfirm(itemIDFromLink(link), d.who, iname or d.name)
 				end
-				-- "bags": no master-loot -> falls into your bags when the window closes
-				-- "leave"/"roll": don't touch (stays on the boss to roll/decide)
+				-- "leave"/"roll": don't touch the slot (stays on the boss to roll/decide)
 				out[#out + 1] = d
 			end
 		end
