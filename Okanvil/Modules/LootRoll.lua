@@ -383,17 +383,22 @@ function RM.Rebuild()
 		clear:SetScript("OnClick", function() selected = nil; L.StopRoll(); RM.Refresh() end)
 		y = y - 36
 
-		-- Clear the whole session's loot list (fresh run). Confirms first.
-		local wipeBtn = keep(W.Button(body, "Clear session loot", "danger")); wipeBtn:SetSize(INNER, 22); wipeBtn:SetPoint("TOPLEFT", M, y)
+		-- Hide this run's items from THIS list. Does not delete: the history and the
+		-- export keep everything (use the Loot page to actually delete a session).
+		-- The list also clears itself when you zone into a new run, so this is only
+		-- for tidying up mid-run.
+		local wipeBtn = keep(W.Button(body, "Hide from this list")); wipeBtn:SetSize(INNER, 22); wipeBtn:SetPoint("TOPLEFT", M, y)
 		wipeBtn:SetScript("OnClick", function()
 			if not StaticPopupDialogs["OKANVIL_ROLL_CLEAR"] then
 				StaticPopupDialogs["OKANVIL_ROLL_CLEAR"] = {
-					text = "Clear ALL loot from this session's list?\n(Any roll in progress is cancelled.)",
+					text = "Hide this run's loot from the mini roll list?\n\n"
+						.. "|cff7cfc8aNothing is deleted|r -- the history and the export keep it.\n"
+						.. "(Any roll in progress is cancelled.)",
 					button1 = YES, button2 = NO,
 					OnAccept = function()
 						if L.ClearActiveDrops and L.ClearActiveDrops() then
 							selected = nil
-							Okanvil:Print("Cleared this session's loot.")
+							Okanvil:Print("Hidden from the list (history kept).")
 						end
 						RM.Refresh()
 					end,
@@ -478,7 +483,13 @@ function RM.Refresh()
 				local rcode = string.format("|cff%02x%02x%02x", cr * 255, cg * 255, cb * 255)
 				local nm = d.name ~= "" and d.name or "?"
 				local who = ""
-				if d.receivedBy and d.receivedBy ~= "" then
+				-- a master-loot give we issued but the server has not confirmed yet:
+				-- show the name greyed with "(giving...)". If it fails, the name goes
+				-- away again -- we never claim someone got an item they did not get.
+				local pendId, pendWho = L.PendingAward and L.PendingAward()
+				if pendId and pendId == d.id and not d.receivedBy then
+					who = "  |cff8a8d93->|r |cff5e6166" .. pendWho .. " (giving...)|r"
+				elseif d.receivedBy and d.receivedBy ~= "" then
 					who = "  |cff8a8d93->|r " .. classColorCode(d.receivedBy) .. d.receivedBy .. "|r"
 				elseif d.passed then
 					who = "  |cff8a8d93(passed)|r"

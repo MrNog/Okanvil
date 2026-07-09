@@ -300,6 +300,11 @@ local function runToken(bump)
 end
 
 -- The current run key (nil if we are not in a recordable instance).
+-- Returns the run key, or nil + "pending" when we are in a raid whose lockout info
+-- has not arrived from the server yet. Callers MUST treat a nil key as "do not open
+-- a session yet" -- see currentSession/onEnterWorld. Guessing a key here (the old
+-- date("%Y-%m-%d") fallback) minted a key that the NEXT day could never match, so a
+-- raid continued tomorrow started a fresh session instead of loading yesterday's.
 local function runKey()
 	if not GetInstanceInfo then return nil end
 	local name, itype, diff, _, _, _, _, mapID = GetInstanceInfo()
@@ -314,8 +319,9 @@ local function runKey()
 				end
 			end
 		end
-		-- no lockout yet (first boss before the save) -> by day
-		return "lock|" .. name .. "|" .. (diff or 0) .. "|" .. date("%Y-%m-%d"), name, diff, mapID
+		-- Lockout not known yet (the server has not sent the saved-instance list, or
+		-- we are not saved at all). Do NOT invent a key: wait for UPDATE_INSTANCE_INFO.
+		return nil, name, diff, mapID, "pending"
 	elseif itype == "party" then
 		return "run|" .. name .. "|" .. (diff or 0) .. "|" .. runToken(), name, diff, mapID
 	end
@@ -332,13 +338,22 @@ local function newSession(key, name, diff, mapID)
 	return s
 end
 
+-- Drops captured while the raid lockout was still unknown. Drained by resolveSession()
+-- as soon as UPDATE_INSTANCE_INFO gives us a real key. Without this, loot that lands
+-- in the first seconds of a raid would either be lost or land in a bogus session.
+local pendingDrops = {}
+
 -- The CURRENT run session. Finds the one with the same runKey (even if not the
 -- newest -- you re-entered the raid after another instance), else creates one.
 -- Does NOT open a new session per boss or on a silence gap -- only per different RUN.
+-- Returns nil while a raid's lockout info has not arrived (key is nil) -- callers
+-- must buffer instead of writing to the wrong session.
 local function currentSession()
 	local key, name, diff, mapID = runKey()
+	if not key then return nil end          -- lockout pending: no session yet
 	local list = sessions()
-	-- match by runKey in any session (not just [1])
+	-- match by runKey in any session (not just [1]). This is what makes a raid
+	-- continued the next day (same lockout -> same key) load yesterday's history.
 	for i = 1, #list do
 		if list[i].key == key then
 			if i > 1 then                       -- traz para a frente (a "atual")
@@ -349,6 +364,33 @@ local function currentSession()
 		end
 	end
 	return newSession(key, name, diff, mapID)
+end
+
+-- The drop list to read/write RIGHT NOW: the current session's, or the pending
+-- buffer while a raid's lockout is still unknown. Shaped like a session ({drops=...})
+-- so it can be passed straight to dropExists/findOpenDrop.
+local function activeBucket()
+	local s = currentSession()
+	if s then return s end
+	return { drops = pendingDrops }
+end
+
+-- Resolve the session for the run we are in, moving it to sessions()[1], and drain
+-- any drops buffered while the key was unknown. Called on zone-in and whenever the
+-- lockout info lands. Returns the session, or nil if still pending.
+--
+-- This is also what stops the mini roll from showing the PREVIOUS run's loot: the
+-- accessors read sessions()[1], which used to only be corrected by the first
+-- storeDrop() of the new run.
+local function resolveSession()
+	local s = currentSession()
+	if not s then return nil end
+	if #pendingDrops > 0 then
+		for i = 1, #pendingDrops do s.drops[#s.drops + 1] = pendingDrops[i] end
+		wipe(pendingDrops)
+		if L.onLoot then L.onLoot() end
+	end
+	return s
 end
 
 -- ------------------------------------------------------------
@@ -410,8 +452,12 @@ end
 local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur)
 	if id == 0 then return nil end
 	if not acceptItem(id, rarity, name) then return nil end
+	-- No session yet (raid lockout still unknown) -> park the drop in pendingDrops.
+	-- resolveSession() moves them into the real session once the key is known, so
+	-- nothing is lost and nothing lands in the previous run's session.
 	local s = currentSession()
-	local existing = dropExists(s, id, boss)
+	local bucket = s and s.drops or pendingDrops
+	local existing = dropExists({ drops = bucket }, id, boss)
 	if existing then
 		if rollID and not existing.rollID then
 			existing.rollID = rollID; existing.rollStart = GetTime(); existing.rollDur = rollDur or 60
@@ -429,7 +475,7 @@ local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur)
 		icon = iconTok,
 	}
 	if rollID then dp.rollID = rollID; dp.rollStart = GetTime(); dp.rollDur = rollDur or 60 end
-	s.drops[#s.drops + 1] = dp
+	bucket[#bucket + 1] = dp
 	lastLootAt = GetTime and GetTime() or 0
 	if L.onLoot then L.onLoot() end
 	if OkanvilLogs and OkanvilLogs.NoteBossFromLoot and boss then OkanvilLogs.NoteBossFromLoot(boss) end
@@ -564,6 +610,10 @@ end
 
 local function noRealm(name) return name and name:gsub("%-.*$", "") or name end
 
+-- forward decl: defined with the pending-award machinery further down. tagReceiver
+-- calls it so a CHAT_MSG_LOOT naming the winner confirms a pending master-loot give.
+local noteReceivedForAward
+
 local function tagReceiver(player, link)
 	local id = itemIDFromLink(link)
 	if id == 0 then return end
@@ -572,7 +622,7 @@ local function tagReceiver(player, link)
 	local rarity = select(3, GetItemInfo(shortLink(link) or link)) or 0
 	local name = (GetItemInfo(link))
 	if not acceptItem(id, rarity, name) then return end
-	local s = currentSession()
+	local s = activeBucket()
 	-- link to the drop START_LOOT_ROLL/scan already created (by id, INDEPENDENT of
 	-- the current boss -- else it made a duplicate on the wrong boss, e.g. Spaulders on
 	-- "Spitting Cobra" AND "Slad'ran"). Only creates a new one if none exists.
@@ -580,6 +630,9 @@ local function tagReceiver(player, link)
 	if not target then target = storeDrop(resolveBoss(), id, link, name, rarity, isBoE(link)) end
 	if target then
 		target.receivedBy = player
+		-- backup confirmation for a pending master-loot give (the primary is
+		-- LOOT_SLOT_CLEARED; this line may never arrive for loot given to others).
+		if noteReceivedForAward then noteReceivedForAward(player, id) end
 		if L.onLoot then L.onLoot() end
 	end
 end
@@ -643,7 +696,7 @@ local function recordNeedGreed(msg)
 			-- the "X won" may arrive amid the rolls and set receivedBy, but the rolls
 			-- that follow still belong to this same item. Prefer the most recent drop that
 			-- is/was rolling (has rollID or already has .rolls); else the most recent.
-			local s = currentSession()
+			local s = activeBucket()
 			-- o drop deste item (por id, ignora boss atual) -- o mesmo do rolling.
 			local dp = findOpenDrop(s, id)
 			if not dp then return end
@@ -663,7 +716,7 @@ local function recordRollWon(player, link)
 	local id = itemIDFromLink(link)
 	if id == 0 then return end
 	player = noRealm(player)
-	local s = currentSession()
+	local s = activeBucket()
 	local dp = findOpenDrop(s, id)   -- o mesmo drop do rolling (ignora boss atual)
 	if dp then
 		dp.receivedBy = player
@@ -679,7 +732,7 @@ end
 local function recordAllPassed(link)
 	local id = itemIDFromLink(link)
 	if id == 0 then return end
-	local s = currentSession()
+	local s = activeBucket()
 	local dp = findOpenDrop(s, id)
 	if dp then
 		dp.rollID = nil; dp.rollStart = nil
@@ -911,7 +964,9 @@ local function giveLootNow(id, winner)
 				local cand = mlCandidate(winner)
 				L.Dbg("  slot " .. slot .. " bate item; candidato de " .. tostring(winner)
 					.. " = " .. tostring(cand))
-				if cand then GiveMasterLoot(slot, cand); return "ok" end
+				-- fire-and-forget: no 3.3.5a API tells us the server accepted. The
+				-- caller watches LOOT_SLOT_CLEARED on this slot to confirm.
+				if cand then GiveMasterLoot(slot, cand); return "ok", slot end
 			end
 		end
 	end
@@ -919,8 +974,7 @@ local function giveLootNow(id, winner)
 end
 
 local function markWinner(id, winner)
-	local s = sessions()[1]
-	if not s then return end
+	local s = activeBucket()
 	for i = #s.drops, 1, -1 do
 		if s.drops[i].id == id and not s.drops[i].receivedBy then
 			s.drops[i].receivedBy = winner
@@ -929,25 +983,116 @@ local function markWinner(id, winner)
 	end
 end
 
+-- ------------------------------------------------------------
+-- PENDING AWARD -- why GiveMasterLoot's return value is not enough.
+--
+-- RaidRoll calls GiveMasterLoot and assumes it worked; it can afford to, because it
+-- never records WHO received an item. We do. On 3.3.5a no API reports whether the
+-- server accepted the hand-over (the master-loot candidate list is server-side and
+-- can be stale), so trusting the call meant the UI showed "X was awarded [item]" for
+-- an item X never got -- and the history kept that lie.
+--
+-- So an award is a PENDING request until something observable confirms it:
+--   * LOOT_SLOT_CLEARED on the slot we gave  -> delivered (primary; always fires on
+--     the ML's own client, unlike CHAT_MSG_LOOT which is not sent for loot handed to
+--     someone else).
+--   * CHAT_MSG_LOOT naming the winner        -> delivered (backup; tagReceiver).
+--   * neither within AWARD_TIMEOUT           -> NOT delivered: drop goes back to
+--     unassigned and we tell the user to trade it.
+--   * LOOT_CLOSED                            -> INVALIDATES (walking away from the
+--     corpse clears every slot; treating that as success is the very bug we fix).
+-- ------------------------------------------------------------
+local AWARD_TIMEOUT = 3          -- seconds to wait for confirmation
+local pendingAward = nil         -- { id, winner, slot, at, nm }
+
+-- The drop the pending award refers to, so the UI can grey out "-> X (giving...)".
+function L.PendingAward()
+	if not pendingAward then return nil end
+	return pendingAward.id, pendingAward.winner
+end
+
+local function clearPending() pendingAward = nil end
+
+-- confirmed: write the winner into the history and say so.
+local function awardConfirmed(why)
+	local p = pendingAward
+	if not p then return end
+	clearPending()
+	markWinner(p.id, p.winner)
+	L.Dbg("awardConfirmed (" .. tostring(why) .. "): " .. p.nm .. " -> " .. p.winner)
+	Okanvil:Print("Awarded (master loot): " .. p.nm .. " -> " .. p.winner .. ".")
+	if L.onLoot then L.onLoot() end
+end
+
+-- failed: leave the drop unassigned; the item is still in the ML's bags/window.
+local function awardFailed(why)
+	local p = pendingAward
+	if not p then return end
+	clearPending()
+	L.Dbg("awardFailed (" .. tostring(why) .. "): " .. p.nm .. " -> " .. p.winner)
+	Okanvil:Print("|cffff5555Server did not confirm handing " .. p.nm
+		.. " to " .. p.winner .. ". Pass it by trade (not recorded).|r")
+	if L.onLoot then L.onLoot() end
+end
+
+-- called from LOOT_SLOT_CLEARED. This is the authoritative "it left the corpse"
+-- signal on the ML's own client, and it always precedes any LOOT_CLOSED caused by
+-- handing over the last item.
+local function onLootSlotCleared(slot)
+	local p = pendingAward
+	if not (p and slot and p.slot == slot) then return end
+	awardConfirmed("slot cleared")
+end
+
+-- called from CHAT_MSG_LOOT (via tagReceiver) -- backup confirmation.
+-- assigns the forward-declared local (see near tagReceiver), not a new one.
+function noteReceivedForAward(player, id)
+	local p = pendingAward
+	if not (p and id == p.id) then return end
+	if player and player:lower() == p.winner:lower() then awardConfirmed("chat") end
+end
+
+-- called from LOOT_CLOSED. A successful hand-over always fires LOOT_SLOT_CLEARED for
+-- the slot first -- including when it was the last item and the give also closes the
+-- window -- and that already resolved the award. So if we get here still pending, the
+-- item never left the corpse: the window closed for another reason (we walked away,
+-- someone else closed it, we were interrupted). That is a failure, not a delivery.
+--
+-- Do NOT try to read GetLootSlotLink here to double-check: the window is being torn
+-- down, so it answers nil for a slot we never gave away, which would read as success.
+local function onLootClosed()
+	if pendingAward then awardFailed("loot window closed before the item was handed over") end
+end
+
+-- timeout watchdog
+local awardTicker = CreateFrame("Frame")
+awardTicker:Hide()
+awardTicker:SetScript("OnUpdate", function(self)
+	if not pendingAward then self:Hide(); return end
+	if (GetTime() - pendingAward.at) >= AWARD_TIMEOUT then
+		awardFailed("timeout")
+		self:Hide()
+	end
+end)
+
 local function commitAward(id, winner)
-	-- RaidRoll-style: tenta DAR primeiro (GiveMasterLoot). So regista o vencedor
-	-- no historico quando o servidor confirma a entrega (res == "ok") -- assim o
-	-- receivedBy nunca fica preenchido para um item que a pessoa nao recebeu.
-	local res = giveLootNow(id, winner)
-	L.Dbg("commitAward: giveLootNow -> " .. tostring(res))
+	local res, slot = giveLootNow(id, winner)
+	L.Dbg("commitAward: giveLootNow -> " .. tostring(res) .. " slot=" .. tostring(slot))
 	local nm = (GetItemInfo(id)) or "item"
 	if res == "ok" then
-		markWinner(id, winner)
-		Okanvil:Print("Dado (master loot): " .. nm .. " -> " .. winner .. ".")
+		-- NOT recorded yet: wait for LOOT_SLOT_CLEARED / CHAT_MSG_LOOT / timeout.
+		pendingAward = { id = id, winner = winner, slot = slot, at = GetTime(), nm = nm }
+		awardTicker:Show()
+		Okanvil:Print("Giving " .. nm .. " to " .. winner .. "...")
 	else
 		local why = ({
-			noapi = "master loot indisponivel", notml = "metodo nao e Master Loot",
-			closed = "janela de loot fechada (item nos bags)", noitem = "item ja nao esta na janela",
-			nocand = winner .. " nao e candidato valido (fora de alcance/offline)",
-		})[res] or "razao desconhecida"
-		-- give falhou: NAO marcamos (como o RaidRoll, que so regista entregas reais).
-		Okanvil:Print("|cffff5555NAO deu " .. nm .. " a " .. winner
-			.. " -- " .. why .. ". Passa por trade (nao registado).|r")
+			noapi = "master loot unavailable", notml = "loot method is not Master Loot",
+			closed = "loot window closed (item is in the bags)", noitem = "item is no longer in the window",
+			nocand = winner .. " is not a valid candidate (out of range/offline)",
+		})[res] or "unknown reason"
+		-- give failed outright: do NOT mark (like RaidRoll, only real hand-overs count).
+		Okanvil:Print("|cffff5555Did NOT give " .. nm .. " to " .. winner
+			.. " -- " .. why .. ". Pass it by trade (not recorded).|r")
 	end
 	activeRoll = nil
 	if L.onLoot then L.onLoot() end
@@ -982,11 +1127,16 @@ function L.AwardWinner(id, winner, topRoll, spec)
 	if dlg then dlg.data = { id = id, winner = winner } end
 end
 
+-- HIDE this run's drops from the mini roll list -- does NOT delete them. The old
+-- version did wipe(s.drops), which destroyed the run's history in SavedVariables;
+-- worse, it read sessions()[1] blindly, so pressing it after zoning into a new run
+-- wiped the PREVIOUS run's loot. To actually delete a session, use L.DeleteSession
+-- from the Loot page, where the intent is explicit.
 function L.ClearActiveDrops()
-	local s = sessions()[1]
-	if not s then return false end
-	wipe(s.drops)
-	activeRoll = nil; lastLootAt = 0
+	local s = activeBucket()
+	if not s or #s.drops == 0 then return false end
+	for i = 1, #s.drops do s.drops[i].hidden = true end
+	activeRoll = nil
 	if L.onLoot then L.onLoot() end
 	return true
 end
@@ -1001,20 +1151,26 @@ function L.RecentDrops(limit)
 	return out
 end
 
+-- Feeds the mini roll manager ONLY. Reads the run we are actually in (or the pending
+-- buffer), never sessions()[1] blindly -- that is what used to show the previous
+-- run's loot until the first item of the new run dropped. Skips `hidden` drops
+-- (the mini roll's "Clear list" button), which remain in the history and the export.
 function L.DropsByBoss()
-	local s = sessions()[1]; if not s then return {} end
+	local s = activeBucket(); if not s then return {} end
 	local order, byBoss = {}, {}
 	for _, dp in ipairs(s.drops) do
-		local b = (dp.boss ~= "" and dp.boss) or "Trash"
-		if not byBoss[b] then byBoss[b] = { boss = b, items = {} }; order[#order + 1] = byBoss[b] end
-		table.insert(byBoss[b].items, dp)
+		if not dp.hidden then
+			local b = (dp.boss ~= "" and dp.boss) or "Trash"
+			if not byBoss[b] then byBoss[b] = { boss = b, items = {} }; order[#order + 1] = byBoss[b] end
+			table.insert(byBoss[b].items, dp)
+		end
 	end
 	return order
 end
 
 function L.SessionHasBoss(name)
 	if not name or name == "" then return false end
-	local s = sessions()[1]; if not s then return false end
+	local s = activeBucket()
 	for i = 1, #s.drops do if s.drops[i].boss == name then return true end end
 	return false
 end
@@ -1339,6 +1495,8 @@ L.RunAutoGive = runAutoGive
 -- ------------------------------------------------------------
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("LOOT_OPENED")
+ev:RegisterEvent("LOOT_SLOT_CLEARED")             -- confirma um master-loot give
+ev:RegisterEvent("LOOT_CLOSED")                   -- invalida um give por confirmar
 ev:RegisterEvent("START_LOOT_ROLL")
 ev:RegisterEvent("CHAT_MSG_LOOT")
 ev:RegisterEvent("CHAT_MSG_SYSTEM")
@@ -1347,14 +1505,27 @@ ev:RegisterEvent("PLAYER_TARGET_CHANGED")         -- scanner de boss
 ev:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")         -- entrou em combate
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")         -- entrada em instancia -> run novo (dungeon)
+ev:RegisterEvent("UPDATE_INSTANCE_INFO")          -- lockout chegou -> resolve a sessao da raid
 
 -- deteta ENTRADA numa dungeon nova para bumpar o runToken (= sessao nova por run).
 -- So dungeons (party): reentrar/refazer a mesma dungeon = run novo. Raids agrupam
 -- by lockout, so they do NOT bump (the lockout runKey merges everything).
+--
+-- Dying and running back does NOT bump: the graveyard is inside the instance, so
+-- `name` is unchanged. Only actually leaving (hearth/portal) clears lastPartyInstance,
+-- which is what makes 5 back-to-back ToC runs 5 separate sessions.
 local lastPartyInstance = nil
 local function onEnterWorld()
 	if not (IsInInstance and IsInInstance()) then lastPartyInstance = nil; return end
 	local _, itype = IsInInstance()
+	if itype == "raid" then
+		-- Ask for the lockout list. Until UPDATE_INSTANCE_INFO answers, runKey() is nil
+		-- and any loot is buffered -- so a raid continued the next day rejoins
+		-- yesterday's session instead of minting a new one from a guessed key.
+		if RequestRaidInfo then RequestRaidInfo() end
+		resolveSession()             -- may be nil (pending); the event below retries
+		return
+	end
 	if itype ~= "party" then return end
 	local name = (GetRealZoneText and GetRealZoneText()) or (GetInstanceInfo and (GetInstanceInfo())) or ""
 	-- entering a different dungeon than last (or re-entering after leaving) = new run
@@ -1362,16 +1533,28 @@ local function onEnterWorld()
 		runToken(true)               -- bump -> currentSession abre uma sessao nova
 		lastPartyInstance = name
 	end
+	-- Resolve NOW (not on the first drop): puts this run's session at sessions()[1],
+	-- so the mini roll stops showing the previous run's loot until an item lands.
+	resolveSession()
 end
 
 ev:SetScript("OnEvent", function(_, event, ...)
 	-- Loot module DISABLED = no loot capture, no boss scan, nothing.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive("__loot") then return end
 	if event == "LOOT_OPENED" then captureCorpse()
+	elseif event == "LOOT_SLOT_CLEARED" then
+		if pendingAward then L.Dbg("LOOT_SLOT_CLEARED slot=" .. tostring((...))) end
+		onLootSlotCleared(...)
+	elseif event == "LOOT_CLOSED" then
+		if pendingAward then L.Dbg("LOOT_CLOSED (award still pending)") end
+		onLootClosed()
 	elseif event == "START_LOOT_ROLL" then captureRollStart(...)
 	elseif event == "CHAT_MSG_LOOT" then onChatLoot(...)
 	elseif event == "CHAT_MSG_SYSTEM" then local a1 = ...; if a1 then captureRoll(a1) end
 	elseif event == "PLAYER_ENTERING_WORLD" then onEnterWorld()
+	elseif event == "UPDATE_INSTANCE_INFO" then
+		-- lockout info landed: open/rejoin the real session and flush buffered drops.
+		resolveSession()
 	elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT"
 		or event == "PLAYER_REGEN_DISABLED" then
 		fireScan()
