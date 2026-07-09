@@ -117,11 +117,20 @@ local function Mod(self)
 end
 Okanvil.Mod = Mod
 
--- shared tooltip wiring (used by anything with a ._tip)
+-- shared tooltip wiring (used by anything with a ._tip).
+-- A "\n" in the text starts a NEW LINE: AddLine does not honour newlines itself, so a
+-- multi-line tip rendered as one run-on line. Each line wraps (the `true` arg), which
+-- is what lets a tip carry a short explanation and not just a label.
 local function tipEnter(self)
 	if not self._tip then return end
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	GameTooltip:AddLine(self._tip, unpack3(C.text))
+	for line in (tostring(self._tip) .. "\n"):gmatch("(.-)\n") do
+		if line == "" then
+			GameTooltip:AddLine(" ")            -- blank spacer line
+		else
+			GameTooltip:AddLine(line, C.text[1], C.text[2], C.text[3], true)
+		end
+	end
 	GameTooltip:Show()
 end
 local function tipLeave() GameTooltip:Hide() end
@@ -214,8 +223,10 @@ function W.Check(parent, label, getFn, setFn)
 		if setFn then setFn(not (getFn and getFn())) end
 		refresh()
 	end)
-	b:SetScript("OnEnter", function() box:SetBackdropBorderColor(unpack3(C.borderHi)) end)
-	b:SetScript("OnLeave", function() box:SetBackdropBorderColor(unpack3(C.border)) end)
+	-- honour :Tooltip() like W.Button does -- without tipEnter here, calling
+	-- :Tooltip() on a checkbox silently did nothing (this OnEnter overwrote it).
+	b:SetScript("OnEnter", function(s) box:SetBackdropBorderColor(unpack3(C.borderHi)); tipEnter(s) end)
+	b:SetScript("OnLeave", function() box:SetBackdropBorderColor(unpack3(C.border)); tipLeave() end)
 	b.refresh = refresh
 	return Mod(b)
 end

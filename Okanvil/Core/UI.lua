@@ -1028,12 +1028,11 @@ function Okanvil:Loot_BuildCollectors(p)
 	local X = 8
 	if not (L and L.Collectors) then return end
 
-	-- What this tab IS (and what it is not) -- read before arming the toggle.
-	local intro = W.Text(p, "|cffe0b860Speed-run loot|r -- for pushing a raid fast. The boss is swept straight into one bag; you settle it later by roll or loot council.\n"
-		.. "|cff8a8d93This is NOT the normal flow.|r Leave the toggle OFF and loot works as usual: the Mini Roll Manager runs the MS/OS roll, you press Award, confirm, and the item goes to the winner.", 10, "dim")
+	-- One line: what this tab is, and that it is not the normal flow. Details on hover.
+	local intro = W.Text(p, "|cffe0b860Speed-run loot|r -- sweep the boss into one bag, settle it later. |cff8a8d93Off = normal roll + Award.|r", 10, "dim")
 	intro:SetPoint("TOPLEFT", X, -6); intro:SetPoint("RIGHT", -X, 0); intro:SetJustifyH("LEFT")
 
-	local warn = W.Text(p, "", 11); warn:SetPoint("TOPLEFT", X, -50); warn:SetPoint("RIGHT", -X, 0); warn:SetJustifyH("LEFT")
+	local warn = W.Text(p, "", 11); warn:SetPoint("TOPLEFT", X, -26); warn:SetPoint("RIGHT", -X, 0); warn:SetJustifyH("LEFT")
 	local function paintWarn()
 		if L.IsMasterLooter and L.IsMasterLooter() then
 			warn:SetText("|cff7cfc8aYou are the Master Looter -- these apply.|r")
@@ -1047,13 +1046,16 @@ function Okanvil:Loot_BuildCollectors(p)
 	local en = W.Check(p, "Speed-run auto master-loot (only when you're the Master Looter)",
 		function() return L.CollectorsEnabled() end,
 		function(v) L.SetCollectorsEnabled(v) end)
-	en:SetPoint("TOPLEFT", X + 2, -70)
+	en:SetPoint("TOPLEFT", X + 2, -46)
+	en:Tooltip("Skips rolling at the pull: the boss is swept into one bag, settled later by "
+		.. "roll or loot council. Every drop is still recorded.\n"
+		.. "Only works while YOU are the Master Looter.")
 
 	-- Exactly what each row does. Kept next to the rows it describes.
 	local hint = W.Text(p, "|cffff8000BoP gear|r -> Main loot.   |cffffd200Orbs / patterns / BoE|r -> BoE (or Main, if BoE is empty).   |cffff5555Legendary fragments always ask first.|r\n"
 		.. "Leave a field |cffffd200EMPTY|r and that loot stays on the corpse to be rolled normally -- nothing is ever swept to anyone you did not name. "
 		.. "|cff7cfc8aEvery drop is still recorded in the history and shown to the raid.|r", 10, "dim")
-	hint:SetPoint("TOPLEFT", X, -94); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
+	hint:SetPoint("TOPLEFT", X, -70); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
 
 	local col = L.Collectors()
 	local function row(bucket, label, y)
@@ -1076,13 +1078,13 @@ function Okanvil:Loot_BuildCollectors(p)
 		local cl = W.Button(p, "Clear", "danger"); cl:SetSize(48, 24); cl:SetPoint("LEFT", tg, "RIGHT", 6, 0)
 		cl:SetScript("OnClick", function() eb.edit:SetText(""); L.SetCollector(bucket, "") end)
 	end
-	-- vertical stack: intro (-6, 2 lines) / warn (-50) / toggle (-70) / hint (-94, 2 lines)
-	row("main", "Main loot (BoP)", -140)
-	row("frag", "Fragments", -170)
-	row("boe", "BoE / orbs", -200)
+	-- vertical stack: intro (-6) / warn (-26) / toggle (-46) / hint (-70, 2 lines)
+	row("main", "Main loot (BoP)", -116)
+	row("frag", "Fragments", -146)
+	row("boe", "BoE / orbs", -176)
 	local wc = W.Check(p, "Whisper winner on Award (\"you won, trade me\")",
 		function() return L.WhisperWinner() end, function(v) L.SetWhisperWinner(v) end)
-	wc:SetPoint("TOPLEFT", X + 2, -236)
+	wc:SetPoint("TOPLEFT", X + 2, -212)
 end
 
 -- ---- Messages tab: editable MS/OS/Free/Whisper templates ([item] placeholder) --
