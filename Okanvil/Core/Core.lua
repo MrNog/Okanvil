@@ -465,3 +465,81 @@ SLASH_OKDEV1 = "/okdev"
 SlashCmdList["OKDEV"] = function()
 	Okanvil:SetDevMode(not (Okanvil.db and Okanvil.db.devMode))
 end
+
+-- ------------------------------------------------------------
+-- UPDATE TOAST -- "a newer Okanvil exists". Peer-to-peer: a 3.3.5a addon can't
+-- reach the internet, so Comms learns the version from raiders who already
+-- updated (see Comms' nag logic). Modelled on Recruit's join toast: a small
+-- draggable card on UIParent. Unlike that one it does NOT fade -- it stays put
+-- until dismissed, because an update notice you miss is a notice wasted.
+-- ------------------------------------------------------------
+local updToast
+local function buildUpdateToast()
+	if updToast then return updToast end
+	local t = CreateFrame("Frame", "Okanvil_UpdateToast", UIParent)
+	t:SetSize(288, 74)
+	t:SetFrameStrata("FULLSCREEN_DIALOG")
+	t:SetPoint("TOP", UIParent, "TOP", 0, -140)
+	Okanvil:Backdrop(t, 0.96)
+	t:EnableMouse(true)
+	t:SetMovable(true)
+	t:RegisterForDrag("LeftButton")
+	t:SetScript("OnDragStart", function(self) self:StartMoving() end)
+	t:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+	t:Hide()
+
+	local icon = t:CreateTexture(nil, "ARTWORK")
+	icon:SetSize(38, 38); icon:SetPoint("TOPLEFT", 10, -9)
+	icon:SetTexture("Interface\\Icons\\Trade_BlackSmithing")
+	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+	local title = t:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, -1)
+	title:SetText("|cffe0b860Okanvil update available|r")
+	t.title = title
+
+	local sub = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -3)
+	sub:SetJustifyH("LEFT")
+	t.sub = sub
+
+	-- close (X): the toast is persistent, this is the only way out
+	local x = CreateFrame("Button", nil, t)
+	x:SetSize(18, 18); x:SetPoint("TOPRIGHT", -5, -5)
+	local xt = x:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	xt:SetAllPoints(); xt:SetText("|cff8a8d93X|r")
+	x:SetScript("OnEnter", function() xt:SetText("|cffff5555X|r") end)
+	x:SetScript("OnLeave", function() xt:SetText("|cff8a8d93X|r") end)
+	x:SetScript("OnClick", function() t:Hide() end)
+
+	-- copy the download link (no OpenURL on 3.3.5a -> a selectable text box)
+	local link = CreateFrame("Button", nil, t)
+	link:SetSize(120, 18); link:SetPoint("BOTTOMLEFT", icon, "BOTTOMRIGHT", 10, -18)
+	local lt = link:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	lt:SetAllPoints(); lt:SetJustifyH("LEFT"); lt:SetText("|cff7cfc8aGet the link|r")
+	link:SetScript("OnClick", function()
+		local url = (Okanvil.db and Okanvil.db.hubURL) or "https://mrnog.github.io/RATS/"
+		if Okanvil.ShowExport then Okanvil:ShowExport(url, "Okanvil -- download (Ctrl+C)") end
+	end)
+	updToast = t
+	return t
+end
+
+-- Show the toast for `ver`. Safe to call more than once (Comms nags only once).
+function Okanvil:ShowUpdateToast(ver)
+	local t = buildUpdateToast()
+	t.sub:SetText("|cff8a8d93You run|r " .. (self.version or "?")
+		.. "  |cff8a8d93-- newest seen|r |cff7cfc8a" .. tostring(ver) .. "|r")
+	t:Show()
+	self:Print("A newer Okanvil (|cff7cfc8a" .. tostring(ver) .. "|r) is out -- you run "
+		.. (self.version or "?") .. ".")
+end
+
+-- wire Comms' nag to the toast once both exist
+local bootUpd = CreateFrame("Frame")
+bootUpd:RegisterEvent("PLAYER_LOGIN")
+bootUpd:SetScript("OnEvent", function()
+	if Okanvil.Comms then
+		Okanvil.Comms.onNewerVersion = function(ver) Okanvil:ShowUpdateToast(ver) end
+	end
+end)

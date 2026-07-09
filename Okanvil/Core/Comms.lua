@@ -164,6 +164,71 @@ local verRunning = false
 C.VersionReplies = function() return verReplies end
 C.VersionCheckRunning = function() return verRunning end
 
+-- ------------------------------------------------------------
+-- Semantic version compare. "1.10.0" > "1.9.0" -- a plain string compare gets
+-- that backwards, which is why we split on dots and compare numerically.
+-- Anything non-numeric (a "-dev+sha" suffix from a main build) is ignored, so a
+-- dev build of 1.2.0 never claims to be newer than the 1.2.0 release.
+-- Returns 1 (a>b), -1 (a<b) or 0.
+-- ------------------------------------------------------------
+local function verParts(v)
+	-- take only the leading X.Y.Z; a package.yml dev build is "1.2.0-dev+ab12cd"
+	-- and those trailing digits must NOT make it look newer than the 1.2.0 release.
+	local core = tostring(v or ""):match("^%s*([%d%.]+)") or ""
+	local out = {}
+	for n in core:gmatch("(%d+)") do out[#out + 1] = tonumber(n) end
+	return out
+end
+local function verCmp(a, b)
+	local pa, pb = verParts(a), verParts(b)
+	for i = 1, math.max(#pa, #pb) do
+		local x, y = pa[i] or 0, pb[i] or 0
+		if x ~= y then return x > y and 1 or -1 end
+	end
+	return 0
+end
+C.CompareVersions = verCmp
+
+-- ------------------------------------------------------------
+-- UPDATE NAG. Peer-to-peer, because a 3.3.5a addon cannot make HTTP requests:
+-- clients announce their version on joining a group, and a client running an
+-- OLDER build learns a new one exists from whoever already updated.
+--
+-- Anti-abuse (straight from DBM's HandleVersion): one player can lie about
+-- their version, so we only nag once TWO DIFFERENT people report the same
+-- higher version. A single troll can't make the raid see "update me".
+-- We also cap how far ahead a claimed version may be, so "999.0.0" is ignored.
+-- ------------------------------------------------------------
+local newerSeen = {}         -- version string -> { [name]=true }
+local nagged = false         -- only nag once per session/group
+local MAX_MAJOR_JUMP = 5     -- a claim more than this many majors ahead is a lie
+
+local function plausible(ver)
+	local mineMaj = (verParts(Okanvil.version)[1]) or 0
+	local theirMaj = (verParts(ver)[1]) or 0
+	return theirMaj <= mineMaj + MAX_MAJOR_JUMP
+end
+
+-- called for every version we learn about (from VERR or the join broadcast)
+local function noteVersion(sender, ver)
+	if not (sender and ver and ver ~= "" and ver ~= "?") then return end
+	if nagged then return end
+	if verCmp(ver, Okanvil.version or "0") <= 0 then return end   -- not newer
+	if not plausible(ver) then return end                          -- anti-abuse
+	local me = UnitName and UnitName("player")
+	if sender == me then return end
+
+	newerSeen[ver] = newerSeen[ver] or {}
+	newerSeen[ver][sender] = true
+	local n = 0
+	for _ in pairs(newerSeen[ver]) do n = n + 1 end
+	-- DBM waits for 2 independent reports before believing the claim
+	if n >= 2 then
+		nagged = true
+		if C.onNewerVersion then C.onNewerVersion(ver) end
+	end
+end
+
 -- someone asked -> whisper our version straight back
 C.On("VERQ", function(sender)
 	if not sender or sender == "" then return end
@@ -174,7 +239,42 @@ end)
 C.On("VERR", function(sender, ver)
 	if not sender or sender == "" then return end
 	verReplies[sender] = (ver ~= nil and ver ~= "") and tostring(ver) or "?"
+	noteVersion(sender, ver)
 	if C.onVersionReply then C.onVersionReply() end
+end)
+
+-- unsolicited "here I am" broadcast, sent on joining a group. Feeds the same
+-- nag logic, so you learn about a new build without pressing any button.
+C.On("VERB", function(sender, ver)
+	if not sender or sender == "" then return end
+	verReplies[sender] = (ver ~= nil and ver ~= "") and tostring(ver) or "?"
+	noteVersion(sender, ver)
+end)
+
+-- Announce our version to the group (throttled: joining a raid fires several
+-- roster events in a row, and we must not spam the addon channel).
+local lastAnnounce = 0
+function C.AnnounceVersion()
+	local now = GetTime and GetTime() or 0
+	if now - lastAnnounce < 20 then return end
+	lastAnnounce = now
+	C.Send("VERB", tostring(Okanvil.version or "?"))
+end
+
+-- Announce on joining a group, and re-arm the nag when the group changes so a
+-- fresh raid can still tell you you're behind (DBM wipes its list the same way).
+local vev = CreateFrame("Frame")
+vev:RegisterEvent("PLAYER_ENTERING_WORLD")
+vev:RegisterEvent("RAID_ROSTER_UPDATE")
+vev:RegisterEvent("PARTY_MEMBERS_CHANGED")
+local wasGrouped = false
+vev:SetScript("OnEvent", function()
+	local grouped = groupChannel() ~= nil
+	if grouped and not wasGrouped then
+		wipe(newerSeen); nagged = false        -- new group -> allow one nag again
+	end
+	wasGrouped = grouped
+	if grouped then C.AnnounceVersion() end
 end)
 
 -- Kick off a check. `onDone(replies)` fires after `timeout` seconds (default 5).
