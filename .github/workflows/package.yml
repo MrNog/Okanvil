@@ -1,18 +1,26 @@
 name: Package addon
 
-# Two ways this runs:
-#   * push a TAG  vX.Y.Z  ->  builds a VERSIONED release (kept forever) + refreshes Latest.
-#   * push to main        ->  refreshes only the rolling "Latest" (a dev/bleeding-edge build).
+# EVERY push to main cuts a release. You never make a tag by hand.
 #
-# The VERSION is derived automatically:
-#   - on a tag  -> the tag minus the leading "v"  (v1.2.0 -> 1.2.0)
-#   - on main   -> "<latest tag>-dev+<short sha>" (or 0.0.0-dev if no tags yet)
-# It is stamped into Okanvil/Okanvil.toc's `## Version:` line before zipping, so you
-# NEVER edit the .toc by hand -- the tag is the single source of truth.
+#   push to main                -> PATCH bump   (1.2.1 -> 1.2.2)
+#   commit message has [minor]  -> MINOR bump   (1.2.1 -> 1.3.0)
+#   commit message has [major]  -> MAJOR bump   (1.2.1 -> 2.0.0)
+#   commit message has [skip]   -> nothing runs (no tag, no zip, no Discord)
 #
-# Bumping: new module / feature = MINOR (1.1 -> 1.2). Breaking change (e.g. wiping
-# SavedVariables) = MAJOR (1.x -> 2.0). Bug-fix only = PATCH (1.2.0 -> 1.2.1).
-# To cut a release:  git tag v1.2.0 && git push --tags
+# The bump keyword may appear anywhere in the message, in any case: "[Minor]",
+# "fix loot [skip]", "[major] wipes SavedVariables". `[skip ci]` also works, since
+# it contains "[skip".
+#
+# The new version is computed from the LATEST EXISTING TAG, not from the .toc --
+# so the .toc's `## Version:` line is never edited by hand; the workflow stamps it
+# into the zip at package time. The tag it creates is the permanent record.
+#
+# Bumping guide: new module / feature = MINOR. Breaking change (e.g. wiping
+# SavedVariables) = MAJOR. Everything else = PATCH (the default, so usually you
+# just push and forget).
+#
+# Pushing a tag by hand (git tag v1.5.0 && git push --tags) still works and uses
+# that exact version -- kept as an escape hatch.
 
 on:
   push:
@@ -29,53 +37,113 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # need tags for the dev-version fallback
+          fetch-depth: 0   # need the full tag history to find the last version
 
-      - name: Derive version
+      # ------------------------------------------------------------------
+      # Decide whether to run at all, and what the next version is.
+      # ------------------------------------------------------------------
+      - name: Decide version
         id: ver
         run: |
+          set -euo pipefail
+
+          # --- hand-pushed tag: use it verbatim, don't compute or create anything
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF#refs/tags/v}"
-            echo "tagged=true" >> "$GITHUB_OUTPUT"
-          else
-            LAST="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
-            V="${LAST#v}-dev+$(git rev-parse --short HEAD)"
-            echo "tagged=false" >> "$GITHUB_OUTPUT"
+            echo "version=$V"   >> "$GITHUB_OUTPUT"
+            echo "tag=v$V"      >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "createtag=false" >> "$GITHUB_OUTPUT"
+            echo "Hand-pushed tag -> $V"
+            exit 0
           fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-          echo "Building version: $V"
 
+          # --- read the commit message (subject + body) and lowercase it
+          MSG="$(git log -1 --pretty=%B | tr '[:upper:]' '[:lower:]')"
+
+          # --- [skip] anywhere -> do nothing at all
+          if [[ "$MSG" == *"[skip"* || "$MSG" == *"[no-release]"* ]]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Commit asked to skip the release."
+            exit 0
+          fi
+
+          # --- last version tag (vX.Y.Z only; ignores anything else)
+          LAST="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+          if [ -z "$LAST" ]; then LAST="v0.0.0"; fi
+          CUR="${LAST#v}"
+          MAJ="${CUR%%.*}"; REST="${CUR#*.}"; MIN="${REST%%.*}"; PAT="${REST#*.}"
+          # guard against a malformed tag (e.g. v1.2 with no patch)
+          [[ "$MAJ" =~ ^[0-9]+$ ]] || MAJ=0
+          [[ "$MIN" =~ ^[0-9]+$ ]] || MIN=0
+          [[ "$PAT" =~ ^[0-9]+$ ]] || PAT=0
+
+          # --- choose the bump from the commit message (default: patch)
+          if   [[ "$MSG" == *"[major]"* ]]; then MAJ=$((MAJ+1)); MIN=0; PAT=0; LEVEL=major
+          elif [[ "$MSG" == *"[minor]"* ]]; then MIN=$((MIN+1)); PAT=0;        LEVEL=minor
+          else                                   PAT=$((PAT+1));               LEVEL=patch
+          fi
+
+          V="$MAJ.$MIN.$PAT"
+          echo "version=$V"      >> "$GITHUB_OUTPUT"
+          echo "tag=v$V"         >> "$GITHUB_OUTPUT"
+          echo "release=true"    >> "$GITHUB_OUTPUT"
+          echo "createtag=true"  >> "$GITHUB_OUTPUT"
+          echo "prev=$LAST"      >> "$GITHUB_OUTPUT"
+          echo "$LAST -> v$V ($LEVEL bump)"
+
+      # Everything below is skipped wholesale on a [skip] commit.
       - name: Build install-ready Okanvil.zip (addon = the Okanvil/ subfolder)
+        if: steps.ver.outputs.release == 'true'
         run: |
+          set -euo pipefail
           name="Okanvil"
           if [ ! -f "$name/$name.toc" ]; then
-            echo "No $name/$name.toc -- nothing to package."; exit 1
+            echo "::error::No $name/$name.toc -- nothing to package."; exit 1
           fi
           mkdir -p out staging
           cp -r "$name" "staging/$name"
           # stamp the version into the staged .toc (single source of truth = the tag)
           sed -i "s/^## Version:.*/## Version: ${{ steps.ver.outputs.version }}/" "staging/$name/$name.toc"
+          grep '^## Version:' "staging/$name/$name.toc"
           # strip dev-only files so the download is JUST the addon
           ( cd "staging/$name" && \
             rm -f PLAN.md CHANGELOG.md .editorconfig && \
             rm -f Media/README.md && \
             rm -f Media/*.png && \
             find . -name '*.bak' -delete && \
+            find . -name '*.logic-bak' -delete && \
             find . -name '*~' -delete )
           ( cd staging && zip -r "../out/$name.zip" "$name" )
           echo "packaged $name v${{ steps.ver.outputs.version }} (dev files stripped)"
 
-      - name: Publish versioned release (only on a tag)
-        if: steps.ver.outputs.tagged == 'true'
+      # Create the tag we just computed, so the release has a permanent anchor and
+      # the NEXT push can find it to bump from. Done before `gh release create` so
+      # the release points at a tag that already exists.
+      - name: Create the version tag
+        if: steps.ver.outputs.release == 'true' && steps.ver.outputs.createtag == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF#refs/tags/}" \
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.ver.outputs.tag }}" -m "Okanvil ${{ steps.ver.outputs.version }}"
+          git push origin "${{ steps.ver.outputs.tag }}"
+
+      - name: Publish the versioned release
+        if: steps.ver.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.ver.outputs.tag }}" \
             --title "Okanvil ${{ steps.ver.outputs.version }}" \
             --generate-notes \
             out/*.zip
 
       - name: Refresh the rolling Latest release
+        if: steps.ver.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -89,20 +157,23 @@ jobs:
       # listening for `release: published`. A release created with the default
       # GITHUB_TOKEN does NOT trigger other workflows (GitHub's anti-recursion
       # rule), so that never fired. Announcing here also guarantees the zip is
-      # already uploaded when the message goes out. Tags only -- never "latest".
+      # already uploaded when the message goes out.
+      #
+      # A missing webhook must NOT fail the build: the release is already public by
+      # this point, and a red X on a successful release is a lie. Warn instead.
       - name: Announce the release to Discord
-        if: steps.ver.outputs.tagged == 'true'
+        if: steps.ver.outputs.release == 'true'
         env:
           WEBHOOK: ${{ secrets.LOG_WEBHOOK }}      # #okanor-logs webhook
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
-          set -e
-          TAG="${GITHUB_REF#refs/tags/}"
-          if [ -z "$WEBHOOK" ]; then
-            echo "::error::LOG_WEBHOOK secret is not set (Settings -> Secrets and variables -> Actions)."
-            exit 1
+          set -uo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::warning::LOG_WEBHOOK secret is not set -- release published, Discord not notified."
+            exit 0
           fi
           # release notes GitHub just generated; trimmed to fit the embed budget
           gh release view "$TAG" --json body -q .body > notes.raw || echo "" > notes.raw
@@ -122,6 +193,5 @@ jobs:
           if [ "$code" = "204" ] || [ "$code" = "200" ]; then
             echo "Announced $TAG to Discord (HTTP $code)"
           else
-            echo "::error::Discord webhook failed (HTTP $code)"
-            exit 1
+            echo "::warning::Discord webhook failed (HTTP $code) -- release is still published."
           fi

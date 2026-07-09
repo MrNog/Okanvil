@@ -49,17 +49,18 @@ built-in module. Turn what you want on or off **per character**, while each tool
 
 ## 🧰 On the anvil
 
-A gold-themed **Home** dashboard (guild online roster, tiles, web-hub card) is always there. The six
+A gold-themed **Home** dashboard (guild online roster, tiles, web-hub card) is always there. The seven
 tools below are modules you toggle in **Settings → Modules**:
 
 | | Module | What it hammers out |
 |:--:|:--|:--|
-| ⚔️ | **Invite** | Mass-invite: whole guild online, by rank, or from saved lists. Keyword whisper invites and auto-invite on login. |
+| ⚔️ | **Invite** | Mass-invite: whole guild online, by rank, or from saved lists. Keyword whisper invites and auto-invite on login. Imports a Raid-Helper comp and auto-assigns raid groups. |
 | 🐀 | **Guild** | Guild dashboard — online roster with rank colors, per-row invite, and a JSON roster export for the web hub. |
-| 🎁 | **Loot** | Per-boss loot tracking with de-dupe and emblem/gem filtering. Inline session viewer, fair-loot priority. |
+| 🎁 | **Loot** | Per-boss loot tracking with de-dupe and emblem/gem filtering. Inline session viewer, fair-loot priority, and a **Mini Roll Manager** (with a compact mode) for running MS/OS roll-offs under master loot. |
 | 📜 | **Combat Logs** | One-click `/combatlog` with a movable REC timer, "log this instance?" prompt, and a session history that names the bosses you killed. |
 | 🔎 | **ID Finder** | Find a spell/item **ID by name** for WeakAuras — offline spell library + item harvester. A reusable lookup API (`Okanvil.IDs`) other addons can call. |
 | 📣 | **Recruit** | Recruitment advertiser with auto-reply and auto-invite, for officers & pug leaders. |
+| 🔍 | **Raid Finder** | Reads the LFM spam in chat and decodes it — reserved-loot lingo (`B`/`O`/`P`/`Frags`), roles and gear score — so you can spot the run you want. |
 
 <br>
 
@@ -86,11 +87,31 @@ stays — the swarm underneath it is whatever you make it. 🧀
 ## 🛠️ For tinkerers
 
 Everything lives in one addon: `Okanvil/Core/` (the shell) and `Okanvil/Modules/` (the tools).
-Push to `main` → a GitHub Action builds a clean, install-ready **`Okanvil.zip`** (dev files stripped)
-and rolls the **Latest** release.
 
-Design notes & roadmap → **[`Okanvil/PLAN.md`](Okanvil/PLAN.md)**.
-SavedVariables layout (account-wide vs per-character — read before wiping/debugging saved data) → **[`docs/STORAGE.md`](docs/STORAGE.md)**.
+**Releases are automatic.** Every push to `main` makes a GitHub Action bump the version, tag it,
+build a clean install-ready **`Okanvil.zip`** (dev files stripped), publish the release and announce
+it. The version is derived from the last tag — **never hand-edit `## Version:` in the `.toc`**; the
+Action stamps it at build time. Steer the bump with a keyword anywhere in the commit message:
+
+| commit message | `1.2.1` becomes | use for |
+|:--|:--|:--|
+| *(no keyword)* | `1.2.2` | bug fix — the default |
+| `… [minor]` | `1.3.0` | new module or feature |
+| `… [major]` | `2.0.0` | breaking change (e.g. wipes SavedVariables) |
+| `… [skip]` | *no release* | docs / CI-only push |
+
+In-game, clients gossip their version over the addon channel: run an older build next to someone on
+a newer one and Okanvil tells you an update is out. (A 3.3.5a addon can't make HTTP requests, so it
+learns this from your group, not from GitHub — and it wants two independent reports before it
+believes anyone, so nobody can troll the raid into "updating".)
+
+**Reference reading**
+
+- Design notes & roadmap → **[`Okanvil/PLAN.md`](Okanvil/PLAN.md)**
+- SavedVariables layout (account-wide vs per-character — read before wiping/debugging saved data) → **[`docs/STORAGE.md`](docs/STORAGE.md)**
+- How MRT captures "who received what" → **[`docs/MRT_LOOT_MODEL.md`](docs/MRT_LOOT_MODEL.md)**
+- How the RaidRoll addon works → **[`docs/RAIDROLL_HOW_IT_WORKS.md`](docs/RAIDROLL_HOW_IT_WORKS.md)**
+- How RaidBrowser parses LFM spam → **[`docs/PARSER-REFERENCE.md`](docs/PARSER-REFERENCE.md)**
 
 <br>
 
