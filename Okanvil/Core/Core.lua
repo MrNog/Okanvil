@@ -328,7 +328,7 @@ end
 -- The record lives in the per-character DB, which WoW flushes to
 -- SavedVariables\Okanvil.lua on logout/reload -- so nothing is lost if you
 -- forget to run `/okdebug log` before quitting. Read it back with
--- `/okdebug errors`, or straight out of the .lua file.
+-- `/okerr`, or straight out of the .lua file.
 -- ------------------------------------------------------------
 -- A WoW addon cannot write files (no `io` in the sandbox). The ONLY file we get
 -- is a SavedVariable, which the client flushes on logout/reload. `OkanvilBugDB`
@@ -393,7 +393,7 @@ function Okanvil:ErrorSummary()
 	return out
 end
 
--- Whole history, formatted for the copy box (/okdebug errors). This is also what
+-- Whole history, formatted for the copy box (/okerr). This is also what
 -- you read straight out of Okanvil.lua when a raider sends you their file.
 function Okanvil:ErrorReport()
 	local log = self:ErrorLog()
@@ -585,7 +585,7 @@ SlashCmdList["Okanvil"] = function(arg)
 		-- NOTE: a literal "|" starts a colour escape in WoW; use "/" as the separator
 		-- (or "||") or the client eats the rest of the line.
 		Okanvil:Print("  |cffffd200/okrec|r |cff8a8d93or|r |cffffd200/recruit|r  recruiter  |cff8a8d93(on / off / afk / clear / toast / channels)|r")
-		Okanvil:Print("  |cffffd200/okdebug|r        loot debug  |cff8a8d93(tips / log / clear / world)|r")
+		Okanvil:Print("  |cffffd200/okdebug|r        loot debug  |cff8a8d93(tips / scan / log / clear / world)|r")
 		Okanvil:Print("  |cffffd200/okerr|r          error log  |cff8a8d93(clear)|r")
 		Okanvil:Print("  |cffffd200/okdev|r          toggle dev mode")
 		Okanvil:Print("  |cffffd200/okfocus|r        release a stuck keyboard focus")
