@@ -46,6 +46,7 @@ local ACCEPT_IDS = {
 	[47556] = true, -- Crusader Orb
 	[45087] = true, -- Runed Orb
 	[49908] = true, -- Primordial Saronite
+	[43102] = true, -- Frozen Orb (drop do ultimo boss -- a raid rola por ele)
 	[45038] = true, [45039] = true, [45896] = true, [49869] = true, -- fragmentos de lendario
 }
 local DENY_IDS = {
@@ -58,10 +59,11 @@ local DENY_IDS = {
 	[44990] = true, -- Champion's Seal
 	[47242] = true, -- Trophy of the Crusade (token de moeda)
 	[20725] = true, [22450] = true, -- crystals de DE
-	-- Crafting mats. Frozen Orb is EPIC, so the rarity gate never caught it; the
-	-- skinning/cloth mats ride in because skinning a boss corpse fires the same
-	-- LOOT_OPENED that captureCorpse() scans, so they get labelled with the boss name.
-	[43102] = true, -- Frozen Orb
+	-- Skinning/cloth/enchanting mats. These ride in because skinning (or DE'ing) a boss
+	-- corpse fires the same LOOT_OPENED that captureCorpse() scans, so they get labelled
+	-- with the boss name even though nobody rolled on them.
+	-- NOTE: Frozen Orb is deliberately NOT here -- it is a real last-boss drop that the
+	-- raid rolls on. It lives in ACCEPT_IDS below.
 	[44128] = true, -- Arctic Fur
 	[38425] = true, -- Heavy Borean Leather
 	[33568] = true, -- Borean Leather
@@ -80,7 +82,7 @@ local DENY_IDS = {
 -- Eternal Observer's Legplates, and "crystallized " the Crystallized Ebony Wand.
 local DENY_NAME_EXACT = {
 	["crystallized fire"] = true, ["crystallized shadow"] = true,
-	["jormungar scale"] = true, ["frozen orb"] = true, ["arctic fur"] = true,
+	["jormungar scale"] = true, ["arctic fur"] = true,
 }
 -- allow por NOME (robusto): patterns/plans/recipes + orbs + fragmentos.
 local ACCEPT_NAME = {
@@ -1242,11 +1244,32 @@ awardTicker:SetScript("OnUpdate", function(self)
 	end
 end)
 
+-- Freeze the MANUAL /roll list onto the drop so the history can show it later.
+-- Native need/greed already lands in dp.rolls via CHAT_MSG_LOOT; a manual roll only
+-- ever lived in `activeRoll` and died when we cleared it, so an awarded item showed a
+-- winner and no rolls. Normalize to the same shape (kind = "ms"/"os") and never
+-- overwrite native rolls that are already there.
+local function freezeManualRolls(id)
+	if not (activeRoll and activeRoll.id == id and activeRoll.list) then return end
+	if #activeRoll.list == 0 then return end
+	local s = activeBucket()
+	local dp = findOpenDrop(s, id)
+	if not dp or (dp.rolls and #dp.rolls > 0) then return end
+	dp.rolls = {}
+	for _, e in ipairs(activeRoll.list) do
+		dp.rolls[#dp.rolls + 1] = {
+			player = e.player, roll = e.roll or 0,
+			kind = (e.spec == "off") and "os" or "ms", spec = e.spec,
+		}
+	end
+end
+
 local function commitAward(id, winner)
 	local res, slot = giveLootNow(id, winner)
 	L.Dbg("commitAward: giveLootNow -> " .. tostring(res) .. " slot=" .. tostring(slot))
 	local nm = (GetItemInfo(id)) or "item"
 	if res == "ok" then
+		freezeManualRolls(id)
 		-- NOT recorded yet: wait for LOOT_SLOT_CLEARED / CHAT_MSG_LOOT / timeout.
 		pendingAward = { id = id, winner = winner, slot = slot, at = GetTime(), nm = nm }
 		awardTicker:Show()

@@ -425,7 +425,12 @@ function RM.Rebuild()
 	-- rolls: state line + list (both modes see the rolls) --------------------
 	local lnH = compact and 13 or 16
 	local rs = keep(W.Text(body, "", compact and 10 or 11, "dim")); rs:SetPoint("TOPLEFT", M, y); f.rollState = rs; y = y - lnH
-	local rl = keep(W.Text(body, ml and "Rolls -- click to pick winner" or "Rolls", 10, "dim")); rl:SetPoint("TOPLEFT", M, y); y = y - lnH
+	-- No bare "Rolls" caption -- the list is self-evident. The ML keeps a hint, because
+	-- for them the rows are clickable and nothing else advertises that.
+	if ml then
+		local rl = keep(W.Text(body, "Rolls -- click to pick winner", 10, "dim"))
+		rl:SetPoint("TOPLEFT", M, y); y = y - lnH
+	end
 	local rbox = keep(W.Frame(body, "dark")); rbox:SetPoint("TOPLEFT", M, y); rbox:SetSize(INNER, ROLL_ROWS * ROW_H + 4)
 	for i = 1, ROLL_ROWS do
 		local r = CreateFrame("Button", nil, rbox)
