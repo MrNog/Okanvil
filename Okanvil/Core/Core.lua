@@ -260,8 +260,15 @@ function Okanvil:Backdrop(frame, alpha, dark)
 	frame:SetBackdropBorderColor(0.32, 0.32, 0.38, 1)
 end
 
+-- Every addon message goes to the "Okanvil" chat tab when that tab EXISTS, else to
+-- the default frame. We never create it here (DevFrame(false)): a raider who has
+-- never opened the tab keeps seeing messages in General instead of having a window
+-- appear unasked. Create it with /okanvil tab (or /okdev).
+--
+-- self:DevFrame is resolved at call time, so it being defined further down is fine.
 function Okanvil:Print(msg)
-	DEFAULT_CHAT_FRAME:AddMessage("|cffffd200[Okanvil]|r " .. tostring(msg))
+	local f = (self.DevFrame and self:DevFrame(false)) or DEFAULT_CHAT_FRAME
+	f:AddMessage("|cffffd200[Okanvil]|r " .. tostring(msg))
 end
 
 -- ------------------------------------------------------------
@@ -556,7 +563,34 @@ end)
 -- Slash
 -- ------------------------------------------------------------
 SLASH_Okanvil1 = "/okanvil"
-SlashCmdList["Okanvil"] = function()
+SlashCmdList["Okanvil"] = function(arg)
+	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	if arg == "tab" then
+		-- opt in to the dedicated chat tab: from now on Print() lands there
+		local f = Okanvil:DevFrame(true)
+		if f then
+			Okanvil:Print("Okanvil messages now go to the |cffe0b860Okanvil|r chat tab.")
+		else
+			Okanvil:Print("|cffff5555Could not open a chat tab (all 10 slots in use).|r")
+		end
+		return
+	end
+	if arg == "help" or arg == "?" then
+		Okanvil:Print("commands:")
+		Okanvil:Print("  |cffffd200/okanvil|r        open/close the window   |cff8a8d93(/okanvil tab = own chat tab)|r")
+		Okanvil:Print("  |cffffd200/okroll|r         mini roll manager")
+		Okanvil:Print("  |cffffd200/okid|r |cff8a8d93or|r |cffffd200/idfind|r  item/spell ID finder  |cff8a8d93(/okid sweep)|r")
+		Okanvil:Print("  |cffffd200/oklog|r          combat logs  |cff8a8d93(on / off)|r")
+		Okanvil:Print("  |cffffd200/okrf|r           raid finder")
+		-- NOTE: a literal "|" starts a colour escape in WoW; use "/" as the separator
+		-- (or "||") or the client eats the rest of the line.
+		Okanvil:Print("  |cffffd200/okrec|r |cff8a8d93or|r |cffffd200/recruit|r  recruiter  |cff8a8d93(on / off / afk / clear / toast / channels)|r")
+		Okanvil:Print("  |cffffd200/okdebug|r        loot debug  |cff8a8d93(tips / log / clear / world)|r")
+		Okanvil:Print("  |cffffd200/okerr|r          error log  |cff8a8d93(clear)|r")
+		Okanvil:Print("  |cffffd200/okdev|r          toggle dev mode")
+		Okanvil:Print("  |cffffd200/okfocus|r        release a stuck keyboard focus")
+		return
+	end
 	Okanvil:Toggle()
 end
 

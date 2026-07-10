@@ -850,3 +850,67 @@ function Okanvil:ShowExport(text, label)
 	end
 	f.eb:SetCursorPosition(0)
 end
+
+-- ------------------------------------------------------------
+-- Import dialog -- an empty multiline EditBox plus one action button. Same shape as
+-- ShowExport, but the text flows the other way: you paste, we hand the string to
+-- `onAccept`. Used to feed the addon a list of item ids from the website.
+--   Okanvil:ShowImport("Paste ids", "Scan", function(text) ... end)
+-- ------------------------------------------------------------
+local importDlg
+function Okanvil:ShowImport(label, actionText, onAccept, hintText)
+	local f = importDlg
+	if not f then
+		f = self:Popup("Import")
+		f:SetSize(440, 320)
+		local hint = W.Text(f, "", 10, "dim")
+		hint:SetPoint("TOPLEFT", 10, -30)
+
+		local go = W.Button(f, "Go", "primary")
+		go:SetSize(90, 22); go:SetPoint("BOTTOMRIGHT", -8, 8)
+
+		local box = W.Frame(f, "input")
+		box:SetPoint("TOPLEFT", 8, -48); box:SetPoint("BOTTOMRIGHT", -8, 38)
+		local sf = CreateFrame("ScrollFrame", nil, box)
+		sf:SetPoint("TOPLEFT", 4, -4); sf:SetPoint("BOTTOMRIGHT", -10, 4)
+		local eb = CreateFrame("EditBox", nil, sf)
+		eb:SetMultiLine(true); eb:SetAutoFocus(false); eb:SetWidth(390)
+		eb:SetFontObject(GameFontHighlightSmall)
+		eb:SetTextColor(unpack3(C.text))
+		eb:SetScript("OnEscapePressed", function() f:Hide() end)
+		Okanvil:TrackEditBox(eb)
+		-- SAFETY: release the keyboard on close, so a lingering focus can never eat
+		-- W/A/S/D out in the world.
+		f:HookScript("OnHide", function() eb:ClearFocus() end)
+		sf:SetScrollChild(eb)
+
+		local sb = CreateFrame("Slider", nil, box)
+		sb:SetPoint("TOPRIGHT", -3, -4); sb:SetPoint("BOTTOMRIGHT", -3, 4); sb:SetWidth(4)
+		sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
+		local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetVertexColor(unpack3(C.accent)); th:SetSize(4, 40)
+		sb:SetThumbTexture(th)
+		sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
+		sf:EnableMouseWheel(true)
+		sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 24) end)
+		local function range()
+			local max = math.max(0, eb:GetHeight() - sf:GetHeight())
+			sb:SetMinMaxValues(0, max); sb:SetShown(max > 0)
+		end
+		eb:SetScript("OnTextChanged", range)
+		f.eb, f._range, f.go, f.hint = eb, range, go, hint
+		importDlg = f
+	end
+	f.title:SetText("|cffffd200" .. (label or "Import") .. "|r")
+	f.hint:SetText(hintText or "Paste, then press the button.")
+	f.go.text:SetText(actionText or "Go")
+	f.go:SetScript("OnClick", function()
+		local txt = f.eb:GetText() or ""
+		f.eb:ClearFocus()
+		f:Hide()
+		if onAccept then onAccept(txt) end
+	end)
+	f.eb:SetText("")
+	f:Show()
+	if f._range then f._range() end
+	if not (InCombatLockdown and InCombatLockdown()) then f.eb:SetFocus() end
+end

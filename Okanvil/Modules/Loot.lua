@@ -151,18 +151,54 @@ local function guidIsNPC(guid)
 	return b and (b % 8) == 3
 end
 
--- BoE probe (tooltip) -- only to tag drops for the export.
+-- ------------------------------------------------------------
+-- TOOLTIP SCAN. One hidden GameTooltip, read once, reused for both the BoE tag and
+-- the full stat lines we ship in the export (so the web hub can draw an in-game
+-- looking tooltip without Wowhead).
+--
+-- 3.3.5a: the tooltip is EMPTY until the client has the item cached. Callers must
+-- Okanvil:WarmItem() first and retry -- scanLines() returns nil (not {}) when the
+-- item is not cached yet, so the caller can tell "no data" from "no stats".
+-- Colours matter: ilvl is yellow, "Equip:" lines are green. We keep the rgb so the
+-- site can recolour without re-deriving what each line means.
+-- ------------------------------------------------------------
 local scanTip
-local function isBoE(link)
-	if not link then return false end
+local function ensureScanTip()
 	if not scanTip then
 		scanTip = CreateFrame("GameTooltip", "OkanvilLootScanTip", nil, "GameTooltipTemplate")
 		scanTip:SetOwner(UIParent, "ANCHOR_NONE")
 	end
-	scanTip:ClearLines(); scanTip:SetHyperlink(link)
-	for i = 2, math.min(6, scanTip:NumLines()) do
-		local t = _G["OkanvilLootScanTipTextLeft" .. i]
-		local s = t and t:GetText()
+	return scanTip
+end
+
+-- -> { {text=, r=, g=, b=}, ... }  or nil if the item isn't cached yet
+local function scanLines(link)
+	if not link or link == "" then return nil end
+	local tip = ensureScanTip()
+	tip:ClearLines()
+	local ok = pcall(function() tip:SetHyperlink(link) end)
+	if not ok then return nil end
+	local n = tip:NumLines() or 0
+	if n < 1 then return nil end
+	local out = {}
+	for i = 1, n do
+		local fs = _G["OkanvilLootScanTipTextLeft" .. i]
+		local s = fs and fs:GetText()
+		if s and s ~= "" then
+			local r, g, b = 1, 1, 1
+			if fs.GetTextColor then r, g, b = fs:GetTextColor() end
+			out[#out + 1] = { text = s, r = r, g = g, b = b }
+		end
+	end
+	if #out == 0 then return nil end
+	return out
+end
+
+local function isBoE(link)
+	local lines = scanLines(link)
+	if not lines then return false end
+	for i = 2, math.min(6, #lines) do
+		local s = lines[i].text
 		if s == ITEM_BIND_ON_PICKUP then return false end
 		if s == ITEM_BIND_ON_EQUIP  then return true end
 	end
@@ -561,6 +597,9 @@ local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur)
 		name = name or "", rarity = rarity or 0, qty = 1, boe = boe and true or false,
 		icon = iconTok,
 	}
+	-- STAT LINES: same reasoning as the icon -- capture now, while the item is cached.
+	-- nil (not cached) is left unset so L.BackfillTips() can retry later.
+	dp.tip = scanLines(link)
 	if rollID then dp.rollID = rollID; dp.rollStart = GetTime(); dp.rollDur = rollDur or 60 end
 	bucket[#bucket + 1] = dp
 	lastLootAt = GetTime and GetTime() or 0
@@ -1460,6 +1499,143 @@ local function iconToken(link, id)
 	return tex and (tex:gsub(".*\\", "")) or ""
 end
 
+-- dp.tip -> JSON array [{"t":"+67 Strength","c":"1eff00"}, ...]
+-- Colour as hex: the site wants a CSS colour, not three floats. White (the default
+-- body colour) is omitted so the JSON stays small -- the site defaults to white.
+local function tipJSON(tip)
+	if not tip or #tip == 0 then return "null" end
+	local parts = {}
+	for _, ln in ipairs(tip) do
+		local r = math.floor((ln.r or 1) * 255 + 0.5)
+		local g = math.floor((ln.g or 1) * 255 + 0.5)
+		local b = math.floor((ln.b or 1) * 255 + 0.5)
+		local col = ""
+		if not (r == 255 and g == 255 and b == 255) then
+			col = string.format(',"c":"%02x%02x%02x"', r, g, b)
+		end
+		parts[#parts + 1] = string.format('{"t":"%s"%s}', esc(ln.text), col)
+	end
+	return "[" .. table.concat(parts, ",") .. "]"
+end
+
+-- ------------------------------------------------------------
+-- BACKFILL. Drops recorded before the tooltip capture existed (or captured while the
+-- item was still un-cached) have no dp.tip. Ask the server for each one via the Core
+-- warmer, then re-scan on a ticker until the client answers. Purely additive: an item
+-- that already has .tip is skipped, and a failure just leaves it unset.
+--
+-- No C_Timer on 3.3.5a -> OnUpdate ticker, throttled, and it stops itself when done.
+-- ------------------------------------------------------------
+-- Each job = { key = "item:45107" or a full link, apply = function(lines) end }.
+-- Keeping the write behind a callback lets ONE ticker serve both callers: filling
+-- dp.tip in our own sessions, and building a standalone id->tip dictionary for the
+-- website (whose history long outlives the sessions we still hold locally).
+local backfill = { queue = nil, i = 1, tries = 0, acc = 0, done = 0, onDone = nil, label = "" }
+local backfillTicker = CreateFrame("Frame")
+backfillTicker:Hide()
+backfillTicker:SetScript("OnUpdate", function(self, e)
+	backfill.acc = backfill.acc + e
+	if backfill.acc < 0.25 then return end   -- ~4 attempts/sec: the server query is the risky part
+	backfill.acc = 0
+	local q = backfill.queue
+	if not q or backfill.i > #q then
+		self:Hide()
+		backfill.queue = nil
+		local done, total, cb = backfill.done, #(q or {}), backfill.onDone
+		Okanvil:Print(backfill.label .. ": " .. done .. "/" .. total .. " item(s) prontos.")
+		if cb then cb(done, total) end
+		if L.onLoot then L.onLoot() end
+		return
+	end
+	local job = q[backfill.i]
+	local lines = scanLines(job.key)
+	if lines then
+		job.apply(lines)
+		backfill.done = backfill.done + 1
+		backfill.i = backfill.i + 1; backfill.tries = 0
+	else
+		backfill.tries = backfill.tries + 1
+		if backfill.tries >= 8 then          -- ~2s per item, then give up and move on
+			backfill.i = backfill.i + 1; backfill.tries = 0
+		end
+	end
+end)
+
+local function runBackfill(jobs, label, onDone)
+	if backfill.queue then Okanvil:Print("Tooltips: ja a correr."); return false end
+	if #jobs == 0 then Okanvil:Print(label .. ": nada a fazer."); return false end
+	for _, j in ipairs(jobs) do
+		if Okanvil.WarmItem then Okanvil:WarmItem(j.key) end
+	end
+	backfill.queue, backfill.i, backfill.tries, backfill.acc, backfill.done = jobs, 1, 0, 0, 0
+	backfill.onDone, backfill.label = onDone, label
+	Okanvil:Print(label .. ": a pedir " .. #jobs .. " item(s) ao servidor...")
+	backfillTicker:Show()
+	return true
+end
+
+-- Fill in dp.tip for every drop that lacks it, across ALL sessions.
+function L.BackfillTips()
+	local jobs = {}
+	for _, s in ipairs(sessions()) do
+		for _, dp in ipairs(s.drops or {}) do
+			if not dp.tip and (dp.id or 0) ~= 0 then
+				local d = dp
+				jobs[#jobs + 1] = {
+					key = (d.item ~= "" and d.item) or ("item:" .. d.id),
+					apply = function(lines) d.tip = lines end,
+				}
+			end
+		end
+	end
+	runBackfill(jobs, "Tooltips", nil)
+end
+
+-- ------------------------------------------------------------
+-- TOOLTIPS FOR THE WEBSITE. The hub's loot history is far older than the sessions
+-- we still keep locally (they get deleted), so we cannot backfill from our own
+-- drops. But a tooltip belongs to the ITEM, not to the drop -- and WarmItem() only
+-- needs an id. So: paste the ids the site is missing, scan them here, paste the
+-- resulting dictionary back. Sessions are never touched.
+--
+--   L.ScanIDs("45107 45110, 47131")  ->  {"type":"tips","tips":{"45107":[...]}}
+-- ------------------------------------------------------------
+function L.ScanIDs(text)
+	-- accept any separator (spaces, commas, newlines, JSON brackets)
+	local ids, seen = {}, {}
+	for n in tostring(text or ""):gmatch("%d+") do
+		local id = tonumber(n)
+		if id and id > 0 and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
+	end
+	if #ids == 0 then
+		Okanvil:Print("Scan: nao encontrei nenhum item id no texto colado.")
+		return
+	end
+	local out = {}    -- id -> lines
+	local jobs = {}
+	for _, id in ipairs(ids) do
+		local myId = id
+		jobs[#jobs + 1] = {
+			key = "item:" .. myId,
+			apply = function(lines) out[myId] = lines end,
+		}
+	end
+	runBackfill(jobs, "Scan", function(done, total)
+		local parts = {}
+		for _, id in ipairs(ids) do
+			if out[id] then
+				parts[#parts + 1] = '"' .. id .. '":' .. tipJSON(out[id])
+			end
+		end
+		local json = '{"type":"tips","count":' .. #parts .. ',"tips":{' .. table.concat(parts, ",") .. "}}"
+		if Okanvil.ShowExport then
+			Okanvil:ShowExport(json, "Tooltips (" .. #parts .. "/" .. #ids .. ") -- Ctrl+C, cola no site")
+		else
+			Okanvil:Print(json)
+		end
+	end)
+end
+
 function L.SessionJSON(s)
 	if not s then return "{}" end
 	local guildName = GetGuildInfo("player") or "Guild"
@@ -1475,11 +1651,12 @@ function L.SessionJSON(s)
 		local class  = d.de and "" or classNameOf(d.receivedBy)
 		drops[#drops + 1] = string.format(
 			'{"ts":%d,"player":"%s","class":"%s","itemId":%d,"name":"%s","icon":"%s",'
-			.. '"quality":%d,"boss":"%s","raid":"%s","size":%d,"runId":"%s","de":%s,"boe":%s}',
+			.. '"quality":%d,"boss":"%s","raid":"%s","size":%d,"runId":"%s","de":%s,"boe":%s,'
+			.. '"tip":%s}',
 			d.t or 0, esc(player), esc(class), d.id or 0,
 			esc(d.name), esc(d.icon or iconToken(d.item, d.id)), d.rarity or 4, esc(d.boss),
 			esc(s.zone or ""), size, esc(runId), d.de and "true" or "false",
-			d.boe and "true" or "false")
+			d.boe and "true" or "false", tipJSON(d.tip))
 	end
 	return string.format(
 		'{"type":"loot","guildName":"%s","realm":"%s","capturedAt":%d,"day":"%s",'
@@ -1914,6 +2091,18 @@ end
 SLASH_OKDEBUG1 = "/okdebug"
 SlashCmdList["OKDEBUG"] = function(arg)
 	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	if arg == "tips" then
+		-- fill dp.tip for old drops so the web export carries their stat lines
+		L.BackfillTips(); return
+	end
+	if arg == "scan" then
+		-- Website has loot whose sessions we deleted locally. Paste the item ids it is
+		-- missing; we scan them by id and hand back an id->tooltip dictionary.
+		if not Okanvil.ShowImport then Okanvil:Print("ShowImport indisponivel."); return end
+		Okanvil:ShowImport("Scan tooltips", "Scan", function(text) L.ScanIDs(text) end,
+			"Cola aqui os item ids do site (o botao 'Copy missing ids').")
+		return
+	end
 	if arg == "log" then
 		local buf = dbgBuf()
 		if #buf == 0 then Okanvil:Print("Log vazio. Liga com /okdebug e repete o award."); return end
