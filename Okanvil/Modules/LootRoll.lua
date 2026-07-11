@@ -528,6 +528,33 @@ end
 -- ------------------------------------------------------------
 -- refresh -- paint items, rolls from the Loot module's live data
 -- ------------------------------------------------------------
+-- Jump to and SELECT the item with this id, across ALL boss tabs. Fired when a roll
+-- starts (L.onRollStart) so you don't have to search the tabs for the item being
+-- rolled -- Okanvil pages to it and selects it, and its live rolls show immediately.
+function RM.SelectItemById(id)
+	if not (win and id) then return end
+	-- Two passes: first an item still OPEN for rolls (not awarded), so re-rolling a
+	-- fresh drop of an id doesn't land on an old awarded copy; then any copy of the id.
+	local groups = L.DropsByBoss and L.DropsByBoss() or {}
+	local function pick(openOnly)
+		for gi, g in ipairs(groups) do
+			for _, d in ipairs(g.items) do
+				if d.id == id and (not openOnly or not d.receivedBy) then
+					win.bossIdx = gi
+					win.userCleared = false
+					selected = d
+					win.rollScroll = 0
+					RM.Refresh()   -- no-op if the window is hidden; selection is remembered for next open
+					return true
+				end
+			end
+		end
+		return false
+	end
+	if pick(true) then return end
+	pick(false)
+end
+
 function RM.Refresh()
 	if not win or not win:IsShown() then return end
 	local f = win
@@ -677,6 +704,12 @@ function RM.Refresh()
 	-- No selection = empty (we don't auto-pick any item). "only when I select".
 	local rollItem = selected
 
+	-- WATCH the selected item for manual /rolls (ML rolling bag items by hand). Done
+	-- here in Refresh so EVERY path that changes `selected` (click, boss page change,
+	-- clear, award, auto-pick) updates the watch. No managed roll needed -- selecting
+	-- the item is enough to see people's rolls live. (Refresh runs on select.)
+	if L and L.WatchItem then L.WatchItem(selected) end
+
 	-- roll state line
 	if f.rollState then
 		if rollItem then
@@ -704,7 +737,9 @@ function RM.Refresh()
 		-- NOT beat a DE 35), so they share a rank and the number decides. Ties break on
 		-- name: table.sort is not stable, so equal rolls would otherwise swap places
 		-- between refreshes.
-		local rank = { need = 2, greed = 1, de = 1 }
+		-- need beats all; ms (main-spec manual) beats os (off-spec manual); greed/de
+		-- tie at the base level (the game awards the higher number between them).
+		local rank = { need = 3, ms = 2, greed = 1, de = 1, os = 0 }
 		for _, e in ipairs(selRolls) do sorted[#sorted + 1] = e end
 		table.sort(sorted, function(a, b)
 			local ra, rb = rank[a.kind] or 0, rank[b.kind] or 0
@@ -874,6 +909,11 @@ function RM.OnRollOpen() popOrRefresh(false) end
 -- a loot window just opened with items in front of us -> always pop (forced).
 function RM.OnLootWindow() popOrRefresh(true) end
 
+-- Just hide (never toggle open). Used by Okanvil:CloseAll() on a DBM pull.
+function RM.Hide()
+	if win and win:IsShown() then win:Hide() end
+end
+
 function RM.Toggle()
 	local ok, err = pcall(function()
 		if win and win:IsShown() then
@@ -945,6 +985,9 @@ ev:SetScript("OnEvent", function(_, event)
 	local prevLoot = L.onLoot
 	L.onLoot = function() if prevLoot then prevLoot() end; onLoot() end
 	L.onRoll = function() RM.OnRollOpen() end
+	-- a roll just STARTED on an item id -> page to it and select it (no tab hunting)
+	L.onRollStart = function(id) local ok, err = pcall(RM.SelectItemById, id)
+		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SelectItemById", err) end end
 	-- fired the instant a loot window opens with items (RaidRoll / RCLootCouncil
 	-- model) -- pop the mini roll even if the item is filtered from recording, and
 	-- regardless of the InLiveRun timing race (we KNOW a corpse is open).

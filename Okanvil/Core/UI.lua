@@ -783,6 +783,16 @@ function Okanvil:BuildGuild()
 	local host = fill.child
 	local G = Okanvil.Guild
 
+	-- Prime the FULL roster now so an export moments later has the offline members
+	-- loaded. GetGuildRosterInfo only returns offline members after the client has
+	-- fetched them (GUILD_ROSTER_UPDATE), which needs SetGuildRosterShowOffline(true)
+	-- + a GuildRoster() request. Without this, opening the panel and hitting Export
+	-- immediately exported only the online members (the "238 left the guild" bug).
+	if IsInGuild and IsInGuild() then
+		if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
+		if GuildRoster then GuildRoster() end
+	end
+
 	-- Dashboard shell (MRT/Recruit-style): header (icon + title + status + CTA),
 	-- no tabs, no drawer -> the snapshots list gets the whole content area and
 	-- scrolls internally. CTA = Export roster.
@@ -792,7 +802,14 @@ function Okanvil:BuildGuild()
 		drawerWidth = 0,
 		footerHeight = 0,
 		primaryText = function() return "Export roster" end,
-		onPrimary = function() Okanvil:ShowExport(G.BuildRosterJSON(), "Guild roster") end,
+		onPrimary = function()
+			-- Async: force "Show Offline Members" on, refresh, wait for the roster to
+			-- actually load the offline members (GUILD_ROSTER_UPDATE), THEN build + show
+			-- the full list. A synchronous build here caught only the online members.
+			G.ExportRoster(function(json)
+				Okanvil:ShowExport(json, "Guild roster")
+			end)
+		end,
 		statusText = function()
 			local snaps = (Okanvil.db.guild and Okanvil.db.guild.snapshots) or {}
 			return "|cff8a8d93" .. #snaps .. " snapshot" .. (#snaps == 1 and "" or "s") .. "|r"
@@ -1815,6 +1832,10 @@ function Okanvil:Settings_Options(p)
 		function() return (db.ratArt or "on") ~= "off" end,
 		function(v) db.ratArt = v and "on" or "off"; Okanvil:RefreshRatArt() end)
 	showChk:SetPoint("TOPLEFT", X, -170)
+	local pullChk = W.Check(p, "Close all windows on a DBM pull",
+		function() return db.closeOnPull ~= false end,
+		function(v) db.closeOnPull = v end)
+	pullChk:SetPoint("TOPLEFT", X + 200, -170)
 	-- rat watermark intensity -- its OWN slider, independent of panel opacity.
 	W.Slider(p, "Rat art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
 		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -212)
@@ -2085,6 +2106,18 @@ function Okanvil:Toggle()
 		self.win:Show()
 		self:ShowPanel(self._current or HOME)
 	end
+end
+
+-- Hide EVERY Okanvil frame: the shell, the collapsed puck, the global dropdown, and
+-- the mini roll manager. Wired to DBM's pull (see the DBM_Pull hook at PLAYER_LOGIN)
+-- so the whole UI gets out of the way the instant the raid engages a boss. pcall'd
+-- per frame so one missing piece can't stop the rest from closing.
+function Okanvil:CloseAll()
+	local function try(fn) local ok, err = pcall(fn); if not ok and self.Err then self:Err("CloseAll", err) end end
+	if self.CloseDropdown then try(function() self:CloseDropdown() end) end
+	if self.win     then try(function() self.win:Hide() end) end
+	if self.puck    then try(function() self.puck:Hide() end) end
+	if self.RollMgr and self.RollMgr.Hide then try(function() self.RollMgr.Hide() end) end
 end
 
 -- ------------------------------------------------------------

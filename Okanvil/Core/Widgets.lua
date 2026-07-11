@@ -794,6 +794,67 @@ function Okanvil:Popup(title)
 end
 
 -- ------------------------------------------------------------
+-- Confirm -- our OWN "are you sure?" dialog (NOT Blizzard's StaticPopup).
+--
+-- WoW reuses one shared pool of StaticPopup frames for every dialog, addon and
+-- Blizzard alike (REPLACE_ENCHANT, trade, etc). Running a PROTECTED call (like
+-- GiveMasterLoot) from a StaticPopup button taints that shared frame, and the next
+-- protected action landing on it -- e.g. confirming a helm enchant -- gets blocked,
+-- cancelling the player's cast. Owning our own frame side-steps the whole pool, so
+-- our confirms can never taint Blizzard's dialogs.
+--
+--   Okanvil:Confirm(text, acceptLabel, onAccept[, onCancel])
+--
+-- One shared, reused frame. Calling it again just re-labels and re-shows.
+-- ------------------------------------------------------------
+local confirmDlg
+function Okanvil:Confirm(text, acceptLabel, onAccept, onCancel)
+	local f = confirmDlg
+	if not f then
+		f = self:Popup("Confirmar")
+		f:SetSize(340, 150)
+		f:SetFrameStrata("FULLSCREEN_DIALOG")   -- above plugin popups + the loot window
+
+		local msg = W.Text(f, "", nil)
+		msg:SetPoint("TOPLEFT", 14, -34)
+		msg:SetPoint("TOPRIGHT", -14, -34)
+		msg:SetJustifyH("LEFT")
+		msg:SetJustifyV("TOP")
+		f.msg = msg
+
+		local ok = W.Button(f, "", "primary")
+		ok:SetSize(140, 24)
+		ok:SetPoint("BOTTOMRIGHT", f, "BOTTOM", -4, 10)
+		f.ok = ok
+
+		local no = W.Button(f, CANCEL, "secondary")
+		no:SetSize(140, 24)
+		no:SetPoint("BOTTOMLEFT", f, "BOTTOM", 4, 10)
+		f.no = no
+
+		-- Handlers are re-bound per show (closures capture that show's callbacks).
+		-- Both buttons hide first, THEN run the callback -- so the protected call in
+		-- onAccept runs with the dialog already gone, never mid-click on the frame.
+		ok:SetScript("OnClick", function()
+			f:Hide()
+			if f._accept then f._accept() end
+		end)
+		no:SetScript("OnClick", function()
+			f:Hide()
+			if f._cancel then f._cancel() end
+		end)
+		confirmDlg = f
+	end
+
+	f.msg:SetText(text or "")
+	f.ok.text:SetText(acceptLabel or OKAY)
+	f._accept = onAccept
+	f._cancel = onCancel
+	f:Show()
+	return f
+end
+
+-- ------------------------------------------------------------
 -- Export dialog -- a big multiline EditBox with the text pre-selected
 -- (Ctrl+C to copy). One shared, reused dialog. For roster/attendance JSON.
 -- ------------------------------------------------------------

@@ -220,6 +220,15 @@ local currentBoss = nil       -- nome do boss atualmente engajado
 local encounterBoss = nil     -- ultimo boss confirmado (para rotular loot depois da morte)
 local lastCorpseBoss = nil    -- ultimo corpo NPC lootado (fallback)
 local inCombatCid = nil       -- creatureID do boss em combate (para casar o UNIT_DIED)
+-- When a vetted boss was last SEEN alive (engaged) or died. A TWIN fight is two NPCs
+-- sharing one encounter (Twin Val'kyr, ZG's paired bosses, a custom server's twins):
+-- you may only ever target/mouseover ONE of them, so only that one lands in bossCids.
+-- Looting the OTHER twin's corpse then failed the bossCids check and its drops fell to
+-- "Trash". So we remember the moment of the last boss contact -- an unvetted corpse
+-- looted within a short window of it belongs to that same fight and inherits its label
+-- instead of nuking the boss context. Outside the window it is genuine trash.
+local lastBossContactAt = 0
+local TWIN_WINDOW = 30        -- seconds: an unvetted corpse this soon after a boss = same encounter
 -- Master-loot broadcast latch: the FIRST client to detect a boss's loot broadcasts it;
 -- later broadcasts for the SAME encounter are ignored (so two openers don't double it).
 -- Reset when a new boss is engaged (currentBoss changes) -> the next boss can broadcast
@@ -313,6 +322,7 @@ local function tryEngage(unit)
 	if name == "" then return end
 	name = bossLabel(cid, name)   -- Iron Council etc. -> one page, not three
 	inCombatCid = cid
+	lastBossContactAt = (GetTime and GetTime()) or 0   -- twin-window anchor (see captureCorpse)
 	bossCids[cid] = name          -- remember the verdict: its corpse may be looted later
 	-- a new boss only changes the current NAME (the run page via dp.boss/DropsByBoss).
 	-- does NOT open a new session -- bosses are pages WITHIN the same session/run.
@@ -336,6 +346,9 @@ end
 local function onUnitDied(destGUID)
 	local cid = cidFromGUID(destGUID)
 	if not cid then return end
+	-- Any vetted boss death refreshes the twin window: the paired twin's corpse is
+	-- looted moments later and must still resolve to this encounter, not Trash.
+	if bossCids[cid] then lastBossContactAt = (GetTime and GetTime()) or 0 end
 	if cid == inCombatCid then
 		inCombatCid = nil
 		-- currentBoss/encounterBoss already hold the name; keep encounterBoss to
@@ -731,13 +744,20 @@ local function captureCorpse()
 		if cid and bossCids[cid] then
 			if not encounterBoss then lastCorpseBoss = bossLabel(cid, tname) end
 		else
-			-- Looting a NON-boss corpse: the previous boss encounter is over. Clear the
-			-- sticky boss context so this (and later) trash is labelled Trash, not the
-			-- last boss. Without this, a mob killed AFTER a boss inherited the boss name
-			-- (the "trash BoE shows under Bonegrinder" bug) -- encounterBoss/lastCorpseBoss
-			-- were set on the boss and never cleared until the next boss corpse.
-			encounterBoss = nil
-			lastCorpseBoss = nil
+			-- Unvetted corpse. TWO cases:
+			--  a) the SECOND TWIN of an active boss fight -- looted within TWIN_WINDOW of
+			--     the last boss contact. We never vetted this NPC's own cid (you only
+			--     targeted its partner), but its loot belongs to the SAME encounter. Keep
+			--     encounterBoss so resolveBoss() credits the boss, not Trash.
+			--  b) genuine trash AFTER the encounter is over. Clear the sticky boss context
+			--     so this (and later) trash is labelled Trash, not the last boss -- the
+			--     "trash BoE shows under Bonegrinder" bug the clear was added to fix.
+			local now = (GetTime and GetTime()) or 0
+			local inTwinWindow = encounterBoss and (now - lastBossContactAt) <= TWIN_WINDOW
+			if not inTwinWindow then
+				encounterBoss = nil
+				lastCorpseBoss = nil
+			end
 		end
 	end
 	local boss = resolveBoss()
@@ -819,8 +839,15 @@ local function captureRollStart(rollID)
 	-- rollID check so a repeat of the same roll doesn't double.
 	local s = currentSession(true)
 	if s and dropByRollID(s, rollID) then return end
-	local dp = storeDrop(resolveBoss(), id, link, name, rarity, isBoE(link), rollID, dur, true)
+	local boss = resolveBoss()
+	local dp = storeDrop(boss, id, link, name, rarity, isBoE(link), rollID, dur, true)
 	if dp and L.onLootWindow then L.onLootWindow() end
+	-- BROADCAST group-loot rolls too, not just master-loot corpse scans. A DEAD raider
+	-- gets no LOOT_OPENED (can't open the corpse) and no START_LOOT_ROLL (can't roll),
+	-- so under group/need-greed loot nothing popped their roll window -- they couldn't
+	-- see what was dropping. The living rollers broadcast each item; the receiver
+	-- de-dups by id (storeDrop without allowDup), so living players don't double-record.
+	if dp then broadcastDrop(boss, id, link, rarity, isBoE(link)) end
 end
 
 -- ------------------------------------------------------------
@@ -1144,6 +1171,39 @@ end
 
 function L.ActiveRoll() return activeRoll end
 
+-- WATCHED DROP: the item currently SELECTED in the Mini Roll manager. When the ML
+-- rolls bag items by hand at the end of a raid (typing /roll in chat, never clicking
+-- "Roll MS/OS"), there is no activeRoll and no native need/greed -- so nothing was
+-- captured until the item was awarded, forcing you to hunt for what people rolled.
+-- Selecting an item now WATCHES it: any /roll in chat records straight into that
+-- drop's dp.rolls and shows live. Cleared when you de-select. See captureRoll below.
+local watchedDrop = nil
+function L.WatchItem(dp) watchedDrop = dp end
+
+-- EXTERNAL ROLLER: another player's addon (Osipally's, etc.) runs the roll and
+-- announces "Roll for: [item]" over raid warning. We follow it: resolve the item,
+-- SELECT it in the roll manager so you SEE the item being rolled, and make it the
+-- target that captureRoll records into -- independent of what you clicked. This is
+-- what fixes the mess when item 2 starts rolling while item 1's rolls are still up:
+-- the rolls follow the ANNOUNCE (the actively-rolling item), never your selection.
+-- The "X won [item]" announce their addon sends is ignored (we don't use their winner).
+local externalRollDrop = nil
+local externalRollAt = 0
+local EXTERNAL_ROLL_WINDOW = 60   -- seconds a "Roll for:" stays the active target
+-- resolve the drop for an announced item link, mark it the external-roll target, and
+-- tell the UI to select it. findOpenDrop (defined above) prefers an un-awarded copy.
+function L.NoteExternalRoll(link)
+	if not link then return end
+	local id = itemIDFromLink(link)
+	if not id or id == 0 then return end
+	local s = activeBucket and activeBucket()
+	local dp = s and findOpenDrop and findOpenDrop(s, id)
+	if not dp then return end
+	externalRollDrop = dp
+	externalRollAt = (GetTime and GetTime()) or 0
+	if L.onRollStart then L.onRollStart(id) end   -- roll manager pages to + selects it
+end
+
 function L.StartRoll(link, mode)
 	if not link then return end
 	mode = mode or "free"
@@ -1151,6 +1211,9 @@ function L.StartRoll(link, mode)
 		mode = mode, opened = GetTime(), best = nil, list = {}, seen = {} }
 	local chan = announceChannel()
 	if chan then SendChatMessage(L.RollMsg(mode):gsub("%[item%]", link), chan) end
+	-- Tell the UI a roll just STARTED on this item id, so it can page to it and select
+	-- it -- you no longer hunt across the boss tabs for the item you're rolling.
+	if L.onRollStart then L.onRollStart(activeRoll.id) end
 	if L.onRoll then L.onRoll() end
 end
 
@@ -1166,8 +1229,6 @@ end
 local ROLL_PATTERN = (RANDOM_ROLL_RESULT or "%s rolls %d (%d-%d)")
 	:gsub("([%(%)%-])", "%%%1"):gsub("%%s", "(.+)"):gsub("%%d", "(%%d+)")
 local function captureRoll(msg)
-	if not activeRoll then return end
-	if (GetTime() - activeRoll.opened) > ROLL_WINDOW then return end
 	local who, roll, _, hi = msg:match(ROLL_PATTERN)
 	if not who then return end
 	roll = tonumber(roll) or 0
@@ -1175,6 +1236,26 @@ local function captureRoll(msg)
 	if hiN > 100 or roll > 100 then return end
 	local spec = (hiN >= 100) and "main" or "off"
 	local key = noRealm(who)
+
+	-- No managed roll running: record into the active roll TARGET. Priority:
+	--   1. externalRollDrop -- the item an external roller just announced "Roll for:".
+	--      This is authoritative even if you clicked another item, so rolls follow the
+	--      item BEING rolled (fixes item-1/item-2 overlap when someone else runs loot).
+	--   2. watchedDrop -- the item YOU selected (ML hand-rolling bag items).
+	if not activeRoll then
+		local dp = externalRollDrop
+		if dp and (GetTime() - externalRollAt) > EXTERNAL_ROLL_WINDOW then dp = nil end
+		dp = dp or watchedDrop
+		if not dp then return end
+		dp.rolls = dp.rolls or {}
+		for _, e in ipairs(dp.rolls) do if e.player == key then return end end   -- first roll counts
+		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
+		if L.onLoot then L.onLoot() end
+		if L.onRoll then L.onRoll() end
+		return
+	end
+
+	if (GetTime() - activeRoll.opened) > ROLL_WINDOW then return end
 	if activeRoll.seen[key] then return end
 	activeRoll.seen[key] = true
 	activeRoll.list[#activeRoll.list + 1] = { player = key, roll = roll, spec = spec }
@@ -1182,6 +1263,24 @@ local function captureRoll(msg)
 	local better = (not b) or (spec == "main" and b.spec == "off") or (spec == b.spec and roll > b.roll)
 	if better then activeRoll.best = { player = key, roll = roll, spec = spec } end
 	if L.onRoll then L.onRoll() end
+end
+
+-- EXTERNAL ROLLER ANNOUNCE. Another player's roll addon posts over raid warning:
+--   "Roll for: [item]"                 -> start following: select the item, capture rolls
+--   "Congratulations X won [item] ..." -> IGNORED (we don't use their winner)
+-- We only act on a line that OPENS a roll and carries an item link. A line naming a
+-- WINNER also carries a link, so we must exclude it first, or a "won" line would
+-- re-select the just-finished item and steal the selection from the item now rolling.
+local function onRollAnnounce(msg)
+	if type(msg) ~= "string" then return end
+	local lower = msg:lower()
+	-- winner / result lines carry an item link too -> never treat them as a new roll.
+	if lower:find("won") or lower:find("congrat") then return end
+	-- an OPENING line: "roll for", or bare presence of an item link with a roll cue.
+	if not (lower:find("roll for") or lower:find("roll for:") or lower:find("rolling")) then return end
+	local link = msg:match("|c%x+|Hitem:.-|h.-|h|r") or msg:match("|Hitem:[^|]+|h%[.-%]|h")
+	if not link then return end
+	L.NoteExternalRoll(link)
 end
 
 -- ------------------------------------------------------------
@@ -1443,12 +1542,9 @@ end
 -- AWARD with CONFIRMATION -- SAME flow as RaidRoll RR_GiveLoot (where the idea came from):
 -- popup "are you sure? give [item] to X" with the button showing the winner's NAME,
 -- and only OnAccept does it give (RR_ReallyGiveLoot -> GiveMasterLoot). Always confirm.
-StaticPopupDialogs = StaticPopupDialogs or {}
-StaticPopupDialogs["OKANVIL_AWARD_CONFIRM"] = {
-	text = "", button1 = "", button2 = CANCEL,   -- button1 e definido por-show com o nome
-	OnAccept = function(self) local a = self.data; if a then commitAward(a.id, a.winner) end end,
-	timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
-}
+-- Uses Okanvil:Confirm (our OWN dialog), NOT StaticPopup: a StaticPopup running the
+-- protected GiveMasterLoot taints Blizzard's shared popup pool and later blocks the
+-- player's enchant confirm. Our own frame can't touch that pool. See Widgets.lua.
 function L.AwardWinner(id, winner, topRoll, spec)
 	L.Dbg("AwardWinner: id=" .. tostring(id) .. " winner=" .. tostring(winner)
 		.. " roll=" .. tostring(topRoll) .. " spec=" .. tostring(spec))
@@ -1460,12 +1556,10 @@ function L.AwardWinner(id, winner, topRoll, spec)
 	if activeRoll and activeRoll.id == id then link = activeRoll.link end
 	local itemStr = link or ("[" .. ((GetItemInfo(id)) or "item") .. "]")
 	local rollTag = (topRoll and topRoll > 0) and (" (rolou " .. topRoll .. (spec == "off" and " OS" or "") .. ")") or ""
-	-- botao com o nome, como o RaidRoll ("Give to X")
-	StaticPopupDialogs["OKANVIL_AWARD_CONFIRM"].button1 = "Dar a " .. winner
-	StaticPopupDialogs["OKANVIL_AWARD_CONFIRM"].text =
-		"Tens a certeza?\nDar " .. itemStr .. " a |cffffd200" .. winner .. "|r" .. rollTag .. "?"
-	local dlg = StaticPopup_Show("OKANVIL_AWARD_CONFIRM")
-	if dlg then dlg.data = { id = id, winner = winner } end
+	Okanvil:Confirm(
+		"Tens a certeza?\nDar " .. itemStr .. " a |cffffd200" .. winner .. "|r" .. rollTag .. "?",
+		"Dar a " .. winner,                                  -- botao com o nome, como o RaidRoll
+		function() commitAward(id, winner) end)
 end
 
 -- HIDE this run's drops from the mini roll list -- does NOT delete them. The old
@@ -1967,10 +2061,10 @@ local function autoGiveDecision(link, name)
 end
 
 -- ------------------------------------------------------------
--- FRAGMENT CONFIRM QUEUE. runAutoGive() walks the slots synchronously, but a
--- StaticPopup is async -- it returns at once and fires OnAccept later. Two fragments
--- in one window would therefore stack two dialogs (3.3.5a reuses the same frame, so
--- the second silently replaces the first and one fragment is skipped).
+-- FRAGMENT CONFIRM QUEUE. runAutoGive() walks the slots synchronously, but a confirm
+-- dialog is async -- it shows at once and the give happens later, on the click. The
+-- confirm is a single reused frame, so two fragments in one window would stack (the
+-- second replacing the first and skipping one fragment).
 --
 -- So fragment gives are QUEUED and shown one at a time: accepting/cancelling one pops
 -- the next. We re-resolve the slot by item ID at accept time -- the captured index is
@@ -1991,16 +2085,23 @@ local function slotForItemID(id)
 	return nil
 end
 
-local showNextFrag   -- fwd decl (the popup's handlers call it again)
+local showNextFrag   -- fwd decl (the confirm handlers call it again for the next in queue)
 
-StaticPopupDialogs = StaticPopupDialogs or {}
-StaticPopupDialogs["OKANVIL_FRAG_CONFIRM"] = {
-	text = "", button1 = "", button2 = CANCEL,
-	OnAccept = function(self)
-		local a = self.data
-		fragShowing = false
-		if a then
-			-- the window may have shifted (or closed) while the popup was up
+-- Uses Okanvil:Confirm (our OWN dialog), NOT StaticPopup -- same reason as AwardWinner:
+-- giveSlotTo -> GiveMasterLoot is protected, and running it from a StaticPopup taints
+-- Blizzard's shared popup pool, later blocking the player's enchant confirm.
+showNextFrag = function()
+	if fragShowing then return end
+	local a = table.remove(fragQueue, 1)
+	if not a then return end
+	fragShowing = true
+	Okanvil:Confirm(
+		"|cffff8000LEGENDARY|r\n\nGive |cffffd200" .. a.name .. "|r to |cffffd200" .. a.who .. "|r?\n\n"
+			.. "|cffff5555This cannot be undone|r -- it binds on pickup and cannot be traded on.",
+		"Give to " .. a.who,
+		function()   -- accept
+			fragShowing = false
+			-- the window may have shifted (or closed) while the confirm was up
 			local slot = slotForItemID(a.id)
 			if not slot then
 				Okanvil:Print("|cffff5555" .. a.name .. " is no longer in the loot window -- not given.|r")
@@ -2010,29 +2111,13 @@ StaticPopupDialogs["OKANVIL_FRAG_CONFIRM"] = {
 				Okanvil:Print("|cffff5555" .. a.who .. " is not a valid candidate (out of range/offline). "
 					.. a.name .. " stays on the boss.|r")
 			end
-		end
-		showNextFrag()
-	end,
-	OnCancel = function(self)
-		local a = self.data
-		fragShowing = false
-		if a then Okanvil:Print(a.name .. " left on the boss (not given).") end
-		showNextFrag()
-	end,
-	timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
-}
-
-showNextFrag = function()
-	if fragShowing then return end
-	local a = table.remove(fragQueue, 1)
-	if not a then return end
-	fragShowing = true
-	StaticPopupDialogs["OKANVIL_FRAG_CONFIRM"].button1 = "Give to " .. a.who
-	StaticPopupDialogs["OKANVIL_FRAG_CONFIRM"].text =
-		"|cffff8000LEGENDARY|r\n\nGive |cffffd200" .. a.name .. "|r to |cffffd200" .. a.who .. "|r?\n\n"
-		.. "|cffff5555This cannot be undone|r -- it binds on pickup and cannot be traded on."
-	local dlg = StaticPopup_Show("OKANVIL_FRAG_CONFIRM")
-	if dlg then dlg.data = a else fragShowing = false end   -- popup refused (another is up): re-arm
+			showNextFrag()
+		end,
+		function()   -- cancel
+			fragShowing = false
+			Okanvil:Print(a.name .. " left on the boss (not given).")
+			showNextFrag()
+		end)
 end
 
 local function queueFragConfirm(id, who, name)
@@ -2096,6 +2181,9 @@ ev:RegisterEvent("LOOT_CLOSED")                   -- invalida um give por confir
 ev:RegisterEvent("START_LOOT_ROLL")
 ev:RegisterEvent("CHAT_MSG_LOOT")
 ev:RegisterEvent("CHAT_MSG_SYSTEM")
+ev:RegisterEvent("CHAT_MSG_RAID_WARNING")         -- external roller "Roll for: [item]"
+ev:RegisterEvent("CHAT_MSG_RAID")
+ev:RegisterEvent("CHAT_MSG_RAID_LEADER")
 ev:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")   -- mortes de boss
 ev:RegisterEvent("PLAYER_TARGET_CHANGED")         -- scanner de boss
 ev:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
@@ -2160,6 +2248,9 @@ ev:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "START_LOOT_ROLL" then captureRollStart(...)
 	elseif event == "CHAT_MSG_LOOT" then onChatLoot(...)
 	elseif event == "CHAT_MSG_SYSTEM" then local a1 = ...; if a1 then captureRoll(a1) end
+	elseif event == "CHAT_MSG_RAID_WARNING" or event == "CHAT_MSG_RAID"
+		or event == "CHAT_MSG_RAID_LEADER" then
+		local a1 = ...; if a1 then onRollAnnounce(a1) end
 	elseif event == "PLAYER_ENTERING_WORLD" then onEnterWorld()
 	elseif event == "UPDATE_INSTANCE_INFO" then
 		-- lockout info landed: open/rejoin the real session and flush buffered drops.

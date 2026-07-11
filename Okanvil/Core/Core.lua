@@ -186,6 +186,7 @@ local defaults = {
 	lootThreshold = 3, -- min item rarity to log: 0 poor,1 common,2 uncommon,3 rare,4 epic
 	recordDungeon = true, -- capture attendance/loot in 5-man dungeons (party instances)
 	recordRaid = true,    -- capture attendance/loot in raids
+	closeOnPull = true,    -- DBM pull -> close all Okanvil windows (get out of the way on engage)
 	ratArt = "on",         -- faded rat blacksmith art in the page corner: "on" | "off"
 	ratAlpha = 0.30,       -- rat watermark intensity (own slider; independent of bgAlpha)
 	devMode = false,       -- dev output -> dedicated "Okanvil" chat tab (off for raiders)
@@ -607,6 +608,18 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		Okanvil:ProcessPlugins()
 		if Okanvil.BuildMinimap then
 			Okanvil:BuildMinimap()
+		end
+		-- DBM pull -> close every Okanvil window (get the UI out of the way on engage).
+		-- DBM fires "DBM_Pull" the moment a boss is pulled. Guarded: only if DBM is
+		-- present with its callback API, and toggleable via db.closeOnPull (default on).
+		if DBM and DBM.RegisterCallback and not Okanvil._dbmPullHooked then
+			local ok = pcall(function()
+				DBM:RegisterCallback("DBM_Pull", function()
+					if Okanvil.db and Okanvil.db.closeOnPull == false then return end
+					if Okanvil.CloseAll then Okanvil:CloseAll() end
+				end)
+			end)
+			if ok then Okanvil._dbmPullHooked = true end
 		end
 		Okanvil:Print("loaded -- |cff00ff00/okanvil|r. " .. Okanvil:CountPlugins() .. " plugin(s).")
 	end
