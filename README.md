@@ -107,11 +107,9 @@ believes anyone, so nobody can troll the raid into "updating".)
 
 **Reference reading**
 
-- Design notes & roadmap → **[`Okanvil/PLAN.md`](Okanvil/PLAN.md)**
+- Working notes — conventions, 3.3.5a traps, the map to everything → **[`docs/NOTES.md`](docs/NOTES.md)**
+- Slash commands → **[`docs/SLASH_COMMANDS.md`](docs/SLASH_COMMANDS.md)**
 - SavedVariables layout (account-wide vs per-character — read before wiping/debugging saved data) → **[`docs/STORAGE.md`](docs/STORAGE.md)**
-- How MRT captures "who received what" → **[`docs/MRT_LOOT_MODEL.md`](docs/MRT_LOOT_MODEL.md)**
-- How the RaidRoll addon works → **[`docs/RAIDROLL_HOW_IT_WORKS.md`](docs/RAIDROLL_HOW_IT_WORKS.md)**
-- How RaidBrowser parses LFM spam → **[`docs/PARSER-REFERENCE.md`](docs/PARSER-REFERENCE.md)**
 
 <br>
 

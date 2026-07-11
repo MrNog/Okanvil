@@ -260,7 +260,7 @@ local role_words = {
 	           "%f[%w]spriest%f[%W]", "shadow%s?priest", "%f[%w]spri%a*",
 	           "%f[%w]sp%f[%W]", "%f[%w]spd%f[%W]",                 -- sp/spd = shadow priest
 	           "%f[%w]ele%f[%W]", "%f[%w]elem%a*",                 -- ele / elemental
-	           "%f[%w]mage%a*", "%f[%w]lock%a*", "%f[%w]hunt%a*",
+	           "%f[%w]mage%a*", "%f[%w]lock%a*", "%f[%w]warlock%a*", "%f[%w]hunt%a*",
 	           "%f[%w]rogue%a*", "%f[%w]fury%a*",
 	           "%f[%w]ret%f[%W]", "%f[%w]retri%a*", "%f[%w]retro?%a*" },  -- ret / retri / retro(typo)
 }
@@ -772,6 +772,9 @@ local samples = {
 	"toc 10 nm full clear, hr trinkets",
 	"ToC25 3 dps 2 heal SR>MS>OS msg me",
 	"LFM ONYXIA 25 NEED 1 RSHAM AND 7 DPS 4,2++ /w GS+SPEC ONLY QUEST RESS",
+		-- "warlock" must resolve to DPS only (NOT default tank/dps/heal). The
+		-- %f[%w]lock%a* frontier does NOT fire inside "warlock" (r->l is word->word).
+		"LFM VOA10(classrun) - NEED : warlock-last spot /w me GS!",
 	-- should REJECT
 	"<Rats> is a pve guild recruiting all classes, we raid icc 25 and toc",
 	"WTS [Shadowmourne] cheap",

@@ -323,11 +323,11 @@ function RM.Rebuild()
 	local pgW = compact and 20 or 24
 	local prev = keep(W.Button(body, "<")); prev:SetSize(pgW, pgH); prev:SetPoint("TOPLEFT", M, y)
 	prev:SetScript("OnClick", function()
-		f.bossIdx = math.max(1, (f.bossIdx or 1) - 1); selected = nil; f.userCleared = false; RM.Refresh()
+		f.bossIdx = math.max(1, (f.bossIdx or 1) - 1); selected = nil; f.userCleared = false; f.itemScroll = 0; f.rollScroll = 0; RM.Refresh()
 	end)
 	local nxt = keep(W.Button(body, ">")); nxt:SetSize(pgW, pgH); nxt:SetPoint("TOPRIGHT", -M, y)
 	nxt:SetScript("OnClick", function()
-		f.bossIdx = math.min(f.bossCount or 1, (f.bossIdx or 1) + 1); selected = nil; f.userCleared = false; RM.Refresh()
+		f.bossIdx = math.min(f.bossCount or 1, (f.bossIdx or 1) + 1); selected = nil; f.userCleared = false; f.itemScroll = 0; f.rollScroll = 0; RM.Refresh()
 	end)
 	local bossHd = keep(W.Text(body, "", FONT_SZ, "accent")); bossHd:Color(1, 0.82, 0)
 	bossHd:SetPoint("LEFT", prev, "RIGHT", 4, 0); bossHd:SetPoint("RIGHT", nxt, "LEFT", -4, 0); bossHd:SetJustifyH("CENTER")
@@ -394,6 +394,7 @@ function RM.Rebuild()
 				selected = s._d
 				f.userCleared = false
 			end
+			f.rollScroll = 0            -- new item -> start its roll list at the top
 			RM.Refresh()
 		end)
 		f.itemRows[i] = r
@@ -423,15 +424,18 @@ function RM.Rebuild()
 	end
 
 	-- rolls: state line + list (both modes see the rolls) --------------------
+	-- No caption above the list at all -- the rows speak for themselves, and the ML
+	-- clicks a row to award without needing a label to say so.
 	local lnH = compact and 13 or 16
 	local rs = keep(W.Text(body, "", compact and 10 or 11, "dim")); rs:SetPoint("TOPLEFT", M, y); f.rollState = rs; y = y - lnH
-	-- No bare "Rolls" caption -- the list is self-evident. The ML keeps a hint, because
-	-- for them the rows are clickable and nothing else advertises that.
-	if ml then
-		local rl = keep(W.Text(body, "Rolls -- click to pick winner", 10, "dim"))
-		rl:SetPoint("TOPLEFT", M, y); y = y - lnH
-	end
 	local rbox = keep(W.Frame(body, "dark")); rbox:SetPoint("TOPLEFT", M, y); rbox:SetSize(INNER, ROLL_ROWS * ROW_H + 4)
+	f.rbox = rbox
+	-- mouse wheel pages the roll list (a big roll-off has more than ROLL_ROWS entries)
+	rbox:EnableMouseWheel(true)
+	rbox:SetScript("OnMouseWheel", function(_, delta)
+		f.rollScroll = (f.rollScroll or 0) - delta   -- wheel up = higher rolls
+		RM.Refresh()
+	end)
 	for i = 1, ROLL_ROWS do
 		local r = CreateFrame("Button", nil, rbox)
 		r:SetSize(INNER - 8, ROW_H); r:SetPoint("TOPLEFT", 4, -2 - (i - 1) * ROW_H)
@@ -677,13 +681,11 @@ function RM.Refresh()
 	if f.rollState then
 		if rollItem then
 			local nm = (rollItem.name ~= "" and rollItem.name) or "item"
-			local won = ""
-			if rollItem.receivedBy and rollItem.receivedBy ~= "" then
-				won = "  |cff8a8d93won by|r " .. classColorCode(rollItem.receivedBy) .. rollItem.receivedBy .. "|r"
-			elseif rollItem.passed then
-				won = "  |cff8a8d93(all passed)|r"
-			end
-			f.rollState:SetText("|cffffd200" .. nm .. "|r" .. won)
+			-- The winner already shows on the item row above (the "-> name") and the
+			-- green ">" marks the winning roll below, so DON'T repeat the name here --
+			-- just the item, plus "(all passed)" which isn't shown anywhere else.
+			local note = (rollItem.passed and not rollItem.receivedBy) and "  |cff8a8d93(all passed)|r" or ""
+			f.rollState:SetText("|cffffd200" .. nm .. "|r" .. note)
 		elseif ar then
 			f.rollState:SetText("|cffffd200Rolling...|r")
 		else
@@ -754,8 +756,15 @@ function RM.Refresh()
 		end)
 		best = ar and ar.best
 	end
+	-- SCROLL the roll list the same way the item list scrolls: more rolls than
+	-- ROLL_ROWS used to just vanish off the bottom (you could only see ~4). Page with
+	-- the wheel; clamp so we never scroll past the last full page.
+	local nRolls = #sorted
+	local maxRollOff = math.max(0, nRolls - ROLL_ROWS)
+	f.rollScroll = math.max(0, math.min(f.rollScroll or 0, maxRollOff))
+	local roff = f.rollScroll
 	for i = 1, ROLL_ROWS do
-		local r, e = f.rollRows[i], sorted[i]
+		local r, e = f.rollRows[i], sorted[i + roff]
 		if e then
 			r._roll = e
 			-- tag: spec (manual) OR need/greed/de type (native)

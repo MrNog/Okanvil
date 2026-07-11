@@ -584,10 +584,6 @@ function Okanvil:BuildHome()
 			wrap.gempty:SetText("|cff888888You are not in a guild.|r")
 			return
 		end
-		-- 3.3.5a: GetNumGuildMembers only counts ONLINE unless offline are shown.
-		-- Force offline in so we walk the whole roster, not just online.
-		if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
-		local total = GetNumGuildMembers and GetNumGuildMembers() or 0
 		local online, mains, mine, mineIdx = 0, 0, "--", nil
 		local myName = UnitName and UnitName("player")
 		local onlineList = {}
@@ -648,25 +644,29 @@ function Okanvil:BuildHome()
 			if rn:find("sewer", 1, true) then return "ffffe049" end           -- Sewer Rat: yellow
 			return "ff9aa0a6"                                                  -- Pug / unranked: grey
 		end
-		for i = 1, total do
-			-- 3.3.5: name, rank, rankIndex, level, class, zone, publicnote, officernote, online
-			local name, rank, rankIndex, _, class, zone, publicnote, officernote, isOnline = GetGuildRosterInfo(i)
-			if name then
-				local alt = isAlt(rank, rankIndex, officernote)
-				if not alt then mains = mains + 1 end
-				if isOnline then
-					online = online + 1
-					onlineList[#onlineList + 1] = {
-						name = name, rank = rank or "", rankIndex = rankIndex or 99, class = class,
-						col = rankColor(rank, rankIndex, alt), alt = alt,
-						nameCol = classHex(class),   -- NAME is class-coloured
-						zone = zone or "",
-						main = alt and mainOf(publicnote, officernote) or nil,
-					}
+		-- Walk the FULL roster (offline included) without leaving Blizzard's "Show
+		-- Offline" checkbox stuck on -- see Okanvil:WithFullRoster.
+		Okanvil:WithFullRoster(function(total)
+			for i = 1, total do
+				-- 3.3.5: name, rank, rankIndex, level, class, zone, publicnote, officernote, online
+				local name, rank, rankIndex, _, class, zone, publicnote, officernote, isOnline = GetGuildRosterInfo(i)
+				if name then
+					local alt = isAlt(rank, rankIndex, officernote)
+					if not alt then mains = mains + 1 end
+					if isOnline then
+						online = online + 1
+						onlineList[#onlineList + 1] = {
+							name = name, rank = rank or "", rankIndex = rankIndex or 99, class = class,
+							col = rankColor(rank, rankIndex, alt), alt = alt,
+							nameCol = classHex(class),   -- NAME is class-coloured
+							zone = zone or "",
+							main = alt and mainOf(publicnote, officernote) or nil,
+						}
+					end
+					if name == myName then mine = rank or "--"; mineIdx = rankIndex end
 				end
-				if name == myName then mine = rank or "--"; mineIdx = rankIndex end
 			end
-		end
+		end)
 		tiles.online.num:SetText(tostring(online))
 		tiles.members.num:SetText(tostring(mains))   -- MAINS only (real people, alts excluded)
 		-- your rank, coloured with the SAME rank colour used in the online list. Keep
@@ -759,6 +759,10 @@ function Okanvil:BuildHome()
 	local ev = CreateFrame("Frame")
 	ev:RegisterEvent("GUILD_ROSTER_UPDATE")
 	ev:SetScript("OnEvent", function()
+		-- Ignore roster events WE caused: WithFullRoster toggles Show-Offline, which
+		-- fires GUILD_ROSTER_UPDATE, which would call refreshGuild -> WithFullRoster
+		-- again -> a C stack overflow. rosterBusy stays set across that async event.
+		if Okanvil.rosterBusy then return end
 		if wrap:IsShown() then refreshGuild() end
 	end)
 
@@ -1510,26 +1514,26 @@ function Okanvil:BuildInvite()
 			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 0, -4); r:SetSize(200, 18)
 			r.txt:SetText("|cff888888Not in a guild.|r"); r:Show(); rchild:SetHeight(30); return
 		end
-		if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
-		local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
 		-- collect members, split alts out (same alt rule as Home), group by rank
 		local buckets, order = {}, {}
-		for i = 1, total do
-			local name, rank, rankIndex, _, class, _, publicnote, officernote, online = GetGuildRosterInfo(i)
-			if name then
-				name = (name:gsub("%-.*$", ""))
-				local isAlt = (rankIndex == 4)
-					or (rank and rank:lower():find("alt", 1, true))
-					or (officernote and officernote:lower():match("^.-%s+alt%f[%A]"))
-				-- search filter: if a query is typed, keep only matching names
-				local pass = (rfilter == "") or name:lower():find(rfilter, 1, true)
-				if not isAlt and pass then
-					local key = rankIndex or 99
-					if not buckets[key] then buckets[key] = { name = rank or ("Rank " .. key), idx = key, list = {} }; order[#order + 1] = key end
-					table.insert(buckets[key].list, { name = name, class = class, online = online })
+		Okanvil:WithFullRoster(function(total)
+			for i = 1, total do
+				local name, rank, rankIndex, _, class, _, publicnote, officernote, online = GetGuildRosterInfo(i)
+				if name then
+					name = (name:gsub("%-.*$", ""))
+					local isAlt = (rankIndex == 4)
+						or (rank and rank:lower():find("alt", 1, true))
+						or (officernote and officernote:lower():match("^.-%s+alt%f[%A]"))
+					-- search filter: if a query is typed, keep only matching names
+					local pass = (rfilter == "") or name:lower():find(rfilter, 1, true)
+					if not isAlt and pass then
+						local key = rankIndex or 99
+						if not buckets[key] then buckets[key] = { name = rank or ("Rank " .. key), idx = key, list = {} }; order[#order + 1] = key end
+						table.insert(buckets[key].list, { name = name, class = class, online = online })
+					end
 				end
 			end
-		end
+		end)
 		table.sort(order)
 		local ri, y = 0, 4
 		-- get a pooled row; the CALLER positions it (we manage x/y manually for columns)

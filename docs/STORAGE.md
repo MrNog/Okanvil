@@ -1,49 +1,61 @@
-# Okanvil — SavedVariables / storage model
+# 💾 Okanvil — storage model
 
-Where every piece of Okanvil data lives. Read this BEFORE editing, wiping, or
-debugging saved data — otherwise you hunt for data in the wrong file.
+Where every piece of Okanvil data lives. Read this **before** editing, wiping, or
+debugging saved data — otherwise you hunt in the wrong file.
+
+> **The one gotcha:** loot history is **per-character**. Wiping the account file does
+> **not** clear a toon's drops.
 
 Declared in `Okanvil.toc`:
 
 ```
-## SavedVariables:            Okanvil_DB, RecruitDB, OkanvilIDsDB
+## SavedVariables:             Okanvil_DB, RecruitDB, OkanvilIDsDB
 ## SavedVariablesPerCharacter: OkanvilLogsDB, Okanvil_CharDB
 ```
 
-## ACCOUNT-WIDE (one copy for the whole account)
+<br>
 
-File on disk: `WTF\Account\<ACCOUNT>\SavedVariables\Okanvil.lua`
-(plus `RecruitDB` and `OkanvilIDsDB` written to the same account SV folder).
+---
 
-| Global | Code alias | What |
-|---|---|---|
-| `Okanvil_DB` | `Okanvil.db` | brand/skin, loot **config** (collectors, roll messages, thresholds), invite settings, rollmgr window pos |
-| `RecruitDB` | Recruit module | recruit keyword/config |
+## 🌐 Account-wide — one copy for the whole account
+
+📁 `WTF\Account\<ACCOUNT>\SavedVariables\Okanvil.lua`
+
+| Global | Code alias | Holds |
+|:--|:--|:--|
+| `Okanvil_DB` | `Okanvil.db` | brand/skin, loot **config** (collectors, roll messages, thresholds), invite settings, roll window position |
+| `RecruitDB` | Recruit module | recruit keyword / config |
 | `OkanvilIDsDB` | IDs module | ID Finder data |
 
-> Loot **config** (collectors, `rollMsg`, thresholds) is account-wide on purpose —
-> an officer sets collectors once for all their toons. See Loot.lua ~line 204.
+> Loot **config** is account-wide on purpose — an officer sets collectors once for all
+> their toons.
 
-## PER-CHARACTER (a separate copy for EACH character)
+<br>
 
-File on disk: `WTF\Account\<ACCOUNT>\<REALM>\<CHARACTER>\SavedVariables\Okanvil.lua`
-— so e.g. the same account has one per Okanor, Okanath, Okanata, Okanthys…
+## 👤 Per-character — a separate copy for each toon
 
-| Global | Code alias | What |
-|---|---|---|
-| `Okanvil_CharDB` | `Okanvil.cdb` | **loot SESSIONS / drop history** (`cdb.lootSessions`, aliased to `db().sessions`), enabled-modules state |
+📁 `WTF\Account\<ACCOUNT>\<REALM>\<CHARACTER>\SavedVariables\Okanvil.lua`
+*(one each for Okanor, Okanata, Okanthys…)*
+
+| Global | Code alias | Holds |
+|:--|:--|:--|
+| `Okanvil_CharDB` | `Okanvil.cdb` | **loot sessions / drop history** (`cdb.lootSessions`), enabled-modules state |
 | `OkanvilLogsDB` | Logs module | boss-kill / session logs |
 
-> The loot SESSION LOG (every drop, receivedBy, boss) is **PER CHARACTER**. The
-> code aliases `db().sessions` onto `Okanvil.cdb.lootSessions` (Loot.lua ~line 221).
-> **This is the gotcha:** wiping the account file does NOT clear a character's loot
-> history — you must clear that character's per-char `Okanvil.lua` (or the
-> `lootSessions` table inside it).
+> The loot **session log** (every drop, receiver, boss) is per-character. The code
+> aliases `db().sessions` onto `Okanvil.cdb.lootSessions`.
 
-## Practical rules
+<br>
 
-- **Wiping loot history** → edit `lootSessions` in the PER-CHARACTER file of the
-  character(s) that recorded it. The account file has no sessions (only config).
-- **Editing any SV file** → WoW must be fully CLOSED first; it rewrites SV from
-  memory on `/reload` and logout, clobbering disk edits.
-- The in-game "Clear session" button clears the CURRENT character's sessions only.
+---
+
+## 🧹 Common tasks
+
+**Wipe a character's loot history**
+→ edit `lootSessions` in that **character's** per-char file. The account file has no
+sessions (config only). Or use the in-game "Clear session" button — it clears the
+**current** character only.
+
+**Edit any SavedVariables file by hand**
+→ **close WoW first.** It rewrites SV from memory on `/reload` and logout, clobbering
+any edit you made on disk.

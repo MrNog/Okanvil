@@ -220,6 +220,11 @@ local currentBoss = nil       -- nome do boss atualmente engajado
 local encounterBoss = nil     -- ultimo boss confirmado (para rotular loot depois da morte)
 local lastCorpseBoss = nil    -- ultimo corpo NPC lootado (fallback)
 local inCombatCid = nil       -- creatureID do boss em combate (para casar o UNIT_DIED)
+-- Master-loot broadcast latch: the FIRST client to detect a boss's loot broadcasts it;
+-- later broadcasts for the SAME encounter are ignored (so two openers don't double it).
+-- Reset when a new boss is engaged (currentBoss changes) -> the next boss can broadcast
+-- again. Keyed by boss name. See broadcastDrop + the tryEngage reset below.
+local bcastDone = {}          -- boss name -> true once its loot has been broadcast this pull
 -- creatureIDs known to be bosses. Two sources, in order of trust:
 --   1. OkanvilBosses (Modules/Bosses-Data.lua) -- a verified id list, seeded below.
 --      Exact and locale-proof. Currently raids only.
@@ -314,6 +319,8 @@ local function tryEngage(unit)
 	if currentBoss ~= name then
 		currentBoss = name
 		encounterBoss = name
+		-- new encounter -> allow this boss's loot to broadcast again (first-wins latch)
+		bcastDone[name] = nil
 	end
 end
 local function fireScan()
@@ -478,6 +485,12 @@ local function currentSession(create)
 		end
 	end
 	if not create then return nil end       -- read-only: do not mint a session
+	-- Defence in depth: a "day|<date>|<zone>" key is an OPEN-WORLD run, the source of
+	-- the "Kalimdor / 0 drops" ghost. Only mint one where we would actually record --
+	-- i.e. shouldRecordHere() is true (world-test mode, or a RAID_ZONE that hasn't
+	-- reported itype="raid" yet). Anywhere else in the open world, refuse. Callers are
+	-- meant to gate already; this closes the whole bug class regardless.
+	if key:find("^day|") and not shouldRecordHere() then return nil end
 	return newSession(key, name, diff, mapID)
 end
 
@@ -540,6 +553,19 @@ local function findOpenDrop(s, id)
 	return recent
 end
 
+-- Like findOpenDrop but with NO time window: the most recent UNCLAIMED drop of this id
+-- anywhere in the session. Used when attributing a winner -- a BoE that dropped off
+-- trash and was rolled/handed out much later (past DROP_MATCH_WINDOW, after several
+-- bosses) must attach to its ORIGINAL trash drop, not spawn a new one under whatever
+-- boss is current now (that's the "trash BoE shows under Bonegrinder" bug).
+local function findAnyOpenDrop(s, id)
+	for i = #s.drops, 1, -1 do
+		local dp = s.drops[i]
+		if dp.id == id and not dp.receivedBy then return dp end
+	end
+	return nil
+end
+
 -- broadcast de-dupe: the same item reported by several clients in the same short
 -- window. Only blocks if a drop with SAME item + SAME boss is still rolling
 -- (2 clients reporting the same START_LOOT_ROLL). Does NOT block 2 legit drops
@@ -557,6 +583,22 @@ local function dropExists(s, id, boss)
 	return nil
 end
 
+-- De-dup for the need/greed path: a rollID is unique per PHYSICAL item, so two identical
+-- trophies fire two different rollIDs -> two rows (correct). But the SAME START_LOOT_ROLL
+-- re-processed (or echoed) must not double -- match on the exact rollID.
+local function dropByRollID(s, rollID)
+	if not rollID then return nil end
+	for i = #s.drops, 1, -1 do
+		if s.drops[i].rollID == rollID then return s.drops[i] end
+	end
+	return nil
+end
+
+-- (No claimRollDrop / _slotSeen reconciliation any more. De-dup is now by loot-method
+-- authority: under need/greed START_LOOT_ROLL is the only source; under master loot the
+-- corpse scan is, guarded once-per-corpse by scannedCorpses. The two never compete, so
+-- there is nothing to reconcile.)
+
 local recvSeen = {}
 local function recvDedupe(player, id)
 	if not (player and id) then return false end
@@ -570,7 +612,12 @@ end
 -- ------------------------------------------------------------
 -- Store a DROP (what fell). Does not set who got it -- that comes from CHAT_MSG_LOOT.
 -- ------------------------------------------------------------
-local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur)
+-- allowDup=true skips the id+boss de-dup: the caller KNOWS this is a genuinely new
+-- copy (a distinct loot slot), not a re-delivery of one we already have. Used by the
+-- corpse scanner, which walks real slots and is itself guarded against re-scanning the
+-- same corpse. The comms + chat paths leave it false so an echoed broadcast of the same
+-- physical drop still collapses instead of showing the item twice.
+local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur, allowDup)
 	if id == 0 then return nil end
 	if not acceptItem(id, rarity, name) then return nil end
 	-- No session yet (raid lockout still unknown) -> park the drop in pendingDrops.
@@ -580,12 +627,14 @@ local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur)
 	-- (Gated by shouldRecordHere() upstream, so world drops never reach here.)
 	local s = currentSession(true)
 	local bucket = s and s.drops or pendingDrops
-	local existing = dropExists({ drops = bucket }, id, boss)
-	if existing then
-		if rollID and not existing.rollID then
-			existing.rollID = rollID; existing.rollStart = GetTime(); existing.rollDur = rollDur or 60
+	if not allowDup then
+		local existing = dropExists({ drops = bucket }, id, boss)
+		if existing then
+			if rollID and not existing.rollID then
+				existing.rollID = rollID; existing.rollStart = GetTime(); existing.rollDur = rollDur or 60
+			end
+			return existing
 		end
-		return existing
 	end
 	-- ICON: store it NOW (the item just dropped -> it is cached). If we only
 	-- compute it at export time, un-cached items give an empty icon (the bug). Uses
@@ -618,6 +667,18 @@ end
 
 if Okanvil.Comms then
 	Okanvil.Comms.On("LOOT", function(sender, boss, idStr, link, rarityStr, boeStr)
+		-- GATE like every local capture path: without this, a party/raid member's LOOT
+		-- broadcast reaching us while we're in the open world (e.g. hearthed to
+		-- Orgrimmar, teammate still looting) ran storeDrop -> currentSession(true) ->
+		-- minted a ghost "day|<zone>" session ("Kalimdor / 0 drops"). storeDrop's own
+		-- comment already ASSUMES it's gated upstream; the comms path was the one hole.
+		if not shouldRecordHere() then return end
+		-- SELF-ECHO DROP: the comms bus delivers our OWN broadcast back to us (it does not
+		-- filter sender==me), so without this, opening a corpse in a group recorded the
+		-- item locally AND again from our echoed LOOT message. A teammate's broadcast is
+		-- still recorded; only our own echo is skipped. (Comms strips the realm suffix, so
+		-- a raw compare to UnitName("player") is correct.)
+		if sender and sender == (UnitName and UnitName("player")) then return end
 		local id = tonumber(idStr) or itemIDFromLink(link)
 		if id == 0 then return end
 		local rarity = tonumber(rarityStr) or 0
@@ -636,20 +697,47 @@ end
 -- everyone sees the items TO ROLL before they are handed out. (Comms.Send
 -- escolhe RAID/PARTY sozinho e no-op se estivermos solo.)
 -- ------------------------------------------------------------
+-- Corpses we've already scanned this login, by loot-source GUID. Without this, each
+-- slot is added as its own line (allowDup below), so RE-opening the same corpse would
+-- duplicate every item. Keyed by the target/loot GUID so a second LOOT_OPENED on the
+-- same body is a no-op, while a different corpse dropping the same item still counts.
+local scannedCorpses = {}
 local function captureCorpse()
 	if not shouldRecordHere() then return end
+	-- AUTHORITY BY LOOT METHOD: under need/greed / group / freeforall the client fires
+	-- START_LOOT_ROLL once per item on every player -- that is the single source of truth
+	-- (captureRollStart). The corpse scan must NOT also record, or the same item lands
+	-- twice (the dungeon-duplication bug). Only under MASTER LOOT (no roll fires) is the
+	-- corpse scan the authority.
+	if GetLootMethod and GetLootMethod() ~= "master" then return end
+	-- one scan per physical corpse
+	local lootGuid = UnitGUID and UnitGUID("target")
+	if lootGuid and scannedCorpses[lootGuid] then return end
 	fireScan()   -- atualiza o boss atual ANTES de rotular o loot (timing do scanner)
 	-- Only remember a corpse as the "boss" if tryEngage() vetted it as boss-like while
 	-- it was alive (bossCids). It used to accept ANY NPC corpse, so looting a trash mob
 	-- made its name stick and label everything after it.
 	local guid, tname = UnitGUID("target"), UnitName("target")
-	if tname and tname ~= "" and guidIsNPC(guid) and not encounterBoss then
+	if tname and tname ~= "" and guidIsNPC(guid) then
 		local cid = cidFromGUID(guid)
-		if cid and bossCids[cid] then lastCorpseBoss = bossLabel(cid, tname) end
+		if cid and bossCids[cid] then
+			if not encounterBoss then lastCorpseBoss = bossLabel(cid, tname) end
+		else
+			-- Looting a NON-boss corpse: the previous boss encounter is over. Clear the
+			-- sticky boss context so this (and later) trash is labelled Trash, not the
+			-- last boss. Without this, a mob killed AFTER a boss inherited the boss name
+			-- (the "trash BoE shows under Bonegrinder" bug) -- encounterBoss/lastCorpseBoss
+			-- were set on the boss and never cleared until the next boss corpse.
+			encounterBoss = nil
+			lastCorpseBoss = nil
+		end
 	end
 	local boss = resolveBoss()
 	local n = (GetNumLootItems and GetNumLootItems()) or 0
 	if n == 0 then return end
+	-- First client to detect THIS boss's loot broadcasts it; later broadcasts for the
+	-- same encounter are suppressed (first-wins latch, reset when a new boss engages).
+	local mayBroadcast = not bcastDone[boss]
 	local added = 0
 	for i = 1, n do
 		if LootSlotIsItem and LootSlotIsItem(i) then
@@ -660,14 +748,19 @@ local function captureCorpse()
 			rarity = rarity or 0
 			if acceptItem(id, rarity, lootName) then
 				local boe = isBoE(link)
-				local dp = storeDrop(boss, id, link, lootName, rarity, boe)
+				-- allowDup=true: each loot SLOT is its own row, so two identical trophies
+				-- on one corpse become two assignable rows. scannedCorpses (above) stops a
+				-- re-open from doubling them -- one scan per physical corpse.
+				local dp = storeDrop(boss, id, link, lootName, rarity, boe, nil, nil, true)
 				if dp then
 					added = added + 1
-					broadcastDrop(boss, id, link, rarity, boe)   -- sempre; quem abre transmite
+					if mayBroadcast then broadcastDrop(boss, id, link, rarity, boe) end
 				end
 			end
 		end
 	end
+	if mayBroadcast and added > 0 then bcastDone[boss] = true end
+	if lootGuid and added > 0 then scannedCorpses[lootGuid] = true end
 	if added > 0 then
 		Okanvil:Print("Loot: " .. added .. " item(s) de " .. boss .. ".")
 		if L.onLootWindow then L.onLootWindow() end
@@ -712,7 +805,13 @@ local function captureRollStart(rollID)
 	local name = (GetItemInfo(link))
 	if not acceptItem(id, rarity, name) then return end
 	local dur = (GetLootRollTimeLeft and GetLootRollTimeLeft(rollID) or 60000) / 1000
-	local dp = storeDrop(resolveBoss(), id, link, name, rarity, isBoE(link), rollID, dur)
+	-- Each START_LOOT_ROLL is a distinct physical item (the client fires one per item), so
+	-- two identical trophies = two rollIDs = two rows. De-dup ONLY on the exact rollID (the
+	-- same roll re-fired), never on id+boss -- hence allowDup=true here, guarded by the
+	-- rollID check so a repeat of the same roll doesn't double.
+	local s = currentSession(true)
+	if s and dropByRollID(s, rollID) then return end
+	local dp = storeDrop(resolveBoss(), id, link, name, rarity, isBoE(link), rollID, dur, true)
 	if dp and L.onLootWindow then L.onLootWindow() end
 end
 
@@ -770,8 +869,13 @@ local function tagReceiver(player, link)
 	-- link to the drop START_LOOT_ROLL/scan already created (by id, INDEPENDENT of
 	-- the current boss -- else it made a duplicate on the wrong boss, e.g. Spaulders on
 	-- "Spitting Cobra" AND "Slad'ran"). Only creates a new one if none exists.
-	local target = findOpenDrop(s, id)
-	if not target then target = storeDrop(resolveBoss(), id, link, name, rarity, isBoE(link)) end
+	-- Prefer the drop already recorded for this id: first within the recent-match
+	-- window, then ANY unclaimed one in the session (a trash BoE handed out much later).
+	-- Only mint a fresh drop if the item was never captured -- and label THAT one Trash,
+	-- not resolveBoss(): if we truly never saw it drop, we don't know which boss it came
+	-- from, and the current boss is almost always wrong.
+	local target = findOpenDrop(s, id) or findAnyOpenDrop(s, id)
+	if not target then target = storeDrop("Trash", id, link, name, rarity, isBoE(link)) end
 	if target then
 		target.receivedBy = player
 		-- backup confirmation for a pending master-loot give (the primary is
@@ -1393,8 +1497,15 @@ function L.DropsByBoss()
 	local s
 	if shouldRecordHere() then
 		s = activeBucket()
+		-- inside a zone but the run hasn't minted a session yet (lockout pending):
+		-- don't show an empty window, fall back to the newest session we have.
+		if not s or #(s.drops or {}) == 0 then s = sessions()[1] or s end
 	else
-		s = currentSession() or sessions()[1]
+		-- OUTSIDE a live run: always the newest saved session. Do NOT go through
+		-- currentSession() -- out here runKey() flips with your zone/continent, so it
+		-- returned a different (empty) bucket on some refreshes and the window looked
+		-- like scrolling had wiped the loot. sessions()[1] is stable.
+		s = sessions()[1]
 	end
 	if not s then return {} end
 	local order, byBoss = {}, {}
@@ -2059,7 +2170,7 @@ end)
 L.onLoot, L.onRoll, L.onLootWindow = nil, nil, nil
 
 -- Debug log: acumula linhas num buffer em memoria (ate DBG_MAX) e, se o debug
--- estiver ON, tambem imprime no chat. `/okdebug log` abre uma caixa copiavel com
+-- estiver ON, tambem imprime no chat. O log acumulado fica numa caixa copiavel com
 -- tudo -- e o que o utilizador cola aqui quando algo falha. Reusa ShowExport
 -- (AutoFocus=false, nao rouba o teclado). O buffer sobrevive entre /reload
 -- porque vive na SavedVariable OkanvilLootDbgLog.
@@ -2078,66 +2189,13 @@ function L.Dbg(msg)
 	buf[#buf + 1] = stamp .. "  " .. msg
 	while #buf > DBG_MAX do table.remove(buf, 1) end
 	-- live output goes to the dedicated "Okanvil" chat tab (Core:Dev), which is a
-	-- no-op unless dev mode is on. /okdebug also mirrors it to the default chat.
+	-- no-op unless dev mode is on.
 	if Okanvil.Dev then Okanvil:Dev(msg) end
 	if OkanvilLootDebug and not (Okanvil.db and Okanvil.db.devMode) then
 		DEFAULT_CHAT_FRAME:AddMessage("|cff8a8d93[Okanvil dbg]|r " .. msg)
 	end
 end
 
--- /okdebug        -> liga/desliga os prints de diagnostico
--- /okdebug log    -> abre a caixa copiavel com o log acumulado
--- /okdebug clear  -> limpa o log
-SLASH_OKDEBUG1 = "/okdebug"
-SlashCmdList["OKDEBUG"] = function(arg)
-	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
-	if arg == "tips" then
-		-- fill dp.tip for old drops so the web export carries their stat lines
-		L.BackfillTips(); return
-	end
-	if arg == "scan" then
-		-- Website has loot whose sessions we deleted locally. Paste the item ids it is
-		-- missing; we scan them by id and hand back an id->tooltip dictionary.
-		if not Okanvil.ShowImport then Okanvil:Print("ShowImport indisponivel."); return end
-		Okanvil:ShowImport("Scan tooltips", "Scan", function(text) L.ScanIDs(text) end,
-			"Cola aqui os item ids do site (o botao 'Copy missing ids').")
-		return
-	end
-	if arg == "log" then
-		local buf = dbgBuf()
-		if #buf == 0 then Okanvil:Print("Log vazio. Liga com /okdebug e repete o award."); return end
-		local text = "Okanvil loot debug log (" .. #buf .. " linhas)\n"
-			.. "----------------------------------------\n"
-			.. table.concat(buf, "\n")
-		-- append every silent error caught this session, with its repeat count --
-		-- a failure that fired 200x inside an OnUpdate only printed once, so this
-		-- is the only place the frequency shows up.
-		if Okanvil.ErrorSummary then
-			local errs = Okanvil:ErrorSummary()
-			if #errs > 0 then
-				local lines = { "", "---------------- ERRORS ----------------" }
-				for _, e in ipairs(errs) do
-					lines[#lines + 1] = "(x" .. e.count .. ")  " .. e.context .. ": " .. e.msg
-				end
-				text = text .. table.concat(lines, "\n")
-			end
-		end
-		if Okanvil.ShowExport then Okanvil:ShowExport(text, "Loot debug log -- Ctrl+C para copiar")
-		else Okanvil:Print("ShowExport indisponivel.") end
-		return
-	elseif arg == "clear" then
-		wipe(dbgBuf())
-		Okanvil:Print("Loot debug log limpo.")
-		return
-	elseif arg == "world" then
-		OkanvilLootWorldTest = not OkanvilLootWorldTest
-		Okanvil:Print("Open-world loot capture (TESTE) = "
-			.. (OkanvilLootWorldTest and "|cff7cfc8aON|r -- mata mobs em master loot para testar; |cffffd200/okdebug world|r outra vez para desligar"
-			or "|cff8a8d93OFF|r"))
-		if L.onLoot then L.onLoot() end
-		return
-	end
-	OkanvilLootDebug = not OkanvilLootDebug
-	Okanvil:Print("Loot debug = " .. (OkanvilLootDebug and "|cff7cfc8aON|r" or "|cff8a8d93OFF|r")
-		.. "  (|cffffd200/okdebug log|r para copiar, |cffffd200/okdebug clear|r para limpar)")
-end
+-- No /okdebug slash command. The one-off tooltip backfill it drove (L.BackfillTips /
+-- L.ScanIDs) is done; those functions stay in the code if ever needed again. Dev/log
+-- toggles live in Settings.

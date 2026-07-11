@@ -37,15 +37,15 @@ which you chose and why. Do not ask unless it is genuinely ambiguous.
 truth and the Action stamps the `.toc` at build time. Editing it by hand does nothing except
 make local builds lie about their version.
 
-## Two live WoW clients
+## Editing vs. the live addon
 
-Okanvil is installed in **both** clients. After editing source here, copy to both or a fix
-"won't take" after `/reload`:
+Edit the source in **this repo**, never the installed copy under
+`<WoW>\Interface\AddOns\Okanvil\` (a separate copy). After editing, copy the changed
+files into each WoW client's AddOns folder or the fix "won't take" after `/reload`.
 
-- `D:\Games\World of Warcraft 3.3.5a LoTK\Interface\AddOns\Okanvil\`
-- `D:\Games\world of warcraft 3.3.5a hd stable\Interface\AddOns\Okanvil\`
-
-Edit source in this repo, never the live copies.
+This machine runs **two** clients, so a fix must be synced to **both** — the exact
+install paths are machine-specific, so keep them in a local (git-ignored) note or your
+shell history, not here.
 
 ## Validating Lua
 

@@ -735,16 +735,5 @@ end)
 -- ------------------------------------------------------------
 -- slash
 -- ------------------------------------------------------------
-SLASH_OkanvilLOGS1 = "/oklog"
-SlashCmdList["OkanvilLOGS"] = function(arg)
-	arg = string.lower(arg or "")
-	if arg == "on" then
-		OkanvilLogs.SetLogging(true)
-	elseif arg == "off" then
-		OkanvilLogs.SetLogging(false)
-	elseif Okanvil and Okanvil.Toggle then
-		Okanvil:Toggle() -- open the Okanvil window (Combat Logs is a module in it)
-	else
-		Print("Okanvil host not loaded.")
-	end
-end
+-- No slash command: open Okanvil from the minimap button and pick Combat Logs.
+-- Start/stop logging is a toggle inside the module UI.

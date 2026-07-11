@@ -263,12 +263,65 @@ end
 -- Every addon message goes to the "Okanvil" chat tab when that tab EXISTS, else to
 -- the default frame. We never create it here (DevFrame(false)): a raider who has
 -- never opened the tab keeps seeing messages in General instead of having a window
--- appear unasked. Create it with /okanvil tab (or /okdev).
+-- appear unasked. Create it with /okanvil tab.
 --
 -- self:DevFrame is resolved at call time, so it being defined further down is fine.
 function Okanvil:Print(msg)
 	local f = (self.DevFrame and self:DevFrame(false)) or DEFAULT_CHAT_FRAME
 	f:AddMessage("|cffffd200[Okanvil]|r " .. tostring(msg))
+end
+
+-- ------------------------------------------------------------
+-- Walk the FULL guild roster without leaving the Blizzard guild UI changed.
+--
+-- 3.3.5a trap: GetNumGuildMembers() only counts ONLINE members unless "Show Offline"
+-- is on, so to iterate everyone you must SetGuildRosterShowOffline(true). But that
+-- flag is GLOBAL and STICKY -- it flips the checkbox in Blizzard's own Guild panel and
+-- stays on after we're done, which is why the guild tab was suddenly always showing
+-- offline members.
+--
+-- 3.3.5a has no reliable getter for the flag, and inferring "did we turn it on?" from
+-- the member count is unsound: forcing offline in does NOT change the count when the
+-- whole guild is already online, so we could never tell we'd enabled it and would leak
+-- it on. So we don't guess -- we ALWAYS restore the WoW default (offline hidden) after
+-- walking. Cost: a user who manually ticked "Show Offline" gets it unticked after we
+-- run. That is rare and far less bad than the addon silently forcing it on for everyone;
+-- if it ever matters, add an explicit opt-out setting.
+--
+--   Okanvil:WithFullRoster(function(total) ... GetGuildRosterInfo(i) ... end)
+--
+-- LOOP GUARD: toggling SetGuildRosterShowOffline fires GUILD_ROSTER_UPDATE. Our guild
+-- panel refreshes on that event, and the refresh calls WithFullRoster, which toggles
+-- again -> event -> refresh -> ... an endless storm that ends in a C stack overflow.
+-- The event is async (fires AFTER we return), so a simple in-function reentrancy flag
+-- is not enough. Instead we publish Okanvil.rosterBusy while we hold the flag; the
+-- GUILD_ROSTER_UPDATE handler skips its refresh when it sees a roster event we caused
+-- ourselves. Reads only ever set the flag briefly, so a real login/logoff that lands
+-- outside our window still refreshes normally.
+function Okanvil:WithFullRoster(fn)
+	if not (IsInGuild and IsInGuild()) then return end
+	if self.rosterBusy then
+		-- nested call (offline already forced in): run against the roster as-is
+		local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
+		local ok, err = pcall(fn, total)
+		if not ok and Okanvil.Err then Okanvil:Err("WithFullRoster(nested)", err) end
+		return
+	end
+	self.rosterBusy = true
+	if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
+	local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
+	local ok, err = pcall(fn, total)
+	if SetGuildRosterShowOffline then SetGuildRosterShowOffline(false) end
+	-- Keep the guard up briefly: GUILD_ROSTER_UPDATE from our two toggles arrives
+	-- AFTER we return here (it's async), so clearing rosterBusy now would let that
+	-- late event trigger a refresh -> another WithFullRoster -> the loop. Drop it a
+	-- moment later; a genuine login/logoff event after that still refreshes.
+	if Okanvil.Comms and Okanvil.Comms.After then
+		Okanvil.Comms.After(0.3, function() Okanvil.rosterBusy = false end)
+	else
+		self.rosterBusy = false
+	end
+	if not ok and Okanvil.Err then Okanvil:Err("WithFullRoster", err) end
 end
 
 -- ------------------------------------------------------------
@@ -327,7 +380,7 @@ end
 --
 -- The record lives in the per-character DB, which WoW flushes to
 -- SavedVariables\Okanvil.lua on logout/reload -- so nothing is lost if you
--- forget to run `/okdebug log` before quitting. Read it back with
+-- forget to check it before quitting. Read it back with
 -- `/okerr`, or straight out of the .lua file.
 -- ------------------------------------------------------------
 -- A WoW addon cannot write files (no `io` in the sandbox). The ONLY file we get
@@ -385,7 +438,7 @@ function Okanvil:Err(context, err)
 	self:Dev("|cffff5555ERROR|r " .. ctx .. ": " .. msg)
 end
 
--- This session's distinct errors, most frequent first (for /okdebug log).
+-- This session's distinct errors, most frequent first.
 function Okanvil:ErrorSummary()
 	local out = {}
 	for _, e in ipairs(currentErrSession(self).errors) do out[#out + 1] = e end
@@ -579,16 +632,9 @@ SlashCmdList["Okanvil"] = function(arg)
 		Okanvil:Print("commands:")
 		Okanvil:Print("  |cffffd200/okanvil|r        open/close the window   |cff8a8d93(/okanvil tab = own chat tab)|r")
 		Okanvil:Print("  |cffffd200/okroll|r         mini roll manager")
-		Okanvil:Print("  |cffffd200/okid|r |cff8a8d93or|r |cffffd200/idfind|r  item/spell ID finder  |cff8a8d93(/okid sweep)|r")
-		Okanvil:Print("  |cffffd200/oklog|r          combat logs  |cff8a8d93(on / off)|r")
-		Okanvil:Print("  |cffffd200/okrf|r           raid finder")
-		-- NOTE: a literal "|" starts a colour escape in WoW; use "/" as the separator
-		-- (or "||") or the client eats the rest of the line.
-		Okanvil:Print("  |cffffd200/okrec|r |cff8a8d93or|r |cffffd200/recruit|r  recruiter  |cff8a8d93(on / off / afk / clear / toast / channels)|r")
-		Okanvil:Print("  |cffffd200/okdebug|r        loot debug  |cff8a8d93(tips / scan / log / clear / world)|r")
 		Okanvil:Print("  |cffffd200/okerr|r          error log  |cff8a8d93(clear)|r")
-		Okanvil:Print("  |cffffd200/okdev|r          toggle dev mode")
-		Okanvil:Print("  |cffffd200/okfocus|r        release a stuck keyboard focus")
+		Okanvil:Print("  |cffffd200/okfocus|r    release a stuck keyboard focus")
+			Okanvil:Print("  |cff8a8d93every module opens from the minimap button.|r")
 		return
 	end
 	Okanvil:Toggle()
@@ -602,11 +648,8 @@ SlashCmdList["OKFOCUS"] = function()
 	Okanvil:Print("released keyboard focus.")
 end
 
--- /okdev -- toggle dev mode (debug output -> the "Okanvil" chat tab).
-SLASH_OKDEV1 = "/okdev"
-SlashCmdList["OKDEV"] = function()
-	Okanvil:SetDevMode(not (Okanvil.db and Okanvil.db.devMode))
-end
+-- Dev mode has no slash command -- it's a toggle in Settings (Okanvil:SetDevMode,
+-- default OFF). Debug output goes to the "Okanvil" chat tab when it's on.
 
 -- /okerr        -- show the persisted error log (copyable; survives logout)
 -- /okerr clear  -- wipe it

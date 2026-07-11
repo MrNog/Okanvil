@@ -25,6 +25,7 @@ local defaults = {
 	showSaved = true,      -- show raids you're already saved to
 	shortSpec = false,     -- short vs full spec name in the Join whisper
 	gsOverride = 0,        -- manual GS for the whisper (0 = use detected GearScore)
+	background = false,    -- keep scanning chat while the window is closed / on another tab
 }
 
 -- listings[sender] = { raid, instance, size, hc, weekly, roles, gs, reserved,
@@ -45,6 +46,17 @@ local function module_on()
 	return not Okanvil.IsModuleEnabled or Okanvil:IsModuleEnabled(ADDON)
 end
 
+-- Should we parse chat lines right now?
+--   * module OFF  -> never (as if it didn't exist)
+--   * page open   -> yes (you're looking at the list)
+--   * page closed -> only if db.background is on ("keep scanning in background")
+-- Closed with background OFF is the default: the parser doesn't run for every chat
+-- line, so a busy trade channel can't cost you frames when you're not even looking.
+local function should_scan()
+	if not (db and module_on()) then return false end
+	return page_visible() or db.background
+end
+
 -- active filters (nil = All)
 local filter = { instance = nil, size = nil, role = nil, weekly = nil }
 
@@ -62,11 +74,23 @@ end
 -- lockout: is the player saved to this raid's instance+size?
 -- (3.3.5a: GetNumSavedInstances / GetSavedInstanceInfo)
 -- ------------------------------------------------------------
-local function raid_lock_info(instance, size)
+-- 3.3.5a raid difficulty ids: 1 = 10 Normal, 2 = 25 Normal, 3 = 10 Heroic,
+-- 4 = 25 Heroic. So heroic == (diff == 3 or diff == 4).
+local function diff_is_heroic(d) return d == 3 or d == 4 end
+
+local function raid_lock_info(instance, size, heroic)
 	if not instance or not size then return false, nil end
+	heroic = heroic and true or false
 	for i = 1, GetNumSavedInstances() do
-		local name, _, reset, _, locked, _, _, _, ssize = GetSavedInstanceInfo(i)
-		if name and locked and ssize == size and name:lower() == instance:lower() then
+		-- pos 4 = difficulty, pos 9 = maxPlayers (size)
+		local name, _, reset, sdiff, locked, _, _, _, ssize = GetSavedInstanceInfo(i)
+		if name and locked and ssize == size and name:lower() == instance:lower()
+			-- Match the DIFFICULTY too: ToC10 (normal) and ToGC10 (heroic) share the
+			-- same name AND size but are SEPARATE lockouts -- you can be saved to one
+			-- and not the other. Without this, a ToGC save marked ToC "Saved" (and
+			-- vice versa). For raids whose hard modes are per-boss (ICC/Ulduar/RS) the
+			-- server only ever reports ONE lockout, so this still reads correctly.
+			and diff_is_heroic(sdiff) == heroic then
 			return true, reset
 		end
 	end
@@ -106,7 +130,7 @@ local function record(sender, message)
 		info.firstSeen = now
 		info.lastSeen  = now
 		info._flash    = now
-		info.locked, info.reset = raid_lock_info(info.instance, info.size)
+		info.locked, info.reset = raid_lock_info(info.instance, info.size, info.hc)
 		listings[sender] = info
 	end
 
@@ -875,6 +899,7 @@ local function buildSettings(pg)
 	end
 	check("Scan chat channels (Trade / General / Global / LookingForGroup)", "scanChannels")
 	check("Scan yell", "scanYell")
+	check("Keep scanning in background (even when this tab is closed)", "background")
 	check("Show raids I'm already saved to", "showSaved")
 	check("Short spec name in Join whisper", "shortSpec")
 
@@ -1111,9 +1136,9 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
 		-- Ligado mas com a tab FECHADA = tambem nao scaneia (performance): antes
 		-- corria RF.parse() para CADA linha de chat sempre, dando lag/frame-drops
 		-- numa raid com muito trafego. So scaneia com o modulo ligado E a tab aberta.
-		if module_on() and page_visible() and db and db.scanChannels then record(arg2, arg1) end
+		if should_scan() and db.scanChannels then record(arg2, arg1) end
 	elseif event == "CHAT_MSG_YELL" then
-		if module_on() and page_visible() and db and db.scanYell then record(arg2, arg1) end
+		if should_scan() and db.scanYell then record(arg2, arg1) end
 	end
 end)
 
@@ -1133,8 +1158,4 @@ end)
 -- ------------------------------------------------------------
 -- slash
 -- ------------------------------------------------------------
-SLASH_OKANVILRF1 = "/okrf"
-SlashCmdList["OKANVILRF"] = function()
-	if Okanvil.ShowPanel then Okanvil:ShowPanel(ADDON) end
-	if Okanvil.win and not Okanvil.win:IsShown() then Okanvil.win:Show() end
-end
+-- No slash command: open Okanvil from the minimap button and pick Raid Finder.

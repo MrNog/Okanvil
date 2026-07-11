@@ -206,18 +206,20 @@ end
 local function onlineGuildies(rankFilter)
 	local out = {}
 	if not (IsInGuild and IsInGuild()) then return out end
-	if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
-	local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
 	local me = UnitName and UnitName("player")
-	for i = 1, total do
-		local name, rank, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
-		if name and online and name ~= me then
-			name = (name:gsub("%-.*$", ""))
-			if (not rankFilter) or rankFilter[rankIndex] then
-				out[#out + 1] = { name = name, rankIndex = rankIndex or 99, rank = rank or "" }
+	-- walk everyone (WithFullRoster restores Blizzard's Show-Offline flag); we still
+	-- keep only the ONLINE ones below -- invites can't reach offline players anyway.
+	Okanvil:WithFullRoster(function(total)
+		for i = 1, total do
+			local name, rank, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
+			if name and online and name ~= me then
+				name = (name:gsub("%-.*$", ""))
+				if (not rankFilter) or rankFilter[rankIndex] then
+					out[#out + 1] = { name = name, rankIndex = rankIndex or 99, rank = rank or "" }
+				end
 			end
 		end
-	end
+	end)
 	return out
 end
 I.OnlineGuildies = onlineGuildies

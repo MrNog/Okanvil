@@ -791,16 +791,5 @@ end)
 -- ------------------------------------------------------------
 -- slash
 -- ------------------------------------------------------------
-SLASH_OkanvilIDS1 = "/okid"
-SLASH_OkanvilIDS2 = "/idfind"
-SlashCmdList["OkanvilIDS"] = function(arg)
-	arg = string.lower(arg or "")
-	if arg == "sweep" then
-		local added = IDs.SweepLoaded()
-		Print("swept " .. added .. " new item(s). DB now holds " .. IDs.ItemCount() .. ".")
-	elseif Okanvil and Okanvil.Toggle then
-		Okanvil:Toggle() -- open the Okanvil window (ID Finder is a module in it)
-	else
-		Print("Okanvil host not loaded.")
-	end
-end
+-- No slash command: open Okanvil from the minimap button and pick the ID Finder
+-- module. The "sweep loaded items" action lives on a button inside the module UI.
