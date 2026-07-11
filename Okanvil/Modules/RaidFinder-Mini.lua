@@ -23,16 +23,20 @@ local S            -- Okanvil.RaidFinder_Shared (resolved on first open)
 local win          -- the floating window (built lazily)
 local ROW_H = 18   -- tight rows to match the reference image
 local MAX_ROWS = 16
-local WIN_W = 340
+local WIN_W = 360
 
 -- mini-window column x-offsets (inside the row). Kept compact.
+-- Rows are clipped to the scroll interior (WIN_W - 12px well pad - 12px scrollbar
+-- gutter ~= 336px), so the last column (Join, +32w) must end before that edge or it
+-- gets cut off. Join right edge = 278 + 32 = 310, leaving ~22px clearance.
+-- Raid slot = gs - raid - 4 = 60px, which still fits the widest label ("Naxx10 Wk").
 local M = {
 	raid   = 6,
-	gs     = 96,
-	sender = 138,
-	ress   = 230,
-	wsp    = 276,
-	join   = 302,
+	gs     = 70,
+	sender = 108,
+	ress   = 200,
+	wsp    = 250,
+	join   = 278,
 }
 local RESS_W = 40
 
