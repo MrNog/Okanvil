@@ -485,12 +485,16 @@ local function currentSession(create)
 		end
 	end
 	if not create then return nil end       -- read-only: do not mint a session
-	-- Defence in depth: a "day|<date>|<zone>" key is an OPEN-WORLD run, the source of
-	-- the "Kalimdor / 0 drops" ghost. Only mint one where we would actually record --
-	-- i.e. shouldRecordHere() is true (world-test mode, or a RAID_ZONE that hasn't
-	-- reported itype="raid" yet). Anywhere else in the open world, refuse. Callers are
-	-- meant to gate already; this closes the whole bug class regardless.
-	if key:find("^day|") and not shouldRecordHere() then return nil end
+	-- Defence in depth: a "day|<date>|<zone>" key is an OPEN-WORLD run and is ALWAYS a
+	-- ghost in normal play -- real recording happens in raid/party contexts, which mint
+	-- "lock|" / "run|" keys. This is the source of the "Northrend / 0 drops" (and old
+	-- "Kalimdor / 0 drops") ghost: on the frame you leave a dungeon, GetInstanceInfo can
+	-- still report itype="party" (so shouldRecordHere() flickers true) while the zone has
+	-- already flipped to Northrend, so runKey() falls into the day| branch -- and a write
+	-- that lands in that window (a trailing CHAT_MSG_LOOT / comms echo / award confirm)
+	-- minted an empty open-world session. Relying on shouldRecordHere() here was the hole,
+	-- since that is exactly what flickers. Only world-test mode may open a day| session.
+	if key:find("^day|") and not OkanvilLootWorldTest then return nil end
 	return newSession(key, name, diff, mapID)
 end
 
@@ -512,12 +516,16 @@ end
 -- accessors read sessions()[1], which used to only be corrected by the first
 -- storeDrop() of the new run.
 local function resolveSession()
-	-- Only mint where we would actually RECORD. UPDATE_INSTANCE_INFO also fires on
-	-- zoning into a city, where runKey() falls back to "day|<today>|<continent>" -- a
-	-- valid key, so currentSession(true) happily created an empty "Kalimdor / 0 drops"
-	-- session on every hearth back to Orgrimmar. Outside a recorded run we may still
-	-- ADOPT an existing session (read-only), never open a new one.
-	local s = currentSession(shouldRecordHere())
+	-- Zone-in must NOT pre-create a session: entering a dungeon and leaving before
+	-- anything drops used to leave an empty "Trial of the Champion / 0 drops" ghost,
+	-- because this minted eagerly (currentSession(true)) just to move [1] forward. The
+	-- first storeDrop() mints the session; here we only ADOPT one that already exists
+	-- (read-only) so the mini roll stops showing the previous run's loot, and DRAIN any
+	-- pending drops. The ONLY time we must create is when loot already landed while the
+	-- key was unknown (pendingDrops non-empty) -- otherwise that buffered loot has
+	-- nowhere to go. This also subsumes the old "Kalimdor / 0 drops" city-hearth ghost.
+	local mustCreate = #pendingDrops > 0
+	local s = currentSession(mustCreate and shouldRecordHere())
 	if not s then return nil end
 	if #pendingDrops > 0 then
 		for i = 1, #pendingDrops do s.drops[#s.drops + 1] = pendingDrops[i] end
