@@ -68,7 +68,10 @@ local recruit_words = {
 	"recruit", "we raid", "we are raiding", "raid time", "active raider",
 	"is a pve", "is a pvp", "is a pvep", "looking for members", "auto%s?recruit",
 }
-local trade_words = { "wts ", "wtb ", "selling ", "buying " }
+-- "LFW" = Looking For Work: a booster/carry seller advertising themselves for
+-- hire, not a raid leader forming a group. Discard on sight (like WTS spam).
+local trade_words = { "wts ", "wtb ", "selling ", "buying ",
+	"%f[%w]lfw%f[%W]", "looking%s+for%s+work" }
 
 local function matches_any(msg, list)
 	for _, p in ipairs(list) do
@@ -256,7 +259,8 @@ local role_words = {
 	           "%f[%w]disc%f[%W]", "%f[%w]resto%f[%W]",
 	           "%f[%w]dd%f[%W]", "%f[%w]dudu%f[%W]" },              -- dd/dudu = resto druid (this realm's slang)
 	dps    = { "%f[%w]dps%f[%W]", "%f[%w]rdps%f[%W]", "%f[%w]mdps%f[%W]",
-	           "%f[%w]boom%a*", "%f[%w]moonkin%f[%W]",              -- boomy/boomie/boomkin/moonkin
+	           "%f[%w]boom%a*", "%f[%w]bomy%f[%W]", "%f[%w]moonkin%f[%W]",  -- boomy/boomie/boomkin/moonkin (+ "bomy" typo)
+		           "%f[%w]feral%a*", "%f[%w]kitty%f[%W]",               -- feral / kitty = feral dps
 	           "%f[%w]spriest%f[%W]", "shadow%s?priest", "%f[%w]spri%a*",
 	           "%f[%w]sp%f[%W]", "%f[%w]spd%f[%W]",                 -- sp/spd = shadow priest
 	           "%f[%w]ele%f[%W]", "%f[%w]elem%a*",                 -- ele / elemental
@@ -310,7 +314,7 @@ local class_specs = {
 	{ role="dps", class="ROGUE",  label="Rogue",         pats={ "%f[%w]rogue%a*" } },
 	{ role="dps", class="PALADIN",label="Ret Paladin",   pats={ "%f[%w]ret%f[%W]", "%f[%w]retri%a*" } },
 	{ role="dps", class="WARRIOR",label="Fury Warrior",  pats={ "%f[%w]fury%a*" } },
-	{ role="dps", class="DRUID",  label="Feral Cat",     pats={ "%f[%w]kitty%f[%W]", "%f[%w]feral%s?cat%a*" } },
+	{ role="dps", class="DRUID",  label="Feral Cat",     pats={ "%f[%w]kitty%f[%W]", "%f[%w]feral%a*" } },
 	-- tank specs
 	{ role="tank", class="PALADIN",    label="Prot Paladin", pats={ "prot%s?pala%a*", "%f[%w]ptal%a*" } },
 	{ role="tank", class="WARRIOR",    label="Prot Warrior", pats={ "prot%s?war%a*" } },
@@ -386,6 +390,8 @@ local word_cats = {
 	{ "boe",              "BoE" },
 	{ "orbs?",            "Orb" },
 	{ "patterns?",        "Patterns" },
+	{ "recipes?",         "Patterns" },   -- "recip"/"recipe" = crafting pattern drop
+	{ "%f[%w]recip%a*",   "Patterns" },   -- "recip" abbreviation (Orbs recip ress)
 	{ "frags?",           "Fragments" },
 	{ "fragments?",       "Fragments" },
 	{ "shards?",          "Shards" },
@@ -775,7 +781,10 @@ local samples = {
 		-- "warlock" must resolve to DPS only (NOT default tank/dps/heal). The
 		-- %f[%w]lock%a* frontier does NOT fire inside "warlock" (r->l is word->word).
 		"LFM VOA10(classrun) - NEED : warlock-last spot /w me GS!",
+	-- real spam: "Bomy" (boomkin typo) + "Feral" must both be DPS; "recip" = Patterns
+	"LFM ALL TOGC 10 50/50 Need 1 Tank Bomy/ Feral 4.7 + gs / w Orbs recip Ress ! Achiv !!",
 	-- should REJECT
+	"LFW experienced tank, will do ur toc25 run cheap /w me",   -- Looking For Work = seller
 	"<Rats> is a pve guild recruiting all classes, we raid icc 25 and toc",
 	"WTS [Shadowmourne] cheap",
 	"5.8k dps rogue looking for icc 25 group",

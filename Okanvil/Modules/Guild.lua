@@ -34,24 +34,29 @@ end
 function G.BuildRosterJSON()
 	local guildName = GetGuildInfo("player") or "Guild"
 	local realm = GetRealmName() or ""
-	local total = GetNumGuildMembers() or 0
 	local ranksSeen, ranks, members = {}, {}, {}
-	for i = 1, total do
-		-- 3.3.5 signature: name, rank, rankIndex, level, class, zone, note, officernote, online, status
-		local name, rankName, rankIndex, level, class, _, note, officernote = GetGuildRosterInfo(i)
-		if name then
-			name = stripRealm(name)
-			rankIndex = rankIndex or 0
-			if not ranksSeen[rankIndex] then
-				ranksSeen[rankIndex] = true
-				table.insert(ranks, { idx = rankIndex, name = rankName or ("Rank " .. rankIndex) })
+	-- Walk the FULL roster (online AND offline). GetNumGuildMembers() only counts ONLINE
+	-- members unless "Show Offline" is forced on -- without this the export dropped every
+	-- offline main (238 of them showed up as "Left the guild" on the hub). WithFullRoster
+	-- toggles SetGuildRosterShowOffline for the duration and restores it after.
+	Okanvil:WithFullRoster(function(total)
+		for i = 1, total do
+			-- 3.3.5 signature: name, rank, rankIndex, level, class, zone, note, officernote, online, status
+			local name, rankName, rankIndex, level, class, _, note, officernote = GetGuildRosterInfo(i)
+			if name then
+				name = stripRealm(name)
+				rankIndex = rankIndex or 0
+				if not ranksSeen[rankIndex] then
+					ranksSeen[rankIndex] = true
+					table.insert(ranks, { idx = rankIndex, name = rankName or ("Rank " .. rankIndex) })
+				end
+				table.insert(members, string.format(
+					'{"name":"%s","class":"%s","level":%d,"rankName":"%s","rankIndex":%d,"publicNote":"%s","officerNote":"%s"}',
+					esc(name), esc(class), level or 0, esc(rankName), rankIndex, esc(note), esc(officernote)
+				))
 			end
-			table.insert(members, string.format(
-				'{"name":"%s","class":"%s","level":%d,"rankName":"%s","rankIndex":%d,"publicNote":"%s","officerNote":"%s"}',
-				esc(name), esc(class), level or 0, esc(rankName), rankIndex, esc(note), esc(officernote)
-			))
 		end
-	end
+	end)
 	table.sort(ranks, function(a, b) return a.idx < b.idx end)
 	local ranksJson = {}
 	for _, r in ipairs(ranks) do
@@ -62,6 +67,52 @@ function G.BuildRosterJSON()
 		esc(guildName), esc(realm), time(),
 		table.concat(ranksJson, ","), table.concat(members, ",")
 	), #members
+end
+
+-- Async roster export. The offline members are NOT in the client's cache until we ask
+-- for them: SetGuildRosterShowOffline(true) + GuildRoster() kicks off a SERVER fetch,
+-- and the full list only lands a few frames later on GUILD_ROSTER_UPDATE. A synchronous
+-- BuildRosterJSON() therefore caught only the online members (12 of 250 -> the hub
+-- read the missing 238 as "Left the guild"). So we force offline on, request a refresh,
+-- and wait until the roster reports MORE members than are online (offline loaded) before
+-- building. cb(json, count) fires once the full list is ready (or after a timeout, so a
+-- guild that really is all-online still exports).
+function G.ExportRoster(cb)
+	if not (IsInGuild and IsInGuild()) then
+		local json, count = G.BuildRosterJSON()
+		if cb then cb(json, count) end
+		return
+	end
+	-- turn on Show Offline + request a fresh roster from the server
+	if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
+	if GuildRoster then GuildRoster() end
+
+	local After = Okanvil.Comms and Okanvil.Comms.After
+	local attempts = 0
+	local MAX_ATTEMPTS = 12          -- ~3s at 0.25s spacing
+	local function ready()
+		-- GetNumGuildMembers() -> (total, online). total counts offline only when the
+		-- show-offline flag is on AND the offline list has arrived. When they match we
+		-- either have everyone loaded or the guild really is all online.
+		local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
+		local online = (GetNumGuildMembers and select(2, GetNumGuildMembers())) or 0
+		return total > online or online == 0
+	end
+	local function finish()
+		local json, count = G.BuildRosterJSON()
+		if cb then cb(json, count) end
+	end
+	local function poll()
+		attempts = attempts + 1
+		if ready() or attempts >= MAX_ATTEMPTS or not After then
+			finish()
+			return
+		end
+		if GuildRoster then GuildRoster() end
+		After(0.25, poll)
+	end
+	-- give the first request a beat to answer, then poll
+	if After then After(0.25, poll) else finish() end
 end
 
 -- ------------------------------------------------------------

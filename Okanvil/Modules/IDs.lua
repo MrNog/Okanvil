@@ -764,8 +764,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
 		-- load an optional pre-built item DB shipped with the addon
 		-- (Modules/IDs-Data.lua sets the global OkanvilIDs_Seed). New ids only.
 		if OkanvilIDs_Seed then
-			local n = IDs.MergeSeed(OkanvilIDs_Seed)
-			if n > 0 then Print("loaded " .. n .. " seeded item name(s).") end
+			IDs.MergeSeed(OkanvilIDs_Seed)   -- silent; no login chatter
 			OkanvilIDs_Seed = nil -- free it
 		end
 		-- late-bind the lib onto the host if IDs loaded before Okanvil's Core
@@ -782,8 +781,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
 		}
 		if Okanvil and Okanvil.Register then
 			Okanvil.IDs = IDs
-			Okanvil:Register(ADDON)
-			Print("loaded. |cff00ff00/okid|r opens the finder.")
+			Okanvil:Register(ADDON)   -- silent; /okid still opens the finder
 		end
 	end
 end)

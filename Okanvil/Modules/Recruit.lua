@@ -340,8 +340,7 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 		-- native module: always hosted. Okanvil builds the UI lazily when you open
 		-- the Recruit tab (and Modules lets you toggle it off).
 		if Okanvil and Okanvil.Register then
-			Okanvil:Register(ADDON)
-			Print("loaded. |cff00ff00/recruit|r opens it.")
+			Okanvil:Register(ADDON)   -- silent; /recruit still opens it
 		end
 		return
 	end

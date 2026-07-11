@@ -678,8 +678,7 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 			end,
 		}
 		if Okanvil and Okanvil.Register then
-			Okanvil:Register(ADDON)
-			Print("loaded. |cff00ff00/oklog|r toggles logging.")
+			Okanvil:Register(ADDON)   -- silent; /oklog still toggles logging
 		end
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		if not db then

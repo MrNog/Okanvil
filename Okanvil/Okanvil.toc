@@ -27,3 +27,4 @@ Modules\IDs.lua
 Modules\Logs.lua
 Modules\RaidFinder-Parser.lua
 Modules\RaidFinder.lua
+Modules\RaidFinder-Mini.lua

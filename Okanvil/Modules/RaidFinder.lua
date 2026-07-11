@@ -54,6 +54,8 @@ end
 -- line, so a busy trade channel can't cost you frames when you're not even looking.
 local function should_scan()
 	if not (db and module_on()) then return false end
+	-- the floating Mini Raid Browser scans on its own while it is open
+	if Okanvil.RaidFinder_MiniWantsScan then return true end
 	return page_visible() or db.background
 end
 
@@ -135,6 +137,7 @@ local function record(sender, message)
 	end
 
 	if page_visible() then Okanvil.RaidFinder_Render() end
+	if Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
 end
 
 -- prune expired listings; refresh lockout (cheap RequestRaidInfo cache)
@@ -147,8 +150,9 @@ local function prune()
 			changed = true
 		end
 	end
-	if changed and page_visible() then
-		Okanvil.RaidFinder_Render()
+	if changed then
+		if page_visible() then Okanvil.RaidFinder_Render() end
+		if Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
 	end
 end
 
@@ -935,6 +939,14 @@ local function buildUI(panel)
 		drawerWidth = 0,   -- single-panel page
 		footerHeight = 0,  -- no footer -> the list uses the full height (no dead strip)
 		statusText = function() return "" end,
+		-- CTA header button opens the floating Mini Raid Browser (same pattern as
+		-- Loot's "Mini Roll Manager"). It scans + shows listings in a compact
+		-- movable window while this page is closed.
+		primaryText = function() return "Mini Browser" end,
+		onPrimary = function()
+			if Okanvil.RaidFinderMini_Toggle then Okanvil.RaidFinderMini_Toggle()
+			else Okanvil:Print("Mini Raid Browser not loaded.") end
+		end,
 		tabs = {
 			{ key = "settings", label = "Settings", height = 460, build = function(pg) buildSettings(pg) end },
 		},
@@ -1124,8 +1136,7 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
 			refresh = function() if Okanvil.RaidFinder_Render then Okanvil.RaidFinder_Render() end end,
 		}
 		if Okanvil.Register then
-			Okanvil:Register(ADDON)
-			Print("loaded. |cff00ff00/okrf|r opens the Raid Finder.  |cff00ff00/script Okanvil.RF.test()|r tests the parser.")
+			Okanvil:Register(ADDON)   -- silent; pick Raid Finder in Okanvil, "Mini Browser" pops the floating list
 		end
 		-- RequestRaidInfo warms the lockout cache for raid_lock_info().
 		RequestRaidInfo()
@@ -1152,10 +1163,40 @@ tick:SetScript("OnUpdate", function(_, elapsed)
 		if db then prune() end
 		-- keep age labels fresh while the page is open
 		if page_visible() then Okanvil.RaidFinder_Render() end
+		if Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
 	end
 end)
+
+-- ------------------------------------------------------------
+-- SHARED API for the Mini Raid Browser (RaidFinder-Mini.lua)
+--   Exposes the read-only view + render helpers so the floating window can
+--   reuse ALL the logic here (parse store, sort, labels, tooltips, lockout)
+--   without duplicating any of it. The mini window has its OWN scan gate so it
+--   can run while the Dashboard page is closed.
+-- ------------------------------------------------------------
+Okanvil.RaidFinder_Shared = {
+	get_view         = get_view,          -- () -> filtered+sorted listings (respects filters)
+	raid_label       = raid_label,        -- (info) -> "ICC25 HC"
+	roles_text       = roles_text,        -- (roles) -> colored "Tank DPS Heal"
+	roles_tooltip    = roles_tooltip,     -- (info) -> multiline or nil
+	reserved_tooltip = reserved_tooltip,  -- (info) -> multiline or nil
+	age_text         = age_text,          -- (info) -> "18s"
+	show_tip         = show_tip,          -- (owner, str, anchor)
+	hide_tip         = hide_tip,          -- ()
+	sortState        = sortState,         -- {key, asc} -- shared so both views sort alike
+	get_db           = function() return db end,
+	module_on        = module_on,
+}
+
+-- The mini window wants to scan even when the Dashboard tab is closed, so it
+-- registers its own "wants scan" flag. should_scan() above already OR's in a
+-- module hook; expose a setter the mini uses to force background scanning while
+-- it is open. (We keep it as a plain flag the mini toggles.)
+Okanvil.RaidFinder_MiniWantsScan = false
+Okanvil.RaidFinder_RecordExternal = function(sender, message) record(sender, message) end
 
 -- ------------------------------------------------------------
 -- slash
 -- ------------------------------------------------------------
 -- No slash command: open Okanvil from the minimap button and pick Raid Finder.
+-- The Mini Raid Browser opens from the page's "Mini Browser" header button.
