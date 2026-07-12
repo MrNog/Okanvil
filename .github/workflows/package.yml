@@ -242,15 +242,20 @@ jobs:
           # string through command substitution, so the "Fixed" header ended up
           # glued to the last bullet of "New". Build the separator with a plain
           # shell expansion instead, never through $( ).
+          # Both sections are assembled with printf, whose format string carries the
+          # newlines -- do NOT reach for a bare multi-line NL='...' literal here: a
+          # line at column 0 terminates the enclosing YAML block scalar and breaks
+          # the whole workflow.
           DESC=""
-          NL='
-'
           if [ -s new.txt ]; then
-            DESC="**✨ New**${NL}$(head -c 900 new.txt)"
+            DESC="$(printf '**✨ New**\n%s' "$(head -c 900 new.txt)")"
           fi
           if [ -s fix.txt ]; then
-            [ -n "$DESC" ] && DESC="${DESC}${NL}${NL}"
-            DESC="${DESC}**🔧 Fixed**${NL}$(head -c 900 fix.txt)"
+            if [ -n "$DESC" ]; then
+              DESC="$(printf '%s\n\n**🔧 Fixed**\n%s' "$DESC" "$(head -c 900 fix.txt)")"
+            else
+              DESC="$(printf '**🔧 Fixed**\n%s' "$(head -c 900 fix.txt)")"
+            fi
           fi
           [ -z "$DESC" ] && DESC="Maintenance release."
 
