@@ -12,6 +12,7 @@ Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
 
 Core\Core.lua
 Core\Comms.lua
+Core\Lockouts.lua
 Core\Widgets.lua
 Core\UI.lua
 

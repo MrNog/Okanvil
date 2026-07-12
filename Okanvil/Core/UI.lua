@@ -2151,14 +2151,209 @@ function Okanvil:BuildMinimap()
 	end)
 	b:SetScript("OnDragStop", function(s) s:SetScript("OnUpdate", nil) end)
 	b:SetScript("OnClick", function() Okanvil:Toggle() end)
-	b:SetScript("OnEnter", function(s)
-		GameTooltip:SetOwner(s, "ANCHOR_LEFT")
-		GameTooltip:AddLine("|cffffd200Okanvil|r")
-		local gb = Okanvil.db.brand
-		if gb and gb ~= "" and gb ~= "Okanvil" then GameTooltip:AddLine(gb, 0.88, 0.72, 0.38) end
-		GameTooltip:AddLine("Click: open", 1, 1, 1)
-		GameTooltip:Show()
-	end)
-	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	b:SetScript("OnEnter", function(s) Okanvil:ShowMinimapTip(s) end)
+	b:SetScript("OnLeave", function() Okanvil:HideMinimapTip() end)
 	self.minimap = b
+end
+
+-- ------------------------------------------------------------
+-- MINIMAP TOOLTIP  --  lockout grid (raid rows x toon columns)
+--
+-- Built as our OWN frame, not GameTooltip: the stock 3.3.5a tooltip only offers
+-- AddLine / AddDoubleLine (two columns), and a grid of N toons needs N columns.
+-- SavedInstances solves this with LibQTip; we do it with Okanvil.W instead, so no
+-- new library enters the addon.
+--
+-- Columns are laid out by MEASURING text (fs:GetStringWidth()) rather than padding
+-- with spaces -- the WoW font is proportional, so space-padding never lines up.
+-- ------------------------------------------------------------
+-- Tooltip scale. Row height tracks the font size, or lines overlap when it grows.
+local TIP_FONT     = 15   -- body / grid cells
+local TIP_TITLE    = 17   -- "Okanvil" wordmark
+local TIP_SMALL    = 13   -- brand line, reset footer, click hint
+local TIP_ROW_H    = TIP_FONT + 6
+local TIP_PAD      = 14
+local TIP_COL_GAP  = 16
+
+function Okanvil:ShowMinimapTip(owner)
+	local tip = self.minimapTip
+	if not tip then
+		tip = W.Frame(UIParent, "dark")       -- deepest panel: reads as a tooltip, not a window
+		-- Opt OUT of the opacity slider: ReskinAll() would repaint this back to the
+		-- stock panelD fill and undo the darker tooltip look below.
+		if self._skinned then self._skinned[tip] = nil end
+		tip:SetBackdropColor(0.04, 0.04, 0.05, 0.96)
+		tip:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 0.9)  -- gold hairline
+		tip:SetFrameStrata("TOOLTIP")
+		tip:EnableMouse(false)          -- never eat clicks meant for the minimap
+		tip:SetClampedToScreen(true)
+		tip.rows = {}                   -- pooled FontStrings, reused between hovers
+		-- A dedicated off-pool string used only to MEASURE text (GetStringWidth).
+		-- It must not come from the pool, or the next line() would overwrite the
+		-- very string we are still measuring with.
+		tip.probe = W.Text(tip, nil, TIP_FONT)
+		tip.probe:Hide()
+		self.minimapTip = tip
+	end
+
+	-- release every pooled string from the last hover
+	for _, fs in ipairs(tip.rows) do fs:Hide() end
+	local used = 0
+	local function line(text, size, role)
+		used = used + 1
+		local fs = tip.rows[used]
+		if not fs then
+			fs = W.Text(tip, nil, size or TIP_FONT, role)
+			tip.rows[used] = fs
+		end
+		fs:SetFont(Okanvil:Font(), size or TIP_FONT)
+		fs:SetText(text or "")
+		fs:Show()
+		return fs
+	end
+
+	local y = -TIP_PAD
+	local maxW = 0
+
+	-- header: fixed wordmark + optional guild skin
+	local title = line("|cffffd200Okanvil|r", TIP_TITLE)
+	title:ClearAllPoints(); title:SetPoint("TOPLEFT", TIP_PAD, y)
+	maxW = math.max(maxW, title:GetStringWidth())
+	y = y - (TIP_TITLE + 6)          -- the wordmark is taller than a body row
+
+	local gb = self.db.brand
+	if gb and gb ~= "" and gb ~= "Okanvil" then
+		local sub = line(gb, TIP_SMALL); sub:Color(0.88, 0.72, 0.38)
+		sub:ClearAllPoints(); sub:SetPoint("TOPLEFT", TIP_PAD, y)
+		maxW = math.max(maxW, sub:GetStringWidth())
+		y = y - (TIP_SMALL + 6)
+	end
+
+	-- ---------- the grid ----------
+	local LO = self.Lockouts
+	local toons = LO and LO:Get() or {}
+	if #toons > 0 then
+		y = y - 8
+		local hdr = line("|cffc0943aSaved raids|r", TIP_FONT)
+		hdr:ClearAllPoints(); hdr:SetPoint("TOPLEFT", TIP_PAD, y)
+		y = y - TIP_ROW_H - 2
+
+		-- Collect the distinct raids (rows) and the raid SIZES actually in use.
+		-- cell[raid][toon][size] = true  -- a toon can be saved to the same raid at
+		-- two sizes (10 AND 25), which is why size is a dimension and not a string.
+		local raidOrder, cell, sizeSeen = {}, {}, {}
+		local soonest
+		for _, toon in ipairs(toons) do
+			for _, inst in ipairs(toon.instances) do
+				if not cell[inst.name] then
+					cell[inst.name] = {}
+					raidOrder[#raidOrder + 1] = inst.name
+				end
+				local size = (inst.players and inst.players > 0) and inst.players or 0
+				cell[inst.name][toon.name] = cell[inst.name][toon.name] or {}
+				cell[inst.name][toon.name][size] = true
+				sizeSeen[size] = true
+				if not soonest or inst.resets < soonest then soonest = inst.resets end
+			end
+		end
+		table.sort(raidOrder)
+
+		-- Sizes become FIXED sub-columns (10 | 25), ascending. This is the bit that
+		-- makes the grid line up: a lone "25" lands in the 25-column, directly under
+		-- every other 25, instead of being centred in a merged "10 25" cell.
+		local sizes = {}
+		for s in pairs(sizeSeen) do sizes[#sizes + 1] = s end
+		table.sort(sizes)
+
+		local probe = tip.probe
+		probe:SetFont(Okanvil:Font(), TIP_FONT)
+
+		-- column 1: raid name, as wide as the longest raid
+		local nameW = 0
+		for _, raid in ipairs(raidOrder) do
+			probe:SetText(raid)
+			nameW = math.max(nameW, probe:GetStringWidth())
+		end
+
+		-- Sub-column width: the widest size label ("25"), same for all -- uniform
+		-- cells are what let the eye scan a column straight down.
+		local cellW = 0
+		for _, s in ipairs(sizes) do
+			probe:SetText(tostring(s))
+			cellW = math.max(cellW, probe:GetStringWidth())
+		end
+		cellW = cellW + 6
+
+		-- Each toon owns a block of len(sizes) sub-columns -- but the block must also
+		-- be wide enough for the toon's NAME, or the header FontString truncates it
+		-- to "Oka...". Widen the block to whichever is bigger and keep that width:
+		-- the cells centre inside it, so the columns still line up.
+		local cellsW = #sizes * cellW + (#sizes - 1) * 4
+		local colX, blockW, cellOff = {}, {}, {}
+		local x = TIP_PAD + nameW + TIP_COL_GAP
+		for _, toon in ipairs(toons) do
+			probe:SetText(toon.name)
+			local w = math.max(cellsW, probe:GetStringWidth())
+			colX[toon.name]   = x
+			blockW[toon.name] = w
+			-- centre the (possibly narrower) cell strip inside a name-widened block
+			cellOff[toon.name] = (w - cellsW) / 2
+			x = x + w + TIP_COL_GAP
+		end
+		maxW = math.max(maxW, x - TIP_COL_GAP - TIP_PAD)
+
+		-- header row: toon names, class-coloured, centred over their block
+		for _, toon in ipairs(toons) do
+			local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[toon.class]
+			local fs = line(toon.name, TIP_FONT)
+			if c then fs:Color(c.r, c.g, c.b) end
+			fs:ClearAllPoints()
+			fs:SetPoint("TOPLEFT", colX[toon.name], y)
+			fs:SetWidth(blockW[toon.name]); fs:Justify("CENTER")
+		end
+		y = y - TIP_ROW_H
+
+		-- one row per raid; every toon x size gets its own fixed cell
+		for _, raid in ipairs(raidOrder) do
+			local nm = line(raid, TIP_FONT)
+			nm:ClearAllPoints(); nm:SetPoint("TOPLEFT", TIP_PAD, y)
+			for _, toon in ipairs(toons) do
+				local saved = cell[raid][toon.name]
+				for i, s in ipairs(sizes) do
+					local fs = line(saved and saved[s] and tostring(s) or "", TIP_FONT)
+					fs:ClearAllPoints()
+					fs:SetPoint("TOPLEFT",
+						colX[toon.name] + cellOff[toon.name] + (i - 1) * (cellW + 4), y)
+					fs:SetWidth(cellW); fs:Justify("CENTER")
+				end
+			end
+			y = y - TIP_ROW_H
+		end
+
+		-- Every WotLK raid lockout resets on the same weekly server tick, so a
+		-- per-row countdown would repeat the same value N times. One footer instead.
+		if soonest then
+			y = y - 4
+			local rst = line("resets in " .. LO:FormatTime(soonest - time()), TIP_SMALL, "dim")
+			rst:ClearAllPoints(); rst:SetPoint("TOPLEFT", TIP_PAD, y)
+			y = y - TIP_ROW_H
+		end
+	end
+
+	y = y - 6
+	local hint = line("Click: open", TIP_SMALL, "dim")
+	hint:ClearAllPoints(); hint:SetPoint("TOPLEFT", TIP_PAD, y)
+	maxW = math.max(maxW, hint:GetStringWidth())
+	y = y - TIP_ROW_H
+
+	tip:SetSize(maxW + TIP_PAD * 2, -y + TIP_PAD - TIP_ROW_H + 6)
+	-- Anchor BELOW the button (the minimap button lives near the top of the screen,
+	-- so anchoring above would run it off the top edge).
+	tip:ClearAllPoints()
+	tip:SetPoint("TOPRIGHT", owner, "BOTTOMLEFT", 0, -4)
+	tip:Show()
+end
+
+function Okanvil:HideMinimapTip()
+	if self.minimapTip then self.minimapTip:Hide() end
 end
