@@ -1849,11 +1849,32 @@ function L.ScanIDs(text)
 	end)
 end
 
+-- The exported run id. MUST identify the RAID ID, not the calendar day: two nights on
+-- the SAME lockout are one run (continue where we left off), but a RESET between them is
+-- a NEW run even if both nights fall in the same Wed->Wed week. Deriving this from s.day
+-- (the old way) lost that distinction -- the hub then merged a 7th-July and an 8th-July
+-- run of the same raid and showed the same boss killed twice, which cannot happen on one ID.
+--
+-- s.key is already exactly that fingerprint (see runKey): a raid carries the server's
+-- saved-instance resetDay, so a fresh ID after a reset gets a different key; a dungeon
+-- carries runToken, which bumps on every entry. We just have to SHIP it. Slugged (the
+-- raw key has "|" and spaces) and kept stable so a re-export of the same run re-merges
+-- instead of duplicating.
+local function exportRunId(s)
+	local key = s.key
+	if key and key ~= "" then
+		return (key:lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", ""))
+	end
+	-- pre-key session (very old saved data): fall back to the legacy day-based id so
+	-- previously imported history keeps the same id and does not duplicate on re-import.
+	return (s.day or "") .. "-" .. (s.zone or ""):lower():gsub("%s+", "-") .. "-" .. (s.difficulty or 0)
+end
+
 function L.SessionJSON(s)
 	if not s then return "{}" end
 	local guildName = GetGuildInfo("player") or "Guild"
 	local realm = GetRealmName() or ""
-	local runId = (s.day or "") .. "-" .. (s.zone or ""):lower():gsub("%s+", "-") .. "-" .. (s.difficulty or 0)
+	local runId = exportRunId(s)
 	-- size: DUNGEON (key "run|...") = 5; RAID = 25 on difficulties 2/4, else 10.
 	local isDungeon = s.key and s.key:find("^run|") ~= nil
 	local size = isDungeon and 5 or ((s.difficulty == 2 or s.difficulty == 4) and 25 or 10)
