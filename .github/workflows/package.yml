@@ -175,12 +175,82 @@ jobs:
             echo "::warning::LOG_WEBHOOK secret is not set -- release published, Discord not notified."
             exit 0
           fi
-          # release notes GitHub just generated; trimmed to fit the embed budget
-          gh release view "$TAG" --json body -q .body > notes.raw || echo "" > notes.raw
-          NOTES="$(head -c 1200 notes.raw)"
+          # The embed is read by OFFICERS, not by developers: it must say what
+          # CHANGED for a user, never how. So we do NOT use GitHub's generated
+          # notes (a bare list of commit subjects + a compare link -- meaningless
+          # to anyone who does not read the diff).
+          #
+          # Instead we walk every commit since the previous tag and sort its body
+          # lines into two buckets by leading keyword:
+          #
+          #   new: adds the Invite tab      -> "New" list
+          #   fix: loot no longer duplicates -> "Fixed" list
+          #
+          # Accepted prefixes (case-insensitive, `-`/`*` bullet optional):
+          #   new: / feature: / add: / added:   -> New
+          #   fix: / fixed: / bug:              -> Fixed
+          #
+          # A commit whose body has NO such line still gets announced: its subject
+          # is used, going to "Fixed" unless it is a [minor]/[major] bump (-> New).
+          # That way a lazy one-line commit degrades to today's behaviour instead
+          # of vanishing from the post.
+          # The previous tag is the one that PRECEDES this commit in history --
+          # ask git to walk it. (Sorting all tags by version and taking the top
+          # one looks equivalent but is not: it ignores which commit we are on,
+          # so re-running an older tag would build a backwards range.)
+          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$TAG^" 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; else RANGE="$TAG"; fi
+
+          : > new.txt
+          : > fix.txt
+          # %x00-separated commits so bodies with blank lines stay one record
+          git log "$RANGE" --no-merges --pretty=format:'%s%n%b%x00' | \
+          while IFS= read -r -d '' commit; do
+            subject="$(printf '%s' "$commit" | head -n1)"
+            lower="$(printf '%s' "$commit" | tr '[:upper:]' '[:lower:]')"
+            case "$lower" in *"[skip"*) continue ;; esac
+
+            matched=0
+            while IFS= read -r line; do
+              # strip a leading bullet and whitespace
+              item="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*[-*][[:space:]]*//')"
+              case "$(printf '%s' "$item" | tr '[:upper:]' '[:lower:]')" in
+                new:*|feature:*|feat:*|add:*|added:*)
+                  printf -- '- %s\n' "$(printf '%s' "$item" | sed -E 's/^[^:]+:[[:space:]]*//')" >> new.txt
+                  matched=1 ;;
+                fix:*|fixed:*|bug:*)
+                  printf -- '- %s\n' "$(printf '%s' "$item" | sed -E 's/^[^:]+:[[:space:]]*//')" >> fix.txt
+                  matched=1 ;;
+              esac
+            done <<< "$commit"
+
+            # no keyword lines anywhere -> fall back to the bare subject
+            if [ "$matched" = "0" ]; then
+              clean="$(printf '%s' "$subject" | sed -E 's/\[(minor|major|skip[^]]*)\]//Ig; s/^[[:space:]]+|[[:space:]]+$//g')"
+              [ -z "$clean" ] && continue
+              case "$lower" in
+                *"[minor]"*|*"[major]"*) printf -- '- %s\n' "$clean" >> new.txt ;;
+                *)                       printf -- '- %s\n' "$clean" >> fix.txt ;;
+              esac
+            fi
+          done
+
+          # Assemble the sections. Note `$(...)` strips trailing newlines, so a
+          # section cannot end with its own blank line -- each block instead
+          # PREFIXES a separator when something is already above it.
+          DESC=""
+          sep() { [ -n "$DESC" ] && printf '\n\n'; }
+          if [ -s new.txt ]; then
+            DESC="$DESC$(sep)$(printf '**✨ New**\n%s' "$(head -c 900 new.txt)")"
+          fi
+          if [ -s fix.txt ]; then
+            DESC="$DESC$(sep)$(printf '**🔧 Fixed**\n%s' "$(head -c 900 fix.txt)")"
+          fi
+          [ -z "$DESC" ] && DESC="Maintenance release."
+
           URL="https://github.com/$REPO/releases/tag/$TAG"
           ZIP="https://github.com/$REPO/releases/download/$TAG/Okanvil.zip"
-          DESC="$(printf '%s\n\n**Install:** unzip into `World of Warcraft\\Interface\\AddOns\\`, then restart WoW.\n[Download Okanvil.zip](%s)' "$NOTES" "$ZIP")"
+          DESC="$(printf '%s\n\n**Install:** unzip into `World of Warcraft\\Interface\\AddOns\\`, then restart WoW.\n[Download Okanvil.zip](%s)  ·  [Full changelog](%s)' "$DESC" "$ZIP" "$URL")"
 
           # 12686394 = #c1943a (RATS gold)
           payload="$(jq -n --arg t "Okanvil $VERSION" --arg u "$URL" \

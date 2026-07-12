@@ -33,6 +33,32 @@ which you chose and why. Do not ask unless it is genuinely ambiguous.
 - A mixed diff takes the **highest** level it contains — a feature plus a docs tweak is
   `[minor]`, never `[skip]`.
 
+### The commit body becomes the Discord post — write it for officers
+
+The release embed in `#okanor-logs` is built from the commit **bodies** since the last
+tag, not from the diff. Officers read it; they do not read code. So the body must say
+what changed *for a user*, in plain words.
+
+Sort each user-visible change onto its own line, prefixed with a keyword:
+
+```
+[minor] loot: raid ID tracking
+
+new: Loot now tracks the raid ID, so two raids on the same night no longer merge.
+fix: Master-loot window no longer shows for every raider, only the actual ML.
+- Internal: renamed exportRunId. (no keyword -> not announced)
+```
+
+- `new:` / `feature:` / `add:` → the **✨ New** list.
+- `fix:` / `fixed:` / `bug:` → the **🔧 Fixed** list.
+- Any other line (internals, refactors, co-author trailers) is **left out of the post**.
+- A commit with no keyword line at all falls back to its subject, so nothing ever
+  vanishes — but that subject is usually developer shorthand, which is exactly the
+  problem. **Write the keyword lines.**
+
+One line = one thing the officer would notice in-game. Name the module, say the effect,
+skip the mechanism ("no longer merges two raids", not "keys off s.key not s.day").
+
 **Never hand-edit `## Version:` in `Okanvil/Okanvil.toc`.** The tag is the single source of
 truth and the Action stamps the `.toc` at build time. Editing it by hand does nothing except
 make local builds lie about their version.
