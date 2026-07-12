@@ -235,16 +235,22 @@ jobs:
             fi
           done
 
-          # Assemble the sections. Note `$(...)` strips trailing newlines, so a
-          # section cannot end with its own blank line -- each block instead
-          # PREFIXES a separator when something is already above it.
+          # Assemble the sections.
+          #
+          # `$(...)` strips trailing newlines -- which also killed the old `$(sep)`
+          # helper: a function that only ever printf'd "\n\n" returned the empty
+          # string through command substitution, so the "Fixed" header ended up
+          # glued to the last bullet of "New". Build the separator with a plain
+          # shell expansion instead, never through $( ).
           DESC=""
-          sep() { [ -n "$DESC" ] && printf '\n\n'; }
+          NL='
+'
           if [ -s new.txt ]; then
-            DESC="$DESC$(sep)$(printf '**✨ New**\n%s' "$(head -c 900 new.txt)")"
+            DESC="**✨ New**${NL}$(head -c 900 new.txt)"
           fi
           if [ -s fix.txt ]; then
-            DESC="$DESC$(sep)$(printf '**🔧 Fixed**\n%s' "$(head -c 900 fix.txt)")"
+            [ -n "$DESC" ] && DESC="${DESC}${NL}${NL}"
+            DESC="${DESC}**🔧 Fixed**${NL}$(head -c 900 fix.txt)"
           fi
           [ -z "$DESC" ] && DESC="Maintenance release."
 
