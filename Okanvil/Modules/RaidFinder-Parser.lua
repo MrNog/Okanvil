@@ -64,9 +64,22 @@ end
 --   SOLID (reuse). Keep this list short and obvious; expand as we see
 --   false listings slip through.
 -- ------------------------------------------------------------
+-- A guild advertising itself for membership -- NOT a leader forming a group right
+-- now. Warmane spam is heavily es/pt/ru, so the recruit vocabulary has to be too:
+-- an English-only list let "Guild hispanohablante, reclutamos HEAL ... para TOGC25"
+-- through as a live ToGC25 listing.
 local recruit_words = {
+	-- english
 	"recruit", "we raid", "we are raiding", "raid time", "active raider",
 	"is a pve", "is a pvp", "is a pvep", "looking for members", "auto%s?recruit",
+	"join%s+our%s+guild",
+	-- "Progress TOGC25 46/50" -- a guild quoting its clear record is advertising
+	-- itself; a leader forming a pug never posts a progress fraction.
+	"progress%s*%a*%s*%d+%s*/%s*%d+",
+	-- spanish (stems, so reclutamos/reclutando/reclutar all hit)
+	"reclut", "hispanohablante", "hermandad", "buscamos",
+	-- portuguese
+	"recrutan", "recrutando", "guilda",
 }
 -- "LFW" = Looking For Work: a booster/carry seller advertising themselves for
 -- hire, not a raid leader forming a group. Discard on sight (like WTS spam).
