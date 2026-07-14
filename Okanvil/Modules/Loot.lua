@@ -1015,6 +1015,7 @@ local function recordNeedGreed(msg)
 			-- one entry per player (the first roll counts)
 			for _, e in ipairs(dp.rolls) do if e.player == who then return end end
 			dp.rolls[#dp.rolls + 1] = { player = who, roll = roll or 0, kind = kind }
+			dp.lastRollAt = GetTime()   -- keeps the roll-off "open" while people are rolling
 			L.AttributeByRoll(dp)
 			if L.onLoot then L.onLoot() end
 			if L.onRoll then L.onRoll() end
@@ -1337,6 +1338,7 @@ local function captureRoll(msg)
 		dp.rolls = dp.rolls or {}
 		for _, e in ipairs(dp.rolls) do if e.player == key then return end end   -- first roll counts
 		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
+		dp.lastRollAt = GetTime()   -- keeps the roll-off "open" while people are rolling
 		L.AttributeByRoll(dp)
 		if L.onLoot then L.onLoot() end
 		if L.onRoll then L.onRoll() end
@@ -1535,12 +1537,47 @@ function L.RollWinner(dp)
 	return best
 end
 
--- Attribute the drop to whoever won its roll. Called when a roll is RECORDED -- never
--- from the render path, which would have the UI writing to the data it is drawing.
+-- Is a roll-off still OPEN on this drop? While it is, the top roll is only the leader --
+-- more people may yet roll higher, so nothing may be recorded as won.
+--
+--   rollID    -- the game's own need/greed roll is live
+--   rollStart -- a chat roll-off we timed
+--   activeRoll -- a roll WE announced, on this item
+--
+-- A chat roll-off nobody closes stays "open" forever, so it also ages out: after
+-- ROLL_SETTLE seconds with no new roll, the top roll stands as the winner.
+local ROLL_SETTLE = 90
+
+local function rollIsOpen(dp)
+	if not dp then return false end
+	if dp.rollID then return true end
+	if activeRoll and (not activeRoll.id or not dp.id or activeRoll.id == dp.id) then return true end
+	if dp.rollStart then
+		local dur = dp.rollDur or ROLL_SETTLE
+		if (GetTime() - dp.rollStart) < dur then return true end
+	end
+	-- a roll landed recently -> others may still be rolling
+	if dp.lastRollAt and (GetTime() - dp.lastRollAt) < ROLL_SETTLE then return true end
+	return false
+end
+
+-- Attribute the drop to whoever won its roll.
+--
+-- ONLY once the roll is OVER. While a roll-off is open the top roll is the LEADER, not
+-- the winner -- writing it into receivedBy on every captured roll meant the first person
+-- to roll instantly "owned" the item, and a single /roll with nobody else yet awarded it
+-- to the roller. An item is won when the master looter hands it over, or when the roll
+-- has closed; until then the leader is shown in the list and nothing is recorded.
+--
+-- Called when a roll is RECORDED -- never from the render path, which would have the UI
+-- writing to the data it is drawing.
 function L.AttributeByRoll(dp)
+	if not dp then return end
+	if dp.receivedBy and dp.receivedBy ~= "" then return end   -- already handed over
+	if rollIsOpen(dp) then return end                          -- still rolling: no winner yet
+
 	local best = L.RollWinner(dp)
 	if not (best and best.player and best.player ~= "") then return end
-	if dp.receivedBy == best.player then return end
 	dp.receivedBy = best.player
 	dp.rollWon    = true          -- attributed by roll, not by watching the handover
 end
