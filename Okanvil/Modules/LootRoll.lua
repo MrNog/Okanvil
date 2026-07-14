@@ -98,20 +98,22 @@ local function itemIcon(itemLink)
 	return itemLink and Okanvil:ItemIcon(itemLink) or nil
 end
 
--- Should the body carry the "Roll MS / Roll OS" buttons? They /roll into chat, so they
--- belong wherever the raid decides an item by a chat roll-off -- which is NOT only under
--- master loot: a roll called over raid warning happens under any loot method, and gating
--- on the method alone left a raider in a group-loot raid with no way to roll at all.
+-- Should the body carry the "Roll MS / Roll OS" buttons? They /roll into chat, and a raid
+-- calls a chat roll-off under ANY loot method -- so the only thing that matters is that
+-- there is a group to roll in front of.
 --
--- Under need-before-greed with nothing announced the game shows its own roll frame, and
--- these would only spam chat -- so a quiet group-loot raid still hides them.
+-- Earlier versions tried to be clever about WHEN a chat roll-off was happening (master
+-- loot only; then master loot or a roll we started). Both guessed wrong the same way: an
+-- item announced by someone else's addon under group loot has no roll we know about yet,
+-- which is exactly the moment you need to roll. A stray /roll costs nothing; not being
+-- able to roll costs you the item.
 --
 -- ONE definition: Rebuild decides the layout from it and OnRollOpen decides whether the
 -- layout needs rebuilding from it. Two copies of this test would drift apart.
 local function wantsChatRollButtons()
-	if L and L.IsMasterLootMethod and L.IsMasterLootMethod() then return true end
-	if L and L.ActiveRoll and L.ActiveRoll() then return true end
-	return false
+	local inGroup = (GetNumRaidMembers and GetNumRaidMembers() > 0)
+		or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+	return inGroup and true or false
 end
 
 -- are we the loot master right now? (drives ML-vs-raider layout)
