@@ -98,6 +98,22 @@ local function itemIcon(itemLink)
 	return itemLink and Okanvil:ItemIcon(itemLink) or nil
 end
 
+-- Should the body carry the "Roll MS / Roll OS" buttons? They /roll into chat, so they
+-- belong wherever the raid decides an item by a chat roll-off -- which is NOT only under
+-- master loot: a roll called over raid warning happens under any loot method, and gating
+-- on the method alone left a raider in a group-loot raid with no way to roll at all.
+--
+-- Under need-before-greed with nothing announced the game shows its own roll frame, and
+-- these would only spam chat -- so a quiet group-loot raid still hides them.
+--
+-- ONE definition: Rebuild decides the layout from it and OnRollOpen decides whether the
+-- layout needs rebuilding from it. Two copies of this test would drift apart.
+local function wantsChatRollButtons()
+	if L and L.IsMasterLootMethod and L.IsMasterLootMethod() then return true end
+	if L and L.ActiveRoll and L.ActiveRoll() then return true end
+	return false
+end
+
 -- are we the loot master right now? (drives ML-vs-raider layout)
 -- MUST match the Loot module's real check: master-loot method AND *we* are the ML.
 -- The old test only checked the method was "master" (true for EVERYONE in the raid,
@@ -708,11 +724,8 @@ function RM.Rebuild()
 		y = y - (compact and 24 or 28)
 	end
 
-	-- Your roll -- MASTER LOOT ONLY ------------------------------------------
-	-- Under group loot / need-before-greed the game shows its own roll frame and
-	-- these buttons would just spam a /roll nobody reads. Only a master-loot run
-	-- decides by a chat roll-off, so that's the only place they belong.
-	if L.IsMasterLootMethod and L.IsMasterLootMethod() then
+	-- Your roll ---------------------------------------------------------------
+	if wantsChatRollButtons() then
 		local yrl = keep(W.Text(body, "Your roll", compact and 10 or 11, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - (compact and 15 or 18)
 		local hw = (INNER - 8) / 2
 		local bh = compact and 22 or 28
@@ -1236,8 +1249,23 @@ local function popOrRefresh(force)
 end
 local function onLoot() popOrRefresh(false) end
 
--- also pop for a raider when a roll opens (so they see the Roll MS/OS buttons).
-function RM.OnRollOpen() popOrRefresh(false) end
+-- A roll just opened. Pop the window, and rebuild it ONLY if the buttons it should
+-- carry have changed: the "Your roll" pair only exists while a chat roll-off is
+-- plausible, and a plain Refresh repaints the list without re-deciding the body -- so
+-- a raider would watch rolls come in with no way to roll himself.
+--
+-- Gated on the FLAG, not on the event: onRoll fires for every captured roll, and a full
+-- Rebuild per roll is 25 rebuilds in a 25-man roll-off (the shape of the raid lag).
+local lastChatRoll = nil
+function RM.OnRollOpen()
+	popOrRefresh(false)
+	if not (win and win:IsShown()) then return end
+	local now = wantsChatRollButtons()
+	if now == lastChatRoll then return end
+	lastChatRoll = now
+	local ok, err = pcall(RM.Rebuild)
+	if not ok and Okanvil.Err then Okanvil:Err("RollMgr OnRollOpen", err) end
+end
 
 -- a loot window just opened with items in front of us -> always pop (forced).
 function RM.OnLootWindow() popOrRefresh(true) end
