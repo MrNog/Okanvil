@@ -436,7 +436,10 @@ function RM.Rebuild()
 	local trackTail = false
 	local function keep(w)
 		f.bodyKids[#f.bodyKids + 1] = w
-		if trackTail then f.tail[#f.tail + 1] = w end
+		if trackTail then
+			w._pts = nil          -- freshly laid out: fitList must re-capture its anchors
+			f.tail[#f.tail + 1] = w
+		end
 		return w
 	end
 
@@ -733,6 +736,11 @@ end
 --
 -- `usedH` is the real height of the rendered rows. Everything below the list slides up
 -- by the difference, and the window loses the same amount.
+--
+-- Widgets are moved by re-applying ALL of their points, not just the first. A widget
+-- gets its WIDTH from a second anchor (a TOPLEFT plus a RIGHT); clearing the lot and
+-- restoring only point 1 drops that second anchor, and the widget collapses to the
+-- width of its own text -- which squeezed the whole window into a sliver.
 local function fitList(f, usedH)
 	if not (f.ibox and f.tail and f.tailBaseH) then return end
 	local full = f.listAssumedH or (LIST_ROWS * ROW_H + 6)
@@ -742,14 +750,22 @@ local function fitList(f, usedH)
 	f.listH = want - 6
 
 	for _, w in ipairs(f.tail) do
-		if w.GetPoint and w:IsShown() then
-			local p, rel, rp, x, wy = w:GetPoint(1)
-			-- Only widgets anchored to the BODY move; ones anchored to a sibling (a
-			-- button placed LEFT of another) follow their anchor on their own.
-			if p and rel == f.body and wy then
-				if not w._y0 then w._y0 = wy end
-				w:ClearAllPoints()
-				w:SetPoint(p, rel, rp, x, w._y0 + shrink)
+		if w.GetNumPoints and w:GetNumPoints() > 0 then
+			-- capture every point ONCE, before anything has been moved
+			if not w._pts then
+				local pts = {}
+				for i = 1, w:GetNumPoints() do
+					local p, rel, rp, x, wy = w:GetPoint(i)
+					pts[i] = { p = p, rel = rel, rp = rp, x = x, y = wy }
+				end
+				w._pts = pts
+			end
+			w:ClearAllPoints()
+			for _, pt in ipairs(w._pts) do
+				-- Only points anchored to the BODY shift: one anchored to a sibling
+				-- follows that sibling on its own and must keep its original offset.
+				local dy = (pt.rel == f.body) and shrink or 0
+				w:SetPoint(pt.p, pt.rel, pt.rp, pt.x, (pt.y or 0) + dy)
 			end
 		end
 	end
