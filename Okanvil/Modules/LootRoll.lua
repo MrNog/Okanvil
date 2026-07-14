@@ -30,8 +30,8 @@ Okanvil.RollMgr = RM
 --   LIST_ROWS -- visible rows of the mixed list (items + any expanded rolls).
 --   MAX_ROLLS -- rolls shown inline before the roll block itself starts scrolling.
 local SIZES = {
-	full    = { ROW_H = 32, FONT_SZ = 12, SUB_SZ = 10, ROLL_H = 18, LIST_ROWS = 9, WIN_W = 330 },
-	compact = { ROW_H = 26, FONT_SZ = 11, SUB_SZ =  9, ROLL_H = 15, LIST_ROWS = 8, WIN_W = 270 },
+	full    = { ROW_H = 32, FONT_SZ = 12, SUB_SZ = 10, ROLL_H = 18, LIST_ROWS = 12, WIN_W = 330 },
+	compact = { ROW_H = 26, FONT_SZ = 11, SUB_SZ =  9, ROLL_H = 15, LIST_ROWS = 10, WIN_W = 270 },
 }
 local MAX_ROLLS = 5   -- inline rolls visible at once; the rest scroll within the block
 
@@ -677,16 +677,18 @@ function RM.Rebuild()
 	-- (No separate rolls panel: the rolls render inside the list above, under whichever
 	--  item is expanded.)
 
-	-- ML-only: award / clear -------------------------------------------------
+	-- ML-only: award ---------------------------------------------------------
+	-- "Stop" above already cancels a roll, and clicking the winning roll in the list
+	-- awards the item -- so this is only the shortcut for "give it to the top roll"
+	-- without aiming at the name. Hiding the run's loot lives on the Loot page: it is
+	-- end-of-raid tidying, not something you reach for mid-boss.
 	if ml then
 		local awH = compact and 22 or 26
-		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER - 90, awH); award:SetPoint("TOPLEFT", M, y)
+		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER, awH); award:SetPoint("TOPLEFT", M, y)
 		award:SetScript("OnClick", function()
 			if not selected then Okanvil:Print("|cffff5555Open an item in the list first.|r"); return end
 			-- Award the top roll of the OPEN item, from the rolls actually captured on
-			-- it. The old version only looked at L.ActiveRoll(), so awarding no-oped for
-			-- every item whose rolls came from chat rather than a managed roll -- which
-			-- is most of them.
+			-- it, falling back to a managed roll's own winner.
 			local top = L.RollWinner and L.RollWinner(selected)
 			if not top then
 				local ar = L.ActiveRoll()
@@ -695,35 +697,7 @@ function RM.Rebuild()
 			if not top then Okanvil:Print("|cffff5555No rolls captured for this item yet.|r"); return end
 			L.AwardWinner(selected.id, top.player, top.roll, top.spec)
 		end)
-		local clear = keep(W.Button(body, "Clear")); clear:SetSize(82, awH); clear:SetPoint("LEFT", award, "RIGHT", 8, 0)
-		clear:SetScript("OnClick", function() selected = nil; L.StopRoll(); RM.Refresh() end)
 		y = y - (awH + 10)
-
-		-- Hide this run's items from THIS list. Does not delete: the history and the
-		-- export keep everything (use the Loot page to actually delete a session).
-		-- The list also clears itself when you zone into a new run, so this is only
-		-- for tidying up mid-run.
-		local wipeBtn = keep(W.Button(body, "Hide from this list")); wipeBtn:SetSize(INNER, 22); wipeBtn:SetPoint("TOPLEFT", M, y)
-		wipeBtn:SetScript("OnClick", function()
-			if not StaticPopupDialogs["OKANVIL_ROLL_CLEAR"] then
-				StaticPopupDialogs["OKANVIL_ROLL_CLEAR"] = {
-					text = "Hide this run's loot from the mini roll list?\n\n"
-						.. "|cff7cfc8aNothing is deleted|r -- the history and the export keep it.\n"
-						.. "(Any roll in progress is cancelled.)",
-					button1 = YES, button2 = NO,
-					OnAccept = function()
-						if L.ClearActiveDrops and L.ClearActiveDrops() then
-							selected = nil
-							Okanvil:Print("Hidden from the list (history kept).")
-						end
-						RM.Refresh()
-					end,
-					timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
-				}
-			end
-			StaticPopup_Show("OKANVIL_ROLL_CLEAR")
-		end)
-		y = y - (compact and 24 or 28)
 	end
 
 	-- Your roll ---------------------------------------------------------------
