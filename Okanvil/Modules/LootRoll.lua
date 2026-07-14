@@ -561,18 +561,23 @@ function RM.Rebuild()
 		-- ROLL FACE: shown instead of the item face when this row renders a roll of the
 		-- expanded item.
 		--
-		-- TREE GUIDE, drawn in the column the icon occupies on an item row:
-		--     [icon] Hauberk of the Towering Monstrosity
-		--        |-- Mildorc      81
-		--        `-- Udoo          78      <- last roll closes the branch
-		-- It sits in its own fontstring so the NAME can start at textX(), the very column
-		-- the item name starts at. Putting the glyph inline with the name would push the
-		-- name right by however wide the glyph rendered -- which is what left the rolls
-		-- out of line with the item.
-		r.tree = W.Text(r, "", FONT_SZ, "dim")
-		r.tree:SetPoint("LEFT", PAD, 0)
-		r.tree:SetJustifyH("LEFT")
-		r.tree:Hide()
+		-- TREE GUIDE: two 1px LINES (textures), drawn -- not text glyphs. "|-" and "`-"
+		-- render in a proportional font, so they never line up down the column nor sit at
+		-- the right height, which is what made the branch look broken.
+		--
+		-- `stem` is the vertical run down the row, `elbow` the tick across to the name.
+		-- Every roll gets the same pair, full height: stopping the stem half-way on the
+		-- last roll left a stub dangling mid-row instead of reading as a corner.
+		local TREE_X = PAD + 6            -- the column the branch runs down
+		r.stem = r:CreateTexture(nil, "ARTWORK")
+		r.stem:SetWidth(1)
+		r.stem:SetTexture(0.45, 0.45, 0.48, 0.9)
+		r.stem:Hide()
+		r.elbow = r:CreateTexture(nil, "ARTWORK")
+		r.elbow:SetHeight(1)
+		r.elbow:SetTexture(0.45, 0.45, 0.48, 0.9)
+		r.elbow:Hide()
+		r._treeX = TREE_X
 
 		r.rollTxt = W.Text(r, "", FONT_SZ)
 		r.rollTxt:SetPoint("LEFT", textX(), 0)
@@ -945,8 +950,6 @@ function RM.Refresh()
 								roll = e,
 								best = (best == e),
 								more = (nR > MAX_ROLLS) and nR or nil,
-								-- close the tree branch on the last VISIBLE roll
-								last = (i == shown),
 							}
 						end
 					end
@@ -997,7 +1000,7 @@ function RM.Refresh()
 				local d = en.d
 				r:SetHeight(ROW_H); yRow = yRow - ROW_H
 				r._d = d; r._roll = nil
-				r.rollTxt:Hide(); r.tree:Hide()
+				r.rollTxt:Hide(); r.stem:Hide(); r.elbow:Hide()
 				r.icon:Show(); r.icon:SetTexture(itemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark")
 				r.txt:Show(); r.sub:Show(); r.timer:Show()
 				r.txt:SetTextColor(1, 1, 1)   -- base; inline codes do the coloring
@@ -1063,9 +1066,20 @@ function RM.Refresh()
 				r._d = nil; r._roll = e; r._rolling = false
 				r.icon:Hide(); r.txt:Hide(); r.sub:Hide(); r.timer:Hide(); r.bar:Hide()
 
-				-- tree guide: "|-" for a roll with more below it, "`-" to close the branch
-				r.tree:SetText(en.last and "|cff5e6166`-|r" or "|cff5e6166|-|r")
-				r.tree:Show()
+				-- TREE. The stem runs the full height of every roll row and the elbow ticks
+				-- across to where the name starts, so the branch reads as one continuous
+				-- line down the column with a rung at each roll.
+				local tx = r._treeX
+				local mid = ROLL_H / 2
+				r.stem:ClearAllPoints()
+				r.stem:SetPoint("TOPLEFT", tx, 0)
+				r.stem:SetHeight(ROLL_H)
+				r.stem:Show()
+
+				r.elbow:ClearAllPoints()
+				r.elbow:SetPoint("TOPLEFT", tx, -mid)
+				r.elbow:SetWidth(math.max(1, textX() - tx - 4))
+				r.elbow:Show()
 
 				-- tag: the roll TYPE. `kind` is the captured roll (need/greed/de, or ms/os
 				-- from the 1-100 vs 1-99 range); `spec` is the managed roll's own field.
@@ -1092,7 +1106,12 @@ function RM.Refresh()
 				r:SetHeight(ROLL_H); yRow = yRow - ROLL_H
 				r._d = nil; r._roll = nil; r._rolling = false
 				r.icon:Hide(); r.txt:Hide(); r.sub:Hide(); r.timer:Hide(); r.bar:Hide(); r.hl:Hide()
-				r.tree:SetText("|cff5e6166`-|r"); r.tree:Show()
+				-- same branch as a real roll, just with nothing hanging off it
+				local tx, mid = r._treeX, ROLL_H / 2
+				r.stem:ClearAllPoints(); r.stem:SetPoint("TOPLEFT", tx, 0)
+				r.stem:SetHeight(ROLL_H); r.stem:Show()
+				r.elbow:ClearAllPoints(); r.elbow:SetPoint("TOPLEFT", tx, -mid)
+				r.elbow:SetWidth(math.max(1, textX() - tx - 4)); r.elbow:Show()
 				r.rollTxt:SetText("|cff5e6166no rolls yet|r")
 				r.rollTxt:Show()
 				r:Show()
