@@ -624,10 +624,30 @@ function RM.Rebuild()
 		end)
 
 		-- CLICK.
-		--   item row -> EXPAND it (anyone). Its rolls appear inline, right below.
-		--              Clicking the open item again collapses it. Only one at a time.
-		--   roll row -> AWARD that player (master looter only).
+		--   shift-click -> link the item into the open chat edit box (the game-wide
+		--                  convention). Works on the item row and on its roll rows, since
+		--                  both belong to the same item.
+		--   item row    -> EXPAND it (anyone). Its rolls appear inline, right below.
+		--                  Clicking the open item again collapses it. One at a time.
+		--   roll row    -> AWARD that player (master looter only).
 		r:SetScript("OnClick", function(s)
+			if IsShiftKeyDown() then
+				-- the item is on the row itself (item face) or on the selected drop the
+				-- roll belongs to (roll face)
+				local link = (s._d and s._d.item) or (s._roll and selected and selected.item)
+				if link then
+					-- ChatEdit_InsertLink only works when an edit box is already open;
+					-- if none is, open one first, exactly like a shift-click in the bags.
+					if not (ChatEdit_InsertLink and ChatEdit_InsertLink(link)) then
+						local eb = ChatEdit_ChooseBoxForSend and ChatEdit_ChooseBoxForSend()
+						if eb then
+							ChatEdit_ActivateChat(eb)
+							ChatEdit_InsertLink(link)
+						end
+					end
+				end
+				return
+			end
 			if s._roll then
 				if not isML() then return end
 				if not selected then return end
