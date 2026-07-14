@@ -1201,14 +1201,35 @@ end
 
 function L.ActiveRoll() return activeRoll end
 
--- WATCHED DROP: the item currently SELECTED in the Mini Roll manager. When the ML
--- rolls bag items by hand at the end of a raid (typing /roll in chat, never clicking
--- "Roll MS/OS"), there is no activeRoll and no native need/greed -- so nothing was
--- captured until the item was awarded, forcing you to hunt for what people rolled.
--- Selecting an item now WATCHES it: any /roll in chat records straight into that
--- drop's dp.rolls and shows live. Cleared when you de-select. See captureRoll below.
+-- WATCHED DROP: the item currently SELECTED in the Mini Roll manager.
+--
+-- Selecting an item means "show me this", NOT "I am rolling on this". A selection is
+-- therefore NOT a target for rolls: making it one meant that opening an item and then
+-- pressing Roll MS filed your roll against it, and clicking around the list while a
+-- raid rolled scattered other people's rolls across whatever you happened to be
+-- looking at.
+--
+-- It is only a target once the item has actually been OPENED for rolls -- see
+-- rollTarget() below, which is what captureRoll uses.
 local watchedDrop = nil
 function L.WatchItem(dp) watchedDrop = dp end
+
+-- Items the ML opened for a hand roll-off ("we're rolling on this now") without going
+-- through StartRoll -- i.e. he typed the call in chat himself. OpenForRolls is what the
+-- UI calls to say so; until then a selected item takes no rolls.
+local handRollDrop = nil
+local handRollAt = 0
+local HAND_ROLL_WINDOW = 300      -- 5 min: long enough for a slow end-of-raid roll-off
+function L.OpenForRolls(dp)
+	handRollDrop = dp
+	handRollAt = GetTime()
+end
+function L.HandRollDrop()
+	if handRollDrop and (GetTime() - handRollAt) <= HAND_ROLL_WINDOW then
+		return handRollDrop
+	end
+	return nil
+end
 
 -- EXTERNAL ROLLER: another player's addon (Osipally's, etc.) runs the roll and
 -- announces "Roll for: [item]" over raid warning. We follow it: resolve the item,
@@ -1290,6 +1311,13 @@ function L.StartRoll(link, mode)
 	mode = mode or "free"
 	activeRoll = { id = itemIDFromLink(link), link = link, name = (GetItemInfo(link)) or "",
 		mode = mode, opened = GetTime(), best = nil, list = {}, seen = {} }
+	-- This item is now open for rolls, so chat rolls land on it even after activeRoll's
+	-- own window closes -- a slow roll-off still belongs to the item that was called.
+	do
+		local s = activeBucket()
+		local dp = s and findOpenDrop(s, activeRoll.id)
+		if dp then L.OpenForRolls(dp) end
+	end
 	local chan = announceChannel()
 	if chan then SendChatMessage(L.RollMsg(mode):gsub("%[item%]", link), chan) end
 	-- Tell the UI a roll just STARTED on this item id, so it can page to it and select
@@ -1318,23 +1346,23 @@ local function captureRoll(msg)
 	local spec = (hiN >= 100) and "main" or "off"
 	local key = noRealm(who)
 
-	-- No managed roll running: record into the active roll TARGET. Priority:
-	--   1. externalRollDrop -- the item an external roller ANNOUNCED. Authoritative
-	--      even if you clicked something else, so rolls follow the item actually being
-	--      rolled rather than whatever happens to be selected.
-	--   2. watchedDrop -- the item YOU selected (ML hand-rolling bag items).
+	-- No managed roll running: record into an item that is actually OPEN for rolls.
+	--   1. externalRollDrop -- an external roller ANNOUNCED this item. Authoritative
+	--      even if you clicked something else, so rolls follow the item being rolled
+	--      rather than whatever happens to be selected.
+	--   2. handRollDrop -- the ML opened this item for a hand roll-off.
 	--
-	-- The fallback to the selection is only safe while NOTHING has been announced. If
-	-- an external roll is running, a roll belongs to THAT item, full stop -- letting it
-	-- fall through to the selection is how a whole roll ends up recorded against the
-	-- wrong item, winner and all, with nothing on screen to say it went wrong.
+	-- A SELECTION is deliberately not a target. Selecting an item means "show me this",
+	-- not "roll on this" -- treating it as a target filed your own roll against whatever
+	-- item you had open, and scattered other people's rolls across the list as you
+	-- clicked around during a raid.
 	if not activeRoll then
 		local dp = externalRollDrop
 		local externalLive = dp and (GetTime() - externalRollAt) <= EXTERNAL_ROLL_WINDOW
 		if not externalLive then
-			dp = watchedDrop          -- nobody is announcing: your selection is the target
+			dp = L.HandRollDrop()     -- an item the ML explicitly opened for rolls
 		end
-		if not dp then return end
+		if not dp then return end     -- nothing is being rolled: the roll is not ours
 		dp.rolls = dp.rolls or {}
 		for _, e in ipairs(dp.rolls) do if e.player == key then return end end   -- first roll counts
 		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
