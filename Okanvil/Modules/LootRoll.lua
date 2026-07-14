@@ -108,12 +108,12 @@ end
 -- which is exactly the moment you need to roll. A stray /roll costs nothing; not being
 -- able to roll costs you the item.
 --
--- ONE definition: Rebuild decides the layout from it and OnRollOpen decides whether the
--- layout needs rebuilding from it. Two copies of this test would drift apart.
+-- Solo counts too: /roll works alone, and a manager you cannot exercise outside a raid
+-- cannot be tested. So this is always true -- it stays a named function because Rebuild
+-- decides the layout from it and OnRollOpen decides whether the layout needs rebuilding
+-- from it, and those two must never disagree.
 local function wantsChatRollButtons()
-	local inGroup = (GetNumRaidMembers and GetNumRaidMembers() > 0)
-		or (GetNumPartyMembers and GetNumPartyMembers() > 0)
-	return inGroup and true or false
+	return true
 end
 
 -- are we the loot master right now? (drives ML-vs-raider layout)
