@@ -303,6 +303,10 @@ local function build()
 
 	win = f
 	update_headers()
+	-- A new frame is SHOWN by default. Left that way, the first click built the window
+	-- (already visible), the toggle right after saw IsShown() and hid it again -- so the
+	-- browser only appeared on the second click. It starts hidden; the toggle opens it.
+	f:Hide()
 	return f
 end
 

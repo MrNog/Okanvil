@@ -35,6 +35,17 @@ local SIZES = {
 }
 local MAX_ROLLS = 5   -- inline rolls visible at once; the rest scroll within the block
 
+-- HORIZONTAL GEOMETRY -- one source of truth, so the item name, the roll name and the
+-- tree glyph cannot drift apart (they are three different frames that must line up).
+--   PAD      inset of a row's content from the row edge -- the SAME on the left and
+--            right, which is what makes the highlight look centred.
+--   ICO_GAP  gap between the icon and the item name.
+-- textX() is where an item's NAME starts; the rolls indent to exactly that column, so
+-- a roll reads as hanging off the item above it.
+local PAD, ICO_GAP = 4, 7
+local function iconSize() return ROW_H - 4 end
+local function textX() return PAD + iconSize() + ICO_GAP end
+
 -- Live geometry, re-pointed at one of the SIZES tables by applySize(). Seeded from
 -- `full` at LOAD time: Okanvil.db does not exist yet here (Core.lua only assigns it
 -- on VARIABLES_LOADED, after every file has run), so calling db() at this scope
@@ -47,9 +58,19 @@ local ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W do
 end
 
 local function db()
-	Okanvil.db.rollmgr = Okanvil.db.rollmgr
-		or { point = "RIGHT", x = -30, y = 60, autoShow = true, compact = true }
-	return Okanvil.db.rollmgr
+	local d = Okanvil.db.rollmgr
+	if not d then
+		d = { point = "RIGHT", x = -30, y = 60, autoShow = true, compact = true }
+		Okanvil.db.rollmgr = d
+	end
+	-- The compact layout became the default AFTER these profiles were written, so a
+	-- profile from before it has compact=false baked in and would keep opening large.
+	-- Move it over once; the toggle still owns the setting from then on.
+	if not d.compactDefaulted then
+		d.compactDefaulted = true
+		d.compact = true
+	end
+	return d
 end
 
 -- pull the geometry for the currently-selected mode into the locals above
@@ -254,7 +275,9 @@ local function buildWindow()
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 
-	-- compact toggle: [-] shrinks to the tight layout, [+] restores the roomy one.
+	-- Size toggle. The glyphs are chevrons, not "-" and "+": those two sit high and
+	-- narrow in the font, so in a 20px button they read as badly centred no matter how
+	-- the label is anchored. A chevron fills the box and says which way it will go.
 	local size = W.Button(hdr, ""); size:SetSize(22, 20); size:SetPoint("RIGHT", close, "LEFT", -2, 0)
 	f.sizeBtn = size
 	size:SetScript("OnClick", function()
@@ -367,7 +390,8 @@ function RM.ApplyMode()
 		win.title:SetText(compact and "Okanvil - Roll" or "Okanvil - Mini Roll Manager")
 	end
 	if win.sizeBtn then
-		win.sizeBtn.text:SetText(compact and "+" or "-")
+		-- compact -> chevron DOWN (click to grow); full -> chevron UP (click to shrink)
+		win.sizeBtn.text:SetText(compact and "v" or "^")
 	end
 	-- body is built once, so re-anchor it for the new mode
 	if win.body then
@@ -402,7 +426,15 @@ function RM.Rebuild()
 	-- a roll of the expanded item -- the list is a single mixed sequence of the two.
 	f.itemRows = {}
 	local body = f.body
-	local function keep(w) f.bodyKids[#f.bodyKids + 1] = w; return w end
+	-- Once the list is placed, `trackTail` turns on and every widget kept after it is
+	-- recorded with its layout y. fitList() then slides that whole tail up when the list
+	-- turns out shorter than the cap it was laid out against.
+	local trackTail = false
+	local function keep(w)
+		f.bodyKids[#f.bodyKids + 1] = w
+		if trackTail then f.tail[#f.tail + 1] = w end
+		return w
+	end
 
 	local ml = isML()
 	local compact = db().compact and true or false
@@ -441,12 +473,20 @@ function RM.Rebuild()
 	y = y - (pgH + 6)
 
 	-- THE LIST -- items, plus the rolls of whichever item is expanded ---------
-	-- Rows are sized in ROW_H units but an expanded item's roll rows are shorter
-	-- (ROLL_H), so the box height is stated in ROW_H and the rows pack from the top.
+	-- LIST_ROWS is the CAP, not the size: the box is resized to what is actually in it
+	-- (fitList below), so three drops give a three-row window instead of a tall empty
+	-- panel. LIST_H here is only the starting height; Refresh has the real content.
 	local LIST_H = LIST_ROWS * ROW_H
 	local ibox = keep(W.Frame(body, "dark")); ibox:SetPoint("TOPLEFT", M, y); ibox:SetSize(INNER, LIST_H + 6)
 	f.ibox = ibox
 	f.listH = LIST_H
+	-- Everything below the list is anchored under it, so shrinking the box has to move
+	-- it all. From here on, every widget `keep()` places gets its y remembered, and
+	-- fitList() slides that whole tail up by however much the list shrank.
+	f.listAssumedH = LIST_H + 6
+	f.tail = {}
+	f.tailBaseH = nil        -- window height as laid out (before any shrink)
+	trackTail = true
 	-- mouse wheel scrolls the list. Over an expanded item's ROLLS the wheel scrolls
 	-- the rolls instead, so a long roll-off doesn't drag the whole list around --
 	-- the row under the cursor decides, which is set in the row's own OnMouseWheel.
@@ -486,35 +526,50 @@ function RM.Rebuild()
 		-- a glance), the item NAME sits on the top line with the whole width to itself,
 		-- and the winner + trade timer share the line beneath it. Nothing has to be
 		-- truncated to make room for anything else.
-		local icoSz = ROW_H - 8
+		local icoSz = ROW_H - 4
 		r.icon = r:CreateTexture(nil, "ARTWORK")
 		r.icon:SetSize(icoSz, icoSz)
-		r.icon:SetPoint("LEFT", 5, 0)
+		r.icon:SetPoint("LEFT", PAD, 0)
 		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
 		-- line 1: item name, rarity-coloured
 		r.txt = W.Text(r, "", FONT_SZ)
-		r.txt:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 7, 1)
-		r.txt:SetPoint("RIGHT", -6, 0)
+		r.txt:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", ICO_GAP, 1)
+		r.txt:SetPoint("RIGHT", -PAD, 0)
 		r.txt:SetJustifyH("LEFT")
 		if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
 
 		-- line 2: who won it (left) and how long it can still be traded (right)
 		r.sub = W.Text(r, "", SUB_SZ)
-		r.sub:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", 7, 0)
+		r.sub:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", ICO_GAP, 0)
 		r.sub:SetJustifyH("LEFT")
 		if r.sub.SetWordWrap then r.sub:SetWordWrap(false) end
 
 		r.timer = W.Text(r, "", SUB_SZ)
-		r.timer:SetPoint("BOTTOMRIGHT", -6, 2)
+		r.timer:SetPoint("BOTTOMRIGHT", -PAD, 2)
 		r.timer:SetJustifyH("RIGHT")
 		r.sub:SetPoint("RIGHT", r.timer, "LEFT", -4, 0)
 		r.hl = r:CreateTexture(nil, "BORDER"); r.hl:SetAllPoints(); r.hl:SetTexture(0.75, 0.58, 0.23, 0.22); r.hl:Hide()
 
 		-- ROLL FACE: shown instead of the item face when this row renders a roll of the
-		-- expanded item. Indented so it reads as belonging to the item above it.
+		-- expanded item.
+		--
+		-- TREE GUIDE, drawn in the column the icon occupies on an item row:
+		--     [icon] Hauberk of the Towering Monstrosity
+		--        |-- Mildorc      81
+		--        `-- Udoo          78      <- last roll closes the branch
+		-- It sits in its own fontstring so the NAME can start at textX(), the very column
+		-- the item name starts at. Putting the glyph inline with the name would push the
+		-- name right by however wide the glyph rendered -- which is what left the rolls
+		-- out of line with the item.
+		r.tree = W.Text(r, "", FONT_SZ, "dim")
+		r.tree:SetPoint("LEFT", PAD, 0)
+		r.tree:SetJustifyH("LEFT")
+		r.tree:Hide()
+
 		r.rollTxt = W.Text(r, "", FONT_SZ)
-		r.rollTxt:SetPoint("LEFT", 18, 0); r.rollTxt:SetPoint("RIGHT", -6, 0)
+		r.rollTxt:SetPoint("LEFT", textX(), 0)
+		r.rollTxt:SetPoint("RIGHT", -PAD, 0)
 		r.rollTxt:SetJustifyH("LEFT")
 		if r.rollTxt.SetWordWrap then r.rollTxt:SetWordWrap(false) end
 		r.rollTxt:Hide()
@@ -659,10 +714,42 @@ function RM.Rebuild()
 	--  COLLECTED panel. The mini manager stays focused on rolling.)
 	f.colInfo = nil
 
-	-- Bottom margin = M, the same inset used on the other three sides.
-	f:SetHeight(BODY_TOP() + (-y) + M)
+	-- Bottom margin = M, the same inset used on the other three sides. This is the
+	-- height with the list at its FULL cap; fitList() trims it to the real content.
+	f.tailBaseH = BODY_TOP() + (-y) + M
+	f.tailMargin = M
+	f:SetHeight(f.tailBaseH)
 
 	RM.Refresh()
+end
+
+-- Shrink the list (and the window) to what is actually in it. The list is laid out
+-- against LIST_ROWS -- the CAP -- so three drops would otherwise leave a tall empty
+-- panel and a window mostly full of nothing.
+--
+-- `usedH` is the real height of the rendered rows. Everything below the list slides up
+-- by the difference, and the window loses the same amount.
+local function fitList(f, usedH)
+	if not (f.ibox and f.tail and f.tailBaseH) then return end
+	local full = f.listAssumedH or (LIST_ROWS * ROW_H + 6)
+	local want = math.min(full, math.max(ROW_H, usedH + 6))
+	local shrink = full - want
+	f.ibox:SetHeight(want)
+	f.listH = want - 6
+
+	for _, w in ipairs(f.tail) do
+		if w.GetPoint and w:IsShown() then
+			local p, rel, rp, x, wy = w:GetPoint(1)
+			-- Only widgets anchored to the BODY move; ones anchored to a sibling (a
+			-- button placed LEFT of another) follow their anchor on their own.
+			if p and rel == f.body and wy then
+				if not w._y0 then w._y0 = wy end
+				w:ClearAllPoints()
+				w:SetPoint(p, rel, rp, x, w._y0 + shrink)
+			end
+		end
+	end
+	f:SetHeight(f.tailBaseH - shrink)
 end
 
 -- ------------------------------------------------------------
@@ -775,6 +862,7 @@ function RM.Refresh()
 		if f.bossHd then f.bossHd:SetText("|cff8a8d93No loot yet|r") end
 		for _, r in ipairs(f.itemRows) do r:Hide() end
 		if f.sbThumb then f.sbThumb:Hide(); if f.sbTrack then f.sbTrack:Hide() end end
+		fitList(f, ROW_H)   -- nothing to show -> collapse to a single empty row
 	else
 		-- auto-jump to the newest boss when fresh loot just arrived (a new kill).
 		-- DropsByBoss() lists bosses in arrival order, so newest = last.
@@ -829,10 +917,17 @@ function RM.Refresh()
 				else
 					local maxR = math.max(0, nR - MAX_ROLLS)
 					f.rollScroll = math.max(0, math.min(f.rollScroll or 0, maxR))
-					for i = 1, math.min(MAX_ROLLS, nR) do
+					local shown = math.min(MAX_ROLLS, nR)
+					for i = 1, shown do
 						local e = rolls[i + f.rollScroll]
 						if e then
-							entries[#entries + 1] = { roll = e, best = (best == e), more = (nR > MAX_ROLLS) and nR or nil }
+							entries[#entries + 1] = {
+								roll = e,
+								best = (best == e),
+								more = (nR > MAX_ROLLS) and nR or nil,
+								-- close the tree branch on the last VISIBLE roll
+								last = (i == shown),
+							}
 						end
 					end
 				end
@@ -862,13 +957,19 @@ function RM.Refresh()
 		-- the y cursor advances by whatever the row actually is rather than by a fixed
 		-- stride (which would leave a gap under every roll).
 		local yRow = -2
-		local RIGHT_PAD = 4 + (f.sbW or 5) + 3   -- clear of the scrollbar track
+
+		-- Reserve room for the scrollbar ONLY when there is one. Always reserving it
+		-- left every row 12px clear of the right edge against 4px on the left, so the
+		-- highlight sat visibly off-centre even on a list short enough to need no bar.
+		local needBar = nEnt > LIST_ROWS
+		local RIGHT_PAD = needBar and (PAD + (f.sbW or 5) + 3) or PAD
+
 		for i = 1, LIST_ROWS do
 			local en = entries[i + off]
 			if not en then break end
 			local r = f.makeItemRow(i)
 			r:ClearAllPoints()
-			r:SetPoint("TOPLEFT", 4, yRow)
+			r:SetPoint("TOPLEFT", PAD, yRow)
 			r:SetPoint("RIGHT", f.ibox, "RIGHT", -RIGHT_PAD, 0)
 
 			if en.d then
@@ -876,7 +977,7 @@ function RM.Refresh()
 				local d = en.d
 				r:SetHeight(ROW_H); yRow = yRow - ROW_H
 				r._d = d; r._roll = nil
-				r.rollTxt:Hide()
+				r.rollTxt:Hide(); r.tree:Hide()
 				r.icon:Show(); r.icon:SetTexture(itemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark")
 				r.txt:Show(); r.sub:Show(); r.timer:Show()
 				r.txt:SetTextColor(1, 1, 1)   -- base; inline codes do the coloring
@@ -942,6 +1043,10 @@ function RM.Refresh()
 				r._d = nil; r._roll = e; r._rolling = false
 				r.icon:Hide(); r.txt:Hide(); r.sub:Hide(); r.timer:Hide(); r.bar:Hide()
 
+				-- tree guide: "|-" for a roll with more below it, "`-" to close the branch
+				r.tree:SetText(en.last and "|cff5e6166`-|r" or "|cff5e6166|-|r")
+				r.tree:Show()
+
 				-- tag: the roll TYPE. `kind` is the captured roll (need/greed/de, or ms/os
 				-- from the 1-100 vs 1-99 range); `spec` is the managed roll's own field.
 				local kind = e.kind or ((e.spec == "off") and "os" or "ms")
@@ -951,7 +1056,7 @@ function RM.Refresh()
 				elseif kind == "need" then tag = " |cff7cfc8a(need)|r"
 				elseif kind == "os" then tag = " |cff8a5ad9(OS)|r" end
 
-				local mark = en.best and "|cff7cfc8a> |r" or "  "
+				local mark = en.best and "|cff7cfc8a> |r" or ""
 				local more = ""
 				if en.more then more = "  |cff5e6166(" .. en.more .. ")|r" end
 				r.rollTxt:SetText(mark .. classColorCode(e.player) .. e.player .. "|r  |cffffd200"
@@ -967,16 +1072,21 @@ function RM.Refresh()
 				r:SetHeight(ROLL_H); yRow = yRow - ROLL_H
 				r._d = nil; r._roll = nil; r._rolling = false
 				r.icon:Hide(); r.txt:Hide(); r.sub:Hide(); r.timer:Hide(); r.bar:Hide(); r.hl:Hide()
-				r.rollTxt:SetText("|cff5e6166   no rolls yet|r")
+				r.tree:SetText("|cff5e6166`-|r"); r.tree:Show()
+				r.rollTxt:SetText("|cff5e6166no rolls yet|r")
 				r.rollTxt:Show()
 				r:Show()
 			end
 		end
 
+		-- Shrink the list to the rows actually drawn (yRow is now the bottom of the last
+		-- one), so a 3-drop boss gives a small window instead of a tall empty panel.
+		fitList(f, -yRow)
+
 		-- size + place the side scrollbar thumb from the scroll position. Thumb
 		-- height = (visible / total) of the track; thumb top slides with `off`.
 		if f.sbThumb and f.sbTrack then
-			if nEnt <= LIST_ROWS then
+			if not needBar then
 				f.sbThumb:Hide(); f.sbTrack:Hide()   -- everything fits -> no bar
 			else
 				f.sbTrack:Show(); f.sbThumb:Show()
