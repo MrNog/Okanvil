@@ -46,9 +46,12 @@ function L:Scan()
 	for i = 1, n do
 		-- 3.3.5a signature: name, id, expires, diff, locked, extended, mostsig, raid, players, diffname
 		local iname, id, expires, diff, locked, extended, _, raid, players, diffname = GetSavedInstanceInfo(i)
-		-- Raids only, and only while actually locked. `expires` is SECONDS REMAINING
-		-- (not an absolute timestamp), so it must be converted to a wall-clock time
-		-- or it would silently stop counting down the moment we log out.
+		-- Every RAID lockout, all four WotLK flavours (10N, 10H, 25N, 25H). Any of them
+		-- stops you re-entering, so all of them are worth seeing. Heroic 5-man dungeons
+		-- are excluded by the `raid` flag -- those are a different question.
+		--
+		-- `expires` is SECONDS REMAINING, not a timestamp, so it is converted to a
+		-- wall-clock time or it would silently stop counting down once we log out.
 		if iname and raid and locked and expires and expires > 0 then
 			instances[#instances + 1] = {
 				name     = iname,
@@ -56,6 +59,9 @@ function L:Scan()
 				diff     = diff,
 				diffname = diffname,
 				players  = players,
+				heroic   = (diff == 3 or diff == 4),
+				-- An EXTENDED lockout was deliberately held over by the player, so it
+				-- outlives the normal reset.
 				extended = extended and true or false,
 				resets   = time() + expires,   -- absolute: survives logout
 			}

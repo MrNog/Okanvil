@@ -36,17 +36,23 @@ do
 			end
 		end
 	end
-	-- In 3.3.5a EVERY widget type (Frame, Button, Slider, EditBox, ScrollFrame,
-	-- CheckButton, ...) shares ONE method table -- getmetatable(x).__index is the
-	-- same for all -- so patching a single throwaway Frame covers them all.
+	-- Each widget TYPE has its own method table on 3.3.5a -- a Frame, a Slider and a
+	-- Button do not share one. Every type we actually use must be patched, or
+	-- `slider:SetShown(...)` still dies with "attempt to call method 'SetShown'".
+	--
 	-- CRITICAL: do NOT create an EditBox here to "also patch it". A fresh EditBox
-	-- defaults to autoFocus=true and, on creation, GRABS the keyboard -- an orphan
-	-- box left focused eats W/A/S/D for the whole session (this made the game
-	-- unplayable). One Frame + its Texture/FontString metatables is enough.
+	-- defaults to autoFocus=true and GRABS the keyboard on creation -- an orphan box
+	-- left focused eats W/A/S/D for the whole session and makes the game unplayable.
 	local f = CreateFrame("Frame")
 	polyfill(f)
 	polyfill(f:CreateTexture())
 	polyfill(f:CreateFontString())
+	polyfill(CreateFrame("Button"))
+	polyfill(CreateFrame("Slider"))
+	polyfill(CreateFrame("StatusBar"))
+	polyfill(CreateFrame("ScrollFrame"))
+	polyfill(CreateFrame("CheckButton"))
+	polyfill(CreateFrame("Cooldown"))
 end
 
 local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)

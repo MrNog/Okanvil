@@ -26,6 +26,8 @@ Modules\Recruit.lua
 Modules\IDs-Data.lua
 Modules\IDs.lua
 Modules\Logs.lua
+Modules\RaidCheck.lua
+Modules\MarksBar.lua
 Modules\RaidFinder-Parser.lua
 Modules\RaidFinder.lua
 Modules\RaidFinder-Mini.lua

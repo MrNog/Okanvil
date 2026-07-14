@@ -282,7 +282,44 @@ local role_words = {
 	           "%f[%w]ret%f[%W]", "%f[%w]retri%a*", "%f[%w]retro?%a*" },  -- ret / retri / retro(typo)
 }
 
+-- A role can be named to say the group is FULL of it, which means the exact
+-- opposite of wanting it: "full on tanks", "tanks closed", "no more healers", "have
+-- tank" all mean do NOT send us that role. These are stripped from the message
+-- before the role words are read, so the mention cannot register as a request.
+local role_full_pats = {
+	"full%s+on%s+(%a+)",
+	"full%s+(%a+)",
+	"(%a+)s?%s+full",
+	"no%s+more%s+(%a+)",
+	"(%a+)s?%s+closed",
+	"have%s+(%a+)",
+	"got%s+(%a+)",
+	"(%a+)s?%s+covered",
+	"(%a+)s?%s+sorted",
+}
+
+-- Map the captured word back onto one of our three roles.
+local function roleOfWord(w)
+	if not w then return nil end
+	w = w:lower():gsub("s$", "")
+	if w == "tank" or w == "mt" or w == "ot" or w == "bear" or w == "prot" then return "tank" end
+	if w == "heal" or w == "healer" or w == "healz" then return "healer" end
+	if w == "dps" or w == "dd" then return "dps" end
+	return nil
+end
+
 local function lex_roles(msg)
+	-- Roles the message says are already FULL. Strip the phrase so the role word
+	-- inside it is never read as a request.
+	local full = {}
+	for _, p in ipairs(role_full_pats) do
+		msg = msg:gsub(p, function(w)
+			local r = roleOfWord(w)
+			if r then full[r] = true; return " " end
+			return nil          -- not a role word: leave the text alone
+		end)
+	end
+
 	local found = {}
 	for role, pats in pairs(role_words) do
 		for _, p in ipairs(pats) do
@@ -290,12 +327,16 @@ local function lex_roles(msg)
 			if n > 0 then msg = m; found[role] = true end
 		end
 	end
+
+	-- A role explicitly declared full is not being recruited, whatever else the
+	-- message says.
+	for r in pairs(full) do found[r] = nil end
 	-- normalize to an ordered list
 	local list = {}
 	if found.tank then list[#list+1] = "tank" end
 	if found.dps then list[#list+1] = "dps" end
 	if found.healer then list[#list+1] = "healer" end
-	return list, msg
+	return list, msg, full
 end
 
 -- ------------------------------------------------------------
@@ -721,9 +762,18 @@ function RF.parse(message)
 	-- 3. roles (default: all).  Detect SPECIFIC specs from the raw text BEFORE
 	-- lex_roles rewrites the role words (so "hpala"/"spriest" are still readable).
 	local classNeeds = lex_classes(raw)
-	local roles
-	roles, msg = lex_roles(msg)
-	if #roles == 0 then roles = { "tank", "dps", "healer" } end
+	local roles, full
+	roles, msg, full = lex_roles(msg)
+	-- Naming no role at all means "anyone" -- but a role the message declared FULL is
+	-- still excluded, or "Full on tanks" would fall through the default and ask for
+	-- exactly the tank they said they do not want.
+	if #roles == 0 then
+		roles = {}
+		for _, r in ipairs({ "tank", "dps", "healer" }) do
+			if not full[r] then roles[#roles + 1] = r end
+		end
+		if #roles == 0 then roles = { "tank", "dps", "healer" } end
+	end
 
 	-- 4. gs
 	local gs
@@ -782,6 +832,9 @@ local samples = {
 	"LFM TOC 25 NM 4.4 + /w 1Tank(DK) 2Heal(Hpal/disco) DPS(War/rog/sp/bomy/Demo)(B+O+P Res)[Call of the Grand Crusade (25 player)]",
 	-- "retri"/"elemental" must map to DPS specs, NOT default to tank/dps/heal:
 	"LFM toc25 need retri and elemental dps 4.5k wsp",
+	-- a role named as FULL is the opposite of a request: this wants dps/heal, NOT tanks
+	"LFM to ToC25 normal (semi guild run) | Full on tanks | Loot is MS>OS | BoEs, Orbs and Recipes HR for guild",
+	"LFM ICC10 need dps, tanks closed, heals full",
 	"lfm onyxia 25 need all gs + spec /w head res",   -- "head res" -> Quest (Onyxia head)
 	-- terse ToC/VoA forms RaidBrowser catches but we used to drop (broadened shapes)
 	"ToC 25 HR [Death's Choice] pst",

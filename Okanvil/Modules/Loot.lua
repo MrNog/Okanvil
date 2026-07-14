@@ -346,9 +346,21 @@ end
 local function onUnitDied(destGUID)
 	local cid = cidFromGUID(destGUID)
 	if not cid then return end
-	-- Any vetted boss death refreshes the twin window: the paired twin's corpse is
-	-- looted moments later and must still resolve to this encounter, not Trash.
-	if bossCids[cid] then lastBossContactAt = (GetTime and GetTime()) or 0 end
+
+	-- A death in the known boss table NAMES the encounter on its own. Previously the
+	-- name was only set for a boss the scanner had vetted -- which means one you
+	-- targeted or mouseovered while it was alive. Kill a boss you never clicked (you
+	-- were dead, or busy, or someone else tanked it) and encounterBoss stayed nil, so
+	-- every drop from it was filed under "Trash". The combat log sees the kill
+	-- whatever you were looking at, and the id is exact.
+	local known = bossCids[cid]
+	if known then
+		lastBossContactAt = (GetTime and GetTime()) or 0
+		if type(known) == "string" and known ~= "" then
+			encounterBoss = known
+		end
+	end
+
 	if cid == inCombatCid then
 		inCombatCid = nil
 		-- currentBoss/encounterBoss already hold the name; keep encounterBoss to
@@ -706,6 +718,22 @@ if Okanvil.Comms then
 		local name = link ~= "" and (GetItemInfo(link)) or (GetItemInfo(id))
 		if (not rarity or rarity == 0) and id ~= 0 then rarity = select(3, GetItemInfo(id)) or rarity end
 		if not acceptItem(id, rarity, name) then return end
+		-- The sender may not have known the boss either (nobody on the raid opened the
+		-- corpse -- the master looter did, and he has no Okanvil). Rather than filing it
+		-- under Trash, inherit the boss from this run's most recent real drop: that is
+		-- the encounter whose loot is being handed out.
+		if boss == "" or boss == "Trash" then
+			local s = currentSession and currentSession(false)
+			if s and s.drops then
+				for i = #s.drops, 1, -1 do
+					local prev = s.drops[i]
+					if prev.boss and prev.boss ~= "" and prev.boss ~= "Trash" then
+						boss = prev.boss
+						break
+					end
+				end
+			end
+		end
 		local dp = storeDrop(boss ~= "" and boss or "Trash", id, link, name, rarity, boeStr == "1")
 		if dp and L.onLootWindow then L.onLootWindow() end
 	end)
@@ -987,6 +1015,7 @@ local function recordNeedGreed(msg)
 			-- one entry per player (the first roll counts)
 			for _, e in ipairs(dp.rolls) do if e.player == who then return end end
 			dp.rolls[#dp.rolls + 1] = { player = who, roll = roll or 0, kind = kind }
+			L.AttributeByRoll(dp)
 			if L.onLoot then L.onLoot() end
 			if L.onRoll then L.onRoll() end
 			return
@@ -1197,11 +1226,62 @@ function L.NoteExternalRoll(link)
 	local id = itemIDFromLink(link)
 	if not id or id == 0 then return end
 	local s = activeBucket and activeBucket()
-	local dp = s and findOpenDrop and findOpenDrop(s, id)
-	if not dp then return end
+	if not s then return end
+
+	-- Look for the item ANYWHERE in this run, not just among recent unawarded drops.
+	-- findOpenDrop only matches inside DROP_MATCH_WINDOW, but a roll is announced long
+	-- after the kill -- so it misses the real drop and we would add a second copy of an
+	-- item we already have. Prefer an un-awarded copy; fall back to any copy.
+	local dp = findOpenDrop and findOpenDrop(s, id)
+	if not dp then
+		local any
+		for i = #s.drops, 1, -1 do
+			local prev = s.drops[i]
+			if prev.id == id then
+				if not prev.receivedBy then dp = prev; break end
+				any = any or prev
+			end
+		end
+		dp = dp or any
+	end
+
+	-- Still nothing: the item is not one of OUR captured drops at all. That is normal
+	-- when someone else is master looter -- we never saw the loot, only the roll call.
+	-- Create it from the announce, or the manager never opens and no roll is recorded.
+	if not dp then
+		local name, _, rarity = GetItemInfo(link)
+		local icon = select(10, GetItemInfo(link)) or (GetItemIcon and GetItemIcon(id)) or nil
+
+		-- BOSS: do NOT call resolveBoss() here. It reads the CURRENT target and the
+		-- last corpse -- but a roll is announced minutes after the kill, with the loot
+		-- already in the master looter's bags and nothing boss-like targeted, so it
+		-- would answer "Trash" and file the item under the wrong page. Inherit the boss
+		-- from the most recent drop of this run instead: that IS the boss whose loot is
+		-- being handed out.
+		local boss = "Trash"
+		for i = #s.drops, 1, -1 do
+			local prev = s.drops[i]
+			if prev.boss and prev.boss ~= "" and prev.boss ~= "Trash" then
+				boss = prev.boss
+				break
+			end
+		end
+
+		dp = {
+			t = time(), boss = boss, id = id,
+			item = link, name = name or "", rarity = rarity or 0, qty = 1,
+			icon = icon and icon:gsub(".*\\", "") or nil,
+			announced = true,     -- came from someone else's roll call, not our own loot
+		}
+		if scanLines then dp.tip = scanLines(link) end
+		s.drops[#s.drops + 1] = dp
+		if L.onLoot then L.onLoot() end
+	end
+
 	externalRollDrop = dp
 	externalRollAt = (GetTime and GetTime()) or 0
 	if L.onRollStart then L.onRollStart(id) end   -- roll manager pages to + selects it
+	if L.onLootWindow then L.onLootWindow() end   -- and force it open: a roll is starting
 end
 
 function L.StartRoll(link, mode)
@@ -1238,18 +1318,26 @@ local function captureRoll(msg)
 	local key = noRealm(who)
 
 	-- No managed roll running: record into the active roll TARGET. Priority:
-	--   1. externalRollDrop -- the item an external roller just announced "Roll for:".
-	--      This is authoritative even if you clicked another item, so rolls follow the
-	--      item BEING rolled (fixes item-1/item-2 overlap when someone else runs loot).
+	--   1. externalRollDrop -- the item an external roller ANNOUNCED. Authoritative
+	--      even if you clicked something else, so rolls follow the item actually being
+	--      rolled rather than whatever happens to be selected.
 	--   2. watchedDrop -- the item YOU selected (ML hand-rolling bag items).
+	--
+	-- The fallback to the selection is only safe while NOTHING has been announced. If
+	-- an external roll is running, a roll belongs to THAT item, full stop -- letting it
+	-- fall through to the selection is how a whole roll ends up recorded against the
+	-- wrong item, winner and all, with nothing on screen to say it went wrong.
 	if not activeRoll then
 		local dp = externalRollDrop
-		if dp and (GetTime() - externalRollAt) > EXTERNAL_ROLL_WINDOW then dp = nil end
-		dp = dp or watchedDrop
+		local externalLive = dp and (GetTime() - externalRollAt) <= EXTERNAL_ROLL_WINDOW
+		if not externalLive then
+			dp = watchedDrop          -- nobody is announcing: your selection is the target
+		end
 		if not dp then return end
 		dp.rolls = dp.rolls or {}
 		for _, e in ipairs(dp.rolls) do if e.player == key then return end end   -- first roll counts
 		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
+		L.AttributeByRoll(dp)
 		if L.onLoot then L.onLoot() end
 		if L.onRoll then L.onRoll() end
 		return
@@ -1274,13 +1362,37 @@ end
 local function onRollAnnounce(msg)
 	if type(msg) ~= "string" then return end
 	local lower = msg:lower()
-	-- winner / result lines carry an item link too -> never treat them as a new roll.
-	if lower:find("won") or lower:find("congrat") then return end
-	-- an OPENING line: "roll for", or bare presence of an item link with a roll cue.
-	if not (lower:find("roll for") or lower:find("roll for:") or lower:find("rolling")) then return end
+	-- Winner / result lines carry an item link too -> never treat them as a new roll,
+	-- or a "won" line would steal the selection back to the item that just finished.
+	if lower:find("won") or lower:find("congrat") or lower:find("wins") then return end
+	if lower:find("passed") or lower:find("disenchant") then return end
+
 	local link = msg:match("|c%x+|Hitem:.-|h.-|h|r") or msg:match("|Hitem:[^|]+|h%[.-%]|h")
 	if not link then return end
-	L.NoteExternalRoll(link)
+
+	-- An opening line either SAYS it is a roll, or is simply the item posted on its
+	-- own -- which is how most raid leaders open one: paste the link into raid warning
+	-- and people /roll. Requiring the words meant a bare "[Pants of the Soothing
+	-- Touch]" was ignored and the roll manager never opened.
+	--
+	-- "ms"/"os" are matched as WHOLE WORDS (%f is Lua's frontier pattern). As bare
+	-- substrings they hide inside "boss", "close", "most" -- which would make almost
+	-- any raid warning look like a roll call.
+	if lower:find("roll") or lower:find("%f[%w]ms%f[%W]") or lower:find("%f[%w]os%f[%W]")
+		or lower:find("%f[%w]offspec%f[%W]") or lower:find("%f[%w]mainspec%f[%W]") then
+		L.NoteExternalRoll(link)
+		return
+	end
+
+	-- No cue words: accept it only if the message is essentially JUST the link, so a
+	-- chatty line that merely mentions an item is not mistaken for a roll call.
+	--
+	-- Digits are stripped as well as punctuation: roll addons prefix the link with
+	-- their own counter ("(39) [Boots of the Harsh Winter]"), and requiring a bare
+	-- link would reject every one of those and send the rolls to the wrong item.
+	local rest = msg:gsub("|c%x+|Hitem:.-|h.-|h|r", ""):gsub("|Hitem:[^|]+|h%[.-%]|h", "")
+	rest = rest:gsub("[%s%p%d]", "")
+	if rest == "" then L.NoteExternalRoll(link) end
 end
 
 -- ------------------------------------------------------------
@@ -1314,6 +1426,12 @@ local function iAmMasterLooter()
 	return me ~= nil and noRealm(ml):lower() == noRealm(me):lower()
 end
 function L.IsMasterLooter() return iAmMasterLooter() end
+
+-- Who the master looter is, by name (nil when the group is not on master loot).
+-- The UI needs this to tell "the ML is holding this until it is rolled" apart from
+-- "this person owns it" -- under master loot EVERY item lands on the ML first, so
+-- naming him as the owner is noise, not information.
+function L.MasterLooterName() return masterLooterName() end
 
 -- Is the group on MASTER LOOT at all (regardless of who the ML is)? Under group
 -- loot / need-before-greed you roll in Blizzard's own roll frame, so our manual
@@ -1390,6 +1508,41 @@ local function giveLootNow(id, winner)
 		end
 	end
 	return saw and "nocand" or "noitem"
+end
+
+-- Highest roll on a drop, MS beating OS whatever the numbers say (a 5 main-spec beats
+-- a 99 off-spec). Returns the entry, so the caller has the name AND the number.
+--
+-- The winner is also written back to `receivedBy`. Under master loot EVERY item is
+-- handed to the ML first, so receivedBy holds the ML's name and tells you nothing
+-- about who the item is actually for -- it would export a whole raid's loot as won by
+-- one person. The roll is the real answer, so it wins.
+function L.RollWinner(dp)
+	if not (dp and dp.rolls) then return nil end
+	local best
+	for _, e in ipairs(dp.rolls) do
+		local better
+		if not best then
+			better = true
+		elseif e.kind ~= best.kind then
+			better = (e.kind ~= "os")        -- MS outranks OS outright
+		else
+			better = (e.roll or 0) > (best.roll or 0)
+		end
+		if better then best = e end
+	end
+
+	return best
+end
+
+-- Attribute the drop to whoever won its roll. Called when a roll is RECORDED -- never
+-- from the render path, which would have the UI writing to the data it is drawing.
+function L.AttributeByRoll(dp)
+	local best = L.RollWinner(dp)
+	if not (best and best.player and best.player ~= "") then return end
+	if dp.receivedBy == best.player then return end
+	dp.receivedBy = best.player
+	dp.rollWon    = true          -- attributed by roll, not by watching the handover
 end
 
 local function markWinner(id, winner)

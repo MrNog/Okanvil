@@ -9,7 +9,7 @@
 --   Okanvil:Skin(frame[, kind])       flat panel backdrop (kinds below)
 --   Okanvil:Popup(title)              draggable, clamped dialog
 -- The chained widgets all understand :Point :Size :Shown :OnClick :OnEnter
--- :OnLeave :Color, and hand back `self` so calls compose like MRT's.
+-- :OnLeave :Color, and hand back `self` so calls compose.
 -- ============================================================
 
 local Okanvil = Okanvil
@@ -198,6 +198,19 @@ function W.Button(parent, text, kind)
 	paint(false)
 	b:SetScript("OnEnter", function(s) paint(true); tipEnter(s) end)
 	b:SetScript("OnLeave", function(s) paint(false); tipLeave() end)
+
+	-- Re-style in place. For an ON/OFF toggle the STATE is the fill, not a colour
+	-- code in the label: a "primary" button is a solid gold box whose label is
+	-- painted dark, so an embedded |cff8a8d93 (dim grey) override lands grey-on-gold
+	-- and is unreadable. Flip the kind instead -> ON = gold primary, OFF = surface.
+	function b:SetKind(k)
+		self._kind = k
+		primary = (k == "primary")
+		kind = k
+		paint(self._hover)
+	end
+	b:HookScript("OnEnter", function(s) s._hover = true end)
+	b:HookScript("OnLeave", function(s) s._hover = false end)
 	return Mod(b)
 end
 
@@ -209,11 +222,15 @@ function W.Check(parent, label, getFn, setFn)
 	b:SetSize(18, 18)
 	local box = W.Frame(b, "input")
 	box:SetAllPoints()
+	-- Our own palette, not Blizzard's UI-CheckBox-Check -- that texture carries its
+	-- own yellow and bevel and clashes with the flat gold-on-dark used everywhere
+	-- else. A filled gold square inset in the box: unambiguous at 18px, and it needs
+	-- no SetRotation, which stock 3.3.5a textures do not have.
 	local tick = box:CreateTexture(nil, "OVERLAY")
 	tick:SetTexture(FLAT)
-	tick:SetPoint("TOPLEFT", 3, -3)
-	tick:SetPoint("BOTTOMRIGHT", -3, 3)
 	tick:SetVertexColor(unpack3(C.accent))
+	tick:SetPoint("TOPLEFT", 4, -4)
+	tick:SetPoint("BOTTOMRIGHT", -4, 4)
 	local t = W.Text(b, label)
 	t:SetPoint("LEFT", b, "RIGHT", 6, 0)
 	b.text = t
@@ -513,7 +530,7 @@ end
 -- Dashboard -- a reusable plugin shell (header strip + live main area +
 -- toggleable right stats drawer + config tabs that open as a FULL overlay
 -- with a Back button + footer strip). Plugins fill the zones via callbacks
--- and never worry about the layout again. Modelled on how MRT lays a module
+-- and never worry about the layout again. Lays a module
 -- into the host panel. Returns a table of the zone frames + a few methods.
 --
 --   local dash = W.Dashboard(panel, {
@@ -554,7 +571,10 @@ function W.Dashboard(parent, cfg)
 	-- header CTA (primary button, right)
 	local cta
 	if cfg.onPrimary then
-		cta = W.Button(header, cfg.primaryText and cfg.primaryText() or "", "primary")
+		-- primaryKind (optional) -> fn() returning "primary"/"secondary", so a CTA that
+		-- is really an ON/OFF switch can show its state as the button fill.
+		cta = W.Button(header, cfg.primaryText and cfg.primaryText() or "",
+			cfg.primaryKind and cfg.primaryKind() or "primary")
 		cta:SetSize(150, 22); cta:SetPoint("RIGHT", -10, 0)
 		cta:SetScript("OnClick", function() cfg.onPrimary() end)
 		D.cta = cta
@@ -755,6 +775,7 @@ function W.Dashboard(parent, cfg)
 
 	function D:Refresh()
 		if cta and cfg.primaryText then cta.text:SetText(cfg.primaryText()) end
+		if cta and cfg.primaryKind then cta:SetKind(cfg.primaryKind()) end
 		if cta2 then
 			if cfg.secondaryText then cta2.text:SetText(cfg.secondaryText()) end
 			if cfg.secondaryShown then

@@ -256,6 +256,7 @@ Okanvil.ICONS = {
 	recruit = "Interface\\Icons\\Achievement_General_StayClassy",
 	modules = "Interface\\Icons\\INV_Misc_Gear_01",
 	settings= "Interface\\Icons\\Trade_Engineering",
+	raidcheck = "Interface\\Icons\\INV_Misc_Food_15",   -- food buff (Raid Check)
 }
 
 Okanvil.NATIVE = {
@@ -271,6 +272,8 @@ Okanvil.NATIVE = {
 -- set where a module sits in the menu -- add a new feature's title here at the
 -- index you want. Home is always first; Modules + Settings are always last.
 -- Anything enabled but NOT listed here falls to the end (alphabetical).
+-- Raid Check and the Marks Bar are deliberately NOT here: neither has a page.
+-- Both ARE their on-screen overlay, and their switches live in Settings > RAID TOOLS.
 Okanvil.NAV_ORDER = { "Guild", "Invite", "Recruit", "Raid Finder", "Loot", "ID Finder", "Combat Logs" }
 
 function Okanvil:RefreshNav()
@@ -373,8 +376,7 @@ end
 -- below the page panels, which are the transparent "page" skin -- so this one
 -- rat reads as a true, uniform background behind every page and NEVER moves.
 -- Its intensity is db.ratAlpha (its own Settings slider), so it stays visible
--- even at full panel opacity (the old rat lived under opaque panels and vanished
--- when bgAlpha hit 1).
+-- even at full panel opacity.
 function Okanvil:MountPageRat()
 	if self._pageRat then return self._pageRat end
 	local host = self.content
@@ -1297,9 +1299,15 @@ function Okanvil:BuildInvite()
 		-- que a checkbox. Este e o master switch do keyword/on-login auto-invite:
 		-- OFF = nenhum auto-invite mesmo com listas armadas (nao deixa guildies cair
 		-- na tua party numa dungeon). A checkbox de baixo foi removida (era duplicada).
+		-- O estado vive no FILL do botao (gold = ON, surface = OFF). Nao meter |cff...
+		-- no label: o kind "primary" ja pinta o texto escuro sobre o dourado, e um
+		-- cinzento embutido ficava cinzento-sobre-dourado (ilegivel).
 		primaryText = function()
 			if not I then return "" end
-			return I.KeywordEnabled() and "|cff7cfc8aAuto-Invite: ON|r" or "|cff8a8d93Auto-Invite: OFF|r"
+			return I.KeywordEnabled() and "Auto-Invite: ON" or "Auto-Invite: OFF"
+		end,
+		primaryKind = function()
+			return (I and I.KeywordEnabled()) and "primary" or "secondary"
 		end,
 		onPrimary = function()
 			if not I then return end
@@ -1621,7 +1629,7 @@ function Okanvil:BuildInvite()
 		-- Fit the left column to its ACTUAL content (the rank block grows with the
 		-- number of guild ranks). Measuring the last element and sizing the frame
 		-- from it stops the footer ("Pick raiders...") being clipped off the bottom
-		-- when there are many ranks -- the old fixed 560 height guessed wrong.
+		-- when there are many ranks. A fixed height cannot know how many there are.
 		local top = left:GetTop()
 		local bot = pinfo:GetBottom()
 		if top and bot then left:SetHeight(math.max(1, top - bot + 6)) end
@@ -1758,37 +1766,26 @@ function Okanvil:BuildSettings()
 	local db = self.db
 	local X = 12
 
-	-- Dashboard shell: no tabs -- all general settings (appearance + media +
-	-- branding) live directly on the landing, in one internal scroll. Loot settings
-	-- moved to the Loot module. The app credit sits in the bottom-right corner.
+	-- TABS. Everything used to be stacked on one landing page -- appearance, media,
+	-- branding, dev, version check, and then the raid overlays crammed into an
+	-- improvised right-hand column. It was unreadable. Each concern now gets its own
+	-- tab, and W.Dashboard gives every tab its own internal scroll for free.
 	local dash = W.Dashboard(host, {
 		title = "Settings",
 		icon = Okanvil.ICONS.settings,
 		drawerWidth = 0,
 		footerHeight = 0,
+		tabs = {
+			{ key = "general", label = "General",    height = 500,
+			  build = function(pg) Okanvil:Settings_General(pg) end },
+			{ key = "raid",    label = "Raid Tools", height = 470,
+			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
+			{ key = "adv",     label = "Advanced",   height = 420,
+			  build = function(pg) Okanvil:Settings_Advanced(pg) end },
+		},
 	})
 	fill.dash = dash
-
-	local main = dash.main
-	-- internal scroll so the stacked sections never spill off the window
-	local sf = CreateFrame("ScrollFrame", nil, main)
-	sf:SetPoint("TOPLEFT", 10, -8); sf:SetPoint("BOTTOMRIGHT", -14, 22)  -- leave room for the credit line
-	local p = CreateFrame("Frame", nil, sf); p:SetSize(10, 1); sf:SetScrollChild(p)
-	local sb = CreateFrame("Slider", nil, main)
-	sb:SetPoint("TOPRIGHT", -4, -8); sb:SetPoint("BOTTOMRIGHT", -4, 22); sb:SetWidth(4)
-	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
-	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetVertexColor(u3(C.accent)); th:SetSize(4, 40)
-	sb:SetThumbTexture(th)
-	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
-	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
-	sf:SetScript("OnSizeChanged", function()
-		p:SetWidth(sf:GetWidth())
-		local maxs = math.max(0, p:GetHeight() - sf:GetHeight())
-		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
-	end)
-	p:SetHeight(820)   -- grew with the DEV + VERSION CHECK sections at the bottom
-	Okanvil:Settings_Options(p)
+	local main = dash.main   -- the badge below anchors to it
 
 	-- app credit -- a small badge in the bottom-right corner (anvil + wordmark),
 	-- nicer than a bare line of text.
@@ -1812,14 +1809,16 @@ end
 
 -- ---- Settings: Options (single tab -- Appearance + Media + Branding stacked) ----
 -- Loot capture/threshold settings live in the Loot module now (Okanvil:Loot_BuildSettings).
-function Okanvil:Settings_Options(p)
+-- ---- Settings tabs -------------------------------------------------------
+-- Split out of one giant stacked page. Each tab gets its own scroll from
+-- W.Dashboard, so nothing overlaps and nothing spills off the window.
+
+function Okanvil:Settings_General(p)
 	local db = self.db
 	local X = 4
 
-	-- NOTE: W.Slider anchors at its BAR; its own label sits ~5px ABOVE that anchor.
-	-- So each slider needs a full ~46px of vertical room, and the first one must
-	-- start ~24px below a section header so the header isn't overlapped.
-
+	-- NOTE: W.Slider anchors at its BAR; its own label sits ~5px ABOVE that anchor,
+	-- so each slider needs ~46px of vertical room.
 	-- APPEARANCE
 	local a = W.Text(p, "APPEARANCE", 10, "dim"); a:SetPoint("TOPLEFT", X, -8)
 	W.Slider(p, "Window scale", 0.6, 1.4, 0.05, function() return db.scale end,
@@ -1870,6 +1869,114 @@ function Okanvil:Settings_Options(p)
 	end)
 	urlBox:SetSize(320, 22); urlBox:SetPoint("TOPLEFT", X, -452)
 	urlBox.edit:SetText(db.hubURL or "")
+
+end
+
+function Okanvil:Settings_RaidTools(p)
+	local db = self.db
+	local X = 4
+
+	-- RAID TOOLS -- the two in-raid overlays. Neither owns a nav page: a handful of
+	-- switches never justified a Dashboard with an empty footer, and both features
+	-- ARE their on-screen overlay. Right-hand column; this space was empty.
+	--
+	-- The setters below must store a REAL boolean, never nil: W.Check toggles by
+	-- inverting what getFn reads, so deleting the key leaves the tick stuck on.
+	local RX = X
+	local rt = W.Text(p, "RAID CHECK -- the ready-check popup", 10, "dim")
+	rt:SetPoint("TOPLEFT", RX, -8)
+
+	local RC = Okanvil.RaidCheck
+	if RC then
+		local rcdb = function()
+			db.raidcheck = db.raidcheck or {}
+			return db.raidcheck
+		end
+
+		local rcOn = W.Check(p, "Raid check popup on a ready check",
+			function() return rcdb().onReadyCheck ~= false end,
+			function(v) rcdb().onReadyCheck = v and true or false end)
+		rcOn:SetPoint("TOPLEFT", RX + 2, -30)
+
+		local rcHint = W.Text(p, "Who is missing a flask, food or a buff. Leader/assist only.", 10, "dim")
+		rcHint:SetPoint("TOPLEFT", RX + 20, -50); rcHint:SetWidth(270); rcHint:SetJustifyH("LEFT")
+
+		local rcNum = W.Check(p, "Show minutes left on each icon",
+			function() return rcdb().hideNumbers ~= true end,
+			function(v)
+				rcdb().hideNumbers = not v
+				if RC.RenderToast then RC:RenderToast() end
+			end)
+		rcNum:SetPoint("TOPLEFT", RX + 2, -74)
+
+		local rcGrey = W.Check(p, "Grey out missing buffs",
+			function() return rcdb().hideMissing ~= true end,
+			function(v)
+				rcdb().hideMissing = not v
+				if RC.RenderToast then RC:RenderToast() end
+			end)
+		rcGrey:SetPoint("TOPLEFT", RX + 2, -100)
+
+		local rcGreyHint = W.Text(p, "Off: only buffs people actually have are drawn.", 10, "dim")
+		rcGreyHint:SetPoint("TOPLEFT", RX + 20, -120); rcGreyHint:SetWidth(300); rcGreyHint:SetJustifyH("LEFT")
+
+		local rcSortL = W.Text(p, "Sort by", 11, "dim")
+		rcSortL:SetPoint("TOPLEFT", RX + 2, -146)
+		W.DropDown(p,
+			function() return RC.SORTS or { "group", "class", "name" } end,
+			function() return rcdb().sort or "group" end,
+			function(v) rcdb().sort = v; if RC.RenderToast then RC:RenderToast() end end)
+			:Size(130, 22):Point("TOPLEFT", RX + 60, -144)
+
+		-- W.Slider anchors at its BAR and prints its label ABOVE -- hence the gap.
+		W.Slider(p, "Popup size", 70, 160, 5,
+			function() return rcdb().scale or 100 end,
+			function(v)
+				rcdb().scale = v
+				if RC.SetToastScale then RC:SetToastScale(v) end
+			end):SetPoint("TOPLEFT", RX + 2, -200)
+
+		local rcTest = W.Button(p, "Show it now")
+		rcTest:SetSize(110, 22); rcTest:SetPoint("TOPLEFT", RX + 2, -228)
+		rcTest:SetScript("OnClick", function() if RC.ShowToast then RC:ShowToast(true) end end)
+	end
+
+	-- RAID UTILS -- the floating marks bar (8 raid icons + clear + ready check + a
+	-- DBM pull). Same deal: an overlay, not a page.
+	local MB = Okanvil.MarksBar
+	if MB then
+		local ut = W.Text(p, "RAID UTILS -- the floating marks bar", 10, "dim")
+		ut:SetPoint("TOPLEFT", RX, -262)
+		local mbdb = function()
+			db.marksbar = db.marksbar or {}
+			return db.marksbar
+		end
+
+		local mbOn = W.Check(p, "Raid utils bar (marks, ready check, pull)",
+			function() return mbdb().enabled and true or false end,
+			function(v) if MB.Toggle then MB:Toggle(v and true or false) end end)
+		mbOn:SetPoint("TOPLEFT", RX + 2, -284)
+
+		local mbHint = W.Text(p, "Only visible while you are raid leader or assist.", 10, "dim")
+		mbHint:SetPoint("TOPLEFT", RX + 20, -304); mbHint:SetWidth(320); mbHint:SetJustifyH("LEFT")
+
+		W.Slider(p, "Bar size", 70, 160, 5,
+			function() return mbdb().scale or 100 end,
+			function(v)
+				mbdb().scale = v
+				if MB.Refresh then MB:Refresh() end
+			end):SetPoint("TOPLEFT", RX + 2, -352)
+
+		W.Slider(p, "Pull timer (seconds)", 3, 30, 1,
+			function() return mbdb().pullTime or 10 end,
+			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", RX + 2, -398)
+	end
+
+end
+
+function Okanvil:Settings_Advanced(p)
+	local db = self.db
+	local X = 4
 
 	-- DEV MODE -- routes debug output to a dedicated "Okanvil" chat tab (next to
 	-- General / Combat Log) instead of spamming the default chat. Off by default,
@@ -2118,6 +2225,11 @@ function Okanvil:CloseAll()
 	if self.win     then try(function() self.win:Hide() end) end
 	if self.puck    then try(function() self.puck:Hide() end) end
 	if self.RollMgr and self.RollMgr.Hide then try(function() self.RollMgr.Hide() end) end
+	-- The Raid Check toast goes too: once the boss is pulled, who was missing a
+	-- flask is no longer actionable -- it is just something in front of the fight.
+	if self.RaidCheck and self.RaidCheck.HideToast then
+		try(function() self.RaidCheck:HideToast() end)
+	end
 end
 
 -- ------------------------------------------------------------
@@ -2249,7 +2361,11 @@ function Okanvil:ShowMinimapTip(owner)
 					cell[inst.name] = {}
 					raidOrder[#raidOrder + 1] = inst.name
 				end
-				local size = (inst.players and inst.players > 0) and inst.players or 0
+				-- The label carries the difficulty, not just the size: a 25 normal and a
+				-- 25 heroic are different lockouts and must not share a cell. "25H" /
+				-- "10H" sorts after the plain size, which is the order we want.
+				local n = (inst.players and inst.players > 0) and inst.players or 0
+				local size = inst.heroic and (n .. "H") or tostring(n)
 				cell[inst.name][toon.name] = cell[inst.name][toon.name] or {}
 				cell[inst.name][toon.name][size] = true
 				sizeSeen[size] = true
@@ -2258,12 +2374,21 @@ function Okanvil:ShowMinimapTip(owner)
 		end
 		table.sort(raidOrder)
 
-		-- Sizes become FIXED sub-columns (10 | 25), ascending. This is the bit that
-		-- makes the grid line up: a lone "25" lands in the 25-column, directly under
-		-- every other 25, instead of being centred in a merged "10 25" cell.
+		-- Sizes become FIXED sub-columns, ascending: 10H | 25 | 25H. This is what makes
+		-- the grid line up -- a lone "25" lands in the 25-column, directly under every
+		-- other 25, instead of drifting into a merged cell.
+		--
+		-- Sorted by the NUMBER first, then normal before heroic. A plain table.sort on
+		-- the strings would order them lexically, which puts "10H" before "10" and
+		-- breaks as soon as a label reaches two digits.
 		local sizes = {}
 		for s in pairs(sizeSeen) do sizes[#sizes + 1] = s end
-		table.sort(sizes)
+		table.sort(sizes, function(a, b)
+			local na = tonumber(a:match("%d+")) or 0
+			local nb = tonumber(b:match("%d+")) or 0
+			if na ~= nb then return na < nb end
+			return (a:find("H") == nil) and (b:find("H") ~= nil)
+		end)
 
 		local probe = tip.probe
 		probe:SetFont(Okanvil:Font(), TIP_FONT)
@@ -2275,8 +2400,8 @@ function Okanvil:ShowMinimapTip(owner)
 			nameW = math.max(nameW, probe:GetStringWidth())
 		end
 
-		-- Sub-column width: the widest size label ("25"), same for all -- uniform
-		-- cells are what let the eye scan a column straight down.
+		-- Sub-column width: the widest size label, same for all -- uniform cells are
+		-- what let the eye scan a column straight down.
 		local cellW = 0
 		for _, s in ipairs(sizes) do
 			probe:SetText(tostring(s))
@@ -2284,19 +2409,41 @@ function Okanvil:ShowMinimapTip(owner)
 		end
 		cellW = cellW + 6
 
-		-- Each toon owns a block of len(sizes) sub-columns -- but the block must also
-		-- be wide enough for the toon's NAME, or the header FontString truncates it
-		-- to "Oka...". Widen the block to whichever is bigger and keep that width:
-		-- the cells centre inside it, so the columns still line up.
-		local cellsW = #sizes * cellW + (#sizes - 1) * 4
+		-- Each toon gets only the sub-columns it ACTUALLY uses. A toon with nothing but
+		-- 25s does not need a 10H column standing empty next to it, and reserving one
+		-- for every difficulty any toon anywhere is saved to made the tooltip much wider
+		-- than the data in it. Work out each toon's own set of labels.
+		local toonSizes = {}
+		for _, toon in ipairs(toons) do
+			local seen, list = {}, {}
+			for _, raid in ipairs(raidOrder) do
+				local saved = cell[raid][toon.name]
+				if saved then
+					for s in pairs(saved) do
+						if not seen[s] then seen[s] = true; list[#list + 1] = s end
+					end
+				end
+			end
+			-- keep the global column order, so the same label sits at the same depth
+			local ordered = {}
+			for _, s in ipairs(sizes) do
+				if seen[s] then ordered[#ordered + 1] = s end
+			end
+			toonSizes[toon.name] = ordered
+		end
+
+		-- The block must also be wide enough for the toon's NAME, or the header
+		-- FontString truncates it to "Oka...". Widen to whichever is bigger; the cells
+		-- centre inside it.
 		local colX, blockW, cellOff = {}, {}, {}
 		local x = TIP_PAD + nameW + TIP_COL_GAP
 		for _, toon in ipairs(toons) do
+			local n = #toonSizes[toon.name]
+			local cellsW = math.max(1, n) * cellW + math.max(0, n - 1) * 4
 			probe:SetText(toon.name)
 			local w = math.max(cellsW, probe:GetStringWidth())
 			colX[toon.name]   = x
 			blockW[toon.name] = w
-			-- centre the (possibly narrower) cell strip inside a name-widened block
 			cellOff[toon.name] = (w - cellsW) / 2
 			x = x + w + TIP_COL_GAP
 		end
@@ -2313,13 +2460,13 @@ function Okanvil:ShowMinimapTip(owner)
 		end
 		y = y - TIP_ROW_H
 
-		-- one row per raid; every toon x size gets its own fixed cell
+		-- one row per raid; a cell per sub-column THIS toon uses
 		for _, raid in ipairs(raidOrder) do
 			local nm = line(raid, TIP_FONT)
 			nm:ClearAllPoints(); nm:SetPoint("TOPLEFT", TIP_PAD, y)
 			for _, toon in ipairs(toons) do
 				local saved = cell[raid][toon.name]
-				for i, s in ipairs(sizes) do
+				for i, s in ipairs(toonSizes[toon.name]) do
 					local fs = line(saved and saved[s] and tostring(s) or "", TIP_FONT)
 					fs:ClearAllPoints()
 					fs:SetPoint("TOPLEFT",

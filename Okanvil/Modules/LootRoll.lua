@@ -19,29 +19,36 @@ Okanvil.RollMgr = RM
 --   compact -- RaidRoll-density (its roll frame is 185x180): tighter rows, smaller
 --              font, fewer visible rows, narrower window. Same sections, no features
 --              removed -- it just takes about a quarter of the screen area.
+-- An item row is TWO lines: the item name on top, the winner and trade timer below.
+-- One line meant the name, the winner and the timer all fought for the same width, so
+-- everything was truncated to "Hauberk of the Towering Mon.. -> Ud..." and the compact
+-- layout was unreadable. Two lines give each its own space and let the icon grow.
 local SIZES = {
-	full    = { ROW_H = 26, FONT_SZ = 13, ITEM_ROWS = 5, ROLL_ROWS = 6, WIN_W = 340 },
-	compact = { ROW_H = 18, FONT_SZ = 11, ITEM_ROWS = 3, ROLL_ROWS = 4, WIN_W = 250 },
+	full    = { ROW_H = 32, FONT_SZ = 12, SUB_SZ = 10, ROLL_H = 18, ITEM_ROWS = 5, ROLL_ROWS = 7, WIN_W = 330 },
+	compact = { ROW_H = 26, FONT_SZ = 11, SUB_SZ =  9, ROLL_H = 15, ITEM_ROWS = 4, ROLL_ROWS = 5, WIN_W = 270 },
 }
 -- Live geometry, re-pointed at one of the SIZES tables by applySize(). Seeded from
 -- `full` at LOAD time: Okanvil.db does not exist yet here (Core.lua only assigns it
 -- on VARIABLES_LOADED, after every file has run), so calling db() at this scope
 -- would index a nil table. applySize() is called from showWin()/the toggle instead,
 -- both of which run long after the DB is up.
-local ROW_H, FONT_SZ, ITEM_ROWS, ROLL_ROWS, WIN_W do
+local ROW_H, FONT_SZ, SUB_SZ, ROLL_H, ITEM_ROWS, ROLL_ROWS, WIN_W do
 	local s = SIZES.full
-	ROW_H, FONT_SZ, ITEM_ROWS, ROLL_ROWS, WIN_W = s.ROW_H, s.FONT_SZ, s.ITEM_ROWS, s.ROLL_ROWS, s.WIN_W
+	ROW_H, FONT_SZ, SUB_SZ, ROLL_H, ITEM_ROWS, ROLL_ROWS, WIN_W =
+		s.ROW_H, s.FONT_SZ, s.SUB_SZ, s.ROLL_H, s.ITEM_ROWS, s.ROLL_ROWS, s.WIN_W
 end
 
 local function db()
-	Okanvil.db.rollmgr = Okanvil.db.rollmgr or { point = "RIGHT", x = -30, y = 60, autoShow = true }
+	Okanvil.db.rollmgr = Okanvil.db.rollmgr
+		or { point = "RIGHT", x = -30, y = 60, autoShow = true, compact = true }
 	return Okanvil.db.rollmgr
 end
 
 -- pull the geometry for the currently-selected mode into the locals above
 local function applySize()
 	local s = SIZES[db().compact and "compact" or "full"]
-	ROW_H, FONT_SZ, ITEM_ROWS, ROLL_ROWS, WIN_W = s.ROW_H, s.FONT_SZ, s.ITEM_ROWS, s.ROLL_ROWS, s.WIN_W
+	ROW_H, FONT_SZ, SUB_SZ, ROLL_H, ITEM_ROWS, ROLL_ROWS, WIN_W =
+		s.ROW_H, s.FONT_SZ, s.SUB_SZ, s.ROLL_H, s.ITEM_ROWS, s.ROLL_ROWS, s.WIN_W
 end
 
 -- Pixels from the window top to the body frame: the 26px header + the status line.
@@ -75,6 +82,85 @@ local function rarityColor(r)
 	if q then return q.r, q.g, q.b end
 	return 0.9, 0.9, 0.9
 end
+
+-- ------------------------------------------------------------
+-- TRADE TIMER
+-- A BoP item looted in a group can be traded to another eligible player for a
+-- limited window. The SERVER owns that countdown -- it stops while you are logged
+-- out, so it cannot be derived from "when did this drop". The only honest source is
+-- the item's own tooltip, where the server writes the remaining time.
+--
+-- That means the timer can only be read for items sitting in YOUR OWN bags, which
+-- is exactly the master looter's case: the drops still waiting to be handed out.
+-- ------------------------------------------------------------
+local tradeTip
+local BIND_PAT   -- "You may trade this item ... for %s" -> a Lua pattern
+
+local function tradePattern()
+	if BIND_PAT then return BIND_PAT end
+	local s = BIND_TRADE_TIME_REMAINING
+	if not s or s == "" then return nil end
+	-- escape magic chars, then turn the %s placeholder into a capture
+	BIND_PAT = "^" .. s:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1"):gsub("%%%%s", "(.+)")
+	return BIND_PAT
+end
+
+-- CACHE. Reading this means walking every bag slot and scanning a tooltip, and the
+-- roll manager redraws on EVERY roll -- 25 people rolling on one item redrew 25
+-- times, each walk costing ~100 GetContainerItemLink calls per visible row. That is
+-- thousands of scans in a second, and it is felt as a periodic stutter mid-raid.
+--
+-- The value only changes on the minute, so it is cached per item link and only
+-- recomputed when the cache is stale or the bags actually changed.
+local tradeCache = {}       -- [link] = { text = "1h 43m" | false, at = GetTime() }
+local TRADE_TTL = 20        -- seconds a cached answer stays good
+
+local function tradeTimeUncached(link)
+	local pat = tradePattern()
+	if not pat then return nil end
+
+	if not tradeTip then
+		tradeTip = CreateFrame("GameTooltip", "OkanvilTradeTip", nil, "GameTooltipTemplate")
+		tradeTip:SetOwner(WorldFrame, "ANCHOR_NONE")
+	end
+
+	for bag = 0, NUM_BAG_SLOTS do
+		for slot = 1, (GetContainerNumSlots(bag) or 0) do
+			if GetContainerItemLink(bag, slot) == link then
+				tradeTip:ClearLines()
+				tradeTip:SetBagItem(bag, slot)
+				for i = 2, tradeTip:NumLines() do
+					local fs = _G["OkanvilTradeTipTextLeft" .. i]
+					local txt = fs and fs:GetText()
+					if txt then
+						local left = txt:match(pat)
+						if left then return left end
+					end
+				end
+				return nil          -- found the item, but no trade line: not tradeable
+			end
+		end
+	end
+	return nil                      -- not in our bags
+end
+
+local function tradeTimeLeft(link)
+	if not link then return nil end
+	local now = GetTime()
+	local c = tradeCache[link]
+	if c and (now - c.at) < TRADE_TTL then
+		return c.text or nil        -- `false` caches a known negative
+	end
+	local t = tradeTimeUncached(link)
+	tradeCache[link] = { text = t or false, at = now }
+	return t
+end
+
+-- Bags changed -> the cached answers may be wrong (an item was given away, or a new
+-- one arrived). Cheaper to drop the whole cache than to work out which entry moved.
+local bagEv = CreateFrame("Frame")
+bagEv:RegisterEvent("BAG_UPDATE")
+bagEv:SetScript("OnEvent", function() tradeCache = {} end)
 
 -- class color of a player by NAME -> "|cffRRGGBB". Finds their class from the
 -- party/raid, else the guild roster, else a learned cache. Falls back to gold if
@@ -122,6 +208,11 @@ end
 -- ------------------------------------------------------------
 local win
 local selected            -- the drop table currently picked for a roll
+-- Boss page a roll asked us to jump to while the window did not exist yet. Applied
+-- when it is next shown, so a roll announced before you ever opened the manager still
+-- lands on the right page.
+local pendingBossIdx
+local pendingItemScroll   -- scroll offset that puts the selected item on screen
 local function isML() return amML() end
 
 local function buildWindow()
@@ -192,6 +283,13 @@ local function buildWindow()
 					if tex then r.icon:SetTexture(tex) end
 				end
 			end
+		end
+		-- Trade timers tick down in whole minutes, so a redraw every 20s is plenty and
+		-- keeps the bag scan off the per-frame path.
+		self._tradeAcc = (self._tradeAcc or 0) + e
+		if self._tradeAcc >= 20 then
+			self._tradeAcc = 0
+			RM.Refresh()
 		end
 		-- Shrinking roll-timer bars on the item rows (ElvUI M:statusbarOnUpdate style):
 		-- read GetLootRollTimeLeft(rollID) each frame and scale the row-width bar.
@@ -368,11 +466,33 @@ function RM.Rebuild()
 		r.bar:SetPoint("TOPLEFT", 0, 0); r.bar:SetPoint("BOTTOMLEFT", 0, 0)
 		r.bar:SetTexture(0.75, 0.58, 0.23, 0.30)   -- gold, translucent
 		r.bar:Hide()
-		local icoSz = ROW_H - 4          -- icon hugs the row height (22 full / 14 compact)
-		r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(icoSz, icoSz); r.icon:SetPoint("LEFT", 5, 0)
+		-- TWO-LINE ROW. The icon takes the full height (so it is big enough to read at
+		-- a glance), the item NAME sits on the top line with the whole width to itself,
+		-- and the winner + trade timer share the line beneath it. Nothing has to be
+		-- truncated to make room for anything else.
+		local icoSz = ROW_H - 8
+		r.icon = r:CreateTexture(nil, "ARTWORK")
+		r.icon:SetSize(icoSz, icoSz)
+		r.icon:SetPoint("LEFT", 5, 0)
 		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-		r.txt = W.Text(r, "", FONT_SZ); r.txt:SetPoint("LEFT", r.icon, "RIGHT", 6, 0); r.txt:SetPoint("RIGHT", -6, 0); r.txt:SetJustifyH("LEFT")
+
+		-- line 1: item name, rarity-coloured
+		r.txt = W.Text(r, "", FONT_SZ)
+		r.txt:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 7, 1)
+		r.txt:SetPoint("RIGHT", -6, 0)
+		r.txt:SetJustifyH("LEFT")
 		if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
+
+		-- line 2: who won it (left) and how long it can still be traded (right)
+		r.sub = W.Text(r, "", SUB_SZ)
+		r.sub:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", 7, 0)
+		r.sub:SetJustifyH("LEFT")
+		if r.sub.SetWordWrap then r.sub:SetWordWrap(false) end
+
+		r.timer = W.Text(r, "", SUB_SZ)
+		r.timer:SetPoint("BOTTOMRIGHT", -6, 2)
+		r.timer:SetJustifyH("RIGHT")
+		r.sub:SetPoint("RIGHT", r.timer, "LEFT", -4, 0)
 		r.hl = r:CreateTexture(nil, "BORDER"); r.hl:SetAllPoints(); r.hl:SetTexture(0.75, 0.58, 0.23, 0.22); r.hl:Hide()
 		r:SetScript("OnEnter", function(s)
 			if s._d and s._d.item then GameTooltip:SetOwner(s, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink(s._d.item); GameTooltip:Show() end
@@ -428,7 +548,7 @@ function RM.Rebuild()
 	-- clicks a row to award without needing a label to say so.
 	local lnH = compact and 13 or 16
 	local rs = keep(W.Text(body, "", compact and 10 or 11, "dim")); rs:SetPoint("TOPLEFT", M, y); f.rollState = rs; y = y - lnH
-	local rbox = keep(W.Frame(body, "dark")); rbox:SetPoint("TOPLEFT", M, y); rbox:SetSize(INNER, ROLL_ROWS * ROW_H + 4)
+	local rbox = keep(W.Frame(body, "dark")); rbox:SetPoint("TOPLEFT", M, y); rbox:SetSize(INNER, ROLL_ROWS * ROLL_H + 4)
 	f.rbox = rbox
 	-- mouse wheel pages the roll list (a big roll-off has more than ROLL_ROWS entries)
 	rbox:EnableMouseWheel(true)
@@ -438,7 +558,7 @@ function RM.Rebuild()
 	end)
 	for i = 1, ROLL_ROWS do
 		local r = CreateFrame("Button", nil, rbox)
-		r:SetSize(INNER - 8, ROW_H); r:SetPoint("TOPLEFT", 4, -2 - (i - 1) * ROW_H)
+		r:SetSize(INNER - 8, ROLL_H); r:SetPoint("TOPLEFT", 4, -2 - (i - 1) * ROLL_H)
 		r.txt = W.Text(r, "", FONT_SZ); r.txt:SetPoint("LEFT", 4, 0); r.txt:SetPoint("RIGHT", -4, 0); r.txt:SetJustifyH("LEFT")
 		r.hl = r:CreateTexture(nil, "BACKGROUND"); r.hl:SetAllPoints(); r.hl:SetTexture(0.49, 0.99, 0.54, 0.16); r.hl:Hide()
 		-- only ML can award by clicking a roll. Be LOUD about why a click no-ops
@@ -452,7 +572,7 @@ function RM.Rebuild()
 		end)
 		f.rollRows[i] = r
 	end
-	y = y - (ROLL_ROWS * ROW_H + 4) - (compact and 6 or 10)
+	y = y - (ROLL_ROWS * ROLL_H + 4) - (compact and 6 or 10)
 
 	-- ML-only: award / clear -------------------------------------------------
 	if ml then
@@ -531,20 +651,42 @@ end
 -- Jump to and SELECT the item with this id, across ALL boss tabs. Fired when a roll
 -- starts (L.onRollStart) so you don't have to search the tabs for the item being
 -- rolled -- Okanvil pages to it and selects it, and its live rolls show immediately.
+-- Jump to the item being rolled: find it among the drops, switch to ITS boss page,
+-- and select it. Called whenever a roll starts (ours or an external roller's), so the
+-- manager always shows the item the raid is actually rolling on -- you never have to
+-- hunt for it, and the rolls have somewhere to land.
+--
+-- This must work with the window CLOSED: the manager is built lazily, and it is the
+-- roll starting that opens it. Bailing out on `not win` meant a roll announced before
+-- you ever opened the manager selected nothing at all, so every roll was discarded.
 function RM.SelectItemById(id)
-	if not (win and id) then return end
+	if not id then return end
+
 	-- Two passes: first an item still OPEN for rolls (not awarded), so re-rolling a
 	-- fresh drop of an id doesn't land on an old awarded copy; then any copy of the id.
 	local groups = L.DropsByBoss and L.DropsByBoss() or {}
 	local function pick(openOnly)
 		for gi, g in ipairs(groups) do
-			for _, d in ipairs(g.items) do
+			for ii, d in ipairs(g.items) do
 				if d.id == id and (not openOnly or not d.receivedBy) then
-					win.bossIdx = gi
-					win.userCleared = false
-					selected = d
-					win.rollScroll = 0
-					RM.Refresh()   -- no-op if the window is hidden; selection is remembered for next open
+					selected = d                    -- module-scope: survives the window not existing
+					pendingBossIdx = gi             -- applied when the window is (re)built
+
+					-- Scroll the item INTO VIEW. Selecting row 9 of a 5-row list would
+					-- otherwise highlight something you cannot see -- the item being
+					-- rolled has to be on screen, not just selected. Centre it in the
+					-- page, clamped to the ends of the list.
+					local maxOff = math.max(0, #g.items - ITEM_ROWS)
+					local off = math.floor(ii - 1 - (ITEM_ROWS - 1) / 2)
+					pendingItemScroll = math.max(0, math.min(off, maxOff))
+
+					if win then
+						win.bossIdx = gi
+						win.userCleared = false
+						win.rollScroll = 0
+						win.itemScroll = pendingItemScroll
+					end
+					RM.Refresh()                    -- no-op while hidden; the selection still stands
 					return true
 				end
 			end
@@ -619,43 +761,48 @@ function RM.Refresh()
 			if d then
 				r._d = d
 				r.icon:Show(); r.icon:SetTexture(itemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark")
-				-- item name in RARITY color; receiver in CLASS color; both inline so
-				-- one string can carry two colors. Long names get truncated with ...
 				r.txt:SetTextColor(1, 1, 1)   -- base; inline codes do the coloring
 				local cr, cg, cb = rarityColor(d.rarity)
 				local rcode = string.format("|cff%02x%02x%02x", cr * 255, cg * 255, cb * 255)
-				local nm = d.name ~= "" and d.name or "?"
-				local who = ""
-				-- a master-loot give we issued but the server has not confirmed yet:
-				-- show the name greyed with "(giving...)". If it fails, the name goes
-				-- away again -- we never claim someone got an item they did not get.
+
+				-- LINE 1: the item name gets the row to itself, so it no longer has to be
+				-- cut short to leave room for a winner and a timer.
+				local baseTxt = rcode .. (d.name ~= "" and d.name or "?") .. "|r"
+
+				-- LINE 2, left: who owns it. Under master loot every item passes through
+				-- the ML first, so `receivedBy` alone means "the ML is holding it" and
+				-- says nothing about who it is for -- the roll winner is the real answer.
 				local pendId, pendWho = L.PendingAward and L.PendingAward()
+				local win = L.RollWinner and L.RollWinner(d)
+				local mlName = L.MasterLooterName and L.MasterLooterName()
+				-- Under master loot every item is handed to the ML first, so a receivedBy
+				-- that is just the ML's own name means "still in his bags, nobody has won
+				-- it yet" -- printing him as the owner is noise. Say nothing instead.
+				local heldByML = mlName and d.receivedBy == mlName
+
+				local sub
 				if pendId and pendId == d.id and not d.receivedBy then
-					who = "  |cff8a8d93->|r |cff5e6166" .. pendWho .. " (giving...)|r"
-				elseif d.receivedBy and d.receivedBy ~= "" then
-					who = "  |cff8a8d93->|r " .. classColorCode(d.receivedBy) .. d.receivedBy .. "|r"
+					sub = "|cff5e6166" .. pendWho .. " (giving...)|r"
+				elseif win then
+					sub = classColorCode(win.player) .. win.player .. "|r"
+						.. " |cff8a8d93" .. (win.roll or 0) .. (win.kind == "os" and " os" or "") .. "|r"
 				elseif d.passed then
-					who = "  |cff8a8d93(passed)|r"
+					sub = "|cff8a8d93passed|r"
+				elseif d.receivedBy and d.receivedBy ~= "" and not heldByML then
+					sub = classColorCode(d.receivedBy) .. d.receivedBy .. "|r"
+				else
+					sub = ""          -- unrolled, or simply sitting with the ML
 				end
-				-- When there's a winner, truncate the NAME shorter so the "-> winner"
-				-- always fits (else long names like "Vambraces of Unholy Command"
-				-- pushed the winner off-screen and you couldn't see who won).
-				-- Budget scales with the window: the compact layout is 250px at font 11,
-				-- so the full-size 16/26 char limits overflowed the row. Subtract the
-				-- winner's own length -- a long name like "Mojobimbo" eats the budget a
-				-- short one doesn't.
-				-- TOTAL budget for the row, then the winner's name is carved out of it.
-				-- (Compact is narrower but the font is smaller, so it fits ~the same
-				-- character count; the old fixed 16/26 was tuned for 340px only.)
-				local cpt = db().compact
-				local budget = cpt and 30 or 38
-				if who ~= "" then
-					budget = budget - #(d.receivedBy or "(passed)") - 3   -- room for "-> X"
-				end
-				local maxNm = math.max(cpt and 10 or 14, budget)
-				if #nm > maxNm then nm = nm:sub(1, maxNm - 1) .. ".." end
-				-- (the side scrollbar now shows there's more above/below -- no [+]/[v])
-				local baseTxt = rcode .. nm .. "|r" .. who
+				r.sub:SetText(sub)
+
+				-- LINE 2, right: how long the item can still be traded. tradeTimeLeft only
+				-- finds items sitting in OUR bags, which is exactly the master looter's
+				-- case -- an item won on a roll is still ours to hand over, and that is
+				-- precisely when the deadline matters. So ask regardless of receivedBy;
+				-- an item that is not ours simply returns nil.
+				local left = (not d.passed) and tradeTimeLeft(d.item) or nil
+				r.timer:SetText(left and ("|cffc0943a" .. left .. "|r") or "")
+
 				r.hl:SetShown(selected == d)
 				-- roll timer bar (ElvUI-style): show while a roll is live for this item
 				-- and not yet won. Live = a native need/greed roll (d.rollID) OR the
@@ -839,7 +986,20 @@ local pendingJumpNewest = false
 -- show the window (building + rebuilding the mode-specific body)
 local function showWin()
 	buildWindow()
-	if pendingJumpNewest then win._jumpNewest = true; pendingJumpNewest = false end
+	-- A roll that started while the window was closed already picked the item and the
+	-- page it lives on. Honour that over "jump to newest", or opening the manager
+	-- would land on the last boss instead of the item actually being rolled.
+	if pendingBossIdx then
+		win.bossIdx = pendingBossIdx
+		win.userCleared = false
+		win.rollScroll = 0
+		win.itemScroll = pendingItemScroll or 0
+		pendingBossIdx = nil
+		pendingItemScroll = nil
+		pendingJumpNewest = false
+	elseif pendingJumpNewest then
+		win._jumpNewest = true; pendingJumpNewest = false
+	end
 	win:Show()                       -- always show (idempotent)
 	win:Raise()                      -- bring to front in case something covers it
 	applySize()                      -- DB may have changed since the last show

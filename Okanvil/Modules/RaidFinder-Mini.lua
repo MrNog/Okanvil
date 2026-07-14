@@ -213,6 +213,22 @@ local function build()
 	f.count = W.Text(f, "", 10, "dim")
 	f.count:SetPoint("TOPLEFT", 8, -30)
 
+	-- Straight through to the Raid Finder page, where the filters live. The mini list
+	-- has no room for them, and hunting for the module in the nav to change one filter
+	-- is friction you feel every single raid night.
+	f.filters = W.Button(f, "Filters")
+	f.filters:SetSize(52, 16)
+	f.filters:SetPoint("TOPRIGHT", -28, -28)
+	f.filters:SetScript("OnClick", function()
+		-- Toggle() would CLOSE the window if it happened to be open already, so build
+		-- and show it directly, then jump to the page.
+		if not Okanvil.win then Okanvil:BuildShell() end
+		if Okanvil.puck then Okanvil.puck:Hide() end
+		Okanvil:RefreshNav()
+		Okanvil.win:Show()
+		Okanvil:ShowPanel("Okanvil-RaidFinder")
+	end)
+
 	-- dark well holding the list
 	local well = W.Frame(f, "dark")
 	well:SetPoint("TOPLEFT", 6, -44)
