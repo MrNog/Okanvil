@@ -35,17 +35,6 @@ local SIZES = {
 }
 local MAX_ROLLS = 5   -- inline rolls visible at once; the rest scroll within the block
 
--- HORIZONTAL GEOMETRY -- one source of truth, so the item name, the roll name and the
--- tree glyph cannot drift apart (they are three different frames that must line up).
---   PAD      inset of a row's content from the row edge -- the SAME on the left and
---            right, which is what makes the highlight look centred.
---   ICO_GAP  gap between the icon and the item name.
--- textX() is where an item's NAME starts; the rolls indent to exactly that column, so
--- a roll reads as hanging off the item above it.
-local PAD, ICO_GAP = 4, 7
-local function iconSize() return ROW_H - 4 end
-local function textX() return PAD + iconSize() + ICO_GAP end
-
 -- Live geometry, re-pointed at one of the SIZES tables by applySize(). Seeded from
 -- `full` at LOAD time: Okanvil.db does not exist yet here (Core.lua only assigns it
 -- on VARIABLES_LOADED, after every file has run), so calling db() at this scope
@@ -56,6 +45,21 @@ local ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W do
 	ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W =
 		s.ROW_H, s.FONT_SZ, s.SUB_SZ, s.ROLL_H, s.LIST_ROWS, s.WIN_W
 end
+
+-- HORIZONTAL GEOMETRY -- one source of truth, so the item name, the roll name and the
+-- tree glyph cannot drift apart (they are three different frames that must line up).
+--   PAD      inset of a row's content from the row edge -- the SAME on the left and
+--            right, which is what makes the highlight look centred.
+--   ICO_GAP  gap between the icon and the item name.
+-- textX() is where an item's NAME starts; the rolls indent to exactly that column, so
+-- a roll reads as hanging off the item above it.
+--
+-- These MUST be declared after ROW_H: a Lua function closes over the locals visible
+-- where it is WRITTEN, so declaring them above would have captured a global (nil) ROW_H
+-- and thrown on the first row it drew.
+local PAD, ICO_GAP = 4, 7
+local function iconSize() return ROW_H - 4 end
+local function textX() return PAD + iconSize() + ICO_GAP end
 
 local function db()
 	local d = Okanvil.db.rollmgr
