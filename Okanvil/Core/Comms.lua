@@ -259,6 +259,7 @@ end)
 -- their own version straight back, so the joiner (who may be the one behind)
 -- learns the versions of people who were ALREADY seated and never re-announce.
 -- Throttled so a wave of invites doesn't make the whole raid whisper at once.
+local HI_REPLY_THROTTLE = 3   -- seconds between whispered replies to joiners
 local lastHiReply = 0
 C.On("VERB", function(sender, ver)
 	if not sender or sender == "" then return end
@@ -269,7 +270,7 @@ C.On("VERB", function(sender, ver)
 	local me = UnitName and UnitName("player")
 	if sender ~= me then
 		local now = GetTime and GetTime() or 0
-		if now - lastHiReply >= 3 then
+		if now - lastHiReply >= HI_REPLY_THROTTLE then
 			lastHiReply = now
 			C.Whisper("VERR", sender, tostring(Okanvil.version or "?"))
 			Okanvil:Dev("ver: replied VERR " .. tostring(Okanvil.version) .. " -> " .. tostring(sender))
