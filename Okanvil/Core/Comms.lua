@@ -215,9 +215,13 @@ end
 -- called for every version we learn about (from VERR or the join broadcast)
 local function noteVersion(sender, ver)
 	if not (sender and ver and ver ~= "" and ver ~= "?") then return end
-	if nagged then return end
-	if verCmp(ver, Okanvil.version or "0") <= 0 then return end   -- not newer
-	if not plausible(ver) then return end                          -- anti-abuse
+	Okanvil:Dev("ver: " .. tostring(sender) .. " reports " .. tostring(ver)
+		.. " (mine " .. tostring(Okanvil.version) .. ")")
+	if nagged then Okanvil:Dev("ver: already nagged this group"); return end
+	if verCmp(ver, Okanvil.version or "0") <= 0 then
+		Okanvil:Dev("ver: " .. tostring(ver) .. " not newer -> ignore"); return
+	end
+	if not plausible(ver) then Okanvil:Dev("ver: " .. tostring(ver) .. " implausible -> ignore"); return end
 	local me = UnitName and UnitName("player")
 	if sender == me then return end
 
@@ -225,9 +229,11 @@ local function noteVersion(sender, ver)
 	newerSeen[ver][sender] = true
 	local n = 0
 	for _ in pairs(newerSeen[ver]) do n = n + 1 end
+	Okanvil:Dev("ver: " .. tostring(ver) .. " now seen by " .. n .. " (need 2)")
 	-- DBM waits for 2 independent reports before believing the claim
 	if n >= 2 then
 		nagged = true
+		Okanvil:Dev("ver: threshold met -> toast " .. tostring(ver))
 		if C.onNewerVersion then C.onNewerVersion(ver) end
 	end
 end
@@ -248,10 +254,27 @@ end)
 
 -- unsolicited "here I am" broadcast, sent on joining a group. Feeds the same
 -- nag logic, so you learn about a new build without pressing any button.
+--
+-- DBM handshake: the joiner's VERB is a "Hi" -- everyone who hears it whispers
+-- their own version straight back, so the joiner (who may be the one behind)
+-- learns the versions of people who were ALREADY seated and never re-announce.
+-- Throttled so a wave of invites doesn't make the whole raid whisper at once.
+local lastHiReply = 0
 C.On("VERB", function(sender, ver)
 	if not sender or sender == "" then return end
+	Okanvil:Dev("ver: heard VERB from " .. tostring(sender) .. " = " .. tostring(ver))
 	verReplies[sender] = (ver ~= nil and ver ~= "") and tostring(ver) or "?"
 	noteVersion(sender, ver)
+	-- reply to the newcomer with our version (unless that was us)
+	local me = UnitName and UnitName("player")
+	if sender ~= me then
+		local now = GetTime and GetTime() or 0
+		if now - lastHiReply >= 3 then
+			lastHiReply = now
+			C.Whisper("VERR", sender, tostring(Okanvil.version or "?"))
+			Okanvil:Dev("ver: replied VERR " .. tostring(Okanvil.version) .. " -> " .. tostring(sender))
+		end
+	end
 end)
 
 -- Announce our version to the group (throttled: joining a raid fires several
@@ -259,9 +282,10 @@ end)
 local lastAnnounce = 0
 function C.AnnounceVersion()
 	local now = GetTime and GetTime() or 0
-	if now - lastAnnounce < 20 then return end
+	if now - lastAnnounce < 20 then Okanvil:Dev("ver: announce throttled"); return end
 	lastAnnounce = now
-	C.Send("VERB", tostring(Okanvil.version or "?"))
+	local ok = C.Send("VERB", tostring(Okanvil.version or "?"))
+	Okanvil:Dev("ver: broadcast VERB " .. tostring(Okanvil.version) .. (ok and " (sent)" or " (no group)"))
 end
 
 -- Announce on joining a group, and re-arm the nag when the group changes so a
