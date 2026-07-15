@@ -98,22 +98,17 @@ local function itemIcon(itemLink)
 	return itemLink and Okanvil:ItemIcon(itemLink) or nil
 end
 
--- Should the body carry the "Roll MS / Roll OS" buttons? They /roll into chat, and a raid
--- calls a chat roll-off under ANY loot method -- so the only thing that matters is that
--- there is a group to roll in front of.
+-- Should the body carry the "Roll MS / Roll OS" buttons? They /roll into chat, which is
+-- the RATS roll-off convention -- and that convention only runs under MASTER LOOT. Under
+-- group loot / need-before-greed you roll in Blizzard's own need/greed frame, so a manual
+-- chat /roll there is noise; a stray /roll under a Blizzard roll-off just confuses the ML.
 --
--- Earlier versions tried to be clever about WHEN a chat roll-off was happening (master
--- loot only; then master loot or a roll we started). Both guessed wrong the same way: an
--- item announced by someone else's addon under group loot has no roll we know about yet,
--- which is exactly the moment you need to roll. A stray /roll costs nothing; not being
--- able to roll costs you the item.
---
--- Solo counts too: /roll works alone, and a manager you cannot exercise outside a raid
--- cannot be tested. So this is always true -- it stays a named function because Rebuild
--- decides the layout from it and OnRollOpen decides whether the layout needs rebuilding
--- from it, and those two must never disagree.
+-- So the buttons show only when the group is actually on master loot (which already
+-- implies party/raid -- there is no master loot solo). It stays a named function because
+-- Rebuild decides the layout from it and OnRollOpen decides whether the layout needs
+-- rebuilding from it, and those two must never disagree.
 local function wantsChatRollButtons()
-	return true
+	return L and L.IsMasterLootMethod and L.IsMasterLootMethod() or false
 end
 
 -- are we the loot master right now? (drives ML-vs-raider layout)
@@ -1079,15 +1074,24 @@ function RM.Refresh()
 				-- across to where the name starts, so the branch reads as one continuous
 				-- line down the column with a rung at each roll.
 				local tx = r._treeX
-				local mid = ROLL_H / 2
+				-- mid FLOORED + stem 1px TALLER than the row: with an odd ROLL_H (compact = 15)
+				-- the fractional half (7.5) rounded inconsistently, so adjacent stems landed a
+				-- hair apart -- some pixel-columns carried two overlapping 1px stems (a THICK/
+				-- double line), others a gap. Snapping mid to an int + overlapping each stem 1px
+				-- into the next row makes one clean continuous line (the artefact was compact-only).
+				local mid = math.floor(ROLL_H / 2)
 				r.stem:ClearAllPoints()
 				r.stem:SetPoint("TOPLEFT", tx, 0)
-				r.stem:SetHeight(ROLL_H)
+				r.stem:SetHeight(ROLL_H + 1)
 				r.stem:Show()
 
+				-- Elbow starts 1px RIGHT of the stem so the horizontal rung ABUTS the vertical
+				-- line instead of stacking a second texture in the stem's own pixel column --
+				-- the overlapped corner was the darker/"doubled" rung. `mid` is already floored
+				-- (integer), so the rung sits on a whole pixel row and stays a crisp 1px.
 				r.elbow:ClearAllPoints()
-				r.elbow:SetPoint("TOPLEFT", tx, -mid)
-				r.elbow:SetWidth(math.max(1, textX() - tx - 4))
+				r.elbow:SetPoint("TOPLEFT", tx + 1, -mid)
+				r.elbow:SetWidth(math.max(1, textX() - tx - 5))
 				r.elbow:Show()
 
 				-- tag: the roll TYPE. `kind` is the captured roll (need/greed/de, or ms/os
@@ -1116,11 +1120,11 @@ function RM.Refresh()
 				r._d = nil; r._roll = nil; r._rolling = false
 				r.icon:Hide(); r.txt:Hide(); r.sub:Hide(); r.timer:Hide(); r.bar:Hide(); r.hl:Hide()
 				-- same branch as a real roll, just with nothing hanging off it
-				local tx, mid = r._treeX, ROLL_H / 2
+				local tx, mid = r._treeX, math.floor(ROLL_H / 2)   -- floor + 1px overlap: see roll face above
 				r.stem:ClearAllPoints(); r.stem:SetPoint("TOPLEFT", tx, 0)
-				r.stem:SetHeight(ROLL_H); r.stem:Show()
-				r.elbow:ClearAllPoints(); r.elbow:SetPoint("TOPLEFT", tx, -mid)
-				r.elbow:SetWidth(math.max(1, textX() - tx - 4)); r.elbow:Show()
+				r.stem:SetHeight(ROLL_H + 1); r.stem:Show()
+				r.elbow:ClearAllPoints(); r.elbow:SetPoint("TOPLEFT", tx + 1, -mid)   -- +1: abut, don't stack on the stem
+				r.elbow:SetWidth(math.max(1, textX() - tx - 5)); r.elbow:Show()
 				r.rollTxt:SetText("|cff5e6166no rolls yet|r")
 				r.rollTxt:Show()
 				r:Show()

@@ -11,10 +11,17 @@ Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
 Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
 
 Core\Core.lua
+Core\Util.lua
 Core\Comms.lua
 Core\Lockouts.lua
 Core\Widgets.lua
-Core\UI.lua
+Core\UI\Shell.lua
+Core\UI\Page_Home.lua
+Core\UI\Page_Guild.lua
+Core\UI\Page_Loot.lua
+Core\UI\Page_Invite.lua
+Core\UI\Page_Settings.lua
+Core\UI\Page_Modules.lua
 
 Modules\Guild.lua
 Modules\Bosses-Data.lua

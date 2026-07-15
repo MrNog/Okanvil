@@ -15,11 +15,7 @@ Okanvil.Guild = G
 -- ------------------------------------------------------------
 -- minimal JSON string escaper (WoW strings are UTF-8 -> raw is valid JSON)
 -- ------------------------------------------------------------
-local function esc(s)
-	s = tostring(s or "")
-	s = s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
-	return s
-end
+local esc = Okanvil.U.esc
 G.esc = esc
 
 local function stripRealm(name)

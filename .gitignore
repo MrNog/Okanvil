@@ -17,3 +17,5 @@ agent/
 
 # scratch backups from refactors
 *.logic-bak
+*.bak
+*.orig

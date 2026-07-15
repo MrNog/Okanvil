@@ -24,18 +24,9 @@ local Okanvil = Okanvil
 local L = {}
 Okanvil.Loot = L
 
-local esc = function(s)
-	if Okanvil.Guild and Okanvil.Guild.esc then return Okanvil.Guild.esc(s) end
-	s = tostring(s or "")
-	return (s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t"))
-end
-
-local function itemIDFromLink(link)
-	return link and tonumber(link:match("item:(%d+)")) or 0
-end
-local function shortLink(link)
-	return link and link:match("(item:[%-%d:]+)") or nil
-end
+local esc = Okanvil.U.esc
+local itemIDFromLink = Okanvil.U.itemIDFromLink
+local shortLink = Okanvil.U.shortLink
 
 -- ------------------------------------------------------------
 -- FILTER. allow-list forces inclusion (orbs/patterns/shards), deny-list forces
@@ -964,7 +955,7 @@ local NG_PATTERNS   -- { {pattern, kind, extractor}, ... }
 local function buildNeedGreedPatterns()
 	if NG_PATTERNS then return NG_PATTERNS end
 	NG_PATTERNS = {}
-	local function esc2(t) return (t:gsub("([%%%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")) end
+	local esc2 = Okanvil.U.escPattern
 	-- someone's roll: template has %s (name), %d (value), %s (item). Order varies by
 	-- locale, mas em enUS e "%s rolled Need - %d for %s". Capturamos os 3 grupos e
 	-- we resolve which is which by type (link has "|H", number is digits only).
@@ -1115,7 +1106,7 @@ local WIN_PATTERNS
 local function buildWinPatterns()
 	if WIN_PATTERNS then return WIN_PATTERNS end
 	WIN_PATTERNS = {}
-	local function esc2(t) return (t:gsub("([%%%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")) end
+	local esc2 = Okanvil.U.escPattern
 	local me = function() return UnitName("player") end
 	local function add(template, kind, extract)
 		if type(template) ~= "string" or template == "" then return end
