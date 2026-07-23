@@ -33,7 +33,7 @@ function Okanvil:BuildSettings()
 			  build = function(pg) Okanvil:Settings_General(pg) end },
 			{ key = "raid",    label = "Raid Tools", height = 470,
 			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
-			{ key = "adv",     label = "Advanced",   height = 420,
+			{ key = "adv",     label = "Advanced",   height = 460,
 			  build = function(pg) Okanvil:Settings_Advanced(pg) end },
 		},
 	})
@@ -234,77 +234,135 @@ function Okanvil:Settings_Advanced(p)
 	-- DEV MODE -- routes debug output to a dedicated "Okanvil" chat tab (next to
 	-- General / Combat Log) instead of spamming the default chat. Off by default,
 	-- so raiders never see it; the tab is only created when this is switched on.
-	local dv = W.Text(p, "DEV", 10, "dim"); dv:SetPoint("TOPLEFT", X, -486)
+	local dv = W.Text(p, "DEV", 10, "dim"); dv:SetPoint("TOPLEFT", X, -8)
 	local devChk = W.Check(p, "Dev mode -- debug output to its own \"Okanvil\" chat tab",
 		function() return db.devMode and true or false end,
 		function(v) Okanvil:SetDevMode(v) end)
-	devChk:SetPoint("TOPLEFT", X + 2, -506)
+	devChk:SetPoint("TOPLEFT", X + 2, -28)
 
-	-- VERSION CHECK -- ask the group which Okanvil everyone runs (RCLootCouncil-style).
-	-- A stale client is what makes "phantom" bugs (e.g. an old build showing the ML
-	-- layout to a plain raider), so this is the first thing to check on a bug report.
-	local vc = W.Text(p, "VERSION CHECK", 10, "dim"); vc:SetPoint("TOPLEFT", X, -540)
-	local vhint = W.Text(p, "Ask everyone in your group which Okanvil they run.", 10, "dim")
-	vhint:SetPoint("TOPLEFT", X, -560)
+	-- VERSION CHECK -- opens the RCLootCouncil-style checker popup. A stale client
+	-- is what makes "phantom" bugs (e.g. an old build showing the ML layout to a
+	-- plain raider), so this is the first thing to check on a bug report.
+	local vc = W.Text(p, "VERSION CHECK", 10, "dim"); vc:SetPoint("TOPLEFT", X, -62)
+	local vhint = W.Text(p, "Ask your group or the guild which Okanvil they run.", 10, "dim")
+	vhint:SetPoint("TOPLEFT", X, -82)
 
-	local vbtn = W.Button(p, "Check group versions", "primary")
-	vbtn:SetSize(170, 24); vbtn:SetPoint("TOPLEFT", X, -582)
+	local vbtn = W.Button(p, "Open version checker", "primary")
+	vbtn:SetSize(170, 24); vbtn:SetPoint("TOPLEFT", X, -104)
+	vbtn:SetScript("OnClick", function() Okanvil:ShowVersionChecker() end)
+end
 
-	-- results box: one line per player, newest render wins. Kept short (the panel
-	-- scrolls), so we cap the list and summarise the rest.
-	local vout = W.Text(p, "", 11); vout:SetPoint("TOPLEFT", X, -614)
-	vout:SetWidth(360); vout:SetJustifyH("LEFT")
-	if vout.SetJustifyV then vout:SetJustifyV("TOP") end
+-- ---- Version checker popup (RCLootCouncil-style) -------------------------
+-- Its own window, so it can stay open while replies trickle in and the Settings
+-- page can be closed. One shared frame, rebuilt rows on every repaint.
+local verDlg
+function Okanvil:ShowVersionChecker()
+	local f = verDlg
+	if not f then
+		f = Okanvil:Popup("Okanvil version check")
+		f:SetSize(320, 380)
 
-	local function paintVersions()
-		local Comms = Okanvil.Comms
-		if not Comms then vout:SetText("|cffff5555Comms unavailable.|r"); return end
-		local replies = Comms.VersionReplies and Comms.VersionReplies() or {}
-		local roster = Comms.GroupRoster and Comms.GroupRoster() or {}
-		local mine = tostring(Okanvil.version or "?")
-		local lines, ok, old, none = {}, 0, 0, 0
-		for _, name in ipairs(roster) do
-			local v = replies[name]
-			if not v then
-				none = none + 1
-				lines[#lines + 1] = "|cff8a8d93" .. name .. "|r  |cffff5555no reply|r"
-			elseif v == mine then
-				ok = ok + 1
-				lines[#lines + 1] = name .. "  |cff7cfc8a" .. v .. "|r"
-			else
-				old = old + 1
-				lines[#lines + 1] = name .. "  |cffffd200" .. v .. "|r  |cff8a8d93(you: " .. mine .. ")|r"
+		-- scope buttons, RCLoot-style: Group | Guild
+		local bGroup = W.Button(f, "Group", "primary")
+		bGroup:SetSize(90, 22); bGroup:SetPoint("TOPLEFT", 10, -32)
+		local bGuild = W.Button(f, "Guild")
+		bGuild:SetSize(90, 22); bGuild:SetPoint("LEFT", bGroup, "RIGHT", 8, 0)
+
+		local status = W.Text(f, "", 10, "dim")
+		status:SetPoint("LEFT", bGuild, "RIGHT", 10, 0)
+		f.status = status
+
+		-- results list inside a clipped scroll (long guild rosters must not spill)
+		local box = W.Frame(f, "dark")
+		box:SetPoint("TOPLEFT", 10, -62); box:SetPoint("BOTTOMRIGHT", -10, 10)
+		local scroll = CreateFrame("ScrollFrame", nil, box)
+		scroll:SetPoint("TOPLEFT", 6, -6); scroll:SetPoint("BOTTOMRIGHT", -6, 6)
+		Okanvil.Clip(scroll)
+		local child = CreateFrame("Frame", nil, scroll)
+		child:SetWidth(1); child:SetHeight(1)
+		scroll:SetScrollChild(child)
+		scroll:EnableMouseWheel(true)
+		scroll:SetScript("OnMouseWheel", function(self, delta)
+			local cur = self:GetVerticalScroll()
+			local max = math.max(0, child:GetHeight() - self:GetHeight())
+			local nxt = cur - delta * 30
+			if nxt < 0 then nxt = 0 elseif nxt > max then nxt = max end
+			self:SetVerticalScroll(nxt)
+		end)
+		f.scroll, f.child = scroll, child
+
+		local out = W.Text(child, "", 11)
+		out:SetPoint("TOPLEFT", 0, 0)
+		out:SetJustifyH("LEFT")
+		if out.SetJustifyV then out:SetJustifyV("TOP") end
+		f.out = out
+
+		local function paint()
+			local Comms = Okanvil.Comms
+			if not Comms then f.out:SetText("|cffff5555Comms unavailable.|r"); return end
+			local replies = Comms.VersionReplies and Comms.VersionReplies() or {}
+			local roster = Comms.GroupRoster and Comms.GroupRoster(f._scope) or {}
+			local mine = tostring(Okanvil.version or "?")
+			local waiting = Comms.VersionCheckRunning and Comms.VersionCheckRunning()
+			local lines, ok, old, none = {}, 0, 0, 0
+			for _, name in ipairs(roster) do
+				local v = replies[name]
+				if not v then
+					none = none + 1
+					lines[#lines + 1] = "|cff8a8d93" .. name .. "|r  "
+						.. (waiting and "|cff8a8d93waiting...|r" or "|cffff5555no reply|r")
+				elseif v == mine then
+					ok = ok + 1
+					lines[#lines + 1] = name .. "  |cff7cfc8a" .. v .. "|r"
+				else
+					old = old + 1
+					lines[#lines + 1] = name .. "  |cffffd200" .. v .. "|r"
+				end
 			end
+			if #lines == 0 then
+				f.out:SetText("|cff8a8d93Nobody to ask.|r")
+			else
+				f.out:SetText(table.concat(lines, "\n"))
+			end
+			f.status:SetText("|cff7cfc8a" .. ok .. "|r / |cffffd200" .. old
+				.. "|r / |cffff5555" .. none .. "|r"
+				.. (waiting and "  |cff8a8d93asking...|r" or ""))
+			-- size the scroll child to the text so the wheel range is right
+			local w = f.scroll:GetWidth() or 0
+			if w < 10 then w = 288 end            -- first paint runs before layout
+			f.out:SetWidth(w)
+			f.child:SetWidth(w)
+			f.child:SetHeight(math.max(f.out:GetStringHeight() + 8, 1))
 		end
-		if #lines == 0 then vout:SetText("|cff8a8d93No group.|r"); return end
-		local head = "|cff7cfc8a" .. ok .. " up to date|r  |cffffd200" .. old
-			.. " different|r  |cffff5555" .. none .. " no reply|r\n"
-		-- cap the visible list so the settings page never grows unbounded
-		local MAXL = 14
-		if #lines > MAXL then
-			local extra = #lines - MAXL
-			for i = #lines, MAXL + 1, -1 do table.remove(lines, i) end
-			lines[#lines + 1] = "|cff8a8d93... +" .. extra .. " more|r"
+		f.paint = paint
+
+		local function ask(scope)
+			local Comms = Okanvil.Comms
+			if not (Comms and Comms.RequestVersions) then
+				f.out:SetText("|cffff5555Comms unavailable.|r"); return
+			end
+			if Comms.VersionCheckRunning and Comms.VersionCheckRunning() then return end
+			f._scope = scope
+			local sent = Comms.RequestVersions(scope, function() paint() end, 5)
+			if not sent then
+				f.out:SetText(scope == "guild"
+					and "|cffff5555You're not in a guild.|r"
+					or "|cffff5555You're not in a party or raid.|r")
+				f.status:SetText("")
+				return
+			end
+			paint()
 		end
-		vout:SetText(head .. table.concat(lines, "\n"))
+		bGroup:SetScript("OnClick", function() ask("group") end)
+		bGuild:SetScript("OnClick", function() ask("guild") end)
+
+		verDlg = f
 	end
-
-	-- repaint live as whispers trickle in, and once more when the window closes
-	if Okanvil.Comms then Okanvil.Comms.onVersionReply = paintVersions end
-
-	vbtn:SetScript("OnClick", function()
-		local Comms = Okanvil.Comms
-		if not (Comms and Comms.RequestVersions) then
-			Okanvil:Print("|cffff5555Comms unavailable.|r"); return
-		end
-		if Comms.VersionCheckRunning and Comms.VersionCheckRunning() then
-			Okanvil:Print("Version check already running..."); return
-		end
-		vout:SetText("|cff8a8d93Asking the group...|r")
-		local sent = Comms.RequestVersions(function() paintVersions() end, 5)
-		if not sent then vout:SetText("|cffff5555You're not in a party or raid.|r") end
-	end)
-	paintVersions()
+	-- repaint live as whispers trickle in (rebound on every open: last opener wins)
+	if Okanvil.Comms then Okanvil.Comms.onVersionReply = function() if f:IsShown() then f.paint() end end end
+	f._scope = f._scope or "group"
+	f.paint()
+	f:Show()
 end
 
 -- ---- Loot capture settings (used as a tab INSIDE the Loot module) ----

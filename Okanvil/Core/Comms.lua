@@ -150,11 +150,11 @@ end)
 ev:Hide()   -- OnUpdate only runs while timers are pending
 
 -- ------------------------------------------------------------
--- VERSION CHECK (RCLootCouncil-style). Ask everyone in the group which Okanvil
--- they run, so a stale client can be spotted before it causes "phantom" bugs
--- (e.g. an old build that showed the ML layout to plain raiders).
+-- VERSION CHECK (RCLootCouncil-style). Ask the group OR the guild which Okanvil
+-- everyone runs, so a stale client can be spotted before it causes "phantom"
+-- bugs (e.g. an old build that showed the ML layout to plain raiders).
 --
---   VERQ            -> broadcast "who's out there?"
+--   VERQ            -> broadcast "who's out there?" (RAID/PARTY or GUILD)
 --   VERR|<version>  -> whispered straight back to whoever asked
 --
 -- Anyone who does NOT reply within the timeout either has no Okanvil or a build
@@ -167,77 +167,6 @@ local verRunning = false
 C.VersionReplies = function() return verReplies end
 C.VersionCheckRunning = function() return verRunning end
 
--- ------------------------------------------------------------
--- Semantic version compare. "1.10.0" > "1.9.0" -- a plain string compare gets
--- that backwards, which is why we split on dots and compare numerically.
--- Anything non-numeric (a "-dev+sha" suffix from a main build) is ignored, so a
--- dev build of 1.2.0 never claims to be newer than the 1.2.0 release.
--- Returns 1 (a>b), -1 (a<b) or 0.
--- ------------------------------------------------------------
-local function verParts(v)
-	-- take only the leading X.Y.Z; a package.yml dev build is "1.2.0-dev+ab12cd"
-	-- and those trailing digits must NOT make it look newer than the 1.2.0 release.
-	local core = tostring(v or ""):match("^%s*([%d%.]+)") or ""
-	local out = {}
-	for n in core:gmatch("(%d+)") do out[#out + 1] = tonumber(n) end
-	return out
-end
-local function verCmp(a, b)
-	local pa, pb = verParts(a), verParts(b)
-	for i = 1, math.max(#pa, #pb) do
-		local x, y = pa[i] or 0, pb[i] or 0
-		if x ~= y then return x > y and 1 or -1 end
-	end
-	return 0
-end
-C.CompareVersions = verCmp
-
--- ------------------------------------------------------------
--- UPDATE NAG. Peer-to-peer, because a 3.3.5a addon cannot make HTTP requests:
--- clients announce their version on joining a group, and a client running an
--- OLDER build learns a new one exists from whoever already updated.
---
--- Anti-abuse (straight from DBM's HandleVersion): one player can lie about
--- their version, so we only nag once TWO DIFFERENT people report the same
--- higher version. A single troll can't make the raid see "update me".
--- We also cap how far ahead a claimed version may be, so "999.0.0" is ignored.
--- ------------------------------------------------------------
-local newerSeen = {}         -- version string -> { [name]=true }
-local nagged = false         -- only nag once per session/group
-local MAX_MAJOR_JUMP = 5     -- a claim more than this many majors ahead is a lie
-
-local function plausible(ver)
-	local mineMaj = (verParts(Okanvil.version)[1]) or 0
-	local theirMaj = (verParts(ver)[1]) or 0
-	return theirMaj <= mineMaj + MAX_MAJOR_JUMP
-end
-
--- called for every version we learn about (from VERR or the join broadcast)
-local function noteVersion(sender, ver)
-	if not (sender and ver and ver ~= "" and ver ~= "?") then return end
-	Okanvil:Dev("ver: " .. tostring(sender) .. " reports " .. tostring(ver)
-		.. " (mine " .. tostring(Okanvil.version) .. ")")
-	if nagged then Okanvil:Dev("ver: already nagged this group"); return end
-	if verCmp(ver, Okanvil.version or "0") <= 0 then
-		Okanvil:Dev("ver: " .. tostring(ver) .. " not newer -> ignore"); return
-	end
-	if not plausible(ver) then Okanvil:Dev("ver: " .. tostring(ver) .. " implausible -> ignore"); return end
-	local me = UnitName and UnitName("player")
-	if sender == me then return end
-
-	newerSeen[ver] = newerSeen[ver] or {}
-	newerSeen[ver][sender] = true
-	local n = 0
-	for _ in pairs(newerSeen[ver]) do n = n + 1 end
-	Okanvil:Dev("ver: " .. tostring(ver) .. " now seen by " .. n .. " (need 2)")
-	-- DBM waits for 2 independent reports before believing the claim
-	if n >= 2 then
-		nagged = true
-		Okanvil:Dev("ver: threshold met -> toast " .. tostring(ver))
-		if C.onNewerVersion then C.onNewerVersion(ver) end
-	end
-end
-
 -- someone asked -> whisper our version straight back
 C.On("VERQ", function(sender)
 	if not sender or sender == "" then return end
@@ -248,75 +177,29 @@ end)
 C.On("VERR", function(sender, ver)
 	if not sender or sender == "" then return end
 	verReplies[sender] = (ver ~= nil and ver ~= "") and tostring(ver) or "?"
-	noteVersion(sender, ver)
 	if C.onVersionReply then C.onVersionReply() end
 end)
 
--- unsolicited "here I am" broadcast, sent on joining a group. Feeds the same
--- nag logic, so you learn about a new build without pressing any button.
---
--- DBM handshake: the joiner's VERB is a "Hi" -- everyone who hears it whispers
--- their own version straight back, so the joiner (who may be the one behind)
--- learns the versions of people who were ALREADY seated and never re-announce.
--- Throttled so a wave of invites doesn't make the whole raid whisper at once.
-local HI_REPLY_THROTTLE = 3   -- seconds between whispered replies to a joiner
-local lastHiReply = 0
-C.On("VERB", function(sender, ver)
-	if not sender or sender == "" then return end
-	Okanvil:Dev("ver: heard VERB from " .. tostring(sender) .. " = " .. tostring(ver) .. " (mine " .. tostring(Okanvil.version) .. ")")
-	verReplies[sender] = (ver ~= nil and ver ~= "") and tostring(ver) or "?"
-	noteVersion(sender, ver)
-	-- reply to the newcomer with our version (unless that was us)
-	local me = UnitName and UnitName("player")
-	if sender ~= me then
-		local now = GetTime and GetTime() or 0
-		if now - lastHiReply >= HI_REPLY_THROTTLE then
-			lastHiReply = now
-			C.Whisper("VERR", sender, tostring(Okanvil.version or "?"))
-			Okanvil:Dev("ver: replied VERR " .. tostring(Okanvil.version) .. " -> " .. tostring(sender))
-		end
-	end
-end)
-
--- Announce our version to the group (throttled: joining a raid fires several
--- roster events in a row, and we must not spam the addon channel).
-local lastAnnounce = 0
-function C.AnnounceVersion()
-	local now = GetTime and GetTime() or 0
-	if now - lastAnnounce < 20 then Okanvil:Dev("ver: announce throttled"); return end
-	lastAnnounce = now
-	local ok = C.Send("VERB", tostring(Okanvil.version or "?"))
-	Okanvil:Dev("ver: broadcast VERB " .. tostring(Okanvil.version) .. (ok and " (sent)" or " (no group)"))
-end
-
--- Announce on joining a group, and re-arm the nag when the group changes so a
--- fresh raid can still tell you you're behind (DBM wipes its list the same way).
-local vev = CreateFrame("Frame")
-vev:RegisterEvent("PLAYER_ENTERING_WORLD")
-vev:RegisterEvent("RAID_ROSTER_UPDATE")
-vev:RegisterEvent("PARTY_MEMBERS_CHANGED")
-local wasGrouped = false
-vev:SetScript("OnEvent", function()
-	local grouped = groupChannel() ~= nil
-	if grouped and not wasGrouped then
-		wipe(newerSeen); nagged = false        -- new group -> allow one nag again
-	end
-	wasGrouped = grouped
-	if grouped then C.AnnounceVersion() end
-end)
-
--- Kick off a check. `onDone(replies)` fires after `timeout` seconds (default 5).
--- Returns false when solo (nothing to ask).
-function C.RequestVersions(onDone, timeout)
+-- Kick off a check. `scope` is "group" (default) or "guild"; `onDone(replies)`
+-- fires after `timeout` seconds (default 5). Returns false when there is nobody
+-- to ask (solo for "group", unguilded for "guild").
+function C.RequestVersions(scope, onDone, timeout)
+	-- old call shape was (onDone, timeout) -- keep it working
+	if type(scope) == "function" then scope, onDone, timeout = "group", scope, onDone end
 	if verRunning then return false end
-	local chan = groupChannel()
-	if not chan then return false end        -- solo: nobody to ask
+	local chan
+	if scope == "guild" then
+		chan = (IsInGuild and IsInGuild()) and "GUILD" or nil
+	else
+		chan = groupChannel()
+	end
+	if not chan then return false end        -- nobody to ask
 	wipe(verReplies)
 	-- count ourselves immediately; we never whisper ourselves
 	local me = UnitName and UnitName("player")
 	if me then verReplies[me] = tostring(Okanvil.version or "?") end
 	verRunning = true
-	C.Send("VERQ")
+	SendAddonMessage(PREFIX, pack("VERQ"), chan)
 	C.After(timeout or 5, function()
 		verRunning = false
 		if C.onVersionReply then C.onVersionReply() end
@@ -325,9 +208,21 @@ function C.RequestVersions(onDone, timeout)
 	return true
 end
 
--- Everyone in the current group (raid or party), for "who didn't reply".
-function C.GroupRoster()
+-- Everyone we asked, for "who didn't reply". scope mirrors RequestVersions:
+-- "group" = current raid/party, "guild" = ONLINE guild members (offline ones
+-- can't answer, so listing them as "no reply" would just be noise).
+function C.GroupRoster(scope)
 	local out = {}
+	if scope == "guild" then
+		if not (IsInGuild and IsInGuild()) then return out end
+		if GuildRoster then GuildRoster() end     -- ask for a refresh; list may be a few seconds stale
+		local n = (GetNumGuildMembers and GetNumGuildMembers()) or 0
+		for i = 1, n do
+			local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+			if name and online then out[#out + 1] = (name:gsub("%-.*$", "")) end
+		end
+		return out
+	end
 	local nRaid = (GetNumRaidMembers and GetNumRaidMembers()) or 0
 	if nRaid > 0 then
 		for i = 1, nRaid do

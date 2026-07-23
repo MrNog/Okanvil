@@ -39,16 +39,16 @@ local ACCEPT_IDS = {
 	[49908] = true, -- Primordial Saronite
 	[43102] = true, -- Frozen Orb (drop do ultimo boss -- a raid rola por ele)
 	[45038] = true, [45039] = true, [45896] = true, [49869] = true, -- fragmentos de lendario
+	[47242] = true, -- Trophy of the Crusade (drop do boss -- a raid rola por ele para upgrade de tier)
 }
 local DENY_IDS = {
 	[34057] = true, -- Abyss Crystal
-	[36931] = true, [36919] = true, [36928] = true, [36934] = true,
-	[36922] = true, [36925] = true, -- epic gems
+	[36919] = true, [36922] = true, [36925] = true, [36928] = true, [36931] = true,
+	[36934] = true, -- uncut epic gems (exact-id backstop; DENY_GEM_NAME covers cut + rare too)
 	[47241] = true, -- Emblem of Triumph
 	[49426] = true, -- Emblem of Frost
 	[40752] = true, [40753] = true, [45624] = true, [43228] = true, -- emblemas / shard
 	[44990] = true, -- Champion's Seal
-	[47242] = true, -- Trophy of the Crusade (token de moeda)
 	[20725] = true, [22450] = true, -- crystals de DE
 	-- Skinning/cloth/enchanting mats. These ride in because skinning (or DE'ing) a boss
 	-- corpse fires the same LOOT_OPENED that captureCorpse() scans, so they get labelled
@@ -75,6 +75,26 @@ local DENY_NAME_EXACT = {
 	["crystallized fire"] = true, ["crystallized shadow"] = true,
 	["jormungar scale"] = true, ["arctic fur"] = true,
 }
+-- deny por NOME (substring): GEMS, cut or uncut, RARE or epic. This is why Okanvil showed
+-- Autumn's Glow / Twilight Opal / Monarch Topaz when RaidRoll didn't: those are RARE (blue,
+-- rarity 3) gems, and RaidRoll only records epic+ (rarity>3) so it drops them for free --
+-- but Okanvil's threshold is Rare+ (to catch blue dungeon GEAR), so the blue gems rode in.
+-- A gem is never boss loot, so deny the whole family by NAME (threshold-independent):
+--   * a JC cutting mid-raid fires "X receives loot: [Inscribed Monarch Topaz]" -- every cut
+--     is its own id (40012-40179+), an id list is whack-a-mole;
+--   * every Wrath gem's name ENDS with one of these bases ("Deadly Ametrine", uncut "Monarch
+--     Topaz"), and no gear shares a gem's name -- so a substring match catches cut AND uncut,
+--     rare AND epic, with no id per cut.
+-- (Recipe drops "Design:/Pattern: <gem>" are kept -- ACCEPT_NAME is checked first.)
+local DENY_GEM_NAME = {
+	-- epic (rarity 4)
+	"cardinal ruby", "king's amber", "majestic zircon",
+	"dreadstone", "ametrine", "eye of zul",
+	-- rare (rarity 3) -- the ones that slipped past RaidRoll's epic-only gate
+	"scarlet ruby", "monarch topaz", "sky sapphire", "autumn's glow",
+	"twilight opal", "forest emerald", "bloodstone", "sun crystal",
+	"chalcedony", "shadow crystal", "huge citrine", "dark jade",
+}
 -- allow por NOME (robusto): patterns/plans/recipes + orbs + fragmentos.
 local ACCEPT_NAME = {
 	"pattern:", "plans:", "recipe:", "schematic:", "formula:", "design:",
@@ -96,7 +116,13 @@ local function acceptItem(id, rarity, name)
 	if id ~= 0 and DENY_IDS[id] then return false end
 	if name and name ~= "" and DENY_NAME_EXACT[name:lower()] then return false end
 	if id ~= 0 and ACCEPT_IDS[id] then return true end
+	-- Recipe drops ("Design: Royal Twilight Opal", "Pattern: ...") are REAL loot and must
+	-- survive -- check ACCEPT_NAME before the gem-name deny, which would otherwise eat them
+	-- on the "twilight opal" substring.
 	if nameHasAny(name, ACCEPT_NAME) then return true end
+	-- Epic gems, cut or uncut (a JC cutting mid-raid, or an uncut gem that dropped). Denied
+	-- by NAME so we never chase per-cut ids. Safe: no gear shares a gem's name.
+	if nameHasAny(name, DENY_GEM_NAME) then return false end
 	local threshold = (Okanvil.db and Okanvil.db.lootThreshold) or 3
 	return (rarity or 0) >= threshold
 end
@@ -114,6 +140,17 @@ local RAID_ZONES = {
 	["Hyjal Summit"] = true, ["The Battle for Mount Hyjal"] = true, ["Black Temple"] = true,
 	["Gruul's Lair"] = true, ["Magtheridon's Lair"] = true, ["Karazhan"] = true,
 	["Molten Core"] = true, ["Blackwing Lair"] = true,
+}
+
+-- Raids with exactly ONE boss: every drop in the zone is that boss's, so a stray
+-- "Trash" page there is always a mislabel (a missed kill event). Used by the migration
+-- below to sweep all of a run's Trash onto its single boss. (Multi-boss raids can't be
+-- collapsed this way -- there Trash inherits the nearest earlier boss instead.)
+local SINGLE_BOSS_RAID = {
+	["Onyxia's Lair"]        = "Onyxia",
+	["The Obsidian Sanctum"] = "Sartharion",
+	["The Eye of Eternity"]  = "Malygos",
+	["The Ruby Sanctum"]     = "Halion",
 }
 
 local function currentContext()   -- "raid" | "party" | "world"
@@ -210,6 +247,31 @@ end
 local currentBoss = nil       -- nome do boss atualmente engajado
 local encounterBoss = nil     -- ultimo boss confirmado (para rotular loot depois da morte)
 local lastCorpseBoss = nil    -- ultimo corpo NPC lootado (fallback)
+
+-- Forward-declared: runKey is defined further down, but saveBossCtx (just below) must
+-- close over the SAME local so it sees the real function, not a nil global. The later
+-- definition is written `function runKey()` (no `local`) to assign into this upvalue.
+local runKey
+
+-- Boss context PERSISTED across a /reload. Everything above is a module-scope local,
+-- so a /reload (which re-runs this file) wiped it: `encounterBoss` went back to nil and
+-- resolveBoss() answered "Trash" even though a boss died seconds ago. A RL announcing the
+-- loot right after that reload then filed a whole boss drop under a fresh "Trash" page.
+--
+-- So we mirror the confirmed boss into the per-character DB keyed by the RUN (runKey),
+-- with a WALL-CLOCK stamp (time(), not GetTime(): GetTime is uptime and resets to 0 on
+-- every login/reload, so it can't measure "how long ago" across the reload). On load we
+-- read it back ONLY if it belongs to the run we are in and is still within the label TTL.
+local function saveBossCtx(name)
+	if not name or name == "" or name == "Trash" then return end
+	local cdb = Okanvil.cdb or Okanvil.db
+	local key = runKey and (runKey())
+	if not key then return end   -- not in a resolvable run; nothing to pin it to
+	cdb.lootBossCtx = { key = key, boss = name, at = time() }
+end
+-- restoreBossCtx (reads BOSS_LABEL_TTL/lastBossContactAt) is defined below, once those
+-- are declared.
+local restoreBossCtx
 local inCombatCid = nil       -- creatureID do boss em combate (para casar o UNIT_DIED)
 -- When a vetted boss was last SEEN alive (engaged) or died. A TWIN fight is two NPCs
 -- sharing one encounter (Twin Val'kyr, ZG's paired bosses, a custom server's twins):
@@ -220,6 +282,31 @@ local inCombatCid = nil       -- creatureID do boss em combate (para casar o UNI
 -- instead of nuking the boss context. Outside the window it is genuine trash.
 local lastBossContactAt = 0
 local TWIN_WINDOW = 30        -- seconds: an unvetted corpse this soon after a boss = same encounter
+-- How long a dead boss's name may keep labelling loot. `encounterBoss` is held past the
+-- kill on purpose (loot drops a moment later), but it was held FOREVER: a fight the
+-- scanner cannot vet -- one whose ids we don't have and whose HP is under the raid
+-- threshold, like ToC's Faction Champions -- never overwrites it, so the PREVIOUS boss's
+-- name silently labelled the next kill's drops. Past this window we would rather say
+-- "Trash" (honestly unknown) than name the wrong boss with full confidence.
+local BOSS_LABEL_TTL = 600    -- seconds a confirmed boss name stays authoritative
+
+-- Read the persisted boss back into memory when we (re)enter the run it belongs to.
+-- Only trust it if it is the SAME run (key matches) and still fresh by the label TTL,
+-- measured in wall-clock seconds. Seeds encounterBoss so the FIRST drop after a reload
+-- lands on the right boss page instead of a new "Trash". (Assigns the forward-declared
+-- upvalue -- callers in onEnterWorld reach it through that local.)
+function restoreBossCtx()
+	local cdb = Okanvil.cdb or Okanvil.db
+	local ctx = cdb.lootBossCtx
+	if not ctx or not ctx.boss or ctx.boss == "" then return end
+	local key = runKey and (runKey())
+	if not key or key ~= ctx.key then return end        -- different run: don't inherit
+	if (time() - (ctx.at or 0)) > BOSS_LABEL_TTL then return end   -- too old
+	encounterBoss = ctx.boss
+	-- Re-anchor the freshness clock to NOW (GetTime): the wall-clock age already passed
+	-- the TTL gate above, and resolveBoss() measures freshness in GetTime() seconds.
+	lastBossContactAt = (GetTime and GetTime()) or 0
+end
 -- Master-loot broadcast latch: the FIRST client to detect a boss's loot broadcasts it;
 -- later broadcasts for the SAME encounter are ignored (so two openers don't double it).
 -- Reset when a new boss is engaged (currentBoss changes) -> the next boss can broadcast
@@ -320,6 +407,7 @@ local function tryEngage(unit)
 	if currentBoss ~= name then
 		currentBoss = name
 		encounterBoss = name
+		saveBossCtx(name)   -- pin it so a /reload mid-fight keeps the boss page
 		-- new encounter -> allow this boss's loot to broadcast again (first-wins latch)
 		bcastDone[name] = nil
 	end
@@ -349,6 +437,7 @@ local function onUnitDied(destGUID)
 		lastBossContactAt = (GetTime and GetTime()) or 0
 		if type(known) == "string" and known ~= "" then
 			encounterBoss = known
+			saveBossCtx(known)   -- kill confirmed: pin the page against a reload
 		end
 	end
 
@@ -371,7 +460,12 @@ end
 -- An elite that trips the HP heuristic still keeps its own name (Drakkari Rhino), which
 -- is wanted; this only changes the case where we know nothing at all.
 local function resolveBoss()
-	if encounterBoss and encounterBoss ~= "" then return encounterBoss end
+	-- A confirmed name only counts while it is FRESH. Without the TTL an unvettable
+	-- fight (Faction Champions: no ids, and each champion is under the raid HP bar)
+	-- left the previous boss's name standing, and its drops were filed under him.
+	local now = (GetTime and GetTime()) or 0
+	local fresh = (now - lastBossContactAt) <= BOSS_LABEL_TTL
+	if encounterBoss and encounterBoss ~= "" and fresh then return encounterBoss end
 	if lastCorpseBoss and lastCorpseBoss ~= "" then return lastCorpseBoss end
 	-- current target, but only if it was vetted as a boss (else a selected add would
 	-- get the credit). Anything unvetted is trash.
@@ -412,6 +506,58 @@ end
 function L.Sessions() return sessions() end
 
 -- ------------------------------------------------------------
+-- ONE-TIME MIGRATION: relabel stored "Trash" drops in RAID sessions.
+-- Old captures (before the ML self-heal) filed a whole boss drop under "Trash" whenever
+-- the kill event was missed -- so a single-boss raid like Sartharion / Onyxia showed a
+-- bogus "Trash" page next to the real boss, splitting the loot in the mini roll and the
+-- export. This sweeps it once, on load, guarded by a per-char flag so it never runs twice.
+--
+-- Smart rule (as asked):
+--   * SINGLE-BOSS raid zone -> every Trash drop becomes that one boss. Unambiguous.
+--   * MULTI-BOSS raid       -> a Trash drop inherits the NEAREST EARLIER boss in the run
+--                              (drops are stored in loot order). That is the encounter
+--                              whose loot was being handed out.
+--   * neither (Trash before ANY boss in the run) -> leave it. Better an honest "Trash"
+--     than a guess; the new capture path already avoids creating these going forward.
+-- Dungeons are untouched: their trash is real and a "Trash" page there is legitimate.
+local function isRaidSession(s)
+	if not s then return false end
+	-- raids key off the lockout: "lock|" (precise reset) or "week|" (deterministic
+	-- fallback when the server never gave us the reset -- e.g. a solo clear).
+	if s.key and (s.key:find("^lock|") or s.key:find("^week|")) then return true end
+	return s.zone and RAID_ZONES[s.zone] or false
+end
+
+local function migrateTrashLabels()
+	local cdb = Okanvil.cdb or Okanvil.db
+	if not cdb or cdb.trashMigrated then return end
+	cdb.trashMigrated = true
+	local list = cdb.lootSessions
+	if type(list) ~= "table" then return end
+	local fixed = 0
+	for _, s in ipairs(list) do
+		if isRaidSession(s) and type(s.drops) == "table" then
+			local single = s.zone and SINGLE_BOSS_RAID[s.zone]
+			local lastReal = nil   -- nearest earlier real boss, for the multi-boss case
+			for _, d in ipairs(s.drops) do
+				local b = d.boss
+				if b and b ~= "" and b ~= "Trash" then
+					lastReal = b
+				elseif (not b) or b == "" or b == "Trash" then
+					local newBoss = single or lastReal
+					if newBoss then d.boss = newBoss; fixed = fixed + 1 end
+				end
+			end
+		end
+	end
+	if fixed > 0 then
+		Okanvil:Print("Loot: relabelled " .. fixed .. " mislabelled 'Trash' drop(s) onto their boss.")
+		if L.onLoot then L.onLoot() end
+	end
+end
+L.MigrateTrashLabels = migrateTrashLabels
+
+-- ------------------------------------------------------------
 -- SESSION IDENTITY (runKey). ONE session = ONE instance run; bosses are
 -- PAGES within (navigated with <> in the mini roll via DropsByBoss), NOT sessions.
 --
@@ -430,13 +576,30 @@ local function runToken(bump)
 	return cdb.lootRunToken
 end
 
+-- WoW lockout week anchor: the date (YYYY-MM-DD) of the most recent reset boundary,
+-- used to build a raid session key when the server never told us the real reset (a solo
+-- clear that doesn't populate GetSavedInstanceInfo). WotLK raids reset weekly on RESET_WD
+-- (Wednesday = 4 in Lua's date "%w", where Sunday = 0) -- the same Wed->Wed boundary the
+-- rankings site keys off. Anchoring on the reset day (not the raw calendar day) means two
+-- nights of the SAME lockout share one key and rejoin one session, while a genuinely new
+-- lockout next week gets a fresh key. Wall-clock date(), so it survives a /reload.
+local RESET_WD = 4   -- Wednesday. If this guild's server resets on another day, change here.
+local function lootWeekAnchor()
+	local wd = tonumber(date("%w")) or 0        -- 0=Sun .. 6=Sat, local time
+	local back = (wd - RESET_WD + 7) % 7        -- days since the last reset weekday
+	return date("%Y-%m-%d", time() - back * 86400)
+end
+
 -- The current run key (nil if we are not in a recordable instance).
--- Returns the run key, or nil + "pending" when we are in a raid whose lockout info
--- has not arrived from the server yet. Callers MUST treat a nil key as "do not open
--- a session yet" -- see currentSession/onEnterWorld. Guessing a key here (the old
--- date("%Y-%m-%d") fallback) minted a key that the NEXT day could never match, so a
--- raid continued tomorrow started a fresh session instead of loading yesterday's.
-local function runKey()
+-- Returns the run key. For a raid we prefer the server's exact "lock|...|<resetDay>" when
+-- GetSavedInstanceInfo knows it; otherwise a deterministic "week|...|<lockoutWeek>" fallback
+-- (see lootWeekAnchor) so a solo/private-server clear whose lockout never populated still
+-- gets ONE stable, rejoin-able session instead of buffering forever. Both forms rejoin the
+-- same run across a /reload and across the next day within the same lockout -- the property
+-- the old nil-return protected, but without stranding the loot in pendingDrops.
+-- (Declared as a bare `function` -- the local is forward-declared far above so that
+-- saveBossCtx/restoreBossCtx, written before this point, close over the real function.)
+function runKey()
 	if not GetInstanceInfo then return nil end
 	local name, itype, diff, _, _, _, _, mapID = GetInstanceInfo()
 	name = name or (GetRealZoneText and GetRealZoneText()) or ""
@@ -450,9 +613,20 @@ local function runKey()
 				end
 			end
 		end
-		-- Lockout not known yet (the server has not sent the saved-instance list, or
-		-- we are not saved at all). Do NOT invent a key: wait for UPDATE_INSTANCE_INFO.
-		return nil, name, diff, mapID, "pending"
+		-- Lockout not known from the saved-instance list. This happens for real (not just
+		-- a timing gap): a SOLO clear on a private server often never populates a savable
+		-- lockout row, so GetSavedInstanceInfo stays empty for the WHOLE run. The old code
+		-- returned nil here forever -> every drop sat in pendingDrops, DropsByBoss() fell
+		-- back to the previous run's session, and the leftover buffer then drained into the
+		-- NEXT raid (Onyxia loot landing in a ToC session). See lootWeekAnchor below.
+		--
+		-- So we mint a DETERMINISTIC fallback: the raid zone + diff + this WoW lockout week
+		-- (anchored on the reset weekday, same boundary the rankings site uses). It is stable
+		-- across a /reload and across the next day WITHIN the same lockout, so a raid finished
+		-- tomorrow still rejoins today's session -- the exact property the nil-return was
+		-- protecting, but without stranding the loot. If the precise reset later arrives via
+		-- UPDATE_INSTANCE_INFO, the "lock|...|<resetDay>" branch above wins and adopts it.
+		return "week|" .. name .. "|" .. (diff or 0) .. "|" .. lootWeekAnchor(), name, diff, mapID
 	elseif itype == "party" then
 		return "run|" .. name .. "|" .. (diff or 0) .. "|" .. runToken(), name, diff, mapID
 	end
@@ -472,7 +646,14 @@ end
 -- Drops captured while the raid lockout was still unknown. Drained by resolveSession()
 -- as soon as UPDATE_INSTANCE_INFO gives us a real key. Without this, loot that lands
 -- in the first seconds of a raid would either be lost or land in a bogus session.
+--
+-- pendingZone STAMPS the buffer with the zone it is accumulating for. Part A makes this
+-- window tiny (raids now always mint a key), but the buffer is still the activeBucket
+-- fallback, and a stale buffer must NEVER drain into a different instance -- that was the
+-- "Onyxia loot poured into the ToC session" bug. resolveSession refuses to drain when the
+-- buffered zone does not match the session it would drain into.
 local pendingDrops = {}
+local pendingZone = nil
 
 -- The CURRENT run session. Finds the one with the same runKey (even if not the
 -- newest -- you re-entered the raid after another instance).
@@ -498,6 +679,24 @@ local function currentSession(create)
 				table.insert(list, 1, found)
 			end
 			return list[1]
+		end
+	end
+	-- KEY UPGRADE: a raid may have opened its session under the deterministic "week|"
+	-- fallback (lockout unknown at the time), and only now has UPDATE_INSTANCE_INFO given
+	-- us the precise "lock|...|<resetDay>". Same run, better key -> ADOPT the existing
+	-- session (re-key it, bring it to the front) instead of minting a second one. Match on
+	-- zone+diff of the same lockout week, so we never fold a DIFFERENT raid into it.
+	if key:find("^lock|") then
+		local weekKey = "week|" .. (name or "") .. "|" .. (diff or 0) .. "|" .. lootWeekAnchor()
+		for i = 1, #list do
+			if list[i].key == weekKey then
+				list[i].key = key                -- upgrade to the precise lockout key
+				if i > 1 then
+					local found = table.remove(list, i)
+					table.insert(list, 1, found)
+				end
+				return list[1]
+			end
 		end
 	end
 	if not create then return nil end       -- read-only: do not mint a session
@@ -544,8 +743,16 @@ local function resolveSession()
 	local s = currentSession(mustCreate and shouldRecordHere())
 	if not s then return nil end
 	if #pendingDrops > 0 then
-		for i = 1, #pendingDrops do s.drops[#s.drops + 1] = pendingDrops[i] end
+		-- ZONE GUARD (Part B): only drain the buffer into a session of the SAME zone it was
+		-- captured in. A buffer left over from a previous instance (its own session never
+		-- resolved) must NOT pour into this one -- that was Onyxia's loot landing in the ToC
+		-- session. On a mismatch, discard the orphaned buffer rather than contaminate.
+		local zoneOK = (not pendingZone) or (pendingZone == (s.zone or ""))
+		if zoneOK then
+			for i = 1, #pendingDrops do s.drops[#s.drops + 1] = pendingDrops[i] end
+		end
 		wipe(pendingDrops)
+		pendingZone = nil
 		if L.onLoot then L.onLoot() end
 	end
 	return s
@@ -607,6 +814,18 @@ local function dropExists(s, id, boss)
 	return nil
 end
 
+-- De-dup for the BROADCAST path: a corpse GUID + loot slot names one exact physical item,
+-- so re-delivery of the same broadcast is recognisable without collapsing two identical
+-- items that sat in DIFFERENT slots of the same corpse (a hardmode 4x Trophy drop).
+local function dropBySlot(bucket, corpse, slot)
+	if not (corpse and corpse ~= "" and slot and slot > 0) then return nil end
+	for i = #bucket, 1, -1 do
+		local dp = bucket[i]
+		if dp.corpse == corpse and dp.slot == slot then return dp end
+	end
+	return nil
+end
+
 -- De-dup for the need/greed path: a rollID is unique per PHYSICAL item, so two identical
 -- trophies fire two different rollIDs -> two rows (correct). But the SAME START_LOOT_ROLL
 -- re-processed (or echoed) must not double -- match on the exact rollID.
@@ -651,6 +870,10 @@ local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur, all
 	-- (Gated by shouldRecordHere() upstream, so world drops never reach here.)
 	local s = currentSession(true)
 	local bucket = s and s.drops or pendingDrops
+	-- Stamp the buffer with the zone it is filling for, so a leftover buffer can never be
+	-- drained into a DIFFERENT instance's session later (Part B). Only matters when there
+	-- is no session yet; once one exists the drop goes straight in.
+	if not s then pendingZone = (GetRealZoneText and GetRealZoneText()) or pendingZone end
 	if not allowDup then
 		local existing = dropExists({ drops = bucket }, id, boss)
 		if existing then
@@ -682,15 +905,24 @@ local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur, all
 end
 
 -- ------------------------------------------------------------
--- BROADCAST (RAID). Wire via Comms: LOOT | boss | id | link | rarity | boe
+-- BROADCAST (RAID). Wire: LOOT | boss | id | link | rarity | boe | corpse | slot
+--
+-- `corpse` (the loot source GUID) + `slot` are the item's IDENTITY, the same way the
+-- corpse scanner treats each loot slot as its own row (and the way RaidRoll keys its
+-- loot list off the slot). Without them the wire carried nothing to tell FOUR trophies
+-- off one corpse apart from ONE trophy broadcast four times -- both are four identical
+-- messages -- so the receiver's id+boss de-dupe collapsed a hardmode 4x Trophy drop
+-- into a single row. With them the receiver can de-dupe an echo exactly (same corpse,
+-- same slot) while still recording every distinct slot.
 -- ------------------------------------------------------------
-local function broadcastDrop(boss, id, link, rarity, boe)
+local function broadcastDrop(boss, id, link, rarity, boe, corpse, slot)
 	if not Okanvil.Comms then return end
-	Okanvil.Comms.Send("LOOT", boss or "", id or 0, link or "", rarity or 0, boe and "1" or "0")
+	Okanvil.Comms.Send("LOOT", boss or "", id or 0, link or "", rarity or 0, boe and "1" or "0",
+		corpse or "", slot or 0)
 end
 
 if Okanvil.Comms then
-	Okanvil.Comms.On("LOOT", function(sender, boss, idStr, link, rarityStr, boeStr)
+	Okanvil.Comms.On("LOOT", function(sender, boss, idStr, link, rarityStr, boeStr, corpse, slotStr)
 		-- GATE like every local capture path: without this, a party/raid member's LOOT
 		-- broadcast reaching us while we're in the open world (e.g. hearthed to
 		-- Orgrimmar, teammate still looting) ran storeDrop -> currentSession(true) ->
@@ -725,7 +957,25 @@ if Okanvil.Comms then
 				end
 			end
 		end
-		local dp = storeDrop(boss ~= "" and boss or "Trash", id, link, name, rarity, boeStr == "1")
+		-- IDENTITY: a broadcast naming its corpse+slot is one exact physical item, so an
+		-- echo of it is recognisable on its own (dropBySlot) and every OTHER slot is a
+		-- genuinely distinct drop -- which is what lets 4 identical trophies off one
+		-- corpse record as 4 rows. allowDup then bypasses the id+boss de-dupe that used
+		-- to merge them. An older client sends no slot: fall back to the id+boss de-dupe,
+		-- which is wrong for stacks but is exactly the old behaviour, never worse.
+		local slot = tonumber(slotStr) or 0
+		local keyed = corpse and corpse ~= "" and slot > 0
+		local dp
+		if keyed then
+			local s = currentSession and currentSession(false)
+			local bucket = (s and s.drops) or pendingDrops
+			if dropBySlot(bucket, corpse, slot) then return end   -- exact echo: already have it
+			dp = storeDrop(boss ~= "" and boss or "Trash", id, link, name, rarity, boeStr == "1",
+				nil, nil, true)
+			if dp then dp.corpse, dp.slot = corpse, slot end
+		else
+			dp = storeDrop(boss ~= "" and boss or "Trash", id, link, name, rarity, boeStr == "1")
+		end
 		if dp and L.onLootWindow then L.onLootWindow() end
 	end)
 end
@@ -762,6 +1012,18 @@ local function captureCorpse()
 		local cid = cidFromGUID(guid)
 		if cid and bossCids[cid] then
 			if not encounterBoss then lastCorpseBoss = bossLabel(cid, tname) end
+		elseif OkanvilBossGroups and OkanvilBossGroups[tname] then
+			-- TWIN by NAME. This corpse's cid was never vetted (a Twin Val'kyr fight lets
+			-- you target only ONE of the pair, so only that one lands in bossCids) -- but
+			-- its NAME is in the boss-group table, which is authoritative for these paired
+			-- fights. Credit the grouped boss ("Fjola Lightbane"/"Eydis Darkbane" both ->
+			-- "Twin Val'kyr") so the second twin's loot lands on the SAME page instead of
+			-- splitting off under its raw NPC name. Remember the cid so re-loots are cheap.
+			local grouped = OkanvilBossGroups[tname]
+			if cid then bossCids[cid] = grouped end
+			lastBossContactAt = (GetTime and GetTime()) or 0
+			encounterBoss = grouped
+			lastCorpseBoss = grouped
 		else
 			-- Unvetted corpse. TWO cases:
 			--  a) the SECOND TWIN of an active boss fight -- looted within TWIN_WINDOW of
@@ -780,6 +1042,37 @@ local function captureCorpse()
 		end
 	end
 	local boss = resolveBoss()
+	-- SELF-HEAL: the kill event can be missed (you were dead, looted from range, the
+	-- boss was never targeted/mouseovered) -- and then resolveBoss() answers "Trash" and
+	-- files a whole boss drop under Trash. This is the MASTER LOOTER'S own scan (the
+	-- authoritative one), which never had the fallback the comms/announce paths already
+	-- use. Inherit the run's most recent real boss: within one run, the last credited
+	-- boss is the encounter whose loot is being handed out (shared loot tables and all).
+	if boss == "" or boss == "Trash" then
+		local s = currentSession and currentSession(false)
+		if s and s.drops then
+			for i = #s.drops, 1, -1 do
+				local prev = s.drops[i]
+				if prev.boss and prev.boss ~= "" and prev.boss ~= "Trash" then
+					boss = prev.boss
+					break
+				end
+			end
+		end
+	end
+	-- NO "Trash" PAGE IN A RAID. A raid instance has no lootable trash worth a page --
+	-- every drop belongs to a boss. If we STILL couldn't name one (the run's very first
+	-- kill was missed, so there was no prior boss to inherit), fall back to the corpse we
+	-- just looted, then the instance name -- anything but the literal "Trash", which for
+	-- a raid is always a mislabel (and would ship to the export as boss:"Trash").
+	if (boss == "" or boss == "Trash")
+		and IsInInstance and select(2, IsInInstance()) == "raid" then
+		if tname and tname ~= "" then
+			boss = bossLabel(cidFromGUID(guid), tname)   -- the body we're looting
+		else
+			boss = (GetInstanceInfo and (GetInstanceInfo())) or boss
+		end
+	end
 	local n = (GetNumLootItems and GetNumLootItems()) or 0
 	if n == 0 then return end
 	-- First client to detect THIS boss's loot broadcasts it; later broadcasts for the
@@ -800,8 +1093,11 @@ local function captureCorpse()
 				-- re-open from doubling them -- one scan per physical corpse.
 				local dp = storeDrop(boss, id, link, lootName, rarity, boe, nil, nil, true)
 				if dp then
+					-- Stamp this row with the physical item it came from, so a receiver's
+					-- echo of our own broadcast matches it exactly instead of merging by id.
+					dp.corpse, dp.slot = lootGuid, i
 					added = added + 1
-					if mayBroadcast then broadcastDrop(boss, id, link, rarity, boe) end
+					if mayBroadcast then broadcastDrop(boss, id, link, rarity, boe, lootGuid, i) end
 				end
 			end
 		end
@@ -929,9 +1225,36 @@ local function tagReceiver(player, link)
 	-- not resolveBoss(): if we truly never saw it drop, we don't know which boss it came
 	-- from, and the current boss is almost always wrong.
 	local target = findOpenDrop(s, id) or findAnyOpenDrop(s, id)
-	if not target then target = storeDrop("Trash", id, link, name, rarity, isBoE(link)) end
+	if not target then
+		-- No drop for this item exists yet. A CHAT_MSG_LOOT "receives" line for something we
+		-- never saw drop is USUALLY NOT boss loot: a jewelcrafter cutting a gem mid-raid, an
+		-- alchemist making a flask, a quest reward, a mailed item -- all arrive as the same
+		-- "X receives loot/item: [thing]" and would otherwise mint a phantom drop (that is how
+		-- Autumn's Glow / Monarch Topaz showed up, and how items an hour old lumped onto the
+		-- last boss). We do NOT invent boss loot from a chat line alone.
+		--
+		-- The ONE real case for minting here is a master-loot give that RACED the corpse scan:
+		-- the item genuinely dropped off the boss being looted RIGHT NOW. We recognise it only
+		-- by a FRESH real-boss drop in this run (within one pull). No fresh boss context ->
+		-- treat it as a craft/trade/mail and drop it silently, never as Trash boss loot.
+		local now = time()
+		local boss
+		for i = #s.drops, 1, -1 do
+			local prev = s.drops[i]
+			if prev.boss and prev.boss ~= "" and prev.boss ~= "Trash" then
+				if (now - (prev.t or 0)) <= DROP_MATCH_WINDOW then boss = prev.boss end
+				break
+			end
+		end
+		if not boss then return end   -- not part of an active kill -> not boss loot
+		target = storeDrop(boss, id, link, name, rarity, isBoE(link))
+	end
 	if target then
 		target.receivedBy = player
+		-- An "everyone passed" roll can still be handed out by the master looter
+		-- afterwards, so a receiver retires the passed flag rather than coexisting
+		-- with it -- otherwise the row keeps reading "passed" over a real owner.
+		target.passed = nil
 		-- backup confirmation for a pending master-loot give (the primary is
 		-- LOOT_SLOT_CLEARED; this line may never arrive for loot given to others).
 		if noteReceivedForAward then noteReceivedForAward(player, id) end
@@ -1074,6 +1397,7 @@ local function recordRollWon(player, link)
 	local dp = findOpenDrop(s, id)   -- o mesmo drop do rolling (ignora boss atual)
 	if dp then
 		dp.receivedBy = player
+		dp.passed = nil                       -- someone has it: it was not passed on
 		dp.rollID = nil; dp.rollStart = nil   -- para de mostrar "rolling"
 		-- Won via Disenchant: the item is about to be shattered into a shard. Remember
 		-- the winner so the incoming shard is not recorded as a fresh boss drop.
@@ -1258,9 +1582,22 @@ function L.NoteExternalRoll(link)
 		dp = dp or any
 	end
 
-	-- Still nothing: the item is not one of OUR captured drops at all. That is normal
-	-- when someone else is master looter -- we never saw the loot, only the roll call.
-	-- Create it from the announce, or the manager never opens and no roll is recorded.
+	-- Still nothing: the item is not one of OUR captured drops at all.
+	--
+	-- A chat message is PLAYER-WRITTEN TEXT -- it is not evidence that anything dropped.
+	-- Every trustworthy capture path is anchored to the game itself (START_LOOT_ROLL, the
+	-- corpse we opened, or a comms broadcast from someone who did). So minting a drop from
+	-- a link is only defensible when we genuinely COULD NOT have seen the real loot: when
+	-- someone else is master looter and hands it out from their own bags.
+	--
+	-- When we are the ML (or the group is not on master loot at all) we already captured
+	-- every real drop, so anything still unmatched here is just a raider talking about an
+	-- item -- and creating it put phantom loot on the boss page for gear that never
+	-- dropped. Follow-only in that case: no capture, no record.
+	local blind = L.IsMasterLootMethod and L.IsMasterLootMethod()
+		and not (L.IsMasterLooter and L.IsMasterLooter())
+	if not dp and not blind then return end
+
 	if not dp then
 		local name, _, rarity = GetItemInfo(link)
 		local icon = select(10, GetItemInfo(link)) or (GetItemIcon and GetItemIcon(id)) or nil
@@ -1380,7 +1717,33 @@ end
 -- We only act on a line that OPENS a roll and carries an item link. A line naming a
 -- WINNER also carries a link, so we must exclude it first, or a "won" line would
 -- re-select the just-finished item and steal the selection from the item now rolling.
-local function onRollAnnounce(msg)
+-- Is `who` someone who would actually be OPENING a roll? Raid leader, an assistant,
+-- or the master looter -- the people who hand loot out. A raid warning is already
+-- restricted to leader/assist by the game, so it qualifies on its own.
+--
+-- This is what separates "[Eitrigg's Oath]" posted to roll on from "[Eitrigg's Oath]"
+-- posted by a raider saying the trinket sucks. The two are IDENTICAL as text, so no
+-- amount of message parsing can tell them apart -- only the speaker can.
+local function canOpenRoll(who, event)
+	if event == "CHAT_MSG_RAID_WARNING" then return true end
+	if not who or who == "" then return false end
+	local short = noRealm(who):lower()
+	-- via the module table, NOT the `masterLooterName` local: that is declared further
+	-- down this file, so naming it here would read a nil global and never match.
+	local ml = L.MasterLooterName and L.MasterLooterName()
+	if ml and noRealm(ml):lower() == short then return true end
+	if GetNumRaidMembers and GetNumRaidMembers() > 0 and GetRaidRosterInfo then
+		for i = 1, GetNumRaidMembers() do
+			local name, rank = GetRaidRosterInfo(i)
+			if name and noRealm(name):lower() == short then
+				return (rank or 0) >= 1        -- 2 = leader, 1 = assistant
+			end
+		end
+	end
+	return false
+end
+
+local function onRollAnnounce(msg, sender, event)
 	if type(msg) ~= "string" then return end
 	local lower = msg:lower()
 	-- Winner / result lines carry an item link too -> never treat them as a new roll,
@@ -1411,6 +1774,12 @@ local function onRollAnnounce(msg)
 	-- Digits are stripped as well as punctuation: roll addons prefix the link with
 	-- their own counter ("(39) [Boots of the Harsh Winter]"), and requiring a bare
 	-- link would reject every one of those and send the rolls to the wrong item.
+	--
+	-- A bare link says nothing about intent, so it is trusted only from whoever runs
+	-- the raid (see canOpenRoll). Any raider pasting an item to talk about it looks
+	-- exactly like a roll call, and minting a drop from that put phantom items on the
+	-- Trash page for loot that never dropped.
+	if not canOpenRoll(sender, event) then return end
 	local rest = msg:gsub("|c%x+|Hitem:.-|h.-|h|r", ""):gsub("|Hitem:[^|]+|h%[.-%]|h", "")
 	rest = rest:gsub("[%s%p%d]", "")
 	if rest == "" then L.NoteExternalRoll(link) end
@@ -1606,6 +1975,7 @@ local function markWinner(id, winner)
 	for i = #s.drops, 1, -1 do
 		if s.drops[i].id == id and not s.drops[i].receivedBy then
 			s.drops[i].receivedBy = winner
+			s.drops[i].passed = nil
 			return
 		end
 	end
@@ -2430,6 +2800,7 @@ ev:RegisterEvent("UPDATE_INSTANCE_INFO")          -- lockout chegou -> resolve a
 -- which is what makes 5 back-to-back ToC runs 5 separate sessions.
 local lastPartyInstance = nil
 local function onEnterWorld()
+	migrateTrashLabels()   -- one-time (self-guards); cdb is ready by the first of these
 	if not (IsInInstance and IsInInstance()) then lastPartyInstance = nil; return end
 	local _, itype = IsInInstance()
 	if itype == "raid" then
@@ -2438,6 +2809,7 @@ local function onEnterWorld()
 		-- yesterday's session instead of minting a new one from a guessed key.
 		if RequestRaidInfo then RequestRaidInfo() end
 		resolveSession()             -- may be nil (pending); the event below retries
+		restoreBossCtx()             -- may no-op until the key resolves; retried below too
 		return
 	end
 	if itype ~= "party" then return end
@@ -2457,12 +2829,14 @@ local function onEnterWorld()
 		-- never be drained (its session is gone). Drop it, or resolveSession() would
 		-- pour the last dungeon's loot into this one.
 		if #pendingDrops > 0 then wipe(pendingDrops) end
+		pendingZone = nil
 		runToken(true)               -- bump -> currentSession abre uma sessao nova
 		lastPartyInstance = name
 	end
 	-- Resolve NOW (not on the first drop): puts this run's session at sessions()[1],
 	-- so the mini roll stops showing the previous run's loot until an item lands.
 	resolveSession()
+	restoreBossCtx()   -- reload mid-dungeon: recover the boss page for the next drop
 end
 
 ev:SetScript("OnEvent", function(_, event, ...)
@@ -2480,11 +2854,14 @@ ev:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "CHAT_MSG_SYSTEM" then local a1 = ...; if a1 then captureRoll(a1) end
 	elseif event == "CHAT_MSG_RAID_WARNING" or event == "CHAT_MSG_RAID"
 		or event == "CHAT_MSG_RAID_LEADER" then
-		local a1 = ...; if a1 then onRollAnnounce(a1) end
+		local a1, a2 = ...; if a1 then onRollAnnounce(a1, a2, event) end
 	elseif event == "PLAYER_ENTERING_WORLD" then onEnterWorld()
 	elseif event == "UPDATE_INSTANCE_INFO" then
 		-- lockout info landed: open/rejoin the real session and flush buffered drops.
 		resolveSession()
+		-- the raid runKey only became resolvable now, so this is where a post-reload
+		-- boss page is actually recovered for a raid.
+		restoreBossCtx()
 	elseif event == "PLAYER_TARGET_CHANGED" or event == "UPDATE_MOUSEOVER_UNIT"
 		or event == "PLAYER_REGEN_DISABLED" then
 		fireScan()

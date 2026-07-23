@@ -1023,16 +1023,21 @@ function RM.Refresh()
 				local mlName = L.MasterLooterName and L.MasterLooterName()
 				local heldByML = mlName and d.receivedBy == mlName
 
+				-- "passed" only ever means NOBODY has it, so a known owner outranks it:
+				-- an item everyone passed on can still be handed out by the master
+				-- looter afterwards, and that hand-over is the newer truth.
+				local owned = d.receivedBy and d.receivedBy ~= "" and not heldByML
+
 				local sub
 				if pendId and pendId == d.id and not d.receivedBy then
 					sub = "|cff5e6166" .. pendWho .. " (giving...)|r"
 				elseif wn then
 					sub = classColorCode(wn.player) .. wn.player .. "|r"
 						.. " |cff8a8d93" .. (wn.roll or 0) .. (wn.kind == "os" and " os" or "") .. "|r"
+				elseif owned then
+					sub = classColorCode(d.receivedBy) .. d.receivedBy .. "|r"
 				elseif d.passed then
 					sub = "|cff8a8d93passed|r"
-				elseif d.receivedBy and d.receivedBy ~= "" and not heldByML then
-					sub = classColorCode(d.receivedBy) .. d.receivedBy .. "|r"
 				else
 					sub = ""          -- unrolled, or simply sitting with the ML
 				end

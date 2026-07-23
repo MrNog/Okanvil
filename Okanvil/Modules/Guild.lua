@@ -306,6 +306,10 @@ end
 -- One auto-snapshot per raid lockout session (reset when the raid empties).
 -- ------------------------------------------------------------
 local firstPullDone = false
+-- Set only when an ENCOUNTER_START actually ARRIVES, never by registering for it.
+-- Stock 3.3.5a accepts the registration and then never fires the event, so trusting
+-- the register meant the combat fallback was disabled by a trigger that never came --
+-- and no snapshot was ever taken.
 local haveEncounterEvent = false
 
 local function inGroup()
@@ -330,18 +334,22 @@ ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")   -- entered combat
 ev:RegisterEvent("RAID_ROSTER_UPDATE")
 ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
--- ENCOUNTER_START may not exist on 3.3.5a; RegisterEvent errors on unknown
--- events, so guard it in pcall.
-pcall(function() ev:RegisterEvent("ENCOUNTER_START"); haveEncounterEvent = true end)
+-- ENCOUNTER_START exists only on servers that backported it. Registering is safe
+-- either way, but says nothing about whether it will ever fire.
+pcall(function() ev:RegisterEvent("ENCOUNTER_START") end)
 
 ev:SetScript("OnEvent", function(_, event, a1, a2)
 	-- Modulo Guild DESLIGADO = nao faz first-pull announce nem reage a grupo.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive("__guild") then return end
 	if event == "ENCOUNTER_START" then
-		-- a1 = encounterID, a2 = encounterName
+		-- a1 = encounterID, a2 = encounterName. Arriving at all proves this server
+		-- backported the event, which is what retires the combat fallback.
+		haveEncounterEvent = true
 		tryFirstPull(a2, "encounter-start")
 	elseif event == "PLAYER_REGEN_DISABLED" then
-		-- only use combat as a fallback when the encounter event isn't available
+		-- The real trigger on stock 3.3.5a. No boss name: at the instant combat
+		-- starts the Loot scanner has usually not vetted the target yet, so naming
+		-- it here would guess. The snapshot's zone + time place the pull.
 		if not haveEncounterEvent then tryFirstPull(nil, "combat") end
 	else
 		-- group emptied -> arm the next session's first-pull capture again
