@@ -259,6 +259,10 @@ local selected            -- the drop table currently picked for a roll
 -- lands on the right page.
 local pendingBossIdx
 local pendingItemScroll   -- scroll offset that puts the selected item on screen
+-- Pending "jump to the newest boss" request from a loot event. Declared HERE, beside
+-- the other pending-page state, because SelectItemById must be able to CANCEL it: a
+-- roll names an exact page and always outranks "go to the newest boss".
+local pendingJumpNewest = false
 local function isML() return amML() end
 
 local function buildWindow()
@@ -659,6 +663,7 @@ function RM.Rebuild()
 			else
 				selected = s._d
 				f.userCleared = false
+				f.scrollToSelected = true   -- opened by hand: make sure it is in view
 			end
 			f.rollScroll = 0            -- new item -> start its rolls at the top
 			RM.Refresh()
@@ -816,7 +821,12 @@ function RM.SelectItemById(id)
 						win.userCleared = false
 						win.rollScroll = 0
 						win.itemScroll = pendingItemScroll
+						-- A loot event may have queued a jump to the newest boss. The
+						-- roll is the newer intent and names an exact page, so drop it --
+						-- otherwise the next Refresh pages away from the rolled item.
+						win._jumpNewest = nil
 					end
+					pendingJumpNewest = false
 					RM.Refresh()                    -- no-op while hidden; the selection still stands
 					return true
 				end
@@ -926,6 +936,7 @@ function RM.Refresh()
 				if (d.rollID or d.rollStart) and not d.receivedBy and not d.passed then pick = d; break end
 			end
 			selected = pick or g.items[1]
+			f.scrollToSelected = true   -- auto-opened: bring it into view once
 		end
 		-- BUILD THE MIXED LIST: every item, and -- directly under the OPEN one -- its
 		-- rolls. One list, one scroll, and the rolls sit against the item they belong
@@ -967,16 +978,25 @@ function RM.Refresh()
 		f.itemScroll = math.max(0, math.min(f.itemScroll or 0, maxOff))
 		local off = f.itemScroll
 
-		-- KEEP THE OPEN ITEM ON SCREEN. Its rolls are only meaningful next to it, so if
-		-- scrolling pushed the item itself off the top, drag the view back to it.
-		if selected then
+		-- BRING A NEWLY-OPENED ITEM INTO VIEW -- once, when it is opened, not on every
+		-- repaint. Pinning the view to the open item every frame made `off` snap back to
+		-- the item's own index on each rebuild, so the wheel could never move the list:
+		-- with the open item at the top (index 1) the floor was 0 and the list was
+		-- frozen outright. Scrolling away from an open item is legitimate -- you scroll
+		-- to reach the items below it -- so only the moment of opening moves the view.
+		if selected and f.scrollToSelected then
 			for i, en in ipairs(entries) do
 				if en.d == selected then
-					if i - 1 < off then off = i - 1; f.itemScroll = off end
+					-- only if it is actually off screen; an item already visible stays put
+					if i - 1 < off or i - 1 >= off + LIST_ROWS then
+						off = math.max(0, math.min(i - 1, maxOff))
+						f.itemScroll = off
+					end
 					break
 				end
 			end
 		end
+		f.scrollToSelected = nil
 
 		for _, r in ipairs(f.itemRows) do r._d = nil; r._roll = nil; r:Hide() end
 
@@ -1018,7 +1038,11 @@ function RM.Refresh()
 				-- LINE 2, left: who owns it. Under master loot every item passes through
 				-- the ML first, so `receivedBy` alone means "the ML is holding it" and
 				-- says nothing about who it is for -- the roll winner is the real answer.
-				local pendId, pendWho = L.PendingAward and L.PendingAward()
+				-- NOT `local a, b = f and f()`: `and` truncates its right side to ONE
+				-- value, so the second return was always nil and the "(giving...)" line
+				-- concatenated a nil. Call it on its own to keep both returns.
+				local pendId, pendWho
+				if L.PendingAward then pendId, pendWho = L.PendingAward() end
 				local wn = L.RollWinner and L.RollWinner(d)
 				local mlName = L.MasterLooterName and L.MasterLooterName()
 				local heldByML = mlName and d.receivedBy == mlName
@@ -1029,7 +1053,7 @@ function RM.Refresh()
 				local owned = d.receivedBy and d.receivedBy ~= "" and not heldByML
 
 				local sub
-				if pendId and pendId == d.id and not d.receivedBy then
+				if pendId and pendId == d.id and pendWho and not d.receivedBy then
 					sub = "|cff5e6166" .. pendWho .. " (giving...)|r"
 				elseif wn then
 					sub = classColorCode(wn.player) .. wn.player .. "|r"
@@ -1168,11 +1192,10 @@ function RM.Refresh()
 	-- (collector tally intentionally not shown here -- it's on the Loot page)
 end
 
--- pending "jump to the newest boss" request. Kept at MODULE scope (not on the
--- maybe-nil `win` frame) so a loot event that arrives BEFORE the window is ever
--- built is not lost -- showWin() applies it once the frame exists. This is what
--- makes the pager auto-advance to boss 2's loot instead of staying on boss 1.
-local pendingJumpNewest = false
+-- (pendingJumpNewest is declared with the other pending-page state near the top: it
+--  lives at MODULE scope, not on the maybe-nil `win` frame, so a loot event arriving
+--  BEFORE the window is ever built is not lost -- showWin() applies it once the frame
+--  exists. That is what makes the pager auto-advance to boss 2's loot.)
 
 -- show the window (building + rebuilding the mode-specific body)
 local function showWin()
@@ -1238,10 +1261,16 @@ local function popOrRefresh(force)
 		-- only jump to the newest boss when this is a FORCED pop (NEW loot
 		-- coming in, force=true). A normal refresh (e.g. winner filled, roll
 		-- captured) must NOT change the page you're viewing -- just redraws.
-		if force then
+		-- A roll that just picked an item owns the page. L.NoteExternalRoll fires
+		-- onRollStart (which pages to the item) and then onLootWindow (force=true)
+		-- back to back, so jumping to the newest boss here threw away the page the
+		-- roll had just selected -- the announced item "wasn't in the list" because
+		-- the window had been dragged to another boss tab.
+		if force and not pendingBossIdx then
 			win._jumpNewest = true; pendingJumpNewest = false
 			win.userCleared = false   -- new loot -> auto-select it even if you'd cleared
 		end
+		pendingBossIdx = nil; pendingItemScroll = nil
 		RM.Refresh()
 		if dbg then L.Dbg("  => refresh (already shown)") end
 	elseif (force and db().autoShow) or canAutoShow() then

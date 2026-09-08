@@ -869,6 +869,10 @@ function Okanvil:Confirm(text, acceptLabel, onAccept, onCancel)
 
 	f.msg:SetText(text or "")
 	f.ok.text:SetText(acceptLabel or OKAY)
+	-- Re-assert the label colour AFTER the text is set. The accept button is a solid
+	-- gold fill, so its label must be the near-black `dark` -- anything lighter is
+	-- gold-on-gold and unreadable, which is what the confirm button was showing.
+	if f.ok._paint then f.ok._paint(f.ok._hover) end
 	f._accept = onAccept
 	f._cancel = onCancel
 	f:Show()

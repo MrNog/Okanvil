@@ -699,10 +699,18 @@ function Okanvil:ShowMinimapTip(owner)
 		local probe = tip.probe
 		probe:SetFont(Okanvil:Font(), TIP_FONT)
 
-		-- column 1: raid name, as wide as the longest raid
+		-- column 1: raid name, as wide as the longest raid.
+		--
+		-- SHORT names ("ToGC", not "Trial of the Grand Crusader"): the full name is
+		-- wider than the column, and with no SetWidth the FontString wrapped onto a
+		-- second line and drew straight over the "resets in ..." footer beneath it.
+		-- Abbreviating is also just how the raid talks about them.
+		local shortOf = {}
 		local nameW = 0
 		for _, raid in ipairs(raidOrder) do
-			probe:SetText(raid)
+			local s = (Okanvil.U and Okanvil.U.raidShort) and Okanvil.U.raidShort(raid) or raid
+			shortOf[raid] = s
+			probe:SetText(s)
 			nameW = math.max(nameW, probe:GetStringWidth())
 		end
 
@@ -768,8 +776,11 @@ function Okanvil:ShowMinimapTip(owner)
 
 		-- one row per raid; a cell per sub-column THIS toon uses
 		for _, raid in ipairs(raidOrder) do
-			local nm = line(raid, TIP_FONT)
+			local nm = line(shortOf[raid] or raid, TIP_FONT)
 			nm:ClearAllPoints(); nm:SetPoint("TOPLEFT", TIP_PAD, y)
+			-- pin the width: without it a long name wraps onto the next row
+			nm:SetWidth(nameW); nm:Justify("LEFT")
+			if nm.SetWordWrap then nm:SetWordWrap(false) end
 			for _, toon in ipairs(toons) do
 				local saved = cell[raid][toon.name]
 				for i, s in ipairs(toonSizes[toon.name]) do

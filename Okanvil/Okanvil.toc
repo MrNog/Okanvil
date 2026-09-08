@@ -25,6 +25,7 @@ Core\UI\Page_Modules.lua
 
 Modules\Guild.lua
 Modules\Bosses-Data.lua
+Modules\ItemBoss-Data.lua
 Modules\Loot.lua
 Modules\LootRoll.lua
 Modules\Invite.lua

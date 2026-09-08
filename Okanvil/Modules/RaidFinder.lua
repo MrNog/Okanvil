@@ -154,6 +154,8 @@ local function prune()
 		if page_visible() then Okanvil.RaidFinder_Render() end
 		if Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
 	end
+	-- report whether we already repainted, so the 5s ticker doesn't render a second time
+	return changed
 end
 
 -- ------------------------------------------------------------
@@ -1153,17 +1155,35 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
 	end
 end)
 
--- lightweight prune ticker (independent OnUpdate frame, 5s cadence)
+-- Lightweight prune ticker (independent OnUpdate frame, 5s cadence).
+--
+-- GATED, because this used to run forever: with the module off and every window shut it
+-- still pruned and re-rendered every 5s. The renders exist only to keep the "18s" age
+-- labels ticking, so with nothing on screen there is no label to freshen -- it was a
+-- filter+sort over every listing, five seconds apart, for nobody.
+--
+-- That matters most in a raid. You are not shopping for a pug mid-boss, so the whole
+-- module should cost nothing there; a periodic sort is exactly the wrong thing to be
+-- doing when frames are tight.
 local tick = CreateFrame("Frame")
 local acc = 0
 tick:SetScript("OnUpdate", function(_, elapsed)
 	acc = acc + elapsed
-	if acc >= 5 then
-		acc = 0
-		if db then prune() end
-		-- keep age labels fresh while the page is open
-		if page_visible() then Okanvil.RaidFinder_Render() end
-		if Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
+	if acc < 5 then return end
+	acc = 0
+	if not (db and module_on()) then return end
+
+	local onPage = page_visible()
+	local onMini = Okanvil.RaidFinder_MiniWantsScan and true or false
+	-- Nothing visible and not scanning in the background -> nothing can have changed
+	-- and nobody could see it if it had.
+	if not (onPage or onMini or db.background) then return end
+
+	-- prune() already re-renders when it actually dropped a listing, so only render
+	-- here when it did NOT -- otherwise every tick rendered the list twice.
+	if not prune() then
+		if onPage then Okanvil.RaidFinder_Render() end
+		if onMini and Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
 	end
 end)
 

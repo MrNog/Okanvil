@@ -270,10 +270,20 @@ OkanvilBossGroups = {
 	["Prince Taldaram"] = "Blood Prince Council",
 	["Prince Valanar"] = "Blood Prince Council",
 
-	-- Gunships (ICC) -- one encounter, two faction NPCs
+	-- Gunships (ICC) -- one encounter, two faction NPCs.
+	-- Nothing "dies" here (the loot is a chest), so the scanner cannot vet the fight and
+	-- the name has to come from whoever was looted/targeted. That was the enemy COMMANDER
+	-- standing on the deck -- a real ICC night filed the whole Gunship chest, and then
+	-- Saurfang's drops, under "Muradin Bronzebeard". The commanders and their adds all
+	-- collapse onto the encounter so any of them resolves to one page.
 	[37813] = "Gunship Battle", [37960] = "Gunship Battle",
 	["Alliance Gunship"] = "Gunship Battle",
 	["Horde Gunship"] = "Gunship Battle",
+	-- faction commanders (the NPC actually looted/targeted on the deck)
+	["Muradin Bronzebeard"] = "Gunship Battle",
+	["High Overlord Saurfang"] = "Gunship Battle",   -- NOT Deathbringer Saurfang (37215)
+	["Orgrim's Hammer"] = "Gunship Battle",
+	["The Skybreaker"] = "Gunship Battle",
 
 	-- Twin Val'kyr (ToC)
 	[34496] = "Twin Val'kyr", [34497] = "Twin Val'kyr",

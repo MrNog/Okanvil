@@ -86,6 +86,22 @@ local recruit_words = {
 local trade_words = { "wts ", "wtb ", "selling ", "buying ",
 	"%f[%w]lfw%f[%W]", "looking%s+for%s+work" }
 
+-- Streamers pasting a POV/VOD link. The line often names a raid ("ICC 25 hc pov
+-- live now"), so the raid lexer would happily list it as a group forming.
+-- Matched against the message WITH its urls intact -- strip_links() would erase
+-- the evidence.
+--   A streaming DOMAIN is damning on its own: nobody links twitch to fill a spot.
+local stream_sites = {
+	"twitch%.tv", "youtube%.com", "youtu%.be", "kick%.com", "trovo%.live",
+}
+--   Streaming LINGO only vetoes when the line also carries a link, because these
+--   words have honest uses in a raid call ("pov check required", "need someone to
+--   stream for the guild").
+local stream_words = {
+	"%f[%w]pov%f[%W]", "%f[%w]vod%f[%W]", "%f[%w]stream%a*%f[%W]",
+	"live%s+now", "watch%s+me", "%f[%w]subscribe%f[%W]",
+}
+
 local function matches_any(msg, list)
 	for _, p in ipairs(list) do
 		if msg:find(p) then return true end
@@ -738,10 +754,18 @@ local function is_lfg_shape(msg) return matches_any(msg, lfg_shapes) end
 -- ------------------------------------------------------------
 function RF.parse(message)
 	if not message or message == "" then return end
-	local raw = strip_links(message:lower())
+	local withLinks = message:lower()
+	local raw = strip_links(withLinks)
 
 	-- 1. early reject
 	if matches_any(raw, recruit_words) or matches_any(raw, trade_words) then return end
+
+	-- Someone advertising their POV/stream, even when the line names a raid.
+	-- A streaming site is enough by itself (bare "twitch.tv/name" is the usual
+	-- paste); other lingo needs a link beside it, since "pov check" and "stream
+	-- for the guild" are things real raid calls say.
+	if matches_any(withLinks, stream_sites) then return end
+	if withLinks:find("https?://") and matches_any(withLinks, stream_words) then return end
 
 	-- 5. reserved scan on the ORIGINAL message (case + item links preserved, so
 	-- the tooltip can show real [Item Name] text instead of "item:45518:..").

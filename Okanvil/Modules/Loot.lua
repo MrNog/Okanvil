@@ -288,7 +288,11 @@ local TWIN_WINDOW = 30        -- seconds: an unvetted corpse this soon after a b
 -- threshold, like ToC's Faction Champions -- never overwrites it, so the PREVIOUS boss's
 -- name silently labelled the next kill's drops. Past this window we would rather say
 -- "Trash" (honestly unknown) than name the wrong boss with full confidence.
-local BOSS_LABEL_TTL = 600    -- seconds a confirmed boss name stays authoritative
+-- 600s was long enough to bridge two whole encounters: trash pulls between bosses keep
+-- re-anchoring lastBossContactAt, so the window never actually expired and a dead boss's
+-- name stayed authoritative for the rest of the night. A kill's loot is handed out within
+-- a couple of minutes, so 180s covers the real case and expires before the next boss.
+local BOSS_LABEL_TTL = 180    -- seconds a confirmed boss name stays authoritative
 
 -- Read the persisted boss back into memory when we (re)enter the run it belongs to.
 -- Only trust it if it is the SAME run (key matches) and still fresh by the label TTL,
@@ -460,6 +464,18 @@ end
 -- An elite that trips the HP heuristic still keeps its own name (Drakkari Rhino), which
 -- is wanted; this only changes the case where we know nothing at all.
 local function resolveBoss()
+	-- A vetted TARGET wins over a remembered name. The looter is normally on the corpse
+	-- being handed out, and an id is exact, while `encounterBoss` is only a memory of the
+	-- last fight we could vet. Checking the memory first meant an encounter the scanner
+	-- cannot vet -- the Gunship (nothing dies; the loot is a chest) or a fight whose
+	-- UNIT_DIED never matches inCombatCid -- kept the PREVIOUS boss's label, and that
+	-- label then absorbed every later drop: a whole ICC night filed Festergut's and
+	-- Valithria's loot under Rotface, an hour after Rotface died.
+	local guid, t = UnitGUID("target"), UnitName("target")
+	if t and t ~= "" and guidIsNPC(guid) then
+		local cid = cidFromGUID(guid)
+		if cid and bossCids[cid] then return bossLabel(cid, t) end
+	end
 	-- A confirmed name only counts while it is FRESH. Without the TTL an unvettable
 	-- fight (Faction Champions: no ids, and each champion is under the raid HP bar)
 	-- left the previous boss's name standing, and its drops were filed under him.
@@ -467,13 +483,6 @@ local function resolveBoss()
 	local fresh = (now - lastBossContactAt) <= BOSS_LABEL_TTL
 	if encounterBoss and encounterBoss ~= "" and fresh then return encounterBoss end
 	if lastCorpseBoss and lastCorpseBoss ~= "" then return lastCorpseBoss end
-	-- current target, but only if it was vetted as a boss (else a selected add would
-	-- get the credit). Anything unvetted is trash.
-	local guid, t = UnitGUID("target"), UnitName("target")
-	if t and t ~= "" and guidIsNPC(guid) then
-		local cid = cidFromGUID(guid)
-		if cid and bossCids[cid] then return bossLabel(cid, t) end
-	end
 	return "Trash"
 end
 
@@ -771,16 +780,39 @@ end
 -- wrong boss). Match by id, within a recent window (default 5 min = 1 pull).
 -- Prefere um drop que ainda esta a rolar / sem dono.
 local DROP_MATCH_WINDOW = 300
-local function findOpenDrop(s, id)
+
+-- Is this drop still up for grabs? Under MASTER LOOT every item lands in the ML's bags
+-- before it is handed out, so CHAT_MSG_LOOT stamps receivedBy = <the ML> the moment the
+-- boss dies -- minutes before the roll is even called. Treating that as "owned" made a
+-- trophy look already-awarded to every lookup, so an announced roll resolved to a drop
+-- the UI paints as settled and the rolls landed nowhere visible.
+--
+-- Holding is not owning: while the item sits with the ML it is still open for rolls.
+-- (The UI draws the same distinction as `heldByML` when it decides what to show.)
+local function unowned(dp)
+	if not dp then return false end
+	if not dp.receivedBy or dp.receivedBy == "" then return true end
+	local ml = L.MasterLooterName and L.MasterLooterName()
+	return ml ~= nil and dp.receivedBy == ml
+end
+
+-- strict=true: only ever returns a drop that is still up for grabs, never one that
+-- already belongs to somebody. Attribution paths MUST pass strict -- with N copies of
+-- an item, the Nth winner would otherwise land on the fallback and overwrite an earlier
+-- winner's name (four Trophies to four people recorded as two people twice). Paths that
+-- only decorate a drop (attaching rolls to an item already handed out) still want the
+-- fallback, so it stays the default.
+local function findOpenDrop(s, id, strict)
 	local now = time()
 	local recent
 	for i = #s.drops, 1, -1 do
 		local dp = s.drops[i]
 		if dp.id == id and (now - (dp.t or 0)) <= DROP_MATCH_WINDOW then
-			if not dp.receivedBy then return dp end   -- ideal: ainda por atribuir
-			recent = recent or dp                      -- fallback: o mais recente
+			if unowned(dp) then return dp end   -- ideal: ainda por atribuir (ou so na mao do ML)
+			recent = recent or dp                -- fallback: o mais recente
 		end
 	end
+	if strict then return nil end
 	return recent
 end
 
@@ -792,9 +824,27 @@ end
 local function findAnyOpenDrop(s, id)
 	for i = #s.drops, 1, -1 do
 		local dp = s.drops[i]
-		if dp.id == id and not dp.receivedBy then return dp end
+		if dp.id == id and unowned(dp) then return dp end
 	end
 	return nil
+end
+
+-- Does this player ALREADY own a copy of this item in the session?
+-- Guards the two paths that mint an extra row for "another winner with every copy taken".
+-- That reasoning only holds for a DIFFERENT player: one item reaches us through several
+-- announcements ("X won" plus "X receives loot"), and both would otherwise mint a row for
+-- the very same hand-out, listing one player twice for one item.
+-- Returns that copy, so the caller can finish it instead of minting a twin.
+-- Is this item on the list at all (owned or not)?
+-- The attribution paths never invent a row: the list is built from what we SAW drop, and a
+-- winner only fills a free one. So when no free copy is left but the item IS listed, the
+-- announcement is a repeat of a hand-out already recorded and must be dropped -- minting a
+-- row there is what produced one player listed twice for a single item.
+local function dropExistsForID(s, id)
+	for i = #s.drops, 1, -1 do
+		if s.drops[i].id == id then return true end
+	end
+	return false
 end
 
 -- broadcast de-dupe: the same item reported by several clients in the same short
@@ -860,9 +910,27 @@ end
 -- corpse scanner, which walks real slots and is itself guarded against re-scanning the
 -- same corpse. The comms + chat paths leave it false so an echoed broadcast of the same
 -- physical drop still collapses instead of showing the item twice.
+-- The ITEM overrules the SCANNER. resolveBoss() infers a name from targets, corpses and
+-- a remembered kill; every one of those can be stale or plain wrong on an encounter the
+-- scanner cannot vet. A raid item, though, drops from exactly one boss -- so when the id
+-- is in OkanvilItemBoss (Modules/ItemBoss-Data.lua, gear only, single-boss ids only) that
+-- name IS the answer.
+--
+-- Only ever CORRECTS a name to the item's true boss; it never invents one for an item we
+-- don't know (tokens, gems, BoEs, patterns keep the scanner's guess) and never touches a
+-- drop already sitting on the right page.
+local function itemBossFix(boss, id)
+	local real = OkanvilItemBoss and id and OkanvilItemBoss[id]
+	if not real or real == boss then return boss end
+	return real
+end
+
 local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur, allowDup)
 	if id == 0 then return nil end
 	if not acceptItem(id, rarity, name) then return nil end
+	-- Correct BEFORE the dedup check below: dropExists() keys on (id, boss), so a wrong
+	-- boss here would look like a different drop and double-record the same item.
+	boss = itemBossFix(boss, id)
 	-- No session yet (raid lockout still unknown) -> park the drop in pendingDrops.
 	-- resolveSession() moves them into the real session once the key is known, so
 	-- nothing is lost and nothing lands in the previous run's session.
@@ -1224,7 +1292,14 @@ local function tagReceiver(player, link)
 	-- Only mint a fresh drop if the item was never captured -- and label THAT one Trash,
 	-- not resolveBoss(): if we truly never saw it drop, we don't know which boss it came
 	-- from, and the current boss is almost always wrong.
-	local target = findOpenDrop(s, id) or findAnyOpenDrop(s, id)
+	-- STRICT: never claim a copy that already belongs to somebody else -- with several
+	-- copies of one item, the last receiver would otherwise overwrite the first.
+	local target = findOpenDrop(s, id, true) or findAnyOpenDrop(s, id)
+	-- Copies of this item exist and every one is already won: this line is a repeat of a
+	-- hand-out we have recorded (an item is announced more than once -- "X won" and then
+	-- "X receives loot"). The rows come from what we actually SAW drop, so a receiver never
+	-- adds one; the extra announcement is dropped instead of minting a twin.
+	if not target and dropExistsForID(s, id) then return end
 	if not target then
 		-- No drop for this item exists yet. A CHAT_MSG_LOOT "receives" line for something we
 		-- never saw drop is USUALLY NOT boss loot: a jewelcrafter cutting a gem mid-raid, an
@@ -1247,6 +1322,8 @@ local function tagReceiver(player, link)
 			end
 		end
 		if not boss then return end   -- not part of an active kill -> not boss loot
+		-- No allowDup: we only reach here when NO row for this id exists at all, so this is a
+		-- first sighting, never an extra copy of something already listed.
 		target = storeDrop(boss, id, link, name, rarity, isBoE(link))
 	end
 	if target then
@@ -1394,7 +1471,10 @@ local function recordRollWon(player, link)
 	if id == 0 then return end
 	player = noRealm(player)
 	local s = activeBucket()
-	local dp = findOpenDrop(s, id)   -- o mesmo drop do rolling (ignora boss atual)
+	-- STRICT: a winner may only claim a copy nobody owns yet. "X won" carries no rollID
+	-- (it is plain chat text), so with several copies of one item the only thing keeping
+	-- them apart is that each winner takes a free one.
+	local dp = findOpenDrop(s, id, true)
 	if dp then
 		dp.receivedBy = player
 		dp.passed = nil                       -- someone has it: it was not passed on
@@ -1408,7 +1488,11 @@ local function recordRollWon(player, link)
 		if L.onLoot then L.onLoot() end
 		return
 	end
-	-- no drop found: fall through to the normal tagReceiver (creates if needed)
+	-- Copies of this item exist and every one is already won. The rows come from what we
+	-- actually saw drop, so a winner never adds one: this is a repeat announcement of a
+	-- hand-out already on the list, and inventing a row here is what listed one player twice.
+	if dropExistsForID(s, id) then return end
+	-- Never saw this item drop at all: tagReceiver has the craft/trade/mail guards.
 	tagReceiver(player, link)
 end
 
@@ -1504,6 +1588,7 @@ local ROLL_MSG = {
 	ms   = "Roll [item]  --  MAIN SPEC  /roll (1-100)",
 	os   = "Roll [item]  --  OFF SPEC  /roll 99 (1-99)",
 	free = "Roll [item]  --  FREE  /roll (1-100)",
+	stop = "Rolls ended -- stop rolling.",
 }
 function L.RollMsg(mode)
 	local d = db(); d.rollMsg = d.rollMsg or {}
@@ -1571,15 +1656,26 @@ function L.NoteExternalRoll(link)
 	-- item we already have. Prefer an un-awarded copy; fall back to any copy.
 	local dp = findOpenDrop and findOpenDrop(s, id)
 	if not dp then
-		local any
-		for i = #s.drops, 1, -1 do
-			local prev = s.drops[i]
-			if prev.id == id then
-				if not prev.receivedBy then dp = prev; break end
-				any = any or prev
+		-- Search the session the ROLL MANAGER is actually showing as well, not just
+		-- activeBucket(). DropsByBoss() falls back to sessions()[1] whenever the active
+		-- bucket is empty or we are outside a live run, so the announced item can be
+		-- plainly visible in the list while activeBucket() has never heard of it -- and
+		-- we would mint a duplicate of a drop we already captured.
+		local seen = {}
+		local function scan(sess)
+			if not (sess and sess.drops) or seen[sess] then return nil end
+			seen[sess] = true
+			local any
+			for i = #sess.drops, 1, -1 do
+				local prev = sess.drops[i]
+				if prev.id == id then
+					if unowned(prev) then return prev end   -- ML holding it still counts as open
+					any = any or prev
+				end
 			end
+			return any
 		end
-		dp = dp or any
+		dp = scan(s) or scan(sessions()[1])
 	end
 
 	-- Still nothing: the item is not one of OUR captured drops at all.
@@ -1654,8 +1750,19 @@ function L.StartRoll(link, mode)
 	if L.onRoll then L.onRoll() end
 end
 
+-- STOP: close the roll-off. Announces "rolls ended" so the raid stops rolling, then
+-- drops EVERY capture target so a late /roll is not filed against the item.
+--
+-- Clearing activeRoll alone was not enough -- that is only the roll WE announced with
+-- the MS/OS/Free buttons. When the ML follows someone else's call the target is
+-- externalRollDrop (or handRollDrop, for an item opened by hand), and neither was
+-- touched: pressing Stop announced nothing and kept capturing for another 60-300s.
 function L.StopRoll()
+	local chan = announceChannel()
+	if chan then SendChatMessage(L.RollMsg("stop"), chan) end
 	activeRoll = nil
+	externalRollDrop = nil       -- someone else's "Roll for: [item]" call
+	handRollDrop = nil           -- an item the ML opened for a hand roll-off
 	if L.onRoll then L.onRoll() end
 end
 
@@ -1754,6 +1861,11 @@ local function onRollAnnounce(msg, sender, event)
 	local link = msg:match("|c%x+|Hitem:.-|h.-|h|r") or msg:match("|Hitem:[^|]+|h%[.-%]|h")
 	if not link then return end
 
+	-- Nobody but the people who hand loot out can open a roll, whatever the wording.
+	-- Cue words are no evidence of intent: a raider joking "./hack drop [Sandals of the
+	-- Mourning Widow] win roll 82 gg" says "roll" and used to mint a drop on the spot.
+	if not canOpenRoll(sender, event) then return end
+
 	-- An opening line either SAYS it is a roll, or is simply the item posted on its
 	-- own -- which is how most raid leaders open one: paste the link into raid warning
 	-- and people /roll. Requiring the words meant a bare "[Pants of the Soothing
@@ -1774,12 +1886,6 @@ local function onRollAnnounce(msg, sender, event)
 	-- Digits are stripped as well as punctuation: roll addons prefix the link with
 	-- their own counter ("(39) [Boots of the Harsh Winter]"), and requiring a bare
 	-- link would reject every one of those and send the rolls to the wrong item.
-	--
-	-- A bare link says nothing about intent, so it is trusted only from whoever runs
-	-- the raid (see canOpenRoll). Any raider pasting an item to talk about it looks
-	-- exactly like a roll call, and minting a drop from that put phantom items on the
-	-- Trash page for loot that never dropped.
-	if not canOpenRoll(sender, event) then return end
 	local rest = msg:gsub("|c%x+|Hitem:.-|h.-|h|r", ""):gsub("|Hitem:[^|]+|h%[.-%]|h", "")
 	rest = rest:gsub("[%s%p%d]", "")
 	if rest == "" then L.NoteExternalRoll(link) end
@@ -1961,7 +2067,10 @@ end
 -- writing to the data it is drawing.
 function L.AttributeByRoll(dp)
 	if not dp then return end
-	if dp.receivedBy and dp.receivedBy ~= "" then return end   -- already handed over
+	-- `unowned`, not a bare receivedBy test: under master loot the item is stamped with
+	-- the ML's name at the kill, so a plain check meant the roll winner could never be
+	-- recorded on anything the ML was holding -- which is EVERY item in a master-loot run.
+	if not unowned(dp) then return end                         -- already handed over
 	if rollIsOpen(dp) then return end                          -- still rolling: no winner yet
 
 	local best = L.RollWinner(dp)
@@ -1970,15 +2079,31 @@ function L.AttributeByRoll(dp)
 	dp.rollWon    = true          -- attributed by roll, not by watching the handover
 end
 
+-- Write the winner onto the drop the UI is ACTUALLY showing.
+--
+-- activeBucket() alone was not enough: DropsByBoss() (what the roll manager renders)
+-- falls back to sessions()[1] whenever the active bucket is empty or we are outside a
+-- live run, so the two can be different tables. Marking only the bucket left the
+-- displayed row untouched -- the award looked like it made the item disappear until you
+-- switched boss tabs and the list was rebuilt from the other session.
 local function markWinner(id, winner)
-	local s = activeBucket()
-	for i = #s.drops, 1, -1 do
-		if s.drops[i].id == id and not s.drops[i].receivedBy then
-			s.drops[i].receivedBy = winner
-			s.drops[i].passed = nil
-			return
+	local seen = {}
+	local function mark(s)
+		if not (s and s.drops) or seen[s] then return false end
+		seen[s] = true
+		for i = #s.drops, 1, -1 do
+			-- an item still sitting with the ML is NOT taken -- it is exactly the item
+			-- being awarded, so the winner must be allowed to overwrite the ML's name.
+			if s.drops[i].id == id and unowned(s.drops[i]) then
+				s.drops[i].receivedBy = winner
+				s.drops[i].passed = nil
+				return true
+			end
 		end
+		return false
 	end
+	if mark(activeBucket()) then return end
+	mark(sessions()[1])
 end
 
 -- ------------------------------------------------------------
@@ -2100,7 +2225,8 @@ local function commitAward(id, winner)
 	if res == "ok" then
 		freezeManualRolls(id)
 		-- NOT recorded yet: wait for LOOT_SLOT_CLEARED / CHAT_MSG_LOOT / timeout.
-		pendingAward = { id = id, winner = winner, slot = slot, at = GetTime(), nm = nm }
+		pendingAward = { id = id, winner = winner, slot = slot, at = GetTime(), nm = nm,
+			link = link, roll = roll, kind = kind }
 		awardTicker:Show()
 		Okanvil:Print("Giving " .. nm .. " to " .. winner .. "...")
 	else

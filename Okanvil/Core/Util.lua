@@ -37,3 +37,47 @@ end
 function U.shortLink(link)
 	return link and link:match("(item:[%-%d:]+)") or nil
 end
+
+-- Instance name -> the short form the raid actually says ("Trial of the Crusader"
+-- -> "ToC"). Long names wrap and overlap the line beneath them in the tooltip and
+-- eat the whole column in a list, so anywhere a raid is named in a tight space it
+-- goes through here.
+--
+-- Keyed on a lowercased SUBSTRING, not the full name: the server spells the same
+-- instance differently across locales and lockout APIs ("Trial of the Crusader",
+-- "Trial of the Grand Crusader"), and matching a fragment survives that.
+--
+-- ORDER MATTERS -- "grand crusader" must be tested before "crusader", or ToGC
+-- would match the ToC rule first and both would read "ToC".
+local RAID_SHORT = {
+	{ "trial of the grand crusader", "ToGC" },
+	{ "trial of the crusader",       "ToC"  },
+	{ "trial of the champion",       "ToC5" },   -- the 5-man, not the raid
+	{ "icecrown citadel",            "ICC"  },
+	{ "ruby sanctum",                "RS"   },
+	{ "onyxia",                      "Ony"  },
+	{ "ulduar",                      "Uld"  },
+	{ "naxxramas",                   "Naxx" },
+	{ "obsidian sanctum",            "OS"   },
+	{ "eye of eternity",             "EoE"  },
+	{ "vault of archavon",           "VoA"  },
+	{ "halls of reflection",         "HoR"  },
+	{ "pit of saron",                "PoS"  },
+	{ "forge of souls",              "FoS"  },
+	{ "ahn'kahet",                   "AK"   },
+	{ "violet hold",                 "VH"   },
+	{ "the oculus",                  "Oculus" },
+}
+
+-- maxLen: only shorten when the name is actually too long for the space (nil = always).
+function U.raidShort(name, maxLen)
+	if not name or name == "" then return name end
+	if maxLen and #name <= maxLen then return name end
+	local low = name:lower()
+	for _, e in ipairs(RAID_SHORT) do
+		if low:find(e[1], 1, true) then return e[2] end
+	end
+	-- No abbreviation known: cut it rather than let it wrap over the next line.
+	if maxLen and #name > maxLen then return name:sub(1, maxLen - 2) .. ".." end
+	return name
+end
