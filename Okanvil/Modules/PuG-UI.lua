@@ -30,10 +30,10 @@ local ROLE_RGB = {
 local ROLE_LABEL = { tank = "Tank", healer = "Healer", melee = "Melee", ranged = "Ranged" }
 
 local F                      -- built frame set (nil until BuildUI runs)
--- Two lines per person: the name, then the spec and gearscore under it. Nine
--- slots, not eleven -- a taller row is worth more than two more of them, and the
--- column says "+N more" once it overflows.
-local BOARD_ROWS = 9
+-- Two lines per person: the name, then the spec and gearscore under it. Ten fit
+-- in the height the board has now that the needs strip is gone -- an eleventh
+-- would draw past the bottom edge, and a full column already says "+N more".
+local BOARD_ROWS = 10
 local BOARD_ROW_H = 34
 
 local function db() return M.DB() end
@@ -170,59 +170,6 @@ local function buildTopStrip(p)
 		.. "Only works on people in range. Cached, so a second scan only\n"
 		.. "checks who is new.")
 end
-
--- ------------------------------------------------------------
--- Needs strip: one counter per role, with what is still missing
--- ------------------------------------------------------------
-local function buildNeeds(p)
-	local d = db()
-	F.needCells = {}
-
-	local cw = 168                    -- cell width; 4 across
-	for i, role in ipairs(ROLES) do
-		local x = 4 + (i - 1) * cw
-		local cell = W.Frame(p, "input")
-		cell:SetSize(cw - 8, 46)
-		cell:SetPoint("TOPLEFT", x, -4)
-
-		local rgb = ROLE_RGB[role]
-		-- A hint of the role's colour, not a frame around it: at 0.55 the four cells
-		-- read as four boxes competing with the board below them, which is where the
-		-- colour actually has to do work.
-		cell:SetBackdropBorderColor(rgb[1], rgb[2], rgb[3], 0.22)
-
-		local nameFS = W.Text(cell, ROLE_COLOR[role] .. ROLE_LABEL[role] .. "|r", "body")
-		nameFS:SetPoint("TOPLEFT", 8, -5)
-
-		-- "3/8" -- in the raid over the target
-		local cnt = W.Text(cell, "0/0", "head", "accent")
-		cnt:SetPoint("TOPRIGHT", -8, -4)
-
-		local minus = W.Button(cell, "-", nil):Size(20, 18)
-		minus:SetPoint("BOTTOMLEFT", 6, 5)
-		local plus = W.Button(cell, "+", nil):Size(20, 18)
-		plus:SetPoint("BOTTOMLEFT", 28, 5)
-
-		-- SetNeed clamps the total to the raid size, taking any surplus off the
-		-- other dps bucket first (see PuG.lua)
-		minus:OnClick(function()
-			pickTakesOver()
-			M.SetNeed(role, (tonumber(d.need[role]) or 0) - 1)
-			M.RefreshUI()
-		end)
-		plus:OnClick(function()
-			pickTakesOver()
-			M.SetNeed(role, (tonumber(d.need[role]) or 0) + 1)
-			M.RefreshUI()
-		end)
-
-		local left = W.Text(cell, "", "label", "dim")
-		left:SetPoint("BOTTOMRIGHT", -8, 8)
-
-		F.needCells[role] = { frame = cell, count = cnt, left = left }
-	end
-end
-
 -- ------------------------------------------------------------
 -- The board: Unassigned + one column per role.
 --
@@ -324,21 +271,52 @@ local function buildBoard(p)
 		col:SetPoint("BOTTOMLEFT", p, "BOTTOMLEFT", 0, 0)
 		col._idx = i
 
+		-- The header carries EVERYTHING about this role: its name, how many you have
+		-- against how many you want, and the two buttons that change the target.
+		-- There used to be a second strip above the board saying "Melee 1/8 need 7"
+		-- while the column below it said "Melee 1" -- the same fact twice, costing
+		-- 50px of the board it was describing.
 		local head = W.Frame(col, "raise")
 		head:SetPoint("TOPLEFT", 1, -1)
 		head:SetPoint("TOPRIGHT", -1, -1)
-		head:SetHeight(20)
+		head:SetHeight(24)
 
 		local rgb = ROLE_RGB[key]
 		local title = W.Text(head, COL_TITLE[key], "body", key == "unassigned" and "dim" or nil)
 		title:SetPoint("LEFT", 6, 0)
 		if rgb then title:SetTextColor(rgb[1], rgb[2], rgb[3]) end
 
-		local cnt = W.Text(head, "", "label", "dim")
-		cnt:SetPoint("RIGHT", -6, 0)
+		local cnt, minus, plus
+		if key == "unassigned" then
+			-- Applicants has no target -- you take who turns up -- so it shows a plain
+			-- count and no stepper.
+			cnt = W.Text(head, "", "label", "dim")
+			cnt:SetPoint("RIGHT", -6, 0)
+		else
+			plus = W.Button(head, "+", nil):Size(18, 16)
+			plus:SetPoint("RIGHT", -4, 0)
+			minus = W.Button(head, "-", nil):Size(18, 16)
+			minus:SetPoint("RIGHT", plus, "LEFT", -2, 0)
+			cnt = W.Text(head, "", "label", "accent")
+			cnt:SetPoint("RIGHT", minus, "LEFT", -6, 0)
+
+			-- SetNeed clamps the total to the raid size, taking any surplus off the
+			-- other dps bucket first (see PuG.lua)
+			local role = key
+			minus:OnClick(function()
+				pickTakesOver()
+				M.SetNeed(role, (tonumber(db().need[role]) or 0) - 1)
+				M.RefreshUI()
+			end)
+			plus:OnClick(function()
+				pickTakesOver()
+				M.SetNeed(role, (tonumber(db().need[role]) or 0) + 1)
+				M.RefreshUI()
+			end)
+		end
 
 		local rows = {}
-		local y = -24
+		local y = -28
 		for r = 1, BOARD_ROWS do
 			local row = W.Frame(col, "input")
 			row:SetPoint("TOPLEFT", 3, y)
@@ -1090,30 +1068,19 @@ function M.RefreshUI()
 				end
 			end
 			local n = #members
-			col.count:SetText(n > 0 and tostring(n) or "")
+			-- "1/8" for a role, a plain count for Applicants: a target you never set
+			-- would be a slash with nothing after it.
+			if key == "unassigned" then
+				col.count:SetText(n > 0 and tostring(n) or "")
+			else
+				local want = tonumber(d.need[key]) or 0
+				col.count:SetText((have[key] or 0) .. "|cff8a8d93/" .. want .. "|r")
+			end
 			local overflow = n - BOARD_ROWS
 			col.more:SetText(overflow > 0 and ("|cff8a8d93+" .. overflow .. " more|r") or "")
 		end
 	end
 
-	-- ---- needs strip ----
-	local need = M.StillNeeded()
-	if F.needCells then
-		for _, role in ipairs(ROLES) do
-			local cell = F.needCells[role]
-			if cell then
-				local want = tonumber(d.need[role]) or 0
-				local got = have[role] or 0
-				cell.count:SetText(got .. "|cff8a8d93/" .. want .. "|r")
-				local left = need[role] or 0
-				if left > 0 then
-					cell.left:SetText("|cffffd200need " .. left .. "|r")
-				else
-					cell.left:SetText("|cff7cfc8afull|r")
-				end
-			end
-		end
-	end
 
 	-- ---- reserves / classes / channels (tab pages, may not be built yet) ----
 	if F.resBtns then
@@ -1243,11 +1210,9 @@ function M.BuildUI(parent)
 	top:SetHeight(32)
 	buildTopStrip(top)
 
-	local needs = W.Frame(main, "bare")
-	needs:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -3)
-	needs:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -3)
-	needs:SetHeight(52)
-	buildNeeds(needs)
+	-- No needs strip. Each column header carries its own count, target and
+	-- stepper now, so a 52px band repeating them above the board was the same
+	-- facts twice -- and it was taking the space from the thing it described.
 
 	-- Reserves and classes stay ON the page: picking "need a rogue" is the common
 	-- ask and burying it behind a tab made it slower, not cleaner. The SPEC row is
@@ -1270,10 +1235,10 @@ function M.BuildUI(parent)
 	bottom:SetHeight(74)
 	buildBottom(bottom)
 
-	-- the board takes every pixel left between the needs strip and the message
+	-- the board takes every pixel between the top strip and the message
 	local board = W.Frame(main, "bare")
-	board:SetPoint("TOPLEFT", needs, "BOTTOMLEFT", 0, -4)
-	board:SetPoint("TOPRIGHT", needs, "BOTTOMRIGHT", 0, -4)
+	board:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
+	board:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -4)
 	board:SetPoint("BOTTOM", bottom, "TOP", 0, 4)
 	buildBoard(board)
 
