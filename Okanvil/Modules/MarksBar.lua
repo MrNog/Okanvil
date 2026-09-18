@@ -340,6 +340,11 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("RAID_ROSTER_UPDATE")      -- promotion/demotion changes canMark()
 ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
+-- The GUILD roster decides whether the priority shortcut is shown, and it arrives
+-- well after PLAYER_LOGIN -- so the bar was laid out while the answer was still
+-- "no guild, no ranks", and an officer (or an officer's alt) had no prio button
+-- until something raid-related happened to refresh it.
+ev:RegisterEvent("GUILD_ROSTER_UPDATE")
 ev:SetScript("OnEvent", function(_, event)
 	if event == "PLAYER_LOGIN" then
 		build()
