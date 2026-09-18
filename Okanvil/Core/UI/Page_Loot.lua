@@ -26,7 +26,10 @@ local function lootTabs()
 		-- one long list, so every extra pixel of window is another item on screen.
 		t[#t + 1] = { key = "prio", label = "Prio", height = 400, fill = true, build = function(pg) Okanvil:Loot_BuildPrio(pg) end }
 	end
-	t[#t + 1] = { key = "settings", label = "Settings", height = 160, build = function(pg) Okanvil:Loot_BuildSettings(pg) end }
+	-- taller for an officer: the priority-list and my-characters blocks below the
+	-- capture settings only exist for someone who can see the list
+	local settingsH = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) and 240 or 160
+	t[#t + 1] = { key = "settings", label = "Settings", height = settingsH, build = function(pg) Okanvil:Loot_BuildSettings(pg) end }
 	return t
 end
 
@@ -398,9 +401,20 @@ function Okanvil:Loot_BuildSettings(p)
 	-- to everyone else it would just be a button that does nothing for them.
 	if not (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) then return end
 
+	-- ---- Priority list ----------------------------------------------------
+	-- Lived as a button on the Prio tab's toolbar, which put a choice nobody
+	-- revisits after the first time in front of the list every single visit.
+	local ph = W.Text(p, "Priority list", 11, "dim"); ph:SetPoint("TOPLEFT", 8, -122)
+	local cMulti = W.Check(p, "Send each name on its own line",
+		function() return Okanvil.LootPrio and Okanvil.LootPrio.MultiLine() end,
+		function() if Okanvil.LootPrio then Okanvil.LootPrio.ToggleMultiLine() end end)
+	cMulti:SetPoint("TOPLEFT", 8, -140)
+	cMulti:Tooltip("Off: the item and its ladder go out as one line.\n"
+		.. "On: the item first, then its top names one per line.")
+
 	local me = UnitName("player") or ""
-	local mh = W.Text(p, "My characters", 11, "dim"); mh:SetPoint("TOPLEFT", 8, -122)
-	local mhint = W.Text(p, "", 11, "dim"); mhint:SetPoint("TOPLEFT", 8, -158)
+	local mh = W.Text(p, "My characters", 11, "dim"); mh:SetPoint("TOPLEFT", 8, -172)
+	local mhint = W.Text(p, "", 11, "dim"); mhint:SetPoint("TOPLEFT", 8, -208)
 
 	local function claimed()
 		self.db.myChars = self.db.myChars or {}
@@ -418,7 +432,7 @@ function Okanvil:Loot_BuildSettings(p)
 	end
 
 	local claim = W.Button(p, "")
-	claim:SetSize(220, 22); claim:SetPoint("TOPLEFT", 8, -140)
+	claim:SetSize(220, 22); claim:SetPoint("TOPLEFT", 8, -190)
 	local function paintBtn()
 		claim.text:SetText(claimed()[me] and ("Forget " .. me) or ("This is me (" .. me .. ")"))
 	end

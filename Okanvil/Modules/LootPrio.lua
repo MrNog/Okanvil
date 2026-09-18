@@ -568,7 +568,8 @@ function P.BuildTab(p)
 	clear:SetSize(70, 22); clear:SetPoint("RIGHT", imp, "LEFT", -6, 0)
 
 	local search = W.EditBox(p)
-	search:SetSize(200, 22); search:SetPoint("TOPLEFT", 8, -28)
+	search:SetSize(240, 22); search:SetPoint("TOPLEFT", 8, -28)
+	search.edit:SetScript("OnEscapePressed", function(s) s:SetText(""); s:ClearFocus() end)
 
 	-- Reserved / prio-roll toggle, same three states as the website's tabs.
 	local tier = "all"
@@ -590,37 +591,16 @@ function P.BuildTab(p)
 	local bRes = tierBtn("Reserved", "R", 74, bAll)
 	local bRoll = tierBtn("Prio roll", "P", 70, bRes)
 
-	-- Send goes to officer chat; flipping this to SAY lets the format be checked
-	-- without putting test lines in front of the other officers.
-	local chan = W.Button(p, "")
-	chan:SetSize(74, 22); chan:SetPoint("RIGHT", clear, "LEFT", -6, 0)
-	local function syncChan()
-		local testing = P.Channel() == "SAY"
-		if chan.text then
-			chan.text:SetText(testing and "|cffff5555SAY|r" or "Officer")
-		end
-		chan:Tooltip(testing
-			and "Testing: Send posts to SAY. Click to post to officer chat."
-			or "Send posts to officer chat. Click to test in SAY instead.")
-	end
-	chan:SetScript("OnClick", function() P.ToggleTest(); syncChan() end)
-	syncChan()
-
-	-- One line, or the item plus its top names one per line.
-	local fmt = W.Button(p, "")
-	fmt:SetSize(74, 22); fmt:SetPoint("RIGHT", chan, "LEFT", -6, 0)
-	local function syncFmt()
-		local multi = P.MultiLine()
-		if fmt.text then fmt.text:SetText(multi and "Lines" or "1 line") end
-		fmt:Tooltip(multi
-			and "Send posts the item, then its top names one per line.\nClick for a single line."
-			or "Send posts one line.\nClick to put each name on its own line.")
-	end
-	fmt:SetScript("OnClick", function() P.ToggleMultiLine(); syncFmt() end)
-	syncFmt()
-
-	local collapseAll = W.Button(p, "Collapse all")
-	collapseAll:SetSize(88, 22); collapseAll:SetPoint("LEFT", bRoll, "RIGHT", 10, 0)
+	-- Three buttons used to live here and no longer do:
+	--   SAY / Officer -- a channel switch for testing the format. Send always goes
+	--     to officer chat now; testing in SAY is a developer errand, not a control
+	--     worth a permanent button in front of the list.
+	--   1 line / Lines -- inline by default because it reads better in chat, and
+	--     a choice nobody revisits after the first time does not belong in front
+	--     of the list. Still available, as a toggle in Loot > Settings.
+	--   Collapse all -- every group header is already a button that folds its own
+	--     group, so this only ever meant "all of them at once".
+	-- Five controls left, one row, and the list starts higher up the page.
 
 	-- list ---------------------------------------------------------------
 	local listTop = 28 + 22 + 8
@@ -819,19 +799,6 @@ function P.BuildTab(p)
 	sf:SetScript("OnSizeChanged", rebuild)
 	search.edit:SetScript("OnTextChanged", rebuild)
 
-	collapseAll:SetScript("OnClick", function(self)
-		-- Fold everything; if anything is already folded, unfold instead, so one
-		-- button covers both directions without a second control.
-		local any = false
-		for _ in pairs(folded) do any = true break end
-		if any then
-			for k in pairs(folded) do folded[k] = nil end
-		else
-			for _, rec in ipairs(P.Sorted(nil, nil)) do folded[rec.g or "Other"] = true end
-		end
-		if self.text then self.text:SetText(any and "Collapse all" or "Expand all") end
-		rebuild()
-	end)
 
 	imp:SetScript("OnClick", function() P.ShowImport(rebuild) end)
 
