@@ -34,16 +34,10 @@ Okanvil.RollMgr = RM
 local SIZE = { ROW_H = 26, FONT_SZ = 11, SUB_SZ = 9, ROLL_H = 15, LIST_ROWS = 10, WIN_W = 270 }
 local MAX_ROLLS = 5   -- inline rolls visible at once; the rest scroll within the block
 
--- Live geometry, re-pointed at one of the SIZES tables by applySize(). Seeded from
--- `full` at LOAD time: Okanvil.db does not exist yet here (Core.lua only assigns it
--- on VARIABLES_LOADED, after every file has run), so calling db() at this scope
--- would index a nil table. applySize() is called from showWin()/the toggle instead,
--- both of which run long after the DB is up.
-local ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W do
-	local s = SIZES.full
-	ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W =
-		s.ROW_H, s.FONT_SZ, s.SUB_SZ, s.ROLL_H, s.LIST_ROWS, s.WIN_W
-end
+-- Live geometry, unpacked from SIZE. These are locals rather than SIZE lookups
+-- because the layout code reads them on every row of every rebuild.
+local ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W =
+	SIZE.ROW_H, SIZE.FONT_SZ, SIZE.SUB_SZ, SIZE.ROLL_H, SIZE.LIST_ROWS, SIZE.WIN_W
 
 -- HORIZONTAL GEOMETRY -- one source of truth, so the item name, the roll name and the
 -- tree glyph cannot drift apart (they are three different frames that must line up).
@@ -73,11 +67,6 @@ local function db()
 end
 
 -- pull the geometry for the currently-selected mode into the locals above
-local function applySize()
-	ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W =
-		SIZE.ROW_H, SIZE.FONT_SZ, SIZE.SUB_SZ, SIZE.ROLL_H, SIZE.LIST_ROWS, SIZE.WIN_W
-end
-
 -- Pixels from the window top to the body frame: the 26px header + the status line.
 -- ONE source of truth -- the body anchor and the final SetHeight both use it, so a
 -- mode switch can never leave them disagreeing (which clipped the bottom buttons).
@@ -1253,7 +1242,6 @@ local function showWin()
 	end
 	win:Show()                       -- always show (idempotent)
 	win:Raise()                      -- bring to front in case something covers it
-	applySize()                      -- DB may have changed since the last show
 	local ok, err = pcall(RM.ApplyMode)  -- never let a rebuild error leave it half-open
 	if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
 	if OkanvilLootDebug and L and L.Dbg then
