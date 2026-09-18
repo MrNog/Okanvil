@@ -661,7 +661,9 @@ end
 -- somewhere further down the tab, out of sight while you picked. Two scrolling
 -- lists side by side show both halves of the job at once.
 -- ------------------------------------------------------------
-local LOOT_ROW_H = 19   -- readable first; the list scrolls, so fitting more is not worth squinting
+-- Readable first: the list scrolls, so cramming more rows in is not worth
+-- squinting at a wall of purple item names to find the one you want.
+local LOOT_ROW_H = 26
 
 -- One scrolling list: returns the scroll child to draw rows into, plus a
 -- relayout() to call once the content height is known.
@@ -705,12 +707,12 @@ local function lootRow(pool, i, parent, side)
 	row:SetHeight(LOOT_ROW_H)
 
 	row.icon = row:CreateTexture(nil, "ARTWORK")
-	row.icon:SetSize(14, 14)
-	row.icon:SetPoint("LEFT", 3, 0)
+	row.icon:SetSize(20, 20)
+	row.icon:SetPoint("LEFT", 4, 0)
 	row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-	row.text = W.Text(row, "", "body")
-	row.text:SetPoint("LEFT", 21, 0)
+	row.text = W.Text(row, "", "head")
+	row.text:SetPoint("LEFT", 30, 0)
 	row.text:SetPoint("RIGHT", -6, 0)
 	row.text:SetJustifyH("LEFT")
 	if row.text.SetWordWrap then row.text:SetWordWrap(false) end
