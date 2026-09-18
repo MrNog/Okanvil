@@ -80,7 +80,11 @@ function Okanvil:Settings_Modules(panel)
 			r.toggle:SetScript("OnClick", function()
 				Okanvil:SetModuleEnabled(name, not Okanvil:IsModuleEnabled(name))
 				paintToggle()
-				dash:Refresh()
+				-- What actually has to change is the NAV: a module switched off loses
+				-- its row, one switched on gains it back. This called `dash:Refresh()`
+				-- on a global that was never defined here, so every toggle threw
+				-- "attempt to index global 'dash'".
+				Okanvil:RefreshNav()
 			end)
 			r:Show()
 			y = y + 50

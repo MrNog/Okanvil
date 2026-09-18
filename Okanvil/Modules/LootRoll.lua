@@ -14,14 +14,13 @@ local L = Okanvil.Loot
 local RM = {}
 Okanvil.RollMgr = RM
 
--- Two layouts, toggled by the [-]/[+] button in the header and remembered in the DB.
---   full    -- roomy rows/text, the default.
---   compact -- tighter rows, smaller font, fewer visible rows, a narrower window. Same
---              sections, no features removed -- it just takes about a quarter of the area.
+-- ONE layout, deliberately small. There used to be a second, wider one a chevron
+-- away in the title bar -- but this window's job is to sit beside the loot frame
+-- without covering what you are rolling on, which is the small one, every time.
 --
 -- An item row is TWO lines: the item name on top, the winner and trade timer below.
 -- One line meant the name, the winner and the timer all fought for the same width, so
--- everything was truncated and the compact layout was unreadable. Two lines give each
+-- everything was truncated and the rows were unreadable. Two lines give each
 -- its own space and let the icon grow.
 --
 -- The rolls are NOT a separate panel: expanding an item inserts its rolls as extra rows
@@ -29,10 +28,10 @@ Okanvil.RollMgr = RM
 -- and the rolls sit directly under the item they belong to.
 --   LIST_ROWS -- visible rows of the mixed list (items + any expanded rolls).
 --   MAX_ROLLS -- rolls shown inline before the roll block itself starts scrolling.
-local SIZES = {
-	full    = { ROW_H = 32, FONT_SZ = 12, SUB_SZ = 10, ROLL_H = 18, LIST_ROWS = 12, WIN_W = 330 },
-	compact = { ROW_H = 26, FONT_SZ = 11, SUB_SZ =  9, ROLL_H = 15, LIST_ROWS = 10, WIN_W = 270 },
-}
+-- One size. There used to be a "full" layout twice this wide, switched by a
+-- chevron in the title bar -- but the compact one is what the window is FOR: a
+-- small thing beside the loot frame that never covers what you are looting.
+local SIZE = { ROW_H = 26, FONT_SZ = 11, SUB_SZ = 9, ROLL_H = 15, LIST_ROWS = 10, WIN_W = 270 }
 local MAX_ROLLS = 5   -- inline rolls visible at once; the rest scroll within the block
 
 -- Live geometry, re-pointed at one of the SIZES tables by applySize(). Seeded from
@@ -64,24 +63,19 @@ local function textX() return PAD + iconSize() + ICO_GAP end
 local function db()
 	local d = Okanvil.db.rollmgr
 	if not d then
-		d = { point = "RIGHT", x = -30, y = 60, autoShow = true, compact = true }
+		d = { point = "RIGHT", x = -30, y = 60, autoShow = true }
 		Okanvil.db.rollmgr = d
 	end
-	-- The compact layout became the default AFTER these profiles were written, so a
-	-- profile from before it has compact=false baked in and would keep opening large.
-	-- Move it over once; the toggle still owns the setting from then on.
-	if not d.compactDefaulted then
-		d.compactDefaulted = true
-		d.compact = true
-	end
+	-- `compact` and `compactDefaulted` may still be sitting in an older saved
+	-- profile. Nothing reads them any more -- there is one layout now -- and they
+	-- are left alone rather than deleted, so downgrading keeps its setting.
 	return d
 end
 
 -- pull the geometry for the currently-selected mode into the locals above
 local function applySize()
-	local s = SIZES[db().compact and "compact" or "full"]
 	ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W =
-		s.ROW_H, s.FONT_SZ, s.SUB_SZ, s.ROLL_H, s.LIST_ROWS, s.WIN_W
+		SIZE.ROW_H, SIZE.FONT_SZ, SIZE.SUB_SZ, SIZE.ROLL_H, SIZE.LIST_ROWS, SIZE.WIN_W
 end
 
 -- Pixels from the window top to the body frame: the 26px header + the status line.
@@ -89,7 +83,7 @@ end
 -- mode switch can never leave them disagreeing (which clipped the bottom buttons).
 -- no status line (ML / Raider): the tabs already say which mode you're in, so the
 -- body starts straight under the title bar.
-local function BODY_TOP() return db().compact and 28 or 34 end
+local function BODY_TOP() return 28 end
 
 -- Icon resolver: delegates to the shared Core warmer (Okanvil:ItemIcon), which
 -- returns the icon now or nil + auto-queues a server query so a later tick fills
@@ -296,18 +290,6 @@ local function buildWindow()
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 
-	-- Size toggle. The glyphs are chevrons, not "-" and "+": those two sit high and
-	-- narrow in the font, so in a 20px button they read as badly centred no matter how
-	-- the label is anchored. A chevron fills the box and says which way it will go.
-	local size = W.Button(hdr, ""); size:SetSize(22, 20); size:SetPoint("RIGHT", close, "LEFT", -2, 0)
-	f.sizeBtn = size
-	size:SetScript("OnClick", function()
-		local d = db()
-		d.compact = not d.compact
-		applySize()
-		RM.ApplyMode()
-	end)
-
 	-- everything below the title is rebuilt when the ML state changes, so pack the
 	-- mode-specific widgets into a container we can wipe. Give it a FULL size
 	-- (TOPLEFT + BOTTOMRIGHT) -- a frame with height 0 doesn't render its children
@@ -401,20 +383,14 @@ local function buildWindow()
 	return f
 end
 
--- Re-apply the current size mode to the frame chrome, then rebuild the body.
--- Called by the [-]/[+] toggle and on every show (the DB may have changed).
+-- Re-apply the window chrome, then rebuild the body. Called on every show.
 function RM.ApplyMode()
 	if not win then return end
-	local compact = db().compact
 	win:SetWidth(WIN_W)
 	if win.title then
-		win.title:SetText(compact and "Okanvil - Roll" or "Okanvil - Mini Roll Manager")
+		win.title:SetText("Okanvil - Roll")
 	end
-	if win.sizeBtn then
-		-- compact -> chevron DOWN (click to grow); full -> chevron UP (click to shrink)
-		win.sizeBtn.text:SetText(compact and "v" or "^")
-	end
-	-- body is built once, so re-anchor it for the new mode
+	-- body is built once, so re-anchor it
 	if win.body then
 		win.body:ClearAllPoints()
 		win.body:SetPoint("TOPLEFT", 0, -BODY_TOP()); win.body:SetPoint("BOTTOMRIGHT", 0, 0)
@@ -461,8 +437,7 @@ function RM.Rebuild()
 	end
 
 	local ml = isML()
-	local compact = db().compact and true or false
-	local ac = Okanvil.Colors and Okanvil.Colors.accent or { 0.75, 0.58, 0.23 }
+		local ac = Okanvil.Colors and Okanvil.Colors.accent or { 0.75, 0.58, 0.23 }
 
 	-- UNIFIED layout: raider and ML share the same look (boss pager, the list, "Your
 	-- roll"). The ML additionally gets the management controls (Start roll MS/OS/Free/
@@ -472,7 +447,7 @@ function RM.Rebuild()
 	-- the gap right of the ">" and the list is inset the same amount on both edges.
 	-- The body already starts BODY_TOP() below the window top (clear of the title bar),
 	-- so the first row starts at -M, not at some extra hand-tuned offset on top of it.
-	local M = compact and 8 or 10
+	local M = 8
 	local INNER = WIN_W - M * 2
 	local y = -M
 
@@ -480,8 +455,8 @@ function RM.Rebuild()
 	-- The label is anchored BETWEEN the two buttons (not to the body with a hardcoded
 	-- -28 inset, which assumed the full-size 24px button and overflowed the name in
 	-- compact). Create `nxt` first so the label can anchor to it.
-	local pgH = compact and 18 or 22
-	local pgW = compact and 20 or 24
+	local pgH = 18
+	local pgW = 20
 	local prev = keep(W.Button(body, "<")); prev:SetSize(pgW, pgH); prev:SetPoint("TOPLEFT", M, y)
 	prev:SetScript("OnClick", function()
 		f.bossIdx = math.max(1, (f.bossIdx or 1) - 1); selected = nil; f.userCleared = false; f.itemScroll = 0; f.rollScroll = 0; RM.Refresh()
@@ -671,12 +646,12 @@ function RM.Rebuild()
 		f.itemRows[i] = r
 		return r
 	end
-	y = y - (LIST_H + 6) - (compact and 6 or 10)
+	y = y - (LIST_H + 6) - 6
 
 	-- ML-only: Start Roll row (4 equal buttons) ------------------------------
 	if ml then
-		local srH = compact and 22 or 26
-		local sr = keep(W.Text(body, "Start roll (announces)", compact and 10 or 11, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - (compact and 13 or 16)
+		local srH = 22
+		local sr = keep(W.Text(body, "Start roll (announces)", 10, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - 13
 		local gap, bw = 6, (INNER - 3 * 6) / 4
 		local function srBtn(label, kind, idx, fn)
 			local b = keep(W.Button(body, label, kind)); b:SetSize(bw, srH)
@@ -699,7 +674,7 @@ function RM.Rebuild()
 	-- where the item should go without anyone reading the page mid-raid.
 	do
 		local P = Okanvil.LootPrio
-		local spH = compact and 22 or 26
+		local spH = 22
 		local sp = keep(W.Button(body, "Send prio to officers"))
 		sp:SetSize(INNER, spH); sp:SetPoint("TOPLEFT", M, y)
 		sp:SetScript("OnClick", function()
@@ -738,7 +713,7 @@ function RM.Rebuild()
 	-- without aiming at the name. Hiding the run's loot lives on the Loot page: it is
 	-- end-of-raid tidying, not something you reach for mid-boss.
 	if ml then
-		local awH = compact and 22 or 26
+		local awH = 22
 		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER, awH); award:SetPoint("TOPLEFT", M, y)
 
 		-- Say WHICH award this will be before it is clicked. GiveMasterLoot only works
@@ -777,9 +752,9 @@ function RM.Rebuild()
 
 	-- Your roll ---------------------------------------------------------------
 	if wantsChatRollButtons() then
-		local yrl = keep(W.Text(body, "Your roll", compact and 10 or 11, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - (compact and 15 or 18)
+		local yrl = keep(W.Text(body, "Your roll", 10, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - 15
 		local hw = (INNER - 8) / 2
-		local bh = compact and 22 or 28
+		local bh = 22
 		local myms = keep(W.Button(body, "Roll MS (100)", "primary")); myms:SetSize(hw, bh); myms:SetPoint("TOPLEFT", M, y)
 		myms:SetScript("OnClick", function() L.SelfRoll("ms") end)
 		local myos = keep(W.Button(body, "Roll OS (99)")); myos:SetSize(hw, bh); myos:SetPoint("LEFT", myms, "RIGHT", 8, 0)
@@ -968,7 +943,7 @@ function RM.Refresh()
 			-- tail, so "Argent Confessor Paletress (2/3)" lost the "/3)" -- you could no
 			-- longer see how many bosses there were. Cut the name, keep "(2/3)" whole.
 			local bn = g.boss or "?"
-			local maxB = db().compact and 20 or 28
+			local maxB = 20
 			if #bn > maxB then bn = bn:sub(1, maxB - 1) .. ".." end
 			f.bossHd:SetText(bn .. "  |cff8a8d93(" .. f.bossIdx .. "/" .. f.bossCount .. ")|r")
 		end

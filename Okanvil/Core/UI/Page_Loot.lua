@@ -227,9 +227,9 @@ function Okanvil:Loot_BuildCollectors(p)
 	row("frag", "Fragments",       -76, "-- stays on the corpse --")
 	row("boe",  "BoE / orbs",      -108, "-- falls back to Main loot --")
 
-	local wc = W.Check(p, "Whisper winner on Award (\"you won, trade me\")",
-		function() return L.WhisperWinner() end, function(v) L.SetWhisperWinner(v) end)
-	wc:SetPoint("TOPLEFT", X + 2, -146)
+	-- The "whisper the winner" toggle used to sit here, with the message it sends
+	-- on a different page entirely -- so neither half said anything about the
+	-- other. Both are in Settings > Loot now, as one control.
 end
 
 -- ---- Announce templates: MS/OS/Free/Whisper ([item] placeholder) ----
@@ -253,10 +253,46 @@ local function buildMessages(p, y0)
 	row("MS",      y0 - 40, function() return L.RollMsg("ms") end,   function(t) L.SetRollMsg("ms", t) end)
 	row("OS",      y0 - 70, function() return L.RollMsg("os") end,   function(t) L.SetRollMsg("os", t) end)
 	row("Free",    y0 - 100, function() return L.RollMsg("free") end, function(t) L.SetRollMsg("free", t) end)
-	row("Whisper", y0 - 138, function() return L.WhisperMsg() end,    function(t) L.SetWhisperMsg(t) end)
-	local wh = W.Text(p, "Whisper is sent on Award when the boss loot window is already closed.", "note", "dim")
-	wh:SetPoint("TOPLEFT", X, y0 - 164); wh:SetPoint("RIGHT", -X, 0); wh:SetJustifyH("LEFT")
-	return y0 - 190
+	-- ON AWARD: the switch and the message it sends, as one control. They used to
+	-- be on separate pages -- the toggle under Collectors, the text here -- so
+	-- neither half said anything about the other, and the box sat empty with the
+	-- switch on and nothing to explain why nothing was sent.
+	local wy = y0 - 148
+	local wh = W.Text(p, "ON AWARD", "note", "dim"); wh:SetPoint("TOPLEFT", X, wy)
+	wy = wy - 24
+
+	local wc = W.Check(p, "Whisper the winner",
+		function() return L.WhisperWinner() end,
+		function(v) L.SetWhisperWinner(v); if p._paintWhisper then p._paintWhisper() end end)
+	wc:SetPoint("TOPLEFT", X, wy)
+	wy = wy - 26
+
+	local web = W.EditBox(p, function(t) L.SetWhisperMsg(t) end)
+	web:SetHeight(24); web:SetPoint("TOPLEFT", X + 21, wy); web:SetPoint("RIGHT", -X, 0)
+	web.edit:SetText(L.WhisperMsg() or "")
+	-- An empty box with the switch on sends nothing, which is the state the
+	-- screenshot caught. Say so where the box is, not in a line underneath.
+	local wph = W.Text(p, "", "note", "dim")
+	wph:SetPoint("LEFT", web, "LEFT", 8, 0)
+	p._paintWhisper = function()
+		local on = L.WhisperWinner()
+		local txt = web.edit:GetText() or ""
+		web:SetAlpha(on and 1 or 0.4)
+		if not on then
+			wph:SetText("")
+		elseif txt == "" then
+			wph:SetText("|cffff5555nothing to send -- type the message here|r")
+		else
+			wph:SetText("")
+		end
+	end
+	web.edit:HookScript("OnTextChanged", function() p._paintWhisper() end)
+	p._paintWhisper()
+	wy = wy - 22
+	local whh = W.Text(p, "|cff6f7176sent when the boss loot window has already closed|r", "note", "dim")
+	whh:SetPoint("TOPLEFT", X + 21, wy)
+
+	return wy - 26
 end
 
 -- ---- History (landing/main): sessions accordion with an internal-scroll detail
