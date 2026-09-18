@@ -588,6 +588,38 @@ function Okanvil:ShowPanel(key)
 	self._current = key
 end
 
+-- Drop a built page so the next ShowPanel rebuilds it. Pages are built once and
+-- cached, which is right for a layout but wrong when what the page may SHOW has
+-- changed underneath it.
+function Okanvil:InvalidatePanel(key)
+	local e = self.panels[key]
+	if not e then return end
+	if e.Hide then e:Hide() end
+	if e.SetParent then e:SetParent(nil) end
+	self.panels[key] = nil
+	if self._current == key then self:ShowPanel(key) end
+end
+
+-- The guild roster arrives asynchronously, and the first GuildRoster() after
+-- login can come back empty -- so an officer opening Loot early would be told
+-- they are not one and lose the Prio tab until a /reload. Watch the roster and
+-- rebuild the page the moment the answer actually changes.
+do
+	local was = nil
+	local gr = CreateFrame("Frame")
+	gr:RegisterEvent("GUILD_ROSTER_UPDATE")
+	gr:RegisterEvent("PLAYER_GUILD_UPDATE")
+	gr:SetScript("OnEvent", function()
+		if not Okanvil.U or not Okanvil.U.canSeePrio then return end
+		local now = Okanvil.U.canSeePrio() and true or false
+		if was == nil then was = now; return end     -- first answer: nothing built yet
+		if now ~= was then
+			was = now
+			Okanvil:InvalidatePanel(LOOT)
+		end
+	end)
+end
+
 -- ------------------------------------------------------------
 -- Home
 -- ------------------------------------------------------------

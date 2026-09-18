@@ -10,6 +10,10 @@
 --                                  runtime patterns from chat-message templates
 --   Okanvil.U.itemIDFromLink(l) -> numeric item id from a link (0 if none)
 --   Okanvil.U.shortLink(l)      -> the "item:1234:..." span of a link (nil if none)
+--   Okanvil.U.guildRankOf(n)    -> that member's rankIndex (nil if not in guild)
+--   Okanvil.U.isOfficer(n)      -> rankIndex <= 1 (guild master or officer)
+--   Okanvil.U.isMyChar(n)       -> one of the owner's own characters
+--   Okanvil.U.canSeePrio(n)     -> may see the loot priority list
 -- ============================================================
 
 local Okanvil = Okanvil
@@ -80,4 +84,54 @@ function U.raidShort(name, maxLen)
 	-- No abbreviation known: cut it rather than let it wrap over the next line.
 	if maxLen and #name > maxLen then return name:sub(1, maxLen - 2) .. ".." end
 	return name
+end
+
+-- ------------------------------------------------------------
+-- Who is allowed to see officer-only material (the loot priority list).
+--
+-- By rank INDEX, not rank name: 0 is the guild master and 1 the officer rank
+-- below him, whatever the guild has called them this month. Matching on names
+-- would break the day someone renames a rank.
+--
+-- This hides material from people who have no use for it, and stops a stale list
+-- overwriting a good one. It is NOT a security boundary: the roster comes from
+-- the player's own client and an addon on someone's disk can be edited. Anything
+-- that truly must not leak belongs behind the website's login, not in here.
+-- ------------------------------------------------------------
+local OFFICER_MAX_RANK = 1
+
+-- rankIndex for a guild member by name, or nil when not in the guild / not found.
+function U.guildRankOf(name)
+	if not name or name == "" or not IsInGuild or not IsInGuild() then return nil end
+	name = name:gsub("%-.*$", "")
+	for i = 1, (GetNumGuildMembers and GetNumGuildMembers() or 0) do
+		local n, _, rankIndex = GetGuildRosterInfo(i)
+		if n and n:gsub("%-.*$", "") == name then return rankIndex end
+	end
+	return nil
+end
+
+-- Is this name an officer (GM included)? Used both to gate the UI and to decide
+-- whether an incoming priority list may be trusted.
+function U.isOfficer(name)
+	local idx = U.guildRankOf(name)
+	return idx ~= nil and idx <= OFFICER_MAX_RANK
+end
+
+-- "One of my characters." Account-wide, so an alt on a low rank still sees the
+-- list the main imported -- the alternative was locking the owner out of his own
+-- data because this toon happens to be ranked as an alt.
+function U.isMyChar(name)
+	if not name or name == "" then return false end
+	name = name:gsub("%-.*$", "")
+	if name == (UnitName("player") or "") then return true end
+	local mine = Okanvil.db and Okanvil.db.myChars
+	return (mine and mine[name]) and true or false
+end
+
+-- The gate the loot-priority UI asks. Officer by rank, or a character the owner
+-- has claimed as their own.
+function U.canSeePrio(name)
+	name = name or UnitName("player") or ""
+	return U.isOfficer(name) or U.isMyChar(name)
 end

@@ -13,6 +13,23 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
+-- The Prio tab is officer material, so for everyone else it is not drawn at all
+-- rather than drawn and refused: a tab that only exists to say "not for you" is a
+-- worse page for the raider and tells them nothing they can act on.
+local function lootTabs()
+	local t = {
+		{ key = "collectors", label = "Collectors", height = 330, build = function(pg) Okanvil:Loot_BuildCollectors(pg) end },
+		{ key = "messages",   label = "Messages",   height = 260, build = function(pg) Okanvil:Loot_BuildMessages(pg) end },
+	}
+	if Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() then
+		-- fill = the page tracks the window instead of a fixed height: this tab is
+		-- one long list, so every extra pixel of window is another item on screen.
+		t[#t + 1] = { key = "prio", label = "Prio", height = 400, fill = true, build = function(pg) Okanvil:Loot_BuildPrio(pg) end }
+	end
+	t[#t + 1] = { key = "settings", label = "Settings", height = 160, build = function(pg) Okanvil:Loot_BuildSettings(pg) end }
+	return t
+end
+
 function Okanvil:BuildLoot()
 	local L = Okanvil.Loot
 	local fill = newFillPanel()
@@ -66,14 +83,7 @@ function Okanvil:BuildLoot()
 			end
 			return "|cffff5555not master loot|r"
 		end,
-		tabs = {
-			{ key = "collectors", label = "Collectors", height = 330, build = function(pg) Okanvil:Loot_BuildCollectors(pg) end },
-			{ key = "messages",   label = "Messages",   height = 260, build = function(pg) Okanvil:Loot_BuildMessages(pg) end },
-			-- fill = the page tracks the window instead of a fixed height: this tab is
-			-- one long list, so every extra pixel of window is another item on screen.
-			{ key = "prio",       label = "Prio",       height = 400, fill = true, build = function(pg) Okanvil:Loot_BuildPrio(pg) end },
-			{ key = "settings",   label = "Settings",   height = 160, build = function(pg) Okanvil:Loot_BuildSettings(pg) end },
-		},
+		tabs = lootTabs(),
 	})
 	fill.dash = dash
 
@@ -379,6 +389,45 @@ function Okanvil:Loot_BuildSettings(p)
 	local cRaid = W.Check(p, "Raids",
 		function() return db.recordRaid ~= false end, function(v) db.recordRaid = v end)
 	cRaid:SetPoint("TOPLEFT", 160, -86)
+
+	-- ---- My characters ----------------------------------------------------
+	-- The Prio tab is gated on guild rank, but an officer's alt is usually ranked
+	-- as an alt -- which would lock the owner of the list out of it on every toon
+	-- but one. Claiming a character here is account-wide, so marking it once on
+	-- any toon is enough. Only shown to someone who can already see the list:
+	-- to everyone else it would just be a button that does nothing for them.
+	if not (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) then return end
+
+	local me = UnitName("player") or ""
+	local mh = W.Text(p, "My characters", 11, "dim"); mh:SetPoint("TOPLEFT", 8, -122)
+	local mhint = W.Text(p, "", 11, "dim"); mhint:SetPoint("TOPLEFT", 8, -158)
+
+	local function claimed()
+		self.db.myChars = self.db.myChars or {}
+		return self.db.myChars
+	end
+	local function countClaimed()
+		local n = 0
+		for _ in pairs(claimed()) do n = n + 1 end
+		return n
+	end
+	local function paintHint()
+		local n = countClaimed()
+		mhint:SetText(("|cff8a8d93%d character%s claimed -- they all see the Prio tab, whatever their guild rank.|r")
+			:format(n, n == 1 and "" or "s"))
+	end
+
+	local claim = W.Button(p, "")
+	claim:SetSize(220, 22); claim:SetPoint("TOPLEFT", 8, -140)
+	local function paintBtn()
+		claim.text:SetText(claimed()[me] and ("Forget " .. me) or ("This is me (" .. me .. ")"))
+	end
+	claim:SetScript("OnClick", function()
+		local c = claimed()
+		c[me] = (not c[me]) or nil
+		paintBtn(); paintHint()
+	end)
+	paintBtn(); paintHint()
 end
 
 -- ---- Prio tab: the officer page's ladder, pasted in and readable in-game ----

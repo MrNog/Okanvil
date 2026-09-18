@@ -43,7 +43,11 @@ local SHORTCUTS = {
 	{
 		key  = "prio",
 		icon = "Interface\\Icons\\INV_Misc_Book_11",
-		gate = function() return Okanvil.LootPrio ~= nil and Okanvil:IsModuleEnabled("__loot") end,
+		-- officer material: no button for anyone who could not open the list anyway
+		gate = function()
+			if not (Okanvil.LootPrio ~= nil and Okanvil:IsModuleEnabled("__loot")) then return false end
+			return not (Okanvil.U and Okanvil.U.canSeePrio) or Okanvil.U.canSeePrio()
+		end,
 		run  = function()
 			if Okanvil.LootPrio and Okanvil.LootPrio.Toggle then Okanvil.LootPrio.Toggle() end
 		end,
