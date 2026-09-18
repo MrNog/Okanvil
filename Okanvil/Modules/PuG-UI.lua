@@ -1055,15 +1055,29 @@ function M.RefreshUI()
 					-- someone you HAVE and someone you could invite, and the two sit in
 					-- the same board.
 					row._pending = pl.pending
-					if pl.pending then
-						row:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 0.75)
+					-- The card's edge is the player's CLASS -- a druid is orange, a
+					-- rogue yellow -- so a column can be read as colour before it is
+					-- read as text.
+					--
+					-- Pending is carried by ALPHA rather than a different colour: a gold
+					-- border for applicants would have meant the edge said two unrelated
+					-- things and neither reliably. Bright edge = still to invite, faint
+					-- edge = already yours.
+					local cc = RAID_CLASS_COLORS and pl.class and RAID_CLASS_COLORS[pl.class]
+					if cc then
+						row:SetBackdropBorderColor(cc.r, cc.g, cc.b, pl.pending and 0.95 or 0.45)
 					else
-						row:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
+						row:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3],
+							pl.pending and 0.95 or 1)
 					end
 					row:Show()
 				else
 					row._name = nil
 					row._class = nil
+					-- clear the flag too: a pooled row reused for someone already in the
+					-- group would otherwise still think it was an applicant, and a click
+					-- would invite instead of opening the conversation
+					row._pending = nil
 					row:Hide()
 				end
 			end
