@@ -161,7 +161,11 @@ local function buildTopStrip(p)
 				F.scanBtn.text:SetText(done .. "/" .. total)
 			end
 		end
-		local ok, total = I.ScanGroup(false, function(done)
+		-- force = true. Pressing a button called "Read specs" means read them NOW:
+		-- the cached answer is days fresh by IsFresh's reckoning, but someone who
+		-- respecced and regeared five minutes ago is exactly who you are pressing it
+		-- for -- and it kept showing their old spec and old gearscore.
+		local ok, total = I.ScanGroup(true, function(done)
 			I.onProgress = nil
 			if F and F.scanBtn and F.scanBtn.text then F.scanBtn.text:SetText("Read specs") end
 			Okanvil:Print("Specs read for " .. tostring(done) .. " player(s).")
@@ -170,7 +174,9 @@ local function buildTopStrip(p)
 		if not ok then
 			Okanvil:Print("|cffff5555Could not start the scan.|r")
 		elseif total == 0 then
-			Okanvil:Print("Everyone's spec is already known.")
+			-- With force on, an empty queue means there was nobody to read -- not
+			-- that they were all cached.
+			Okanvil:Print("Nobody in range to inspect.")
 		end
 	end)
 	F.scanBtn:Tooltip("Inspect the group and read each player's real spec,\n"
