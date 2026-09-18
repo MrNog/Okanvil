@@ -123,11 +123,18 @@ local function snapshotRaid(trigger, bossName)
 	if raidN == 0 and partyN == 0 then
 		return nil, "not in a group"
 	end
-	local zone, difficultyID, groupSize, mapID
+	local zone, difficultyID, groupSize, mapID, itype
 	if GetInstanceInfo then
 		-- 3.3.5a: name, type, difficulty, difficultyName, maxPlayers, dynDiff, isDyn, mapID
-		local name, _, diff, _, maxPlayers, _, _, mid = GetInstanceInfo()
-		zone, difficultyID, groupSize, mapID = name, diff, maxPlayers, mid
+		local name, t, diff, _, maxPlayers, _, _, mid = GetInstanceInfo()
+		zone, difficultyID, groupSize, mapID, itype = name, diff, maxPlayers, mid, t
+	end
+
+	-- Attendance is a RAID record. A 5-man is not a raid night, and letting dungeons
+	-- in buried the real raids under Violet Hold runs. Only 10/25-man raid instances
+	-- are worth a snapshot.
+	if itype ~= "raid" or not (groupSize == 10 or groupSize == 25) then
+		return nil, "not in a 10 or 25 man raid"
 	end
 
 	local players = {}
@@ -197,6 +204,40 @@ function G.DeleteSnapshot(snap)
 	if G.onSnapshot then G.onSnapshot() end
 end
 
+-- ------------------------------------------------------------
+-- Re-invite everyone from a saved snapshot.
+--
+-- The point: last week's roster IS next week's invite list. Rebuilding it by hand
+-- from the attendance record is the tedious part of forming a raid.
+--
+-- The Invite module owns the actual sending -- it already strips realms, skips
+-- yourself and anyone already in the group, and converts party -> raid before the
+-- 6th invite. We only supply the names.
+-- ------------------------------------------------------------
+function G.SnapshotNames(snap)
+	local out = {}
+	if not (snap and snap.players) then return out end
+	for _, p in ipairs(snap.players) do
+		if p.name and p.name ~= "" then out[#out + 1] = p.name end
+	end
+	return out
+end
+
+-- Returns invitesSent, total.
+function G.InviteSnapshot(snap)
+	local names = G.SnapshotNames(snap)
+	if #names == 0 then
+		Okanvil:Print("|cffff5555Nothing to invite|r -- that snapshot has no players.")
+		return 0, 0
+	end
+	local I = Okanvil.Invite
+	if not (I and I.InviteNames) then
+		Okanvil:Print("|cffff5555Invite module is off|r -- turn it on in Modules.")
+		return 0, #names
+	end
+	return I.InviteNames(names), #names
+end
+
 -- JSON for one snapshot (fed to the hub attendance importer)
 function G.SnapshotJSON(snap)
 	if not snap then return "{}" end
@@ -246,6 +287,46 @@ function G.SnapshotBodyText(snap)
 			.. "  |cff5e6166" .. (p.level > 0 and p.level or "") .. "|r" .. role .. off
 	end
 	return table.concat(lines, "\n")
+end
+
+-- The same body, split into N columns for a wide panel. A 25-man snapshot is
+-- five groups of five: stacked in one column it runs off the bottom of the card
+-- and leaves the right half empty. Split by GROUP, never mid-group, so a column
+-- is always whole groups and a name never separates from its heading.
+function G.SnapshotColumns(snap, cols)
+	cols = cols or 2
+	if not snap or not snap.players then return {} end
+
+	-- gather the groups in order, each already rendered as its own block
+	local groups, order = {}, {}
+	for _, p in ipairs(snap.players) do
+		local g = p.group or 0
+		if not groups[g] then groups[g] = {}; order[#order + 1] = g end
+		local role = (p.role and p.role ~= "") and ("  |cff5e6166(" .. p.role .. ")|r") or ""
+		local off = p.online and "" or "  |cff5e6166[offline]|r"
+		local t = groups[g]
+		t[#t + 1] = "  " .. classHex(p.class) .. p.name .. "|r"
+			.. "  |cff5e6166" .. ((p.level or 0) > 0 and p.level or "") .. "|r" .. role .. off
+	end
+
+	-- deal the groups into columns, keeping each column's line count even
+	local out, counts = {}, {}
+	for i = 1, cols do out[i] = {}; counts[i] = 0 end
+	for _, g in ipairs(order) do
+		-- shortest column takes the next group
+		local pick, best = 1, counts[1]
+		for i = 2, cols do
+			if counts[i] < best then pick, best = i, counts[i] end
+		end
+		local col = out[pick]
+		col[#col + 1] = "|cff8a8d93Group " .. g .. "|r"
+		for _, line in ipairs(groups[g]) do col[#col + 1] = line end
+		counts[pick] = counts[pick] + #groups[g] + 1
+	end
+
+	local res = {}
+	for i = 1, cols do res[i] = table.concat(out[i], "\n") end
+	return res
 end
 
 -- Visual snapshot viewer -- see exactly who was captured, in-game,
