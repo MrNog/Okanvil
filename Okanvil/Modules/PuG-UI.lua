@@ -13,6 +13,12 @@ local M = Okanvil.PuG
 local W = Okanvil.W
 local C = Okanvil.Colors
 
+-- The flat 1px texture every panel and slider in the addon is drawn with. It was
+-- used three times in this file without being declared here -- it is a LOCAL in
+-- Shell.lua, so those calls were passing nil and the scrollbar thumbs and row
+-- highlights had no texture at all.
+local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
+
 local ROLES = { "tank", "healer", "melee", "ranged" }
 local ROLE_COLOR = {
 	tank   = "|cff4a90d9",
@@ -30,10 +36,12 @@ local ROLE_RGB = {
 local ROLE_LABEL = { tank = "Tank", healer = "Healer", melee = "Melee", ranged = "Ranged" }
 
 local F                      -- built frame set (nil until BuildUI runs)
--- Two lines per person: the name, then the spec and gearscore under it. Ten fit
--- in the height the board has now that the needs strip is gone -- an eleventh
--- would draw past the bottom edge, and a full column already says "+N more".
-local BOARD_ROWS = 10
+-- Two lines per person: the name, then the spec and gearscore under it.
+--
+-- This is the POOL size, not how many are visible -- the columns scroll, so it
+-- only has to cover the biggest list a pug produces. Twenty-one applicants in one
+-- ToGC was real, and a 25-man raid is twenty-five names.
+local BOARD_ROWS = 30
 local BOARD_ROW_H = 34
 
 local function db() return M.DB() end
@@ -315,10 +323,31 @@ local function buildBoard(p)
 			end)
 		end
 
+		-- Each column scrolls. A pug fills the Applicants column with everyone who
+		-- answered -- twenty-one of them in one ToGC -- and a fixed ten slots either
+		-- hid the rest behind "+11 more" or drew them past the bottom edge.
+		local csf = CreateFrame("ScrollFrame", nil, col)
+		csf:SetPoint("TOPLEFT", 1, -26)
+		csf:SetPoint("BOTTOMRIGHT", -5, 3)
+		local cchild = CreateFrame("Frame", nil, csf)
+		cchild:SetSize(10, 1); csf:SetScrollChild(cchild)
+		Okanvil.Clip(csf)
+
+		local csb = CreateFrame("Slider", nil, col)
+		csb:SetPoint("TOPRIGHT", -2, -26); csb:SetPoint("BOTTOMRIGHT", -2, 3); csb:SetWidth(3)
+		csb:SetOrientation("VERTICAL"); csb:SetValueStep(1); csb:SetMinMaxValues(0, 0)
+		local cth = csb:CreateTexture(nil, "OVERLAY"); cth:SetTexture(FLAT); cth:SetSize(3, 26)
+		do local a = C.accent; cth:SetVertexColor(a[1], a[2], a[3], 1) end
+		csb:SetThumbTexture(cth)
+		csb:SetScript("OnValueChanged", function(_, v) csf:SetVerticalScroll(v) end)
+		csf:EnableMouseWheel(true)
+		csf:SetScript("OnMouseWheel", function(_, dz) csb:SetValue(csb:GetValue() - dz * 40) end)
+		csf:SetScript("OnSizeChanged", function() cchild:SetWidth(csf:GetWidth()) end)
+
 		local rows = {}
-		local y = -28
+		local y = 0
 		for r = 1, BOARD_ROWS do
-			local row = W.Frame(col, "input")
+			local row = W.Frame(cchild, "input")
 			row:SetPoint("TOPLEFT", 3, y)
 			row:SetPoint("TOPRIGHT", -3, y)
 			row:SetHeight(BOARD_ROW_H)
@@ -400,7 +429,8 @@ local function buildBoard(p)
 		local more = W.Text(col, "", "label", "dim")
 		more:SetPoint("BOTTOMLEFT", 6, 5)
 
-		F.cols[key] = { frame = col, rows = rows, count = cnt, more = more }
+		F.cols[key] = { frame = col, rows = rows, count = cnt, more = more,
+		                sf = csf, child = cchild, sb = csb }
 	end
 
 	-- width them once the panel has a real size
@@ -1090,8 +1120,19 @@ function M.RefreshUI()
 				local want = tonumber(d.need[key]) or 0
 				col.count:SetText((have[key] or 0) .. "|cff8a8d93/" .. want .. "|r")
 			end
+			-- The column scrolls, so "+N more" is only for what BOARD_ROWS itself
+			-- cannot hold -- the pooled rows are the hard limit, not the height.
 			local overflow = n - BOARD_ROWS
 			col.more:SetText(overflow > 0 and ("|cff8a8d93+" .. overflow .. " more|r") or "")
+			if col.sf and col.sb and col.child then
+				local drawn = math.min(n, BOARD_ROWS)
+				local h = math.max(1, drawn * (BOARD_ROW_H + 3))
+				col.child:SetHeight(h)
+				local maxs = math.max(0, h - col.sf:GetHeight())
+				col.sb:SetMinMaxValues(0, maxs)
+				col.sb:SetShown(maxs > 4)
+				if col.sb:GetValue() > maxs then col.sb:SetValue(maxs) end
+			end
 		end
 	end
 

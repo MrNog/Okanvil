@@ -25,7 +25,12 @@ local win          -- the floating window (built lazily)
 -- is smaller than anything else in the addon -- a list you skim mid-raid for a
 -- raid to join is the last place to save pixels.
 local ROW_H = 24
-local MAX_ROWS = 16
+-- VISIBLE_ROWS sizes the window; MAX_ROWS is how many listings the list will
+-- hold. They used to be the same number, which is why the list never scrolled:
+-- the window was always exactly tall enough for every row it would ever draw,
+-- so the scroll range came out as zero no matter how many raids were up.
+local VISIBLE_ROWS = 11
+local MAX_ROWS = 60
 local WIN_W = 460
 
 -- mini-window column x-offsets (inside the row). Kept compact.
@@ -211,7 +216,7 @@ local function build()
 	if not S then return nil end
 
 	local f = Okanvil:Popup("Mini Raid Browser")
-	local rows = MAX_ROWS
+	local rows = VISIBLE_ROWS
 	f:SetSize(WIN_W, 44 + 16 + rows * ROW_H + 12)  -- titlebar+count + colhdr + rows + pad
 
 	-- count / hint line under the title bar
