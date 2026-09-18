@@ -67,26 +67,50 @@ function P.Parse(text)
 	if n == 0 then return nil, 0 end
 	-- the page stamps the raid it was built from; keep it so the UI can say how old
 	local stamp = text:match('generated%s*=%s*"(.-)"')
-	return { items = items, generated = stamp or "", count = n }, n
+	-- ...and when the file itself was exported, which is what decides whose copy
+	-- is newer when two officers compare. Older pastes have no such line.
+	local exported = text:match('exported%s*=%s*"(.-)"')
+	return { items = items, generated = stamp or "", exported = exported or "", count = n }, n
 end
 
 -- Store a pasted export. Returns count, or nil + why.
-function P.Import(text)
+function P.Import(text, fromSync)
 	local parsed, n = P.Parse(text)
 	if not parsed then return nil, "nothing that looks like a prio list" end
 	local d = db()
 	d.items = parsed.items
 	d.generated = parsed.generated
+	d.exported = parsed.exported
 	d.count = n
 	d.imported = date("%d %b %Y")
 	d.stale = nil
+	-- Keep the paste itself: sharing it with another officer means re-sending the
+	-- exact text the website produced, not a second serialiser of our own that
+	-- would have to be kept in step with the parser above.
+	d.raw = text
+	-- When the list came from another officer, remember WHEN it was made rather
+	-- than when it landed here -- that stamp is what decides who has the newest.
+	d.syncedFrom = fromSync or nil
 	P.Unprime()      -- new items: let the client be asked about them again
 	return n
 end
 
+-- Sort key for "who has the newest list", newest = largest string (the stamp is
+-- "YYYY-MM-DD HH:MM:SS", which sorts correctly as text). A paste from before the
+-- page emitted `exported` has none, and loses to any stamped list -- which is the
+-- outcome we want: that copy really is the older format.
+function P.Stamp()
+	local d = db()
+	return d.exported or ""
+end
+function P.Raw() return db().raw end
+
 function P.Clear()
 	local d = db()
 	d.items, d.count, d.generated, d.imported = nil, nil, nil, nil
+	-- the stored paste and its stamp go too: leaving them behind would let the
+	-- officer sync keep serving a list the user believes they deleted
+	d.exported, d.raw, d.syncedFrom, d.stale = nil, nil, nil, nil
 end
 
 -- An older paste can be sitting in the saved variables already: it was stored
@@ -789,6 +813,9 @@ function P.BuildTab(p)
 
 	-- the tier buttons and the group headers both repaint through this
 	p._rebuild = rebuild
+	-- the officer sync repaints through this one: whichever copy of the tab was
+	-- built last (page or popup) is the one on screen
+	P.RefreshTab = function() if p:IsShown() then rebuild() end end
 	sf:SetScript("OnSizeChanged", rebuild)
 	search.edit:SetScript("OnTextChanged", rebuild)
 
@@ -827,6 +854,9 @@ end
 local prioWin
 
 function P.Toggle()
+	-- Same gate as the Loot page's tab: the marks bar is a second door to the
+	-- same list, and gating only the tab would leave this one open.
+	if Okanvil.U and Okanvil.U.canSeePrio and not Okanvil.U.canSeePrio() then return end
 	if prioWin and prioWin:IsShown() then prioWin:Hide(); return end
 	if not prioWin then
 		local f = Okanvil:Popup("Loot priority")
@@ -840,4 +870,96 @@ function P.Toggle()
 	end
 	prioWin:Show()
 	if prioWin._body and prioWin._body._rebuild then prioWin._body._rebuild() end
+end
+
+-- ------------------------------------------------------------
+-- Officer sync
+--
+-- Two officers in the same raid should not be working from different ladders.
+-- Whoever holds the newer export hands it over, quietly, once -- no prompt, no
+-- chat line, nothing for the raid to see.
+--
+--   PRIOV|<stamp>|<count>    "this is the list I have"   (announce)
+--   PRIOQ                    "send me yours"             (request)
+--   BIG:PRIO                 the export text itself      (chunked)
+--
+-- Trust, in both directions:
+--   * We only ANNOUNCE to, and only ACCEPT from, guild officers. Comms hands the
+--     sender's name up unverified, so the rank is checked against the live guild
+--     roster on arrival -- the prefix proves nothing.
+--   * A list is only taken when its stamp is strictly NEWER than ours, so two
+--     officers cannot bounce copies back and forth, and an old client rejoining
+--     the raid cannot roll everyone back.
+-- ------------------------------------------------------------
+local Comms = Okanvil.Comms
+
+-- Am *I* allowed to take part? Officer rank only: the alts exemption lets an alt
+-- READ the list, but a toon that is not an officer never sends one, and never
+-- accepts one over the list its owner imported by hand.
+local function syncAllowed()
+	return Okanvil.U and Okanvil.U.isOfficer and Okanvil.U.isOfficer(UnitName("player"))
+end
+
+-- Sender must be an officer by the live roster. Name comes off the wire, so it
+-- is checked here rather than taken on faith.
+local function senderTrusted(who)
+	return who and who ~= "" and Okanvil.U and Okanvil.U.isOfficer and Okanvil.U.isOfficer(who)
+end
+
+local lastAnnounce = 0
+
+-- Tell the group what we hold. Cheap (one short message), so it can run on any
+-- event that means "the raid changed".
+function P.Announce_Sync()
+	if not (Comms and syncAllowed()) then return end
+	local stamp = P.Stamp()
+	if stamp == "" then return end                 -- nothing worth announcing
+	local now = GetTime() or 0
+	if now - lastAnnounce < 5 then return end      -- roster events arrive in bursts
+	lastAnnounce = now
+	Comms.Send("PRIOV", stamp, tostring(P.Count() or 0))
+end
+
+if Comms then
+	-- Someone announced their list. If theirs is newer than ours, ask for it.
+	Comms.On("PRIOV", function(who, stamp)
+		if not syncAllowed() or not senderTrusted(who) then return end
+		if who == (UnitName("player") or "") then return end
+		if not stamp or stamp == "" then return end
+		if stamp <= P.Stamp() then return end       -- ours is same or newer: nothing to do
+		Comms.Whisper("PRIOQ", who)
+	end)
+
+	-- Someone asked for ours. Send it only if we really do hold something, and
+	-- only to an officer.
+	Comms.On("PRIOQ", function(who)
+		if not syncAllowed() or not senderTrusted(who) then return end
+		local raw = P.Raw()
+		if not raw or raw == "" then return end
+		Comms.SendBig("PRIO", raw, "WHISPER", who)
+	end)
+
+	-- A list arrived. Re-check everything: the stamp may have moved on while the
+	-- chunks were in flight, and the sender is still only a name off the wire.
+	Comms.OnBig("PRIO", function(who, text)
+		if not syncAllowed() or not senderTrusted(who) then return end
+		local parsed, n = P.Parse(text)
+		if not parsed or n == 0 then return end
+		if (parsed.exported or "") <= P.Stamp() then return end
+		P.Import(text, who)
+		Okanvil:Print(("Loot priority updated from |cffffd200%s|r (%d items)."):format(who, n))
+		if P.RefreshTab then P.RefreshTab() end
+	end)
+
+	-- Announce when the raid changes. A new officer joining is exactly the moment
+	-- the two copies should meet.
+	local sev = CreateFrame("Frame")
+	sev:RegisterEvent("RAID_ROSTER_UPDATE")
+	sev:RegisterEvent("PARTY_MEMBERS_CHANGED")
+	sev:SetScript("OnEvent", function()
+		if not syncAllowed() then return end
+		-- settle first: a raid forming fires these in a burst, and the roster we
+		-- need to check ranks against may not have caught up yet
+		Comms.After(3, function() P.Announce_Sync() end)
+	end)
 end

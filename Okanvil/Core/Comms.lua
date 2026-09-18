@@ -150,6 +150,96 @@ end)
 ev:Hide()   -- OnUpdate only runs while timers are pending
 
 -- ------------------------------------------------------------
+-- BIG PAYLOADS (chunked send/receive)
+--
+-- One addon message caps out around 255 bytes and shares the player's chat
+-- throttle, so anything larger goes out as a numbered series and is rebuilt on
+-- the far side. The loot priority list is ~4KB, about 20 messages.
+--
+--   BIG|<tag>|<id>|<seq>|<total>|<chunk>
+--
+-- `id` distinguishes two transfers of the same tag crossing over. A partial
+-- transfer is dropped after BIG_TIMEOUT rather than kept forever: the sender may
+-- have logged out mid-send, and half a priority list is worse than none.
+-- Whatever arrives is still only DATA -- the receiving handler decides whether
+-- the sender was allowed to send it.
+-- ------------------------------------------------------------
+local BIG_CHUNK   = 180        -- payload bytes per message, well under the cap
+local BIG_GAP     = 0.35       -- seconds between sends: stay under the chat throttle
+local BIG_TIMEOUT = 60         -- give up on a half-finished transfer after this
+local bigIn  = {}              -- sender.."\0"..tag -> { id, total, parts, at }
+local bigHandlers = {}         -- tag -> fn(sender, text)
+local bigSeq = 0
+
+-- Register the handler for a chunked payload. fn(sender, wholeText) runs once the
+-- series is complete.
+function C.OnBig(tag, fn) bigHandlers[tag] = fn end
+
+-- Send a large string as a numbered series. Returns the number of chunks, or
+-- false when there is nobody to send to.
+function C.SendBig(tag, text, chan, target)
+	text = tostring(text or "")
+	if text == "" then return false end
+	if not chan then
+		if GetNumRaidMembers and GetNumRaidMembers() > 0 then chan = "RAID"
+		elseif GetNumPartyMembers and GetNumPartyMembers() > 0 then chan = "PARTY"
+		else return false end
+	end
+	bigSeq = bigSeq + 1
+	local id = tostring((time and time() or 0) % 100000) .. "-" .. bigSeq
+	local total = math.ceil(#text / BIG_CHUNK)
+	for i = 1, total do
+		local part = text:sub((i - 1) * BIG_CHUNK + 1, i * BIG_CHUNK)
+		-- spread the series over time: firing 20 messages in one frame trips the
+		-- client's own throttle and the tail is silently dropped.
+		C.After(BIG_GAP * (i - 1), function()
+			local body = table.concat({ VERSION, "BIG", encField(tag), encField(id), i, total, part }, SEP)
+			if target then SendAddonMessage(PREFIX, body, chan, target)
+			else SendAddonMessage(PREFIX, body, chan) end
+		end)
+	end
+	return total
+end
+
+C.On("BIG", function(sender, tag, id, seq, total, part)
+	if not tag or not id then return end
+	seq, total = tonumber(seq), tonumber(total)
+	if not seq or not total or seq < 1 or total < 1 then return end
+	local key = (sender or "") .. "\0" .. tag
+	local slot = bigIn[key]
+	-- a different id for the same tag means a newer transfer: start over rather
+	-- than interleaving two lists into one corrupt blob
+	if not slot or slot.id ~= id then
+		slot = { id = id, total = total, parts = {}, at = GetTime() or 0 }
+		bigIn[key] = slot
+	end
+	slot.parts[seq] = part or ""
+	slot.at = GetTime() or 0
+	for i = 1, total do if slot.parts[i] == nil then return end end   -- still incomplete
+	bigIn[key] = nil
+	local fn = bigHandlers[tag]
+	if not fn then return end
+	local ok, err = pcall(fn, sender, table.concat(slot.parts))
+	if not ok and Okanvil.Err then Okanvil:Err("Comms.OnBig " .. tostring(tag), err) end
+end)
+
+-- Sweep abandoned transfers so a sender who logged out mid-series cannot pin
+-- their partial payload in memory for the rest of the session.
+do
+	local sweep = CreateFrame("Frame")
+	local acc = 0
+	sweep:SetScript("OnUpdate", function(_, e)
+		acc = acc + e
+		if acc < 10 then return end
+		acc = 0
+		local now = GetTime() or 0
+		for k, v in pairs(bigIn) do
+			if now - (v.at or 0) > BIG_TIMEOUT then bigIn[k] = nil end
+		end
+	end)
+end
+
+-- ------------------------------------------------------------
 -- VERSION CHECK (RCLootCouncil-style). Ask the group OR the guild which Okanvil
 -- everyone runs, so a stale client can be spotted before it causes "phantom"
 -- bugs (e.g. an old build that showed the ML layout to plain raiders).
