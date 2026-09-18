@@ -1132,10 +1132,11 @@ function M.BuildUI(parent)
 			return "|cffff5555Spamming OFF|r"
 		end,
 		tabs = {
-			-- The two lists scroll INTERNALLY, so the page itself must not also
-			-- scroll -- a page taller than the view would put a second scrollbar
-			-- around one that already works. 420 fits the overlay without spilling.
-			{ key = "loot",     label = "Reserves", height = 420, build = function(p) buildLoot(p) end },
+			-- fill = take the VIEW's height. The two lists scroll internally and are
+			-- anchored to the page's bottom, so they grow with it -- a fixed 420
+			-- left a third of the window empty under a list you had to scroll.
+			{ key = "loot",     label = "Reserves", height = 420, fill = true,
+			  build = function(p) buildLoot(p) end },
 			-- No "More" tab. It had grown to eight stacked sections -- channels,
 			-- auto-reply, raid groups, spec picks, class run, presets -- none of
 			-- which you touch while forming a raid.
