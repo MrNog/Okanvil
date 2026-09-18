@@ -663,7 +663,12 @@ end
 -- ------------------------------------------------------------
 -- Readable first: the list scrolls, so cramming more rows in is not worth
 -- squinting at a wall of purple item names to find the one you want.
-local LOOT_ROW_H = 26
+--
+-- HEIGHT and STEP are separate. The row frame is the icon's height; the step is
+-- that plus a gap, so consecutive icons do not touch. Advancing by the height
+-- alone stacked them edge to edge and the list read as one solid block.
+local LOOT_ROW_H = 24
+local LOOT_ROW_STEP = LOOT_ROW_H + 5
 
 -- One scrolling list: returns the scroll child to draw rows into, plus a
 -- relayout() to call once the content height is known.
@@ -707,12 +712,12 @@ local function lootRow(pool, i, parent, side)
 	row:SetHeight(LOOT_ROW_H)
 
 	row.icon = row:CreateTexture(nil, "ARTWORK")
-	row.icon:SetSize(20, 20)
-	row.icon:SetPoint("LEFT", 4, 0)
+	row.icon:SetSize(18, 18)
+	row.icon:SetPoint("LEFT", 5, 0)
 	row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
 	row.text = W.Text(row, "", "head")
-	row.text:SetPoint("LEFT", 30, 0)
+	row.text:SetPoint("LEFT", 31, 0)
 	row.text:SetPoint("RIGHT", -6, 0)
 	row.text:SetJustifyH("LEFT")
 	if row.text.SetWordWrap then row.text:SetWordWrap(false) end
@@ -847,7 +852,7 @@ function M.RefreshLootList()
 		row._link = isLink and v or nil
 		local idx = i
 		row._go = function() M.RemoveReserveItem(idx); M.RefreshUI() end
-		ry = ry + LOOT_ROW_H
+		ry = ry + LOOT_ROW_STEP
 	end
 	F.resRelayout(ry)
 
@@ -869,7 +874,7 @@ function M.RefreshLootList()
 		row.icon:Hide(); row._link = nil; row._go = nil
 		row.text:SetText("|cff8a8d93No loot table for " .. raidName .. " -- use the Add box.|r")
 		F.lootScope:SetText("")
-		F.lootRelayout(LOOT_ROW_H + 4)
+		F.lootRelayout(LOOT_ROW_STEP + 4)
 		return
 	end
 
@@ -924,7 +929,7 @@ function M.RefreshLootList()
 				M.RefreshUI()
 			end
 		end
-		y = y + LOOT_ROW_H
+		y = y + LOOT_ROW_STEP
 	end
 
 	if n == 0 then
@@ -933,7 +938,7 @@ function M.RefreshLootList()
 		row:SetPoint("RIGHT", F.lootChild, "RIGHT", 0, 0); row:Show()
 		row.icon:Hide(); row._link, row._go = nil, nil
 		row.text:SetText("|cff8a8d93No match.|r")
-		y = y + LOOT_ROW_H
+		y = y + LOOT_ROW_STEP
 	end
 
 	F.lootRelayout(y)
