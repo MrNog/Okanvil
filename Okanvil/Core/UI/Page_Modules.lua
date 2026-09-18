@@ -13,44 +13,13 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
-function Okanvil:BuildModules()
-	local fill = newFillPanel()
-	local host = fill.child
-
-	-- Dashboard shell: header only (no tabs/drawer/CTA); the module list scrolls.
-	local dash = W.Dashboard(host, {
-		title = "Modules",
-		icon = Okanvil.ICONS.modules,
-		drawerWidth = 0,
-		footerHeight = 0,
-		statusText = function()
-			local on, total = 0, 0
-			for _, m in ipairs(Okanvil.NATIVE) do total = total + 1; if Okanvil:IsModuleEnabled(m.key) then on = on + 1 end end
-			for name in pairs(Okanvil.entries) do total = total + 1; if Okanvil:IsModuleEnabled(name) then on = on + 1 end end
-			return "|cff8a8d93" .. on .. "/" .. total .. " on|r"
-		end,
-	})
-	fill.dash = dash
-
-	local main = dash.main
-	local X = 14
-	local sf = CreateFrame("ScrollFrame", nil, main)
-	sf:SetPoint("TOPLEFT", X, -8); sf:SetPoint("BOTTOMRIGHT", -14, 8)
-	local p = CreateFrame("Frame", nil, sf); p:SetSize(10, 1); sf:SetScrollChild(p)
-	local sb = CreateFrame("Slider", nil, main)
-	sb:SetPoint("TOPRIGHT", -4, -8); sb:SetPoint("BOTTOMRIGHT", -4, 8); sb:SetWidth(4)
-	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
-	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetVertexColor(u3(C.accent)); th:SetSize(4, 40)
-	sb:SetThumbTexture(th)
-	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
-	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
-	sf:SetScript("OnSizeChanged", function() p:SetWidth(sf:GetWidth()) end)
-	local wrap = { relayout = function()
-		p:SetWidth(sf:GetWidth())
-		local maxs = math.max(0, p:GetHeight() - sf:GetHeight())
-		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
-	end }
+-- Modules is a list of on/off switches -- configuration, which is what Settings
+-- is for. It had its own nav row purely because it predated the Settings tabs.
+function Okanvil:Settings_Modules(panel)
+	local X = 4
+	local p = panel
+	local wrap = { relayout = function() end }
+	local sf = panel
 
 	local hint = W.Text(p, "Turn modules on/off for THIS character (off = hidden from the menu). Each module's settings stay shared across your toons.", 11, "dim")
 	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", p, "RIGHT", -X, 0); hint:SetJustifyH("LEFT")
@@ -116,14 +85,12 @@ function Okanvil:BuildModules()
 			r:Show()
 			y = y + 50
 		end
-		p:SetHeight(math.max(y + 10, sf:GetHeight()))
-		wrap.relayout()
+		p:SetHeight(math.max(y + 10, 200))
 	end
 
 	wrap._rebuild = rebuild
-	local function refreshAll() dash:Refresh(); rebuild() end
-	fill:SetScript("OnShow", refreshAll)
-	return fill
+	panel:SetScript("OnShow", rebuild)
+	rebuild()
 end
 
 -- ------------------------------------------------------------

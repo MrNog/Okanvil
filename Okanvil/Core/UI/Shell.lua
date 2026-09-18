@@ -15,13 +15,20 @@ local function u3(t, a) return t[1], t[2], t[3], a or 1 end
 
 Okanvil.panels = {}       -- key -> { panel, scroll, child }
 Okanvil._navButtons = {}
-local HOME, GUILD, LOOT, INVITE, MODULES, SETTINGS = "__home", "__guild", "__loot", "__invite", "__modules", "__settings"
+local HOME, LOOT, SETTINGS = "__home", "__loot", "__settings"
 
 -- FIXED window size (MRT-style): the window is NOT resizable -- a hand-tuned size
 -- that always looks right. Users make it bigger/smaller with the Scale slider in
 -- Settings (proportional, never breaks the layout). Resizing from offsets was
 -- fragile and could break the UI, so we dropped it entirely.
-local WIN_W, WIN_H = 940, 660
+-- 1100 wide, not 940: the pages outgrew the old width. The PuG spec row alone
+-- needs ~790px of buttons and was clipping "bdk" off the right edge, and the
+-- comp columns, the loot rows and the raid-finder table were all fighting for
+-- the same ~730px of content well (940 minus the 190 nav and the padding).
+--
+-- Still safe on a 1280x720 laptop: the window is centred, so this leaves ~90px
+-- either side, and anyone tighter than that has the Scale slider in Settings.
+local WIN_W, WIN_H = 1100, 660
 local MIN_W, MIN_H = WIN_W, WIN_H   -- kept for any legacy references
 local NAV_W = 190
 local HEADER_H = 30
@@ -173,6 +180,12 @@ function Okanvil:BuildShell()
 	-- (No resize grip: the window is fixed-size. Grow it with the Scale slider in
 	-- Settings -- proportional and layout-safe.)
 
+	-- The quick-access menu is parented to UIParent (so it can sit above the shell),
+	-- which means hiding the window does NOT hide it. Hook the window's own OnHide
+	-- and every close path is covered at once -- the X, the collapse, a DBM pull.
+	f:SetScript("OnHide", function()
+	end)
+
 	self:RefreshNav()
 	self:ShowPanel(HOME)
 	f:Hide()
@@ -240,7 +253,7 @@ end
 -- ------------------------------------------------------------
 -- Nav list
 -- ------------------------------------------------------------
--- Built-in modules (rendered by the shell's own BuildInvite/Guild/Loot, not a
+-- Built-in modules (rendered by the shell's own BuildLoot, not a
 -- plugin build()). Listed here so they ALSO appear in the Modules manager and can
 -- be toggled on/off exactly like the plugin modules. Home/Modules/Settings are the
 -- fixed "core" and are never toggleable.
@@ -260,10 +273,10 @@ Okanvil.ICONS = {
 }
 
 Okanvil.NATIVE = {
-	{ key = "__invite", title = "Invite", icon = Okanvil.ICONS.invite,
-	  desc = "Mass-invite the guild, by rank, or from saved lists." },
-	{ key = "__guild",  title = "Guild",  icon = Okanvil.ICONS.guild,
-	  desc = "Guild dashboard + JSON roster export for the web hub." },
+	{ key = "__invite", title = "Invite", icon = Okanvil.ICONS.invite, noNav = true,
+	  desc = "Auto-invite on a keyword. Set it up in Settings > Invite; invite people from Home." },
+	{ key = "__guild",  title = "Guild",  icon = Okanvil.ICONS.guild, noNav = true,
+	  desc = "Attendance snapshots + roster export. Both live on Home." },
 	{ key = "__loot",   title = "Loot",   icon = Okanvil.ICONS.loot,
 	  desc = "Per-boss loot tracking + Mini Roll Manager (MS/OS roll-offs, award, speed-run sweep)." },
 }
@@ -274,7 +287,7 @@ Okanvil.NATIVE = {
 -- Anything enabled but NOT listed here falls to the end (alphabetical).
 -- Raid Check and the Marks Bar are deliberately NOT here: neither has a page.
 -- Both ARE their on-screen overlay, and their switches live in Settings > RAID TOOLS.
-Okanvil.NAV_ORDER = { "Guild", "Invite", "Recruit", "Raid Finder", "Loot", "ID Finder", "Combat Logs" }
+Okanvil.NAV_ORDER = { "Recruit", "Raid Finder", "Loot", "ID Finder", "Combat Logs" }
 
 function Okanvil:RefreshNav()
 	if not self.navChild then return end
@@ -289,12 +302,18 @@ function Okanvil:RefreshNav()
 	-- the end (alphabetical) so a new plugin still shows up.
 	local pool = {}
 	for _, m in ipairs(self.NATIVE) do
-		if self:IsModuleEnabled(m.key) then
+		-- `noNav` = the module runs, and can still be switched off in Modules, but
+		-- owns no page. Its settings live elsewhere (Settings, Home, the marks bar).
+		-- Without this the only way to hide a page was to DISABLE the module, which
+		-- also stops its engine -- auto-invite would quietly stop working.
+		if self:IsModuleEnabled(m.key) and not m.noNav then
 			pool[m.title] = { key = m.key, title = m.title, icon = m.icon }
 		end
 	end
 	for name in pairs(self.entries) do
-		if self:IsModuleEnabled(name) then
+		-- plugins honour `noNav` too: a module whose UI is a floating window or a
+		-- marks-bar button should not also claim a nav row
+		if self:IsModuleEnabled(name) and not self.entries[name].noNav then
 			local t = self.entries[name].title or name
 			pool[t] = { key = name, title = t, icon = self.entries[name].icon }
 		end
@@ -312,7 +331,6 @@ function Okanvil:RefreshNav()
 	table.sort(leftover)
 	for _, title in ipairs(leftover) do list[#list + 1] = pool[title] end
 
-	list[#list + 1] = { key = MODULES, title = "Modules", icon = self.ICONS.modules }
 	list[#list + 1] = { key = SETTINGS, title = "Settings", icon = self.ICONS.settings }
 
 	local y = 0
@@ -323,7 +341,15 @@ function Okanvil:RefreshNav()
 		b.text:SetText(item.title)
 		if item.icon then b.icon:SetTexture(item.icon); b.icon:Show() else b.icon:Hide() end
 		b._key = item.key
-		b:SetScript("OnClick", function() Okanvil:ShowPanel(item.key) end)
+		-- A module whose real UI is a floating window can claim its own nav click
+		-- (navAction) rather than open a page that only says "open the window".
+		local reg = Okanvil_Plugins and Okanvil_Plugins[item.key]
+		local act = reg and reg.navAction
+		if act then
+			b:SetScript("OnClick", function() act() end)
+		else
+			b:SetScript("OnClick", function() Okanvil:ShowPanel(item.key) end)
+		end
 		b:Show()
 		y = y + 26
 	end
@@ -468,10 +494,7 @@ function Okanvil:ShowPanel(key)
 	local entry = self.panels[key]
 	if not entry then
 		if key == HOME then entry = self:BuildHome()
-		elseif key == GUILD then entry = self:BuildGuild()
 		elseif key == LOOT then entry = self:BuildLoot()
-		elseif key == INVITE then entry = self:BuildInvite()
-		elseif key == MODULES then entry = self:BuildModules()
 		elseif key == SETTINGS then entry = self:BuildSettings()
 		else
 			local plug = self.entries[key]
@@ -508,6 +531,57 @@ Okanvil.UI.FLAT           = FLAT
 Okanvil.UI.u3             = u3
 Okanvil.UI.newFillPanel   = newFillPanel
 Okanvil.UI.newScrollPanel = newScrollPanel
+
+-- ------------------------------------------------------------
+-- LAYOUT TOKENS
+--
+-- The numbers every page uses for the same job, in one place. They exist because
+-- the pages drifted: the first element sat at y=-8 on Guild, -20 on Home, -14 on
+-- Invite and -6 on Loot, and the left margin was 12 / 16 / 14 / 8. Nothing was
+-- wrong on its own, but switching pages in the nav made the content JUMP, which
+-- reads as sloppy even when each page looks fine alone.
+--
+-- A token is for a shared JOB, not for every number. A page with a genuine reason
+-- to differ (a tight grid, a fixed column) still hardcodes its own value -- these
+-- are the defaults, not a straitjacket.
+-- ------------------------------------------------------------
+Okanvil.UI.PAD_X    = 12   -- left margin of page content
+Okanvil.UI.PAD_TOP  = 10   -- y of the first element on a page (use as -PAD_TOP)
+Okanvil.UI.ROW_H    = 20   -- one row in a list
+Okanvil.UI.SECTION  = 12   -- vertical gap between two blocks
+Okanvil.UI.FIELD_H  = 46   -- vertical stride of one labelled control
+
+-- ------------------------------------------------------------
+-- The scroll area inside a W.Dashboard's main pane.
+--
+-- This exact block (scroll frame + thin accent slider + wheel + relayout) was
+-- copy-pasted BYTE-IDENTICAL into Guild, Modules, Loot and Invite -- the only
+-- difference was the left margin, which is now a token. Four copies meant a
+-- scrolling fix had to be made four times, so it lives here once.
+--
+-- Returns the scroll child to draw into, plus `relayout()` to call after the
+-- content height changes.
+-- ------------------------------------------------------------
+function Okanvil.UI.DashScroll(main, padX)
+	local X = padX or Okanvil.UI.PAD_X
+	local sf = CreateFrame("ScrollFrame", nil, main)
+	sf:SetPoint("TOPLEFT", X, -8); sf:SetPoint("BOTTOMRIGHT", -14, 8)
+	local p = CreateFrame("Frame", nil, sf); p:SetSize(10, 1); sf:SetScrollChild(p)
+	local sb = CreateFrame("Slider", nil, main)
+	sb:SetPoint("TOPRIGHT", -4, -8); sb:SetPoint("BOTTOMRIGHT", -4, 8); sb:SetWidth(4)
+	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
+	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetVertexColor(u3(C.accent)); th:SetSize(4, 40)
+	sb:SetThumbTexture(th)
+	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
+	sf:EnableMouseWheel(true)
+	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
+	sf:SetScript("OnSizeChanged", function() p:SetWidth(sf:GetWidth()) end)
+	return p, function()
+		p:SetWidth(sf:GetWidth())
+		local maxs = math.max(0, p:GetHeight() - sf:GetHeight())
+		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
+	end, sf, sb
+end
 function Okanvil:Toggle()
 	if not self.win then self:BuildShell() end
 	if self.puck then self.puck:Hide() end   -- opening always leaves the collapsed puck
@@ -520,7 +594,6 @@ function Okanvil:Toggle()
 		self:ShowPanel(self._current or HOME)
 	end
 end
-
 -- Hide EVERY Okanvil frame: the shell, the collapsed puck, the global dropdown, and
 -- the mini roll manager. Wired to DBM's pull (see the DBM_Pull hook at PLAYER_LOGIN)
 -- so the whole UI gets out of the way the instant the raid engages a boss. pcall'd

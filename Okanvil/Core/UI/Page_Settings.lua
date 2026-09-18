@@ -17,7 +17,7 @@ function Okanvil:BuildSettings()
 	local fill = newFillPanel()
 	local host = fill.child
 	local db = self.db
-	local X = 12
+	local X = Okanvil.UI.PAD_X
 
 	-- TABS. Everything used to be stacked on one landing page -- appearance, media,
 	-- branding, dev, version check, and then the raid overlays crammed into an
@@ -33,6 +33,12 @@ function Okanvil:BuildSettings()
 			  build = function(pg) Okanvil:Settings_General(pg) end },
 			{ key = "raid",    label = "Raid Tools", height = 470,
 			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
+			-- Auto-invite is two toggles and a keyword box. It had a whole nav page
+			-- to itself, next to Loot and Raid Finder, for something you set once.
+			{ key = "invite",  label = "Invite",     height = 360,
+			  build = function(pg) Okanvil:Settings_Invite(pg) end },
+			{ key = "modules", label = "Modules",    height = 600,
+			  build = function(pg) Okanvil:Settings_Modules(pg) end },
 			{ key = "adv",     label = "Advanced",   height = 460,
 			  build = function(pg) Okanvil:Settings_Advanced(pg) end },
 		},
@@ -154,13 +160,22 @@ function Okanvil:Settings_RaidTools(p)
 		local rcHint = W.Text(p, "Who is missing a flask, food or a buff. Leader/assist only.", 10, "dim")
 		rcHint:SetPoint("TOPLEFT", RX + 20, -50); rcHint:SetWidth(270); rcHint:SetJustifyH("LEFT")
 
+		local rcClear = W.Check(p, "Close it once everyone is ready and buffed",
+			function() return rcdb().closeWhenClear ~= false end,
+			function(v) rcdb().closeWhenClear = v and true or false end)
+		rcClear:SetPoint("TOPLEFT", RX + 2, -74)
+		rcClear:Tooltip("Everyone answered READY and nobody is missing a flask or food\n"
+			.. "-> the popup has nothing left to show, so it closes itself.\n\n"
+			.. "Someone answering NOT ready keeps it open -- that is the case you\n"
+			.. "want to be looking at.")
+
 		local rcNum = W.Check(p, "Show minutes left on each icon",
 			function() return rcdb().hideNumbers ~= true end,
 			function(v)
 				rcdb().hideNumbers = not v
 				if RC.RenderToast then RC:RenderToast() end
 			end)
-		rcNum:SetPoint("TOPLEFT", RX + 2, -74)
+		rcNum:SetPoint("TOPLEFT", RX + 2, -100)
 
 		local rcGrey = W.Check(p, "Grey out missing buffs",
 			function() return rcdb().hideMissing ~= true end,
@@ -168,18 +183,18 @@ function Okanvil:Settings_RaidTools(p)
 				rcdb().hideMissing = not v
 				if RC.RenderToast then RC:RenderToast() end
 			end)
-		rcGrey:SetPoint("TOPLEFT", RX + 2, -100)
+		rcGrey:SetPoint("TOPLEFT", RX + 2, -126)
 
 		local rcGreyHint = W.Text(p, "Off: only buffs people actually have are drawn.", 10, "dim")
-		rcGreyHint:SetPoint("TOPLEFT", RX + 20, -120); rcGreyHint:SetWidth(300); rcGreyHint:SetJustifyH("LEFT")
+		rcGreyHint:SetPoint("TOPLEFT", RX + 20, -146); rcGreyHint:SetWidth(300); rcGreyHint:SetJustifyH("LEFT")
 
 		local rcSortL = W.Text(p, "Sort by", 11, "dim")
-		rcSortL:SetPoint("TOPLEFT", RX + 2, -146)
+		rcSortL:SetPoint("TOPLEFT", RX + 2, -172)
 		W.DropDown(p,
 			function() return RC.SORTS or { "group", "class", "name" } end,
 			function() return rcdb().sort or "group" end,
 			function(v) rcdb().sort = v; if RC.RenderToast then RC:RenderToast() end end)
-			:Size(130, 22):Point("TOPLEFT", RX + 60, -144)
+			:Size(130, 22):Point("TOPLEFT", RX + 60, -170)
 
 		-- W.Slider anchors at its BAR and prints its label ABOVE -- hence the gap.
 		W.Slider(p, "Popup size", 70, 160, 5,
@@ -187,10 +202,10 @@ function Okanvil:Settings_RaidTools(p)
 			function(v)
 				rcdb().scale = v
 				if RC.SetToastScale then RC:SetToastScale(v) end
-			end):SetPoint("TOPLEFT", RX + 2, -200)
+			end):SetPoint("TOPLEFT", RX + 2, -226)
 
 		local rcTest = W.Button(p, "Show it now")
-		rcTest:SetSize(110, 22); rcTest:SetPoint("TOPLEFT", RX + 2, -228)
+		rcTest:SetSize(110, 22); rcTest:SetPoint("TOPLEFT", RX + 2, -254)
 		rcTest:SetScript("OnClick", function() if RC.ShowToast then RC:ShowToast(true) end end)
 	end
 
@@ -199,7 +214,7 @@ function Okanvil:Settings_RaidTools(p)
 	local MB = Okanvil.MarksBar
 	if MB then
 		local ut = W.Text(p, "RAID UTILS -- the floating marks bar", 10, "dim")
-		ut:SetPoint("TOPLEFT", RX, -262)
+		ut:SetPoint("TOPLEFT", RX, -288)
 		local mbdb = function()
 			db.marksbar = db.marksbar or {}
 			return db.marksbar
@@ -208,21 +223,48 @@ function Okanvil:Settings_RaidTools(p)
 		local mbOn = W.Check(p, "Raid utils bar (marks, ready check, pull)",
 			function() return mbdb().enabled and true or false end,
 			function(v) if MB.Toggle then MB:Toggle(v and true or false) end end)
-		mbOn:SetPoint("TOPLEFT", RX + 2, -284)
+		mbOn:SetPoint("TOPLEFT", RX + 2, -310)
 
 		local mbHint = W.Text(p, "Only visible while you are raid leader or assist.", 10, "dim")
-		mbHint:SetPoint("TOPLEFT", RX + 20, -304); mbHint:SetWidth(320); mbHint:SetJustifyH("LEFT")
+		mbHint:SetPoint("TOPLEFT", RX + 20, -330); mbHint:SetWidth(320); mbHint:SetJustifyH("LEFT")
 
 		W.Slider(p, "Bar size", 70, 160, 5,
 			function() return mbdb().scale or 100 end,
 			function(v)
 				mbdb().scale = v
 				if MB.Refresh then MB:Refresh() end
-			end):SetPoint("TOPLEFT", RX + 2, -352)
+			end):SetPoint("TOPLEFT", RX + 2, -378)
 
 		W.Slider(p, "Pull timer (seconds)", 3, 30, 1,
 			function() return mbdb().pullTime or 10 end,
-			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", RX + 2, -398)
+			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", RX + 2, -424)
+	end
+
+	-- COMBAT LOGGING -- the two switches off the old Combat Logs page. Starting and
+	-- stopping is a marks-bar button and the REC timer says when it is running, so
+	-- the page was carrying these two toggles and nothing else.
+	local lg = W.Text(p, "COMBAT LOGGING", 10, "dim")
+	lg:SetPoint("TOPLEFT", RX, -460)
+	-- the logs settings live in OkanvilLogsDB (per character), not Okanvil.db
+	local LG = OkanvilLogs
+	local ldb = LG and LG.DB and LG.DB()
+	if ldb then
+		local askChk = W.Check(p, "Ask to log when entering a raid",
+			function() return ldb.askOnEnter ~= false end,
+			function(v) ldb.askOnEnter = v and true or false end)
+		askChk:SetPoint("TOPLEFT", RX + 2, -482)
+		local lockChk = W.Check(p, "Lock the REC timer (click-through)",
+			function() return ldb.recLocked and true or false end,
+			function(v)
+				ldb.recLocked = v and true or false
+				if LG.ApplyRecLock then LG.ApplyRecLock() end
+			end)
+		lockChk:SetPoint("TOPLEFT", RX + 2, -504)
+		local lgHint = W.Text(p, "Start/stop logging from the marks bar. Dungeons never prompt.", 10, "dim")
+		lgHint:SetPoint("TOPLEFT", RX + 2, -526)
+	else
+		local t = W.Text(p, "|cff8a8d93Combat Logs module not loaded.|r", 10, "dim")
+		t:SetPoint("TOPLEFT", RX + 2, -482)
 	end
 
 end
@@ -366,3 +408,97 @@ function Okanvil:ShowVersionChecker()
 end
 
 -- ---- Loot capture settings (used as a tab INSIDE the Loot module) ----
+
+-- ------------------------------------------------------------
+-- Invite -- auto-invite master switch, the two channels, and the keywords.
+--
+-- This was a whole nav page. What it actually held was these three settings
+-- plus a mass-invite-by-rank block that went unused, because inviting is faster
+-- from the per-row buttons on Home.
+-- ------------------------------------------------------------
+function Okanvil:Settings_Invite(p)
+	local I = Okanvil.Invite
+	local X = 14
+	if not I then
+		local t = W.Text(p, "Invite engine not loaded.", 11, "dim")
+		t:SetPoint("TOPLEFT", X, -12)
+		return
+	end
+
+	local hdr = W.Text(p, "AUTO-INVITE", 10, "dim"); hdr:SetPoint("TOPLEFT", X, -10)
+
+	-- master switch: OFF means nobody is pulled in by a keyword, whatever the
+	-- channel toggles below say
+	local master = W.Button(p, "", "primary")
+	master:SetSize(150, 24); master:SetPoint("TOPLEFT", X, -28)
+	local function syncMaster()
+		local on = I.KeywordEnabled()
+		if master.text then master.text:SetText(on and "Auto-Invite: ON" or "Auto-Invite: OFF") end
+		master:SetKind(on and "primary" or nil)
+	end
+	master:SetScript("OnClick", function()
+		I.SetKeywordEnabled(not I.KeywordEnabled())
+		syncMaster()
+	end)
+	syncMaster()
+
+	local warn = W.Text(p, "|cff8a8d93Can't run with Recruit (shared keyword) -- enabling one disables the other.|r", 10, "dim")
+	warn:SetPoint("TOPLEFT", X, -58); warn:SetWidth(420); warn:SetJustifyH("LEFT")
+
+	local wChk = W.Check(p, "On whisper", function() return I.db().whisperInvite end,
+		function(v) I.db().whisperInvite = v end)
+	wChk:SetPoint("TOPLEFT", X, -80)
+	local gChk = W.Check(p, "On guild chat", function() return I.db().guildInvite end,
+		function(v) I.db().guildInvite = v end)
+	gChk:SetPoint("LEFT", wChk, "LEFT", 165, 0)
+
+	local kwLbl = W.Text(p, "KEYWORDS", 10, "dim"); kwLbl:SetPoint("TOPLEFT", X, -114)
+
+	-- Live preview. Matching is WHOLE WORD, which is right ("reinvite" must not
+	-- trigger) but not obvious: "inv" alone does NOT match "invite", so the most
+	-- natural thing a person types was being ignored. Showing what does and does
+	-- not match means never having to guess again.
+	local preview = W.Text(p, "", 10, "dim")
+	preview:SetPoint("TOPLEFT", X, -168); preview:SetWidth(430); preview:SetJustifyH("LEFT")
+
+	local SAMPLES = { "inv", "invite", "+", "inv pls", "invite me", "reinvite" }
+	local function refreshPreview(text)
+		local kws = {}
+		for w in (text or ""):lower():gmatch("[^%s,;]+") do kws[#kws + 1] = w end
+		local yes, no = {}, {}
+		for _, sample in ipairs(SAMPLES) do
+			local hit = false
+			for _, kw in ipairs(kws) do
+				if kw ~= "" and sample:find("%f[%w]" .. kw:gsub("(%W)", "%%%1") .. "%f[%W]") then
+					hit = true; break
+				end
+			end
+			if hit then yes[#yes + 1] = '"' .. sample .. '"' else no[#no + 1] = '"' .. sample .. '"' end
+		end
+		preview:SetText("|cff7cfc8amatches|r " .. (table.concat(yes, ", ") ~= "" and table.concat(yes, ", ") or "nothing")
+			.. (#no > 0 and ("\n|cffff5555ignores|r " .. table.concat(no, ", ")) or ""))
+	end
+
+	local kwBox = W.EditBox(p, function(t) I.db().keyword = t or ""; refreshPreview(t) end)
+	kwBox:Size(300, 22); kwBox:SetPoint("TOPLEFT", X, -134)
+	kwBox.edit:SetText(I.db().keyword or "inv, invite, +")
+	kwBox.edit:SetScript("OnTextChanged", function(s) refreshPreview(s:GetText()) end)
+
+	local kwHint = W.Text(p, "comma-separated -- any of them triggers an invite", 10, "dim")
+	kwHint:SetPoint("LEFT", kwBox, "RIGHT", 10, 0)
+
+	refreshPreview(kwBox.edit:GetText())
+
+	-- ---- login toast ----
+	local ltLbl = W.Text(p, "LOGIN TOAST", 10, "dim"); ltLbl:SetPoint("TOPLEFT", X, -206)
+	local ltChk = W.Check(p, "Pop a toast when someone logs in, with an Invite button",
+		function() return I.db().loginToast ~= false end,
+		function(v) I.db().loginToast = v and true or false end)
+	ltChk:SetPoint("TOPLEFT", X, -226)
+
+	local ltRanks = W.EditBox(p, function(t) I.db().loginToastRanks = t or "" end)
+	ltRanks:Size(200, 22); ltRanks:SetPoint("TOPLEFT", X, -252)
+	ltRanks.edit:SetText(I.db().loginToastRanks or "sewer")
+	local ltHint = W.Text(p, "which ranks to toast -- part of the rank name, comma-separated\n(e.g. \"sewer\" or \"sewer, raider\"). Empty = nobody.", 10, "dim")
+	ltHint:SetPoint("LEFT", ltRanks, "RIGHT", 10, 0); ltHint:SetJustifyH("LEFT")
+end
