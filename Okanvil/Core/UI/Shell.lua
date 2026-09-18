@@ -15,6 +15,7 @@ local function u3(t, a) return t[1], t[2], t[3], a or 1 end
 
 Okanvil.panels = {}       -- key -> { panel, scroll, child }
 Okanvil._navButtons = {}
+Okanvil._navHeaders = {}   -- section labels, pooled separately from the clickable rows
 local HOME, LOOT, SETTINGS = "__home", "__loot", "__settings"
 
 -- FIXED window size (MRT-style): the window is NOT resizable -- a hand-tuned size
@@ -37,23 +38,51 @@ local FOOTER_H = 22
 -- ------------------------------------------------------------
 -- Nav entry (icon + label + active bar)
 -- ------------------------------------------------------------
+-- Row metrics, derived from the user's font size so the Scale and Font sliders in
+-- Settings move the nav along with everything else. The old fixed 15px icon and
+-- default text made this the smallest thing on screen, next to a Home page whose
+-- rows are 38px tall.
+local function navFont()
+	local _, base = Okanvil:Font()
+	return math.max(8, (base or 12) + 2)
+end
+local function navRowH() return navFont() + 16 end
+local function navIcon() return math.min(navRowH() - 8, 24) end
+-- Section labels get extra room ABOVE them, which is what actually separates the
+-- groups -- the label text itself sits at the bottom of that space.
+local function navHeaderH() return navFont() + 14 end
+
 local function makeNavEntry(parent)
 	local b = CreateFrame("Button", nil, parent)
-	b:SetHeight(24)
+	b:SetHeight(navRowH())
 	local hl = b:CreateTexture(nil, "BACKGROUND")
 	hl:SetAllPoints(); hl:SetTexture(FLAT); hl:SetVertexColor(0, 0, 0, 0)
 	b.hl = hl
 	local bar = b:CreateTexture(nil, "ARTWORK")   -- left accent bar when active
-	bar:SetPoint("TOPLEFT"); bar:SetPoint("BOTTOMLEFT"); bar:SetWidth(2)
+	bar:SetPoint("TOPLEFT"); bar:SetPoint("BOTTOMLEFT"); bar:SetWidth(3)
 	bar:SetTexture(FLAT); bar:SetVertexColor(u3(C.accent)); bar:Hide()
 	b.bar = bar
 	b.icon = b:CreateTexture(nil, "ARTWORK")
-	b.icon:SetSize(15, 15); b.icon:SetPoint("LEFT", 8, 0)
+	b.icon:SetSize(navIcon(), navIcon()); b.icon:SetPoint("LEFT", 10, 0)
 	b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	b.text = W.Text(b); b.text:SetPoint("LEFT", b.icon, "RIGHT", 7, 0); b.text:SetJustifyH("LEFT")
+	b.text = W.Text(b, nil, navFont()); b.text:SetPoint("LEFT", b.icon, "RIGHT", 9, 0); b.text:SetJustifyH("LEFT")
 	b:SetScript("OnEnter", function(s) if not s._active then s.hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.08) end end)
 	b:SetScript("OnLeave", function(s) if not s._active then s.hl:SetVertexColor(0, 0, 0, 0) end end)
 	return b
+end
+
+-- Section label ("RAID", "GUILD"...). A plain frame, not a Button, so it can never
+-- take a click or steal the active highlight -- it only says what the rows under it
+-- are for. Smaller and dimmer than a row: a signpost, not an entry.
+local function makeNavHeader(parent)
+	local h = CreateFrame("Frame", nil, parent)
+	h:SetHeight(navHeaderH())
+	local rule = h:CreateTexture(nil, "ARTWORK")
+	rule:SetPoint("BOTTOMLEFT", 10, 3); rule:SetPoint("BOTTOMRIGHT", -10, 3); rule:SetHeight(1)
+	rule:SetTexture(FLAT); rule:SetVertexColor(1, 1, 1, 0.07)
+	h.text = W.Text(h, nil, math.max(8, navFont() - 3), "dim")
+	h.text:SetPoint("BOTTOMLEFT", 10, 6); h.text:SetJustifyH("LEFT")
+	return h
 end
 
 -- ------------------------------------------------------------
@@ -287,19 +316,30 @@ Okanvil.NATIVE = {
 -- Anything enabled but NOT listed here falls to the end (alphabetical).
 -- Raid Check and the Marks Bar are deliberately NOT here: neither has a page.
 -- Both ARE their on-screen overlay, and their switches live in Settings > RAID TOOLS.
-Okanvil.NAV_ORDER = { "Recruit", "Raid Finder", "Loot", "ID Finder", "Combat Logs" }
+-- Nav sections. Same idea as the old flat NAV_ORDER -- one table you edit to
+-- place a feature -- but grouped, so the shape of the list says what each entry
+-- is FOR. A section with nothing enabled in it prints no header.
+Okanvil.NAV_GROUPS = {
+	{ section = nil,      items = { "Home" } },
+	{ section = "RAID",   items = { "Loot", "Raid Finder", "PuG" } },
+	{ section = "GUILD",  items = { "Recruit" } },
+	{ section = "TOOLS",  items = { "ID Finder", "Settings" } },
+}
+-- flat order, derived: anything not named above still falls through alphabetically
+Okanvil.NAV_ORDER = {}
+for _, g in ipairs(Okanvil.NAV_GROUPS) do
+	for _, t in ipairs(g.items) do Okanvil.NAV_ORDER[#Okanvil.NAV_ORDER + 1] = t end
+end
 
 function Okanvil:RefreshNav()
 	if not self.navChild then return end
 	for _, b in ipairs(self._navButtons) do b:Hide() end
 
-	local list = {
-		{ key = HOME, title = "Home", icon = self.ICONS.home },
-	}
+	local list = {}
 
 	-- Gather every enabled module (native + plugins) into one pool keyed by title,
-	-- then emit them in a FIXED display order. Anything not in NAV_ORDER falls to
-	-- the end (alphabetical) so a new plugin still shows up.
+	-- then emit them grouped, in the fixed order NAV_GROUPS gives. Anything not
+	-- named there falls to the end (alphabetical) so a new plugin still shows up.
 	local pool = {}
 	for _, m in ipairs(self.NATIVE) do
 		-- `noNav` = the module runs, and can still be switched off in Modules, but
@@ -319,40 +359,72 @@ function Okanvil:RefreshNav()
 		end
 	end
 
-	-- emit in the master order (Okanvil.NAV_ORDER -- edit that to reorder / place
-	-- a new feature). Missing / disabled entries are simply skipped.
+	-- Home and Settings are the shell's own, not modules, so they are not in the
+	-- pool -- put them there so the group table can place them like anything else.
+	pool["Home"] = { key = HOME, title = "Home", icon = self.ICONS.home }
+	pool["Settings"] = { key = SETTINGS, title = "Settings", icon = self.ICONS.settings }
+
+	-- emit group by group. A header is only printed once we know the section has
+	-- at least one enabled entry, so switching a module off never leaves a lone
+	-- heading behind.
 	local emitted = {}
-	for _, title in ipairs(self.NAV_ORDER) do
-		if pool[title] then list[#list + 1] = pool[title]; emitted[title] = true end
+	for _, g in ipairs(self.NAV_GROUPS) do
+		local rows = {}
+		for _, title in ipairs(g.items) do
+			if pool[title] then rows[#rows + 1] = pool[title]; emitted[title] = true end
+		end
+		if #rows > 0 then
+			if g.section then list[#list + 1] = { header = g.section } end
+			for _, r in ipairs(rows) do list[#list + 1] = r end
+		end
 	end
-	-- any enabled module not named in NAV_ORDER (future plugins), alphabetical
+	-- any enabled module not named above (future plugins), alphabetical, under TOOLS
 	local leftover = {}
 	for title in pairs(pool) do if not emitted[title] then leftover[#leftover + 1] = title end end
 	table.sort(leftover)
 	for _, title in ipairs(leftover) do list[#list + 1] = pool[title] end
 
-	list[#list + 1] = { key = SETTINGS, title = "Settings", icon = self.ICONS.settings }
-
-	local y = 0
-	for i, item in ipairs(list) do
-		local b = self._navButtons[i] or makeNavEntry(self.navChild)
-		self._navButtons[i] = b
-		b:ClearAllPoints(); b:SetPoint("TOPLEFT", 0, -y); b:SetPoint("TOPRIGHT", 0, -y)
-		b.text:SetText(item.title)
-		if item.icon then b.icon:SetTexture(item.icon); b.icon:Show() else b.icon:Hide() end
-		b._key = item.key
-		-- A module whose real UI is a floating window can claim its own nav click
-		-- (navAction) rather than open a page that only says "open the window".
-		local reg = Okanvil_Plugins and Okanvil_Plugins[item.key]
-		local act = reg and reg.navAction
-		if act then
-			b:SetScript("OnClick", function() act() end)
+	-- Headers and rows come from two separate pools: reusing a Button as a label
+	-- would leave it clickable, so a section title would open whatever page that
+	-- button last pointed at.
+	local y, nb, nh = 0, 0, 0
+	for _, item in ipairs(list) do
+		if item.header then
+			nh = nh + 1
+			local h = self._navHeaders[nh] or makeNavHeader(self.navChild)
+			self._navHeaders[nh] = h
+			h:SetHeight(navHeaderH())
+			h.text:SetFont(Okanvil:Font(), math.max(8, navFont() - 3))
+			h:ClearAllPoints(); h:SetPoint("TOPLEFT", 0, -y); h:SetPoint("TOPRIGHT", 0, -y)
+			h.text:SetText(item.header)
+			h:Show()
+			y = y + navHeaderH()
 		else
-			b:SetScript("OnClick", function() Okanvil:ShowPanel(item.key) end)
+			nb = nb + 1
+			local b = self._navButtons[nb] or makeNavEntry(self.navChild)
+			self._navButtons[nb] = b
+			-- re-apply the metrics: the font slider can move since this row was built
+			b:SetHeight(navRowH())
+			b.icon:SetSize(navIcon(), navIcon())
+			b.text:SetFont(Okanvil:Font(), navFont())
+			b:ClearAllPoints(); b:SetPoint("TOPLEFT", 0, -y); b:SetPoint("TOPRIGHT", 0, -y)
+			b.text:SetText(item.title)
+			if item.icon then b.icon:SetTexture(item.icon); b.icon:Show() else b.icon:Hide() end
+			b._key = item.key
+			-- A module whose real UI is a floating window can claim its own nav click
+			-- (navAction) rather than open a page that only says "open the window".
+			local reg = Okanvil_Plugins and Okanvil_Plugins[item.key]
+			local act = reg and reg.navAction
+			if act then
+				b:SetScript("OnClick", function() act() end)
+			else
+				b:SetScript("OnClick", function() Okanvil:ShowPanel(item.key) end)
+			end
+			b:Show()
+			y = y + navRowH()
 		end
-		b:Show()
-		y = y + 26
 	end
+	for i = nh + 1, #self._navHeaders do self._navHeaders[i]:Hide() end
 	self.navChild:SetHeight(math.max(1, y))
 	if self.footerCount then
 		-- count = built-in natives + registered plugins

@@ -686,7 +686,11 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		Okanvil_Plugins = Okanvil_Plugins or {}
 		Okanvil_Plugins[ADDON] = {
 			title = "Combat Logs",
-			desc = "Combat-log control, REC timer and session tracker.",
+			-- No nav row: logging starts itself at the first pull, the REC timer on
+			-- screen says when it is running, and its two settings live in
+			-- Settings > Raid Tools. A page for a switch you never press.
+			noNav = true,
+			desc = "Combat-log control + REC timer. Starts at the first pull; settings in Settings > Raid Tools.",
 			icon = (Okanvil and Okanvil.ICONS and Okanvil.ICONS.logs) or "Interface\\Icons\\INV_Scroll_03",
 			build = function(panel)
 				OkanvilLogs.panel = panel
