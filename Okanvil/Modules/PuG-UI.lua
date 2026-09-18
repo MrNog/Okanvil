@@ -126,7 +126,14 @@ local function buildTopStrip(p)
 	-- free text appended to the line ("SR>MS>OS", "wsp me")
 	label(p, "note", 466, -9)
 	F.noteBox = W.EditBox(p):Size(180, 22):Point("TOPLEFT", 500, -4)
-	F.noteBox.edit:SetScript("OnTextChanged", function(s) d.note = s:GetText() or ""; M.RefreshPreview() end)
+	-- An EditBox hands back "||" for every "|" that was pasted -- the pipe is WoW's
+	-- own escape character, so the control doubles it on the way in. An achievement
+	-- or item link pasted here is nothing BUT pipes, so without undoing that the
+	-- link goes out broken. Same fix as the loot-priority paste box.
+	F.noteBox.edit:SetScript("OnTextChanged", function(s)
+		d.note = (s:GetText() or ""):gsub("||", "|")
+		M.RefreshPreview()
+	end)
 
 	-- Read everyone's actual spec instead of guessing from class. Without this the
 	-- board files every paladin the same way and the leader sorts 25 people by hand,
@@ -438,6 +445,11 @@ local function buildClassRow(p)
 		local b = W.Button(p, r.label, nil):Size(48, 20)
 		b:SetPoint("LEFT", x, 0)
 		b:OnClick(function()
+			-- Same as the class and spec buttons: touching a pick means the line is
+			-- being built from the picks again. Without this the role button was the
+			-- one control that left a hand-edited line frozen, so switching from
+			-- Range to Tank changed the buttons and nothing else.
+			pickTakesOver()
 			d.wantRole = r.key
 			-- Drop picks the new role cannot show. Otherwise ticking Mage under
 			-- Range and then switching to Tank leaves "(Mage)" in the line with

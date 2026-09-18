@@ -559,7 +559,22 @@ end
 -- ------------------------------------------------------------
 -- Message builder
 -- ------------------------------------------------------------
--- "LFM ICC25 HC need 1 Tank 2 Heal 5 DPS (DK/Rogue) 5.8k+ gs wsp me"
+-- The classes the leader specifically asked for, as "DK/Rogue".
+-- Specs first, then plain classes. A leader who ticked both "hpala" and "Pala"
+-- means "a holy one especially, but any paladin", and reading the specific ask
+-- first is how it gets said out loud.
+local function wantText()
+	local want = {}
+	for _, s in ipairs(OkanvilClassSpecs or {}) do
+		if db.wantClasses[s.token] then want[#want + 1] = s.short end
+	end
+	for _, c in ipairs(OkanvilClasses or {}) do
+		if db.wantClasses[c.token] then want[#want + 1] = c.short end
+	end
+	return table.concat(want, "/")
+end
+
+-- "LFM ICC25 HC need 1 Tank (DK/Pala) 2 Heal 5 DPS 5.8k+ gs wsp me"
 local function buildMessage()
 	local need = stillNeeded()
 	local parts = { "LFM", raidLabel() }
@@ -572,9 +587,19 @@ local function buildMessage()
 			bits[#bits + 1] = (c.missing > 1 and (c.missing .. " ") or "") .. c.short
 		end
 	else
+		-- The class picks belong to the ROLE they were chosen under: picking Tank
+		-- and then Druid/Pala means "2 Tank (Druid/Pala)", not "2 Tank ... 1 Ranged
+		-- (Druid/Pala)" with the classes stranded at the end of the line saying
+		-- nothing about which role wants them.
+		local wantRole = db.wantRole or ""
+		local classAsk = (wantRole ~= "") and wantText() or ""
 		for _, r in ipairs(ROLES) do
 			if need[r] > 0 then
-				bits[#bits + 1] = need[r] .. " " .. ROLE_SHORT[r]
+				local bit = need[r] .. " " .. ROLE_SHORT[r]
+				if classAsk ~= "" and r == wantRole then
+					bit = bit .. " (" .. classAsk .. ")"
+				end
+				bits[#bits + 1] = bit
 			end
 		end
 	end
@@ -586,18 +611,11 @@ local function buildMessage()
 		parts[#parts + 1] = "almost full"
 	end
 
-	-- Specs first, then plain classes. A leader who ticked both "hpala" and "Pala"
-	-- means "a holy one especially, but any paladin", and reading the specific ask
-	-- first is how it gets said out loud.
-	local want = {}
-	for _, s in ipairs(OkanvilClassSpecs or {}) do
-		if db.wantClasses[s.token] then want[#want + 1] = s.short end
-	end
-	for _, c in ipairs(OkanvilClasses or {}) do
-		if db.wantClasses[c.token] then want[#want + 1] = c.short end
-	end
-	if #want > 0 then
-		parts[#parts + 1] = "(" .. table.concat(want, "/") .. ")"
+	-- No role picked ("Any"), or a class run: the ask is not tied to one role, so
+	-- it goes at the end where it reads as "and by the way, these classes".
+	if (db.wantRole or "") == "" or db.classRun then
+		local w = wantText()
+		if w ~= "" then parts[#parts + 1] = "(" .. w .. ")" end
 	end
 
 	if db.gs ~= "" then parts[#parts + 1] = db.gs .. "+ gs" end
