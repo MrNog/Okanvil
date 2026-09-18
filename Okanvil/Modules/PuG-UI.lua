@@ -127,23 +127,17 @@ local function buildTopStrip(p)
 	F.gsBox = W.EditBox(p):Size(56, 22):Point("TOPLEFT", 398, -4)
 	F.gsBox.edit:SetScript("OnTextChanged", function(s) d.gs = s:GetText() or ""; M.RefreshPreview() end)
 
-	-- free text appended to the line ("SR>MS>OS", "wsp me")
-	label(p, "note", 466, -9)
-	F.noteBox = W.EditBox(p):Size(180, 22):Point("TOPLEFT", 500, -4)
-	-- An EditBox hands back "||" for every "|" that was pasted -- the pipe is WoW's
-	-- own escape character, so the control doubles it on the way in. An achievement
-	-- or item link pasted here is nothing BUT pipes, so without undoing that the
-	-- link goes out broken. Same fix as the loot-priority paste box.
-	F.noteBox.edit:SetScript("OnTextChanged", function(s)
-		d.note = (s:GetText() or ""):gsub("||", "|")
-		M.RefreshPreview()
-	end)
+	-- The "note" box is gone from the strip. Everything it used to carry is said
+	-- by a control that means it -- reserves by the Reserve row, gs by min gs --
+	-- and a free-text tail is the kind of field that is filled once and then
+	-- silently appended to every line for the rest of the night. d.note is still
+	-- honoured by the message builder, so an old profile keeps its text.
 
 	-- Read everyone's actual spec instead of guessing from class. Without this the
 	-- board files every paladin the same way and the leader sorts 25 people by hand,
 	-- remembering who heals. Explicit button, not automatic: inspecting the whole
 	-- raid is a burst of server traffic and should happen when asked for.
-	F.scanBtn = W.Button(p, "Scan specs", nil):Size(90, 22):Point("TOPLEFT", 692, -4)
+	F.scanBtn = W.Button(p, "Read specs", nil):Size(96, 22):Point("TOPLEFT", 470, -4)
 	F.scanBtn:OnClick(function()
 		local I = Okanvil.Inspect
 		if not (I and I.ScanGroup) then
@@ -161,7 +155,7 @@ local function buildTopStrip(p)
 		end
 		local ok, total = I.ScanGroup(false, function(done)
 			I.onProgress = nil
-			if F and F.scanBtn and F.scanBtn.text then F.scanBtn.text:SetText("Scan specs") end
+			if F and F.scanBtn and F.scanBtn.text then F.scanBtn.text:SetText("Read specs") end
 			Okanvil:Print("Specs read for " .. tostring(done) .. " player(s).")
 			M.RefreshUI()
 		end)
@@ -192,7 +186,10 @@ local function buildNeeds(p)
 		cell:SetPoint("TOPLEFT", x, -4)
 
 		local rgb = ROLE_RGB[role]
-		cell:SetBackdropBorderColor(rgb[1], rgb[2], rgb[3], 0.55)
+		-- A hint of the role's colour, not a frame around it: at 0.55 the four cells
+		-- read as four boxes competing with the board below them, which is where the
+		-- colour actually has to do work.
+		cell:SetBackdropBorderColor(rgb[1], rgb[2], rgb[3], 0.22)
 
 		local nameFS = W.Text(cell, ROLE_COLOR[role] .. ROLE_LABEL[role] .. "|r", "body")
 		nameFS:SetPoint("TOPLEFT", 8, -5)
@@ -385,10 +382,13 @@ local function buildBoard(p)
 				-- assigning a slot to someone who has not been invited. Left-click
 				-- invites them; right-click drops them off the list.
 				if self._pending then
+					-- Left opens the conversation: before inviting a stranger you read
+					-- what they actually wrote. Right invites outright, for when the
+					-- line already told you everything.
 					if button == "RightButton" then
-						M.RemoveApplicant(self._name)
-					else
 						M.InviteApplicant(self._name)
+					else
+						M.Msg_Open(self._name)
 					end
 				elseif button == "RightButton" then
 					M.Assign(self._name, nil)
@@ -1016,7 +1016,6 @@ function M.RefreshUI()
 		F.diffBtn:SetKind((canHC and d.hc) and "primary" or nil)
 	end
 	if F.gsBox and not F.gsBox.edit:HasFocus() then F.gsBox.edit:SetText(d.gs or "") end
-	if F.noteBox and not F.noteBox.edit:HasFocus() then F.noteBox.edit:SetText(d.note or "") end
 
 	-- ---- roster + board ----
 	local list = M.RosterList()

@@ -895,6 +895,46 @@ function M.ApplicantList()
 end
 M.AddApplicant = addApplicant
 
+-- Role tints, the same four the board columns use, so a spec on a row and the
+-- column it belongs in are the same colour.
+local ROLE_TINT = {
+	tank   = "|cff4a90d9",
+	healer = "|cff7cfc8a",
+	melee  = "|cffe05555",
+	ranged = "|cffc77dd6",
+}
+
+-- Colour for a gearscore, as a |cff.... escape.
+--
+-- GearScore's OWN function first, when that addon is loaded: the number came
+-- from it, so it should be tinted the way it tints it everywhere else -- a
+-- 5.4k that is orange in their tooltip and green in ours is just confusing.
+--
+-- The fallback is a plain WotLK-era ladder for clients without it: under 4k is
+-- not geared for a 25, 6k+ is fully geared, and the steps between are the range
+-- an actual pug argues about.
+local GS_STEPS = {
+	{ 6000, "ffff8000" },   -- orange: best in slot territory
+	{ 5500, "ffa335ee" },   -- purple
+	{ 5000, "ff0070dd" },   -- blue
+	{ 4500, "ff1eff00" },   -- green
+	{ 4000, "ffffffff" },   -- white
+}
+function M.GSColor(gs)
+	local n = tonumber((tostring(gs or ""):gsub("[^%d%.]", "")))
+	if not n then return "|cff8a8d93" end
+	-- "5.8" and "5.8k" mean 5800; "5800" already does
+	if n < 100 then n = n * 1000 end
+	if _G.GearScore_GetQuality then
+		local r, g, b = _G.GearScore_GetQuality(n)
+		if r then return ("|cff%02x%02x%02x"):format(r * 255, g * 255, b * 255) end
+	end
+	for _, step in ipairs(GS_STEPS) do
+		if n >= step[1] then return "|c" .. step[2] end
+	end
+	return "|cff9d9d9d"     -- below 4k: grey, the way a poor item is
+end
+
 -- The line under a name on the board: "blood dk  5.8k".
 --
 -- Two sources and they are not equal. An INSPECT is measured -- it read their
@@ -911,12 +951,25 @@ function M.SubLabel(name)
 	local info = I and I.Info and I.Info(name)
 	local a = db.applicants and db.applicants[name]
 
-	if info and info.spec then bits[#bits + 1] = info.spec:lower()
-	elseif a and a.spec then bits[#bits + 1] = a.spec end
+	-- The spec is the ROLE's colour, matching the column it belongs in: a healer
+	-- reads green here and sits in the green column, so the board can be scanned
+	-- without reading a single word.
+	local spec = (info and info.spec and info.spec:lower()) or (a and a.spec)
+	if spec then
+		local role = (info and info.role) or (a and a.role)
+		bits[#bits + 1] = (ROLE_TINT[role or ""] or "|cffb0b3b8") .. spec .. "|r"
+	end
 
-	if info and info.gs then bits[#bits + 1] = info.gs
-	elseif info and info.ilvl then bits[#bits + 1] = "i" .. info.ilvl
-	elseif a and a.gs then bits[#bits + 1] = a.gs end
+	-- The gearscore in GearScore's own colours -- that number IS a gearscore, and
+	-- the colour is the fastest way to read it.
+	local gs = (info and info.gs) or (info and info.ilvl and ("i" .. info.ilvl)) or (a and a.gs)
+	if gs then
+		-- "5408" is how the addon stores it and "5.4k" is how the raid says it --
+		-- four digits of precision nobody reads, in a row that has to be skimmed.
+		local n = tonumber(tostring(gs):match("^(%d+)$"))
+		local shown = (n and n >= 1000) and (("%.1fk"):format(n / 1000)) or tostring(gs)
+		bits[#bits + 1] = M.GSColor(gs) .. shown .. "|r"
+	end
 
 	return table.concat(bits, "  ")
 end

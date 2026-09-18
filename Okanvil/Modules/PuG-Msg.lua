@@ -311,6 +311,17 @@ end
 
 function M.Msg_IsShown() return win and win:IsShown() end
 
+-- Open the window ON a given person -- what clicking an applicant on the board
+-- does. Opening it on whoever happened to be newest would make the click feel
+-- like it went to the wrong row.
+function M.Msg_Open(name)
+	if not name then return end
+	if not (win and win:IsShown()) then M.Msg_Toggle() end
+	selected = name
+	M.MarkRead(name)
+	M.Msg_Refresh()
+end
+
 -- How many people are waiting on a reply -- the number on the button that opens
 -- this window.
 function M.UnreadCount()
