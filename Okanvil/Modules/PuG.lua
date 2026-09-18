@@ -38,10 +38,12 @@ local defaults = {
 	active = false,
 	autoReply = false,       -- whisper back automatically when someone applies
 	replyText = "",
-	-- OFF: the page has no applicant list, so collecting them would just grow the
-	-- saved file for nothing. Auto-reply below works independently of this.
-	catchWhispers = false,
-	applicants = {},         -- [name] = { class=, role=, gs=, spec=, msg=, t=, invited= }
+	-- Applicants are always collected while spamming -- the Messages window is
+	-- where they land. (Kept as a field: older profiles have it.)
+	catchWhispers = true,
+	-- [name] = { class=, role=, gs=, spec=, msg=, t=, invited=, unread=,
+	--            log = { { them=, msg=, t= }, ... } }
+	applicants = {},
 	assign = {},             -- [name] = "tank"/"healer"/"melee"/"ranged"; the leader's
 	                         -- board. Persisted so a /reload mid-forming keeps the comp.
 	autoGroup = true,        -- move people into their role's raid group as they accept
@@ -826,6 +828,10 @@ end
 M.Classify = classify
 
 -- Record (or update) an applicant. Returns the row.
+-- Lines kept per conversation. Enough to see how an exchange went; not so many
+-- that a night of pugging bloats the saved file.
+local MAX_LOG_LINES = 30
+
 local function addApplicant(name, msg, guid)
 	local class
 	if guid and GetPlayerInfoByGUID then
@@ -844,7 +850,48 @@ local function addApplicant(name, msg, guid)
 	a.gs    = gs or a.gs
 	a.msg   = msg
 	a.t     = time()
+	-- Keep the CONVERSATION, not just the last line: the messages window shows
+	-- what was said on both sides, and "5.2" three messages later only means
+	-- anything next to the "whats your gs?" it answers.
+	a.log = a.log or {}
+	a.log[#a.log + 1] = { them = true, msg = msg, t = a.t }
+	while #a.log > MAX_LOG_LINES do table.remove(a.log, 1) end
+	a.unread = (a.unread or 0) + 1
 	return a
+end
+
+-- Record something WE sent, so the window reads as a conversation rather than a
+-- list of their lines with our replies missing.
+function M.LogOutgoing(name, msg)
+	if not (name and msg and msg ~= "") then return end
+	local a = db.applicants[name]
+	if not a then return end
+	a.log = a.log or {}
+	a.log[#a.log + 1] = { them = false, msg = msg, t = time() }
+	while #a.log > MAX_LOG_LINES do table.remove(a.log, 1) end
+end
+
+-- Send a whisper AND log it. One call so a reply can never land in the chat
+-- without showing up in the window that sent it.
+function M.Whisper(name, msg)
+	if not (name and msg and msg ~= "") then return false end
+	SendChatMessage(msg, "WHISPER", nil, name)
+	M.LogOutgoing(name, msg)
+	return true
+end
+
+function M.MarkRead(name)
+	local a = db.applicants[name]
+	if a then a.unread = 0 end
+end
+
+-- Applicants, newest conversation first -- the list in the window is ordered by
+-- who spoke last, the way any messages app is.
+function M.ApplicantList()
+	local out = {}
+	for _, a in pairs(db.applicants or {}) do out[#out + 1] = a end
+	table.sort(out, function(x, y) return (x.t or 0) > (y.t or 0) end)
+	return out
 end
 M.AddApplicant = addApplicant
 
@@ -1041,17 +1088,15 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 		-- Only act while forming. Off-hours whispers are just chat.
 		if not db.active then return end
-		-- Nothing to do unless one of the two whisper features is on. (Collecting
-		-- applicants is off by default: the page has no list to show them in.)
-		if not db.catchWhispers and not (db.autoReply and db.replyText ~= "") then return end
+		-- Applicants are always collected while forming: there IS a window to show
+		-- them in now, and a whisper you did not catch is a raider you did not see.
 		local msg, sender = arg1, stripRealm(arg2)
 		if not sender then return end
 		-- CHAT_MSG_* args: 1 msg, 2 sender, ... 11 guid. We already consumed the
 		-- first two, so the GUID is the 9th of the rest.
-		if db.catchWhispers then
-			local guid = select(9, ...)
-			addApplicant(sender, msg, guid)
-		end
+		local guid = select(9, ...)
+		addApplicant(sender, msg, guid)
+		if M.onApplicant then M.onApplicant(sender) end
 		if db.autoReply and db.replyText ~= "" then
 			local last = replied[sender]
 			if not last or (time() - last) > 60 then

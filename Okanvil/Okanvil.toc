@@ -42,6 +42,7 @@ Modules\RaidFinder-Mini.lua
 Modules\Raids-Data.lua
 Modules\RaidLoot-Data.lua
 Modules\PuG.lua
+Modules\PuG-Msg.lua
 Modules\PuG-UI.lua
 Modules\Farm.lua
 Modules\Farm-UI.lua

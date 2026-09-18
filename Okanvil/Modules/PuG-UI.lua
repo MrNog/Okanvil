@@ -1132,6 +1132,15 @@ function M.BuildUI(parent)
 		primaryText = function() return M.IsActive() and "STOP spamming" or "START spamming" end,
 		primaryKind = function() return M.IsActive() and "primary" or "secondary" end,
 		onPrimary = function() M.Toggle(); M.RefreshUI() end,
+		-- Opens the Messages window beside this one. The count is people waiting on
+		-- a reply, so the button says whether there is anything to go and read.
+		secondaryText = function()
+			local n = M.UnreadCount and M.UnreadCount() or 0
+			return n > 0 and ("Messages (" .. n .. ")") or "Messages"
+		end,
+		secondaryWidth = 110,
+		secondaryShown = function() return true end,
+		onSecondary = function() if M.Msg_Toggle then M.Msg_Toggle() end end,
 		statusText = function()
 			if M.IsActive() then return "|cff7cfc8aSpamming ON|r" end
 			return "|cffff5555Spamming OFF|r"
@@ -1148,6 +1157,11 @@ function M.BuildUI(parent)
 		},
 	})
 	F.dash = dash
+
+	-- A whisper arriving has to move the unread count on the Messages button even
+	-- when nothing else about the page changed. Dashboard:Refresh() re-reads every
+	-- text callback, which is the cheapest correct way to do that.
+	M.RefreshMsgBtn = function() if F and F.dash then F.dash:Refresh() end end
 
 	-- The single page is stacked inside dash.main: top strip, needs, board, bottom.
 	local main = dash.main
