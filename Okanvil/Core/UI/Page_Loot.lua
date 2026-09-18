@@ -122,80 +122,112 @@ function Okanvil:BuildLoot()
 	return fill
 end
 
--- ---- Collectors tab: Main/Frag/BoE targets + auto toggle + whisper toggle ----
+-- ---- Collectors: Main/Frag/BoE targets + the speed-run toggle ----
 --
--- Okanvil handles loot three ways; only the THIRD one lives on this tab:
+-- Okanvil handles loot three ways; only the THIRD one lives here:
 --   1. Need/Greed  -- the game's own roll. Okanvil just records what dropped.
 --   2. Master loot -- the normal flow: the Mini Roll Manager runs an MS/OS/Free
 --      roll-off, you press Award, confirm the popup, the item goes to the winner.
---   3. Speed-run   -- THIS TAB. Skips rolling at the pull: the boss is swept into
+--   3. Speed-run   -- THIS PAGE. Skips rolling at the pull: the boss is swept into
 --      one bag so the raid keeps moving, and loot is settled afterwards by roll or
 --      loot council. Every drop is still recorded and broadcast to the raid.
 --
--- The header below says this in-game, because arming the toggle silently ships
--- every BoP drop to one player and that must never be a surprise.
+-- Arming the toggle silently ships every BoP drop to one player, so the page has
+-- to say so -- but on the (?) beside the switch and in the greyed placeholder of
+-- an empty field, not in four paragraphs stacked above the controls.
 function Okanvil:Loot_BuildCollectors(p)
 	local L = Okanvil.Loot
 	local X = 8
 	if not (L and L.Collectors) then return end
 
-	-- One line: what this tab is, and that it is not the normal flow. Details on hover.
-	local intro = W.Text(p, "|cffe0b860Speed-run loot|r -- sweep the boss into one bag, settle it later. |cff8a8d93Off = normal roll + Award.|r", "note", "dim")
-	intro:SetPoint("TOPLEFT", X, -6); intro:SetPoint("RIGHT", -X, 0); intro:SetJustifyH("LEFT")
+	local TIP = "Sweeps each boss into one bag so the raid keeps moving, and the loot is "
+		.. "settled afterwards by roll or loot council.\n"
+		.. "Off: the normal flow -- roll, then Award.\n\n"
+		.. "|cffff8000BoP gear|r goes to Main loot.\n"
+		.. "|cffffd200Orbs, patterns and BoEs|r go to BoE (or Main, if BoE is empty).\n"
+		.. "|cffff5555Legendary fragments|r always ask first.\n\n"
+		.. "Leave a field empty and that loot stays on the corpse to be rolled\n"
+		.. "normally -- nothing is ever swept to anyone you did not name.\n"
+		.. "Every drop is recorded in the history and shown to the raid either way."
 
-	local warn = W.Text(p, "", "label"); warn:SetPoint("TOPLEFT", X, -26); warn:SetPoint("RIGHT", -X, 0); warn:SetJustifyH("LEFT")
-	local function paintWarn()
-		if L.IsMasterLooter and L.IsMasterLooter() then
-			warn:SetText("|cff7cfc8aYou are the Master Looter -- these apply.|r")
-		else
-			local who = L.MasterLooterName and L.MasterLooterName()
-			warn:SetText("|cffff5555Auto-loot inactive (safe) -- the Master Looter is "
-				.. (who and who ~= "" and ("|r|cffffd200" .. who .. "|r") or "|cff8a8d93nobody (not master loot)|r") .. ".")
-		end
-	end
-	paintWarn()
-	local en = W.Check(p, "Speed-run auto master-loot (only when you're the Master Looter)",
+	local en = W.Check(p, "Speed-run auto master-loot",
 		function() return L.CollectorsEnabled() end,
 		function(v) L.SetCollectorsEnabled(v) end)
-	en:SetPoint("TOPLEFT", X + 2, -46)
-	en:Tooltip("Skips rolling at the pull: the boss is swept into one bag, settled later by "
-		.. "roll or loot council. Every drop is still recorded.\n"
-		.. "Only works while YOU are the Master Looter.")
+	en:SetPoint("TOPLEFT", X + 2, -10)
+	en:Tooltip(TIP)
 
-	-- Exactly what each row does. Kept next to the rows it describes.
-	local hint = W.Text(p, "|cffff8000BoP gear|r -> Main loot.   |cffffd200Orbs / patterns / BoE|r -> BoE (or Main, if BoE is empty).   |cffff5555Legendary fragments always ask first.|r\n"
-		.. "Leave a field |cffffd200EMPTY|r and that loot stays on the corpse to be rolled normally -- nothing is ever swept to anyone you did not name. "
-		.. "|cff7cfc8aEvery drop is still recorded in the history and shown to the raid.|r", "note", "dim")
-	hint:SetPoint("TOPLEFT", X, -70); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
+	-- The whole explanation now hangs off this one mark. The header already says
+	-- whether you are the Master Looter, so the state line that used to sit here
+	-- was saying it a second time.
+	local qual = W.Text(p, "|cff8a8d93-- only when you are ML|r  |cffe0b860(?)|r", "note", "dim")
+	qual:SetPoint("LEFT", en, "RIGHT", 10, 0)
+	local qhit = CreateFrame("Frame", nil, p)
+	qhit:SetPoint("TOPLEFT", qual, "TOPLEFT", -2, 2)
+	qhit:SetPoint("BOTTOMRIGHT", qual, "BOTTOMRIGHT", 2, -2)
+	qhit:EnableMouse(true)
+	qhit:SetScript("OnEnter", function(s)
+		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+		for line in (TIP .. "\n"):gmatch("(.-)\n") do
+			if line == "" then GameTooltip:AddLine(" ")
+			else GameTooltip:AddLine(line, 1, 1, 1, true) end
+		end
+		GameTooltip:Show()
+	end)
+	qhit:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 	local col = L.Collectors()
-	local function row(bucket, label, y)
+	-- The three buttons sit at the RIGHT edge and the field stretches to meet them,
+	-- so the name has room and the row reads as one control instead of a short box
+	-- adrift in empty space.
+	local function row(bucket, label, y, emptyNote)
 		local lb = W.Text(p, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(112); lb:SetJustifyH("LEFT")
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
+
+		local cl = W.Button(p, "Clear", "danger"); cl:SetSize(48, 24)
+		cl:SetPoint("TOPRIGHT", p, "TOPRIGHT", -X, y)
+		local tg = W.Button(p, "Target"); tg:SetSize(56, 24); tg:SetPoint("RIGHT", cl, "LEFT", -6, 0)
+		local sf = W.Button(p, "Self"); sf:SetSize(48, 24); sf:SetPoint("RIGHT", tg, "LEFT", -4, 0)
+
 		local eb = W.EditBox(p, function(t) L.SetCollector(bucket, t) end)
-		eb:SetSize(150, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(col[bucket] or "")
+		eb:SetHeight(24)
+		eb:SetPoint("LEFT", lb, "RIGHT", 8, 0)
+		eb:SetPoint("RIGHT", sf, "LEFT", -6, 0)
+		eb.edit:SetText(col[bucket] or "")
+
+		-- An empty field says what an empty field DOES, inside the field itself --
+		-- greyed, and gone the moment there is a real name in it. That sentence used
+		-- to live in a paragraph above the rows, which is where nobody read it.
+		local ph = W.Text(p, "|cff6f7176" .. emptyNote .. "|r", "note", "dim")
+		ph:SetPoint("LEFT", eb, "LEFT", 8, 0)
+		local function paintPH()
+			local v = eb.edit:GetText() or ""
+			if v == "" and not eb.edit:HasFocus() then ph:Show() else ph:Hide() end
+		end
+
 		local function setName(n)
 			if not n or n == "" then return end
-			n = n:gsub("%-.*$", ""); eb.edit:SetText(n); L.SetCollector(bucket, n)
+			n = n:gsub("%-.*$", ""); eb.edit:SetText(n); L.SetCollector(bucket, n); paintPH()
 		end
-		local sf = W.Button(p, "Self"); sf:SetSize(48, 24); sf:SetPoint("LEFT", eb, "RIGHT", 6, 0)
+		eb.edit:HookScript("OnTextChanged", paintPH)
+		eb.edit:HookScript("OnEditFocusGained", paintPH)
+		eb.edit:HookScript("OnEditFocusLost", paintPH)
+
 		if sf.text then sf.text:SetText("|cff7cfc8aSelf|r") end
 		sf:SetScript("OnClick", function() setName(UnitName("player")) end)
-		local tg = W.Button(p, "Target"); tg:SetSize(56, 24); tg:SetPoint("LEFT", sf, "RIGHT", 4, 0)
 		tg:SetScript("OnClick", function()
 			local n = UnitName("target")
 			if n and UnitIsPlayer("target") then setName(n) else Okanvil:Print("Target a player first.") end
 		end)
-		local cl = W.Button(p, "Clear", "danger"); cl:SetSize(48, 24); cl:SetPoint("LEFT", tg, "RIGHT", 6, 0)
-		cl:SetScript("OnClick", function() eb.edit:SetText(""); L.SetCollector(bucket, "") end)
+		cl:SetScript("OnClick", function() eb.edit:SetText(""); L.SetCollector(bucket, ""); paintPH() end)
+		paintPH()
 	end
-	-- vertical stack: intro (-6) / warn (-26) / toggle (-46) / hint (-70, 2 lines)
-	row("main", "Main loot (BoP)", -116)
-	row("frag", "Fragments", -146)
-	row("boe", "BoE / orbs", -176)
+	row("main", "Main loot (BoP)", -44, "-- stays on the corpse --")
+	row("frag", "Fragments",       -76, "-- stays on the corpse --")
+	row("boe",  "BoE / orbs",      -108, "-- falls back to Main loot --")
+
 	local wc = W.Check(p, "Whisper winner on Award (\"you won, trade me\")",
 		function() return L.WhisperWinner() end, function(v) L.SetWhisperWinner(v) end)
-	wc:SetPoint("TOPLEFT", X + 2, -212)
+	wc:SetPoint("TOPLEFT", X + 2, -146)
 end
 
 -- ---- Announce templates: MS/OS/Free/Whisper ([item] placeholder) ----
