@@ -45,14 +45,16 @@ function Okanvil:BuildLoot()
 	local host = fill.child
 	Okanvil._lootFill = fill   -- set BEFORE the tab builders run (they read it)
 
-	-- Dashboard shell (MRT/Recruit-style): header (icon + title + ML status + CTA),
-	-- tabs (History = landing / Collectors / Messages as overlays), a COLLECTED
-	-- drawer, no footer. History gets the whole main area so it scales as loot grows.
+	-- Dashboard shell: header (icon + title + ML status + CTA), three pills, no
+	-- drawer and no footer -- so a page gets the window's full width.
 	local dash = W.Dashboard(host, {
 		title = "Loot",
 		icon = Okanvil.ICONS.loot,
-		drawerWidth = 200,
-		drawerLabel = "collected",
+		-- No COLLECTED drawer. It was a per-person tally of what the speed-run had
+		-- handed out, in a column beside the page with a Show/Hide button on the
+		-- toolbar -- a column of numbers nobody opened, costing every page 200px of
+		-- width and the toolbar a button.
+		drawerWidth = 0,
 		footerHeight = 0,
 		primaryText = function() return "Mini Roll Manager" end,
 		onPrimary = function()
@@ -99,12 +101,9 @@ function Okanvil:BuildLoot()
 	})
 	fill.dash = dash
 
-	Okanvil:Loot_BuildTally(dash.drawer)     -- COLLECTED tally (drawer)
-
-	-- refresh both when loot changes / the page shows / loot method changes
+	-- refresh when loot changes / the page shows / loot method changes
 	local function refreshAll()
 		dash:Refresh()
-		if fill._refreshTally then fill._refreshTally() end
 		if fill._rebuildHistory then fill._rebuildHistory() end
 	end
 	fill.refreshAll = refreshAll
@@ -160,7 +159,10 @@ function Okanvil:Loot_BuildCollectors(p)
 	-- whether you are the Master Looter, so the state line that used to sit here
 	-- was saying it a second time.
 	local qual = W.Text(p, "|cff8a8d93-- only when you are ML|r  |cffe0b860(?)|r", "note", "dim")
-	qual:SetPoint("LEFT", en, "RIGHT", 10, 0)
+	-- anchored to the checkbox's LABEL, not the checkbox: W.Check's frame is the
+	-- 18px box alone and its text hangs outside it, so "RIGHT of en" lands on top
+	-- of that text instead of after it
+	qual:SetPoint("LEFT", en.text, "RIGHT", 10, 0)
 	local qhit = CreateFrame("Frame", nil, p)
 	qhit:SetPoint("TOPLEFT", qual, "TOPLEFT", -2, 2)
 	qhit:SetPoint("BOTTOMRIGHT", qual, "BOTTOMRIGHT", 2, -2)
@@ -257,59 +259,8 @@ local function buildMessages(p, y0)
 	return y0 - 190
 end
 
--- ---- COLLECTED drawer: per-person tally of main/frag/boe given ----
-function Okanvil:Loot_BuildTally(drawer)
-	local L = Okanvil.Loot
-	local fill = Okanvil._lootFill
-	local hd = W.Text(drawer, "COLLECTED", "label", "accent"); hd:SetPoint("TOPLEFT", 10, -8); hd:Color(1, 0.82, 0)
-	local ICON = {
-		main = "Interface\\Icons\\INV_Misc_Coin_01",
-		frag = "Interface\\Icons\\INV_Misc_Gem_Diamond_07",
-		boe  = "Interface\\Icons\\INV_Misc_Orb_04",
-	}
-	local rows = {}
-	local function refresh()
-		for _, r in ipairs(rows) do r:Hide() end
-		if not (L and L.Collectors) then return end
-		local c = L.Collectors()
-		local list = {}
-		for _, bkt in ipairs({ "main", "frag", "boe" }) do
-			for name, n in pairs(c.counts[bkt] or {}) do
-				if n and n > 0 then list[#list + 1] = { name = name, n = n, icon = ICON[bkt] } end
-			end
-		end
-		table.sort(list, function(a, b) return a.n > b.n end)
-		local y = 28
-		if #list == 0 then
-			local r = rows[1]
-			if not r then r = CreateFrame("Frame", nil, drawer); r:SetSize(180, 18)
-				r.name = W.Text(r, "", "note", "dim"); r.name:SetPoint("LEFT", 10, 0); rows[1] = r end
-			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 8, -y)
-			if r.icon then r.icon:Hide() end; if r.cnt then r.cnt:SetText("") end
-			r.name:SetText("|cff888888Nothing collected yet.|r"); r:Show()
-			return
-		end
-		for i, e in ipairs(list) do
-			local r = rows[i]
-			if not r then
-				r = CreateFrame("Frame", nil, drawer); r:SetSize(184, 20)
-				r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(16, 16); r.icon:SetPoint("LEFT", 4, 0)
-				r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-				r.name = W.Text(r, "", "body"); r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
-				r.cnt = W.Text(r, "", "body", "accent"); r.cnt:SetPoint("RIGHT", -6, 0); r.cnt:Color(1, 0.82, 0)
-				rows[i] = r
-			end
-			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 8, -y)
-			r.icon:Show(); r.icon:SetTexture(e.icon); r.name:SetText(e.name); r.cnt:SetText(e.n .. "x")
-			r:Show(); y = y + 22
-		end
-	end
-	if fill then fill._refreshTally = refresh end
-	refresh()
-end
-
 -- ---- History (landing/main): sessions accordion with an internal-scroll detail
--- box, drawn into the Dashboard's main area. Full width now (tally is in the drawer).
+-- box. Full width: the page has no drawer beside it.
 function Okanvil:Loot_BuildHistory(main)
 	local L = Okanvil.Loot
 	local fill = Okanvil._lootFill
