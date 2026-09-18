@@ -291,6 +291,30 @@ function RC:Problems()
 	return bad
 end
 
+-- Is there anything left to LOOK at?
+--
+-- Two separate questions, and the toast is only pointless once BOTH are settled:
+--   * has everyone answered the ready check (nobody still on the hourglass)?
+--   * is everyone flasked and fed?
+--
+-- "Everyone answered" is not the same as "everyone said yes". A raider who
+-- answered NOT ready is exactly what you want to keep looking at, so that counts
+-- as an outstanding problem, not a settled one.
+function RC:AllClear()
+	if #self:Problems() > 0 then return false end
+
+	if readyActive then
+		for _, p in ipairs(self:Scan()) do
+			if p.online and not p.dead then
+				local st = readyState and readyState[p.name]
+				if st ~= "ready" then return false end   -- waiting, or said no
+			end
+		end
+	end
+
+	return true
+end
+
 -- ------------------------------------------------------------
 -- ANNOUNCE -- one line per offender, in raid chat.
 -- Capped so a 25-man with nobody buffed cannot spam 25 lines into chat.
@@ -900,6 +924,39 @@ function RC:HideToast()
 	end
 end
 
+-- Everyone answered READY and everyone is flasked + fed -> there is nothing left
+-- to read, so get out of the way instead of sitting there until the timer runs out.
+--
+-- Held for ALL_CLEAR_LINGER first, for two reasons: closing the instant the last
+-- person clicks Ready is jarring, and a late NOT-ready or a flask that ticks away
+-- inside that window should cancel the close. Re-checked when the timer fires,
+-- so a raid that stops being clear keeps the toast up.
+local ALL_CLEAR_LINGER = 3
+
+function RC:CloseIfAllClear()
+	if not (toast and toast:IsShown()) then return end
+	if (Okanvil.db and Okanvil.db.raidcheck and Okanvil.db.raidcheck.closeWhenClear) == false then return end
+	if not self:AllClear() then return end
+
+	local After = Okanvil.Comms and Okanvil.Comms.After
+	if not After then self:HideToast(); return end
+
+	-- One pending close at a time, invalidated by the same token HideToast() bumps,
+	-- so a manual close (or a pull) cannot be followed by a stale auto-close.
+	if toast._clearPending then return end
+	toast._clearPending = true
+	local mine = toast._token or 0
+
+	After(ALL_CLEAR_LINGER, function()
+		if not toast then return end
+		toast._clearPending = nil
+		if (toast._token or 0) ~= mine then return end   -- closed/reopened meanwhile
+		if not toast:IsShown() then return end
+		if not RC:AllClear() then return end             -- stopped being clear: stay up
+		RC:HideToast()
+	end)
+end
+
 
 -- ------------------------------------------------------------
 -- /okrc -- manual trigger + a plain-text dump for debugging.
@@ -976,6 +1033,13 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("READY_CHECK")
 ev:RegisterEvent("PLAYER_LOGIN")
 
+-- The pull itself closes the toast. DBM's DBM_Pull (hooked in Core) is the clean
+-- signal, but it only exists when DBM is installed AND the pull went through a
+-- DBM timer -- a countdown-less "go" leaves the grid sitting over the fight, which
+-- is the thing you end up closing by hand every single pull. Entering combat is
+-- the one signal that is always true on a real pull, so it backstops DBM.
+ev:RegisterEvent("PLAYER_REGEN_DISABLED")
+
 -- The open toast must stay LIVE: someone eats, the buff lands, the icon has to go
 -- from grey to lit without you reopening anything. UNIT_AURA fires constantly in a
 -- raid (every HoT tick, every unit), so coalesce into at most one redraw per second.
@@ -992,8 +1056,19 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 		if who then
 			readyState = readyState or {}
 			readyState[who] = arg2 and "ready" or "notready"
-			if toast and toast:IsShown() then RC:RenderToast() end
+			if toast and toast:IsShown() then
+				RC:RenderToast()
+				RC:CloseIfAllClear()
+			end
 		end
+		return
+	end
+
+	if event == "PLAYER_REGEN_DISABLED" then
+		-- Pulled. Honour the same switch as the DBM hook, so someone who wants the
+		-- UI to stay put on engage is not overridden by this backstop.
+		if Okanvil.db and Okanvil.db.closeOnPull == false then return end
+		if toast and toast:IsShown() then RC:HideToast() end
 		return
 	end
 
@@ -1020,7 +1095,11 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 		auraPending = true
 		Okanvil.Comms.After(0.5, function()
 			auraPending = nil
-			if toast and toast:IsShown() then RC:RenderToast() end
+			if toast and toast:IsShown() then
+				RC:RenderToast()
+				-- The last missing flask just landed -> nothing left to read.
+				RC:CloseIfAllClear()
+			end
 		end)
 		return
 	end

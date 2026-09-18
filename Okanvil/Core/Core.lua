@@ -574,6 +574,40 @@ function Okanvil:SetModuleEnabled(name, enabled)
 end
 
 -- ------------------------------------------------------------
+-- DBM pull -> close every Okanvil window, so the UI is out of the way the moment
+-- the raid engages. Toggleable via db.closeOnPull (default on).
+--
+-- This RETRIES. DBM on 3.3.5a is a multi-file addon that builds its callback API
+-- across its own load steps, so at our PLAYER_LOGIN `DBM.RegisterCallback` is
+-- frequently still nil -- a one-shot check there attaches nothing and, with a
+-- "already hooked" flag guarding it, never tries again. That is why the pull
+-- close silently did nothing on a client where DBM loads after us.
+-- ------------------------------------------------------------
+local DBM_HOOK_TRIES, DBM_HOOK_EVERY = 20, 1.5
+
+function Okanvil:HookDBMPull(attempt)
+	if self._dbmPullHooked then return end
+	attempt = attempt or 1
+
+	if DBM and DBM.RegisterCallback then
+		local ok = pcall(function()
+			DBM:RegisterCallback("DBM_Pull", function()
+				if Okanvil.db and Okanvil.db.closeOnPull == false then return end
+				if Okanvil.CloseAll then Okanvil:CloseAll() end
+			end)
+		end)
+		if ok then self._dbmPullHooked = true; return end
+	end
+
+	-- Not ready yet (or the register threw): come back and try again.
+	if attempt < DBM_HOOK_TRIES and self.Comms and self.Comms.After then
+		self.Comms.After(DBM_HOOK_EVERY, function()
+			Okanvil:HookDBMPull(attempt + 1)
+		end)
+	end
+end
+
+-- ------------------------------------------------------------
 -- Events / boot
 -- ------------------------------------------------------------
 local core = CreateFrame("Frame")
@@ -615,18 +649,27 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		if Okanvil.BuildMinimap then
 			Okanvil:BuildMinimap()
 		end
-		-- DBM pull -> close every Okanvil window (get the UI out of the way on engage).
-		-- DBM fires "DBM_Pull" the moment a boss is pulled. Guarded: only if DBM is
-		-- present with its callback API, and toggleable via db.closeOnPull (default on).
-		if DBM and DBM.RegisterCallback and not Okanvil._dbmPullHooked then
-			local ok = pcall(function()
-				DBM:RegisterCallback("DBM_Pull", function()
-					if Okanvil.db and Okanvil.db.closeOnPull == false then return end
-					if Okanvil.CloseAll then Okanvil:CloseAll() end
+		Okanvil:HookDBMPull()
+
+		-- WARM THE GUILD ROSTER.
+		--
+		-- GetNumGuildMembers() answers 0 until the client has actually fetched the
+		-- roster from the server, and nothing asked for it until you opened Home --
+		-- so the first open rendered an empty/short list and only filled in a beat
+		-- later, which reads as "the addon takes a while to show up".
+		--
+		-- Asking here means the answer is already cached by the time the window is
+		-- opened. Requested twice: the very first GuildRoster() right after login can
+		-- land before the server is ready to answer it.
+		if IsInGuild and IsInGuild() and GuildRoster then
+			GuildRoster()
+			if Okanvil.Comms and Okanvil.Comms.After then
+				Okanvil.Comms.After(2, function()
+					if IsInGuild() and GuildRoster then GuildRoster() end
 				end)
-			end)
-			if ok then Okanvil._dbmPullHooked = true end
+			end
 		end
+
 		Okanvil:Print("loaded -- |cff00ff00/okanvil|r. " .. Okanvil:CountPlugins() .. " plugin(s).")
 	end
 end)

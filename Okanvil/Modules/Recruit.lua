@@ -467,6 +467,20 @@ function Rec_ToggleActive(state)
 			Okanvil.Invite.SetKeywordEnabled(false)
 			Print("Invite keyword-invite turned OFF (can't share the invite keyword).")
 		end
+		-- Post ONCE right away, then start the interval. Waiting a full cycle before
+		-- the first line makes the button look dead -- 60s of silence after pressing
+		-- START reads as "it did nothing" -- and the leader who just turned it on
+		-- wants the message out now.
+		local msg = brand(db.message)
+		if msg and msg ~= "" then
+			for name, iv in pairs(db.channelIntervals) do
+				if iv and iv > 0 then SendToChannel(name, msg) end
+			end
+			if db.customChannel ~= "" and (db.customInterval or 0) > 0 then
+				SendToChannel(db.customChannel, msg)
+			end
+		end
+		-- then stagger the repeats so the channels never fire on the same tick
 		local i = 0
 		for name, iv in pairs(db.channelIntervals) do
 			if iv and iv > 0 then
