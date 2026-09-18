@@ -12,7 +12,8 @@
 --   Okanvil.U.shortLink(l)      -> the "item:1234:..." span of a link (nil if none)
 --   Okanvil.U.guildRankOf(n)    -> that member's rankIndex (nil if not in guild)
 --   Okanvil.U.isOfficer(n)      -> rankIndex <= 1 (guild master or officer)
---   Okanvil.U.isMyChar(n)       -> one of the owner's own characters
+--   Okanvil.U.mainOf(n)         -> the main an alt belongs to (from guild notes)
+--   Okanvil.U.isOfficerAlt(n)   -> an alt whose main is an officer
 --   Okanvil.U.canSeePrio(n)     -> may see the loot priority list
 -- ============================================================
 
@@ -151,15 +152,34 @@ function U.isOfficer(name)
 	return idx ~= nil and idx <= OFFICER_MAX_RANK
 end
 
--- "One of my characters." Account-wide, so an alt on a low rank still sees the
--- list the main imported -- the alternative was locking the owner out of his own
--- data because this toon happens to be ranked as an alt.
-function U.isMyChar(name)
-	if not name or name == "" then return false end
+-- The MAIN an alt belongs to, from its guild notes -- "<Main> alt" in the officer
+-- note, or the same form in the public note. nil when the notes do not say.
+-- (The Home page reads alts the same way; this is the shared copy.)
+function U.mainOf(name)
+	if not (name and name ~= "" and IsInGuild and IsInGuild()) then return nil end
 	name = name:gsub("%-.*$", "")
-	if name == (UnitName("player") or "") then return true end
-	local mine = Okanvil.db and Okanvil.db.myChars
-	return (mine and mine[name]) and true or false
+	for i = 1, (GetNumGuildMembers and GetNumGuildMembers() or 0) do
+		local n, _, _, _, _, _, publicnote, officernote = GetGuildRosterInfo(i)
+		if n and n:gsub("%-.*$", "") == name then
+			for _, note in ipairs({ officernote, publicnote }) do
+				if note and note ~= "" then
+					local m = note:match("^(.-)%s+[Aa][Ll][Tt]%f[%A]")
+					if m and m ~= "" then return (m:gsub("^%s+", ""):gsub("%s+$", "")) end
+				end
+			end
+			return nil
+		end
+	end
+	return nil
+end
+
+-- An officer's alt is ranked as an alt, so rank alone would lock the owner of the
+-- list out of it on every toon but one. The guild already records who an alt
+-- belongs to -- an officer note reading "<Main> alt" -- so the answer is in the
+-- roster and nobody has to maintain a second list by hand.
+function U.isOfficerAlt(name)
+	local main = U.mainOf(name)
+	return main ~= nil and U.isOfficer(main)
 end
 
 -- Colour for a rank, by POSITION rather than by name. Index 0 is the guild
@@ -196,9 +216,8 @@ function U.lowestRankIndex()
 	return (maxIdx >= 0) and maxIdx or nil
 end
 
--- The gate the loot-priority UI asks. Officer by rank, or a character the owner
--- has claimed as their own.
+-- The gate the loot-priority UI asks: an officer, or an officer's alt.
 function U.canSeePrio(name)
 	name = name or UnitName("player") or ""
-	return U.isOfficer(name) or U.isMyChar(name)
+	return U.isOfficer(name) or U.isOfficerAlt(name)
 end

@@ -15,7 +15,10 @@ local ADDON = "Okanvil-Logs"
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 
 local defaults = {
-	askOnEnter = true, -- prompt (Start log / No) when entering an instance
+	-- Never prompt on entering a raid. Logging starts by itself at the first pull
+	-- and the REC timer says when it is running, so the question only ever had one
+	-- answer. (Kept as a field, not deleted: old saved variables still carry it.)
+	askOnEnter = false,
 	autoLog = false, -- legacy: silently auto-log on raid entry (used only if askOnEnter is off)
 	recLocked = false, -- lock the REC timer (click-through, no drag)
 	rec = { point = "TOP", x = 0, y = -140 },

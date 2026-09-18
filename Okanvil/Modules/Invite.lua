@@ -640,7 +640,16 @@ local function toastDB()
 	local iv = Okanvil.db and Okanvil.db.invite
 	if not iv then return nil end
 	if iv.loginToast == nil then iv.loginToast = true end
-	if iv.loginToastRanks == nil then iv.loginToastRanks = "sewer" end
+	if iv.loginToastRanks == nil then
+		-- Default to this guild's LOWEST rank -- the newest members, whatever they
+		-- are called here. It used to default to "sewer", which is one guild's word
+		-- and matched nothing anywhere else.
+		local low = Okanvil.U and Okanvil.U.lowestRankIndex and Okanvil.U.lowestRankIndex()
+		local name = low and Okanvil.U.rankName and Okanvil.U.rankName(low)
+		-- left nil until the roster can answer, so the real name is stored rather
+		-- than a placeholder that would stick
+		if name and name ~= "" and not name:find("^Rank %d") then iv.loginToastRanks = name end
+	end
 	return iv
 end
 

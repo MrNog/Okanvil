@@ -685,7 +685,10 @@ end)
 -- ------------------------------------------------------------
 SLASH_Okanvil1 = "/okanvil"
 SlashCmdList["Okanvil"] = function(arg)
-	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	-- keep the original case for anything that takes a VALUE (a URL, a guild's
+	-- own spelling of its name); only the command word is matched lowercased
+	local raw = (arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	arg = raw:lower()
 	if arg == "tab" then
 		-- opt in to the dedicated chat tab: from now on Print() lands there
 		local f = Okanvil:DevFrame(true)
@@ -696,9 +699,31 @@ SlashCmdList["Okanvil"] = function(arg)
 		end
 		return
 	end
+	-- Branding lives here rather than on the Settings page: a guild sets its skin
+	-- and hub link once, on the day it installs Okanvil, and then never again --
+	-- which is not worth a third of the page you open to change the window scale.
+	local brand = arg:find("^brand") and raw:match("^%S+%s*(.*)$") or nil
+	if brand then
+		Okanvil.db.brand = (brand ~= "" and brand) or ""
+		if Okanvil.headerPaintBrand then Okanvil.headerPaintBrand() end
+		Okanvil.panels["__home"] = nil
+		Okanvil:Print(brand ~= "" and ("guild skin set to |cffe0b860" .. brand .. "|r")
+			or "guild skin cleared -- the title bar reads just \"Okanvil\".")
+		return
+	end
+	local hub = arg:find("^hub") and raw:match("^%S+%s*(.*)$") or nil
+	if hub then
+		Okanvil.db.hubURL = (hub ~= "" and hub) or ""
+		if Okanvil.footerPaintHub then Okanvil.footerPaintHub() end
+		Okanvil:Print(hub ~= "" and ("web hub set to |cffe0b860" .. hub .. "|r")
+			or "web hub cleared.")
+		return
+	end
 	if arg == "help" or arg == "?" then
 		Okanvil:Print("commands:")
 		Okanvil:Print("  |cffffd200/okanvil|r        open/close the window   |cff8a8d93(/okanvil tab = own chat tab)|r")
+		Okanvil:Print("  |cffffd200/okanvil brand <name>|r  your guild's skin  |cff8a8d93(empty = clear)|r")
+		Okanvil:Print("  |cffffd200/okanvil hub <url>|r     web hub link      |cff8a8d93(empty = clear)|r")
 		Okanvil:Print("  |cffffd200/okroll|r         mini roll manager")
 		Okanvil:Print("  |cffffd200/okerr|r          error log  |cff8a8d93(clear)|r")
 		Okanvil:Print("  |cffffd200/okfocus|r    release a stuck keyboard focus")

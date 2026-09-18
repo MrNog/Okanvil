@@ -100,7 +100,7 @@ function Okanvil:Settings_General(p)
 		function(v) db.scale = v; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", X, -46)
 	W.Slider(p, "Background opacity", 0.3, 1.0, 0.05, function() return db.bgAlpha end,
 		function(v) db.bgAlpha = v; Okanvil:ReskinAll(v); Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -92)
-	local showChk = W.Check(p, "Show rat art on pages",
+	local showChk = W.Check(p, "Background art",
 		function() return (db.ratArt or "on") ~= "off" end,
 		function(v) db.ratArt = v and "on" or "off"; Okanvil:RefreshRatArt() end)
 	showChk:SetPoint("TOPLEFT", X, -132)
@@ -108,8 +108,8 @@ function Okanvil:Settings_General(p)
 		function() return db.closeOnPull ~= false end,
 		function(v) db.closeOnPull = v end)
 	pullChk:SetPoint("TOPLEFT", X + 200, -132)
-	-- rat watermark intensity -- its OWN slider, independent of panel opacity.
-	W.Slider(p, "Rat art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
+	-- watermark intensity -- its OWN slider, independent of panel opacity
+	W.Slider(p, "Art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
 		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -174)
 
 	-- MEDIA -- label on the left, control on the same line to its right
@@ -123,26 +123,10 @@ function Okanvil:Settings_General(p)
 		function() return db.statusbar end, function(v) db.statusbar = v end, "statusbar")
 		:Size(200, 22):Point("TOPLEFT", X + 90, -266)
 
-	-- BRANDING (product name is FIXED -- guilds only set their own skin)
-	local b = W.Text(p, "BRANDING", "note", "dim"); b:SetPoint("TOPLEFT", X, -306)
-	local nl = W.Text(p, "Guild skin (shown after Okanvil)", "label", "dim"); nl:SetPoint("TOPLEFT", X, -332)
-	local nameBox = W.EditBox(p, function(txt)
-		db.brand = txt or ""
-		if Okanvil.headerPaintBrand then Okanvil.headerPaintBrand() end
-		Okanvil.panels["__home"] = nil
-	end)
-	nameBox:SetSize(320, 22); nameBox:SetPoint("TOPLEFT", X, -352)
-	nameBox.edit:SetText((db.brand ~= "Okanvil" and db.brand) or "")
-	local nh = W.Text(p, "e.g. RATS Guild Hub -- leave empty for just \"Okanvil\".", "note", "dim")
-	nh:SetPoint("TOPLEFT", X, -378)
-
-	local ul = W.Text(p, "Web hub URL", "label", "dim"); ul:SetPoint("TOPLEFT", X, -404)
-	local urlBox = W.EditBox(p, function(txt)
-		db.hubURL = txt
-		if Okanvil.footerPaintHub then Okanvil.footerPaintHub() end   -- live-update footer link
-	end)
-	urlBox:SetSize(320, 22); urlBox:SetPoint("TOPLEFT", X, -424)
-	urlBox.edit:SetText(db.hubURL or "")
+	-- Guild skin and Web hub URL used to sit here. Both are set once when a guild
+	-- installs Okanvil and then never again, so they are no longer worth a third of
+	-- this page -- db.brand and db.hubURL still drive the title bar and the footer
+	-- link, they are just not edited from a screen you open to change the scale.
 end
 
 function Okanvil:Settings_RaidTools(p)
@@ -254,33 +238,9 @@ function Okanvil:Settings_RaidTools(p)
 			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", RX + 2, -424)
 	end
 
-	-- COMBAT LOGGING -- the two switches off the old Combat Logs page. Starting and
-	-- stopping is a marks-bar button and the REC timer says when it is running, so
-	-- the page was carrying these two toggles and nothing else.
-	local lg = W.Text(p, "COMBAT LOGGING", "note", "dim")
-	lg:SetPoint("TOPLEFT", RX, -460)
-	-- the logs settings live in OkanvilLogsDB (per character), not Okanvil.db
-	local LG = OkanvilLogs
-	local ldb = LG and LG.DB and LG.DB()
-	if ldb then
-		local askChk = W.Check(p, "Ask to log when entering a raid",
-			function() return ldb.askOnEnter ~= false end,
-			function(v) ldb.askOnEnter = v and true or false end)
-		askChk:SetPoint("TOPLEFT", RX + 2, -482)
-		local lockChk = W.Check(p, "Lock the REC timer (click-through)",
-			function() return ldb.recLocked and true or false end,
-			function(v)
-				ldb.recLocked = v and true or false
-				if LG.ApplyRecLock then LG.ApplyRecLock() end
-			end)
-		lockChk:SetPoint("TOPLEFT", RX + 2, -504)
-		local lgHint = W.Text(p, "Start/stop logging from the marks bar. Dungeons never prompt.", "note", "dim")
-		lgHint:SetPoint("TOPLEFT", RX + 2, -526)
-	else
-		local t = W.Text(p, "|cff8a8d93Combat Logs module not loaded.|r", "note", "dim")
-		t:SetPoint("TOPLEFT", RX + 2, -482)
-	end
-
+	-- No COMBAT LOG block. Logging starts by itself at the first pull and the REC
+	-- timer on screen says when it is running, so the only switch here was one that
+	-- asked a question you always answered the same way -- it is off for good now.
 end
 
 function Okanvil:Settings_Advanced(p)
@@ -512,7 +472,16 @@ function Okanvil:Settings_Invite(p)
 
 	local ltRanks = W.EditBox(p, function(t) I.db().loginToastRanks = t or "" end)
 	ltRanks:Size(200, 22); ltRanks:SetPoint("TOPLEFT", X, -252)
-	ltRanks.edit:SetText(I.db().loginToastRanks or "sewer")
-	local ltHint = W.Text(p, "which ranks to toast -- part of the rank name, comma-separated\n(e.g. \"sewer\" or \"sewer, raider\"). Empty = nobody.", "note", "dim")
+	ltRanks.edit:SetText(I.db().loginToastRanks or "")
+	-- The example uses THIS guild's lowest rank, read from the roster. It used to
+	-- name ours ("sewer", "raider"), which is meaningless in any other guild.
+	local egRank = "the rank name"
+	if Okanvil.U and Okanvil.U.lowestRankIndex then
+		local low = Okanvil.U.lowestRankIndex()
+		local nm = low and Okanvil.U.rankName(low)
+		if nm and nm ~= "" and not nm:find("^Rank %d") then egRank = "\"" .. nm .. "\"" end
+	end
+	local ltHint = W.Text(p, "which ranks to toast -- part of the rank name, comma-separated\n(e.g. "
+		.. egRank .. "). Empty = nobody.", "note", "dim")
 	ltHint:SetPoint("LEFT", ltRanks, "RIGHT", 10, 0); ltHint:SetJustifyH("LEFT")
 end

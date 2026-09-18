@@ -409,36 +409,6 @@ function Okanvil:Loot_BuildSettings(p)
 	cMulti:Tooltip("Off: the item and its ladder go out as one line.\n"
 		.. "On: the item first, then its top names one per line.")
 
-	local me = UnitName("player") or ""
-	local mh = W.Text(p, "My characters", "label", "dim"); mh:SetPoint("TOPLEFT", 8, -382)
-	local mhint = W.Text(p, "", "label", "dim"); mhint:SetPoint("TOPLEFT", 8, -424)
-
-	local function claimed()
-		self.db.myChars = self.db.myChars or {}
-		return self.db.myChars
-	end
-	local function countClaimed()
-		local n = 0
-		for _ in pairs(claimed()) do n = n + 1 end
-		return n
-	end
-	local function paintHint()
-		local n = countClaimed()
-		mhint:SetText(("|cff8a8d93%d character%s claimed -- they all see the Prio tab, whatever their guild rank.|r")
-			:format(n, n == 1 and "" or "s"))
-	end
-
-	local claim = W.Button(p, "")
-	claim:SetSize(220, 22); claim:SetPoint("TOPLEFT", 8, -402)
-	local function paintBtn()
-		claim.text:SetText(claimed()[me] and ("Forget " .. me) or ("This is me (" .. me .. ")"))
-	end
-	claim:SetScript("OnClick", function()
-		local c = claimed()
-		c[me] = (not c[me]) or nil
-		paintBtn(); paintHint()
-	end)
-	paintBtn(); paintHint()
 end
 
 -- ---- Prio tab: the officer page's ladder, pasted in and readable in-game ----
