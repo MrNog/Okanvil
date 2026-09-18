@@ -419,6 +419,10 @@ function M.LoadPreset(name)
 	for k, v in pairs(p.reserve or {}) do db.reserve[k] = v end
 	db.reserveItems = {}
 	for i, v in ipairs(p.reserveItems or {}) do db.reserveItems[i] = v end
+	-- A preset saved before the two became mutually exclusive can carry both, and
+	-- restoring it verbatim would put the contradiction back. The item wins: it is
+	-- the specific claim, and "no res" is the blanket one.
+	if #db.reserveItems > 0 then db.reserveNone = false end
 	return true
 end
 
@@ -1005,6 +1009,10 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 
 		db = OkanvilPuGDB
 		db.active = false          -- never resume spamming across a reload
+		-- A profile saved before "no res" and reserved items became mutually
+		-- exclusive can hold both. Settle it once, the same way the controls do
+		-- now: the named item is the specific claim, so it wins.
+		if db.reserveNone and #(db.reserveItems or {}) > 0 then db.reserveNone = false end
 		-- Targets saved before the clamp existed can exceed the raid size (a 10-man
 		-- sitting at 11). Trim once on load so the very first line is honest.
 		M.FitNeedsToSize()

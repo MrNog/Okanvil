@@ -591,10 +591,16 @@ local function buildReserveStrip(p)
 	F.resNoneBtn:OnClick(function()
 		pickTakesOver()
 		d.reserveNone = not d.reserveNone
-		if d.reserveNone then d.reserve = {} end
+		-- "no res" means NOTHING is reserved, so it drops the reserved categories
+		-- AND any reserved item. Clearing only the categories left the strip showing
+		-- "no res" beside "+1 item" -- two claims that cannot both be true.
+		if d.reserveNone then
+			d.reserve = {}
+			d.reserveItems = {}
+		end
 		M.RefreshUI()
 	end)
-	F.resNoneBtn:Tooltip("Advertise that nothing is reserved.\nFills pugs faster than leaving people to ask.")
+	F.resNoneBtn:Tooltip("Advertise that nothing is reserved.\nFills pugs faster than leaving people to ask.\n\nTurning this on drops any reserved item.")
 
 	-- how many specific items are hard-reserved (they are set in the Reserves tab)
 	F.resItemTag = W.Text(p, "", "label", "dim")
