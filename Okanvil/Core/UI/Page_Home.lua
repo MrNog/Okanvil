@@ -87,10 +87,16 @@ function Okanvil:BuildHome()
 	local tabSnaps = W.Button(p, "Snapshots")
 	tabSnaps:SetSize(96, 22)
 	tabSnaps:SetPoint("LEFT", tabOnline, "RIGHT", 6, 0)
+	-- Snapshots and the roster export ARE the Guild module -- switching it off in
+	-- Modules should take them with it. It did not: the module had a switch that
+	-- changed nothing on the one page its features live on.
+	local guildOn = Okanvil:IsModuleEnabled("__guild")
+	tabSnaps:SetShown(guildOn)
 	local exportBtn = W.Button(p, "Export roster")
 	exportBtn:SetSize(110, 22)
 	exportBtn:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 	exportBtn:SetPoint("TOP", tabOnline, "TOP", 0, 0)
+	exportBtn:SetShown(guildOn)
 	exportBtn:Tooltip("Build the roster JSON the web hub imports.")
 	exportBtn:SetScript("OnClick", function()
 		local G = Okanvil.Guild
@@ -655,19 +661,24 @@ function Okanvil:BuildHome()
 			-- Same ordering as OnShow: the card must be sized before the row list
 			-- measures it, or someone logging in while you watch re-renders the list
 			-- against a stale height.
-			p:SetHeight(math.max(wrap.scroll:GetHeight(), 640))
+			p:SetHeight(math.max(wrap.scroll:GetHeight(), 1))
 			refreshGuild()
 		end
 	end)
 
 	wrap:SetScript("OnShow", function()
 		if GuildRoster then GuildRoster() end   -- async; GUILD_ROSTER_UPDATE fires when ready
+		-- The page takes the VIEW's height, never a fixed minimum. It used to floor
+		-- at 640, which is taller than the window: the guild card is anchored to this
+		-- frame's BOTTOM, so it stretched past the view and its own scrollbar range
+		-- came out as zero -- a full guild ran off the bottom with no way to scroll
+		-- to it, because the outer scroll and the card's scroll were fighting.
 		-- Height FIRST, rows second. The guild card's BOTTOM is anchored to `p`, so
 		-- until p has its final height the card is the wrong size -- and refreshGuild
 		-- measures gsf:GetHeight() to decide whether the list needs a scrollbar. Doing
 		-- it the other way round measured a stale height, so with a full guild online
 		-- the rows ran off the bottom of the card with no scrollbar to reach them.
-		p:SetHeight(math.max(wrap.scroll:GetHeight(), 640))
+		p:SetHeight(math.max(wrap.scroll:GetHeight(), 1))
 		refreshGuild()
 		-- Prime the FULL roster: GetGuildRosterInfo only returns offline members
 		-- once the client has fetched them, and an export taken before that is

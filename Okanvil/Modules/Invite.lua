@@ -733,7 +733,18 @@ end
 function Okanvil.Invite_LoginToast(name, rankName, classFile)
 	local iv = toastDB()
 	if not iv or not iv.loginToast then return end
-	if not rankWanted(rankName) then return end
+	-- An ALT is ranked "Alt", not by what its owner is, so a filter naming a real
+	-- rank never matched one and the alts of the very people you want to invite
+	-- logged in silently. Judge an alt by its MAIN's rank instead.
+	local judged = rankName
+	if Okanvil.U and Okanvil.U.mainOf then
+		local main = Okanvil.U.mainOf(name)
+		if main then
+			local mr = Okanvil.U.guildRankOf(main)
+			if mr and Okanvil.U.rankName then judged = Okanvil.U.rankName(mr) end
+		end
+	end
+	if not rankWanted(judged) then return end
 	-- already queued or showing? do not stack the same person twice
 	for _, e in ipairs(toastQueue) do
 		if e.name == name then return end

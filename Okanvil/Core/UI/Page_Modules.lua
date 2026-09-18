@@ -85,6 +85,10 @@ function Okanvil:Settings_Modules(panel)
 				-- on a global that was never defined here, so every toggle threw
 				-- "attempt to index global 'dash'".
 				Okanvil:RefreshNav()
+				-- Pages built before the toggle are stale: Home hides the snapshot
+				-- tab and the roster export when Guild is off, and it is cached, so
+				-- without this the switch appeared to do nothing at all.
+				if Okanvil.InvalidatePanel then Okanvil:InvalidatePanel("__home") end
 			end)
 			r:Show()
 			y = y + 50
