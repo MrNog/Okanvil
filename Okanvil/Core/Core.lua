@@ -719,11 +719,19 @@ SlashCmdList["Okanvil"] = function(arg)
 			or "web hub cleared.")
 		return
 	end
+	if arg == "dev" then
+		local on = not (Okanvil.db.devMode and true or false)
+		Okanvil:SetDevMode(on)
+		Okanvil:Print(on and "dev mode |cff7cfc8aON|r -- debug goes to the |cffe0b860Okanvil|r chat tab."
+			or "dev mode |cff8a8d93OFF|r.")
+		return
+	end
 	if arg == "help" or arg == "?" then
 		Okanvil:Print("commands:")
 		Okanvil:Print("  |cffffd200/okanvil|r        open/close the window   |cff8a8d93(/okanvil tab = own chat tab)|r")
 		Okanvil:Print("  |cffffd200/okanvil brand <name>|r  your guild's skin  |cff8a8d93(empty = clear)|r")
 		Okanvil:Print("  |cffffd200/okanvil hub <url>|r     web hub link      |cff8a8d93(empty = clear)|r")
+		Okanvil:Print("  |cffffd200/okanvil dev|r          debug to the Okanvil chat tab")
 		Okanvil:Print("  |cffffd200/okroll|r         mini roll manager")
 		Okanvil:Print("  |cffffd200/okerr|r          error log  |cff8a8d93(clear)|r")
 		Okanvil:Print("  |cffffd200/okfocus|r    release a stuck keyboard focus")
@@ -741,8 +749,9 @@ SlashCmdList["OKFOCUS"] = function()
 	Okanvil:Print("released keyboard focus.")
 end
 
--- Dev mode has no slash command -- it's a toggle in Settings (Okanvil:SetDevMode,
--- default OFF). Debug output goes to the "Okanvil" chat tab when it's on.
+-- Dev mode is /okanvil dev (default OFF). It had a checkbox on a Settings page of
+-- its own, which is a screen for a switch only its author ever flips. Debug
+-- output goes to the "Okanvil" chat tab while it is on.
 
 -- /okerr        -- show the persisted error log (copyable; survives logout)
 -- /okerr clear  -- wipe it
