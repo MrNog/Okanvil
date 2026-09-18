@@ -216,10 +216,16 @@ end
 -- ------------------------------------------------------------
 -- Media (shared look -- plugins use these so everything matches)
 -- ------------------------------------------------------------
+-- The size here is only the fallback for a font string created without one --
+-- the type scale (Okanvil.W.F) is what every call site actually names. There is
+-- no font slider any more: the window's Scale does the zooming, text and icons
+-- and spacing together, and a second control that stretched only text inside
+-- boxes that stayed put was never the thing people wanted.
 function Okanvil:Font()
 	local db = self.db
 	local path = LSM and LSM:Fetch("font", db.font, true)
-	return path or STANDARD_TEXT_FONT, db.fontSize, db.fontFlag
+	local size = (Okanvil.W and Okanvil.W.F and Okanvil.W.F.body) or db.fontSize or 12
+	return path or STANDARD_TEXT_FONT, size, db.fontFlag
 end
 
 function Okanvil:Texture()

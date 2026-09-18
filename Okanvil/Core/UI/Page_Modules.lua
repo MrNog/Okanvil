@@ -21,7 +21,7 @@ function Okanvil:Settings_Modules(panel)
 	local wrap = { relayout = function() end }
 	local sf = panel
 
-	local hint = W.Text(p, "Turn modules on/off for THIS character (off = hidden from the menu). Each module's settings stay shared across your toons.", 11, "dim")
+	local hint = W.Text(p, "Turn modules on/off for THIS character (off = hidden from the menu). Each module's settings stay shared across your toons.", "label", "dim")
 	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", p, "RIGHT", -X, 0); hint:SetJustifyH("LEFT")
 
 	wrap.rows = {}
@@ -54,8 +54,8 @@ function Okanvil:Settings_Modules(panel)
 				r.icon = r:CreateTexture(nil, "ARTWORK")
 				r.icon:SetSize(24, 24); r.icon:SetPoint("LEFT", 8, 0)
 				r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-				r.title = W.Text(r, "", 13); r.title:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -1)
-				r.desc = W.Text(r, "", 10, "dim")
+				r.title = W.Text(r, "", "body"); r.title:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -1)
+				r.desc = W.Text(r, "", "note", "dim")
 				r.desc:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -15)
 				r.desc:SetPoint("RIGHT", r, "RIGHT", -110, 0); r.desc:SetJustifyH("LEFT")
 				r.toggle = W.Button(r, "")

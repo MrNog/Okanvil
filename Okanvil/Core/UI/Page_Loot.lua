@@ -132,10 +132,10 @@ function Okanvil:Loot_BuildCollectors(p)
 	if not (L and L.Collectors) then return end
 
 	-- One line: what this tab is, and that it is not the normal flow. Details on hover.
-	local intro = W.Text(p, "|cffe0b860Speed-run loot|r -- sweep the boss into one bag, settle it later. |cff8a8d93Off = normal roll + Award.|r", 10, "dim")
+	local intro = W.Text(p, "|cffe0b860Speed-run loot|r -- sweep the boss into one bag, settle it later. |cff8a8d93Off = normal roll + Award.|r", "note", "dim")
 	intro:SetPoint("TOPLEFT", X, -6); intro:SetPoint("RIGHT", -X, 0); intro:SetJustifyH("LEFT")
 
-	local warn = W.Text(p, "", 11); warn:SetPoint("TOPLEFT", X, -26); warn:SetPoint("RIGHT", -X, 0); warn:SetJustifyH("LEFT")
+	local warn = W.Text(p, "", "label"); warn:SetPoint("TOPLEFT", X, -26); warn:SetPoint("RIGHT", -X, 0); warn:SetJustifyH("LEFT")
 	local function paintWarn()
 		if L.IsMasterLooter and L.IsMasterLooter() then
 			warn:SetText("|cff7cfc8aYou are the Master Looter -- these apply.|r")
@@ -157,12 +157,12 @@ function Okanvil:Loot_BuildCollectors(p)
 	-- Exactly what each row does. Kept next to the rows it describes.
 	local hint = W.Text(p, "|cffff8000BoP gear|r -> Main loot.   |cffffd200Orbs / patterns / BoE|r -> BoE (or Main, if BoE is empty).   |cffff5555Legendary fragments always ask first.|r\n"
 		.. "Leave a field |cffffd200EMPTY|r and that loot stays on the corpse to be rolled normally -- nothing is ever swept to anyone you did not name. "
-		.. "|cff7cfc8aEvery drop is still recorded in the history and shown to the raid.|r", 10, "dim")
+		.. "|cff7cfc8aEvery drop is still recorded in the history and shown to the raid.|r", "note", "dim")
 	hint:SetPoint("TOPLEFT", X, -70); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
 
 	local col = L.Collectors()
 	local function row(bucket, label, y)
-		local lb = W.Text(p, label, 11); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(112); lb:SetJustifyH("LEFT")
+		local lb = W.Text(p, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(112); lb:SetJustifyH("LEFT")
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
 		local eb = W.EditBox(p, function(t) L.SetCollector(bucket, t) end)
 		eb:SetSize(150, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(col[bucket] or "")
@@ -195,10 +195,10 @@ function Okanvil:Loot_BuildMessages(p)
 	local L = Okanvil.Loot
 	local X = 8
 	if not (L and L.RollMsg) then return end
-	local hd = W.Text(p, "Announce templates -- |cffffd200[item]|r = the itemlink.", 11, "dim")
+	local hd = W.Text(p, "Announce templates -- |cffffd200[item]|r = the itemlink.", "label", "dim")
 	hd:SetPoint("TOPLEFT", X, -6); hd:SetPoint("RIGHT", -X, 0); hd:SetJustifyH("LEFT")
 	local function row(label, y, getFn, setFn)
-		local lb = W.Text(p, label, 11); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(58); lb:SetJustifyH("LEFT")
+		local lb = W.Text(p, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(58); lb:SetJustifyH("LEFT")
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
 		local eb = W.EditBox(p, function(t) setFn(t) end)
 		eb:SetSize(360, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(getFn())
@@ -207,7 +207,7 @@ function Okanvil:Loot_BuildMessages(p)
 	row("OS", -60, function() return L.RollMsg("os") end, function(t) L.SetRollMsg("os", t) end)
 	row("Free", -90, function() return L.RollMsg("free") end, function(t) L.SetRollMsg("free", t) end)
 	row("Whisper", -128, function() return L.WhisperMsg() end, function(t) L.SetWhisperMsg(t) end)
-	local wh = W.Text(p, "Whisper is sent on Award when the boss loot window is already closed.", 10, "dim")
+	local wh = W.Text(p, "Whisper is sent on Award when the boss loot window is already closed.", "note", "dim")
 	wh:SetPoint("TOPLEFT", X, -156); wh:SetPoint("RIGHT", -X, 0); wh:SetJustifyH("LEFT")
 end
 
@@ -215,7 +215,7 @@ end
 function Okanvil:Loot_BuildTally(drawer)
 	local L = Okanvil.Loot
 	local fill = Okanvil._lootFill
-	local hd = W.Text(drawer, "COLLECTED", 11, "accent"); hd:SetPoint("TOPLEFT", 10, -8); hd:Color(1, 0.82, 0)
+	local hd = W.Text(drawer, "COLLECTED", "label", "accent"); hd:SetPoint("TOPLEFT", 10, -8); hd:Color(1, 0.82, 0)
 	local ICON = {
 		main = "Interface\\Icons\\INV_Misc_Coin_01",
 		frag = "Interface\\Icons\\INV_Misc_Gem_Diamond_07",
@@ -237,7 +237,7 @@ function Okanvil:Loot_BuildTally(drawer)
 		if #list == 0 then
 			local r = rows[1]
 			if not r then r = CreateFrame("Frame", nil, drawer); r:SetSize(180, 18)
-				r.name = W.Text(r, "", 10, "dim"); r.name:SetPoint("LEFT", 10, 0); rows[1] = r end
+				r.name = W.Text(r, "", "note", "dim"); r.name:SetPoint("LEFT", 10, 0); rows[1] = r end
 			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 8, -y)
 			if r.icon then r.icon:Hide() end; if r.cnt then r.cnt:SetText("") end
 			r.name:SetText("|cff888888Nothing collected yet.|r"); r:Show()
@@ -249,8 +249,8 @@ function Okanvil:Loot_BuildTally(drawer)
 				r = CreateFrame("Frame", nil, drawer); r:SetSize(184, 20)
 				r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(16, 16); r.icon:SetPoint("LEFT", 4, 0)
 				r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-				r.name = W.Text(r, "", 12); r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
-				r.cnt = W.Text(r, "", 12, "accent"); r.cnt:SetPoint("RIGHT", -6, 0); r.cnt:Color(1, 0.82, 0)
+				r.name = W.Text(r, "", "body"); r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+				r.cnt = W.Text(r, "", "body", "accent"); r.cnt:SetPoint("RIGHT", -6, 0); r.cnt:Color(1, 0.82, 0)
 				rows[i] = r
 			end
 			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 8, -y)
@@ -313,7 +313,7 @@ function Okanvil:Loot_BuildHistory(main)
 		dbox:Hide()
 		local sessions = (L.Sessions and L.Sessions()) or {}
 		if #sessions == 0 then
-			p._empty = p._empty or W.Text(p, "", 12, "dim")
+			p._empty = p._empty or W.Text(p, "", "body", "dim")
 			p._empty:SetPoint("TOPLEFT", X, -4)
 			p._empty:SetText("|cff888888No loot logged yet. Kill a boss and open the corpse.|r")
 			p._empty:Show(); p:SetHeight(math.max(sf:GetHeight(), 40)); return
@@ -324,8 +324,8 @@ function Okanvil:Loot_BuildHistory(main)
 			local r = rows[i]
 			if not r then
 				r = W.Frame(p, "input")
-				r.title = W.Text(r, "", 13); r.title:SetPoint("TOPLEFT", 10, -6)
-				r.sub = W.Text(r, "", 10, "dim"); r.sub:SetPoint("BOTTOMLEFT", 10, 6)
+				r.title = W.Text(r, "", "body"); r.title:SetPoint("TOPLEFT", 10, -6)
+				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("BOTTOMLEFT", 10, 6)
 				r.del = W.Button(r, "X", "danger"); r.del:SetSize(24, 22); r.del:SetPoint("RIGHT", -8, 0)
 				r.export = W.Button(r, "Export"); r.export:SetSize(72, 22); r.export:SetPoint("RIGHT", r.del, "LEFT", -6, 0)
 				r.view = W.Button(r, "View"); r.view:SetSize(60, 22); r.view:SetPoint("RIGHT", r.export, "LEFT", -6, 0)
@@ -369,7 +369,7 @@ end
 
 function Okanvil:Loot_BuildSettings(p)
 	local db = self.db
-	local ll = W.Text(p, "Log items of quality", 11, "dim"); ll:SetPoint("TOPLEFT", 8, -8)
+	local ll = W.Text(p, "Log items of quality", "label", "dim"); ll:SetPoint("TOPLEFT", 8, -8)
 	local RARITY = {
 		{ text = "|cff9d9d9dPoor+|r", value = 0 }, { text = "|cffffffffCommon+|r", value = 1 },
 		{ text = "|cff1eff00Uncommon+|r", value = 2 }, { text = "|cff0070ddRare+|r", value = 3 },
@@ -385,7 +385,7 @@ function Okanvil:Loot_BuildSettings(p)
 		end
 	end
 	lootDD:refreshText()
-	local rhint = W.Text(p, "Auto-capture in:", 11, "dim"); rhint:SetPoint("TOPLEFT", 8, -66)
+	local rhint = W.Text(p, "Auto-capture in:", "label", "dim"); rhint:SetPoint("TOPLEFT", 8, -66)
 	local cDun = W.Check(p, "Dungeons",
 		function() return db.recordDungeon ~= false end, function(v) db.recordDungeon = v end)
 	cDun:SetPoint("TOPLEFT", 8, -86)
@@ -404,7 +404,7 @@ function Okanvil:Loot_BuildSettings(p)
 	-- ---- Priority list ----------------------------------------------------
 	-- Lived as a button on the Prio tab's toolbar, which put a choice nobody
 	-- revisits after the first time in front of the list every single visit.
-	local ph = W.Text(p, "Priority list", 11, "dim"); ph:SetPoint("TOPLEFT", 8, -122)
+	local ph = W.Text(p, "Priority list", "label", "dim"); ph:SetPoint("TOPLEFT", 8, -122)
 	local cMulti = W.Check(p, "Send each name on its own line",
 		function() return Okanvil.LootPrio and Okanvil.LootPrio.MultiLine() end,
 		function() if Okanvil.LootPrio then Okanvil.LootPrio.ToggleMultiLine() end end)
@@ -413,8 +413,8 @@ function Okanvil:Loot_BuildSettings(p)
 		.. "On: the item first, then its top names one per line.")
 
 	local me = UnitName("player") or ""
-	local mh = W.Text(p, "My characters", 11, "dim"); mh:SetPoint("TOPLEFT", 8, -172)
-	local mhint = W.Text(p, "", 11, "dim"); mhint:SetPoint("TOPLEFT", 8, -208)
+	local mh = W.Text(p, "My characters", "label", "dim"); mh:SetPoint("TOPLEFT", 8, -172)
+	local mhint = W.Text(p, "", "label", "dim"); mhint:SetPoint("TOPLEFT", 8, -208)
 
 	local function claimed()
 		self.db.myChars = self.db.myChars or {}
@@ -454,7 +454,7 @@ function Okanvil:Loot_BuildPrio(p)
 	if Okanvil.LootPrio and Okanvil.LootPrio.BuildTab then
 		Okanvil.LootPrio.BuildTab(p)
 	else
-		local t = W.Text(p, "Loot priority module not loaded.", 11, "dim")
+		local t = W.Text(p, "Loot priority module not loaded.", "label", "dim")
 		t:SetPoint("TOPLEFT", 8, -8)
 	end
 end

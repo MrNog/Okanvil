@@ -681,8 +681,8 @@ local function buildLoginToast()
 		if d then d.toastPoint, d.toastX, d.toastY = p, x, y end
 	end)
 
-	f.name = W.Text(f, "", 13); f.name:SetPoint("TOPLEFT", 12, -10)
-	f.sub = W.Text(f, "", 10, "dim"); f.sub:SetPoint("TOPLEFT", 12, -28)
+	f.name = W.Text(f, "", "body"); f.name:SetPoint("TOPLEFT", 12, -10)
+	f.sub = W.Text(f, "", "note", "dim"); f.sub:SetPoint("TOPLEFT", 12, -28)
 
 	f.inv = W.Button(f, "Invite", "primary")
 	f.inv:SetSize(70, 22); f.inv:SetPoint("BOTTOMRIGHT", -10, 9)

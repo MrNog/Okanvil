@@ -827,14 +827,14 @@ local function make_row(parent)
 	r.ress = CreateFrame("Button", nil, r)
 	r.ress:SetSize(RESS_W, 17); r.ress:SetPoint("LEFT", COL.ress, 0)
 	Okanvil:Skin(r.ress, "input")
-	r.ress.txt = W.Text(r.ress, "", 11); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
+	r.ress.txt = W.Text(r.ress, "", "label"); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
 	r.ress:SetScript("OnEnter", function(s)
 		show_tip(s, s._res)   -- pre-built multiline list (header + item links/pills)
 	end)
 	r.ress:SetScript("OnLeave", function() hide_tip() end)
 
 	-- Saved column (are YOU locked to this raid?) -- centered under its header
-	r.saved = W.Text(r, "", 11); r.saved:SetPoint("LEFT", COL.saved, 0)
+	r.saved = W.Text(r, "", "label"); r.saved:SetPoint("LEFT", COL.saved, 0)
 	r.saved:SetWidth(44); r.saved:SetJustifyH("CENTER")
 
 	-- Action: /w  +  Join
@@ -954,16 +954,16 @@ local function buildSettings(pg)
 
 	-- ---- Save Raid Gear: shows your spec + GS, lets you override the GS, and
 	-- previews the whisper /w and Join send (spec + GS auto-filled). ----
-	local hdr = W.Text(pg, "|cffe0b860Raid Gear|r  |cff8a8d93(auto-fills /w + Join with your spec + GS)|r", 12)
+	local hdr = W.Text(pg, "|cffe0b860Raid Gear|r  |cff8a8d93(auto-fills /w + Join with your spec + GS)|r", "body")
 	hdr:SetPoint("TOPLEFT", 12, y); y = y - 22
 
-	local specLine = W.Text(pg, "", 12)
+	local specLine = W.Text(pg, "", "body")
 	specLine:SetPoint("TOPLEFT", 12, y); y = y - 22
 
 	-- GS override row: label + edit box + note
-	local ovLabel = W.Text(pg, "Override GS (blank = use detected):", 11, "dim")
+	local ovLabel = W.Text(pg, "Override GS (blank = use detected):", "label", "dim")
 	ovLabel:SetPoint("TOPLEFT", 12, y)
-	local preview = W.Text(pg, "", 11, "dim")
+	local preview = W.Text(pg, "", "label", "dim")
 	local refreshGear   -- fwd decl (edit-box callback needs it)
 	local ov = W.EditBox(pg, function(text)
 		local n = tonumber((text or ""):gsub("[^%d.]", ""))
@@ -1022,7 +1022,7 @@ local function buildSettings(pg)
 	local vb = W.Button(pg, "Verify Achievement IDs")
 	vb:SetPoint("TOPLEFT", 12, y); vb:SetSize(190, 24)
 	vb:SetScript("OnClick", function() Okanvil.RaidFinder_VerifyAchievements() end)
-	local vh = W.Text(pg, "Checks the achievement link IDs against this server (OK / DIFF / NIL).", 11, "dim")
+	local vh = W.Text(pg, "Checks the achievement link IDs against this server (OK / DIFF / NIL).", "label", "dim")
 	vh:SetPoint("LEFT", vb, "RIGHT", 10, 0)
 end
 
@@ -1056,7 +1056,7 @@ local function buildUI(panel)
 	bar:SetPoint("TOPLEFT", 8, -8); bar:SetPoint("TOPRIGHT", -8, -8); bar:SetHeight(24)
 
 	local function label(x, t)
-		local fs = W.Text(bar, t, 11, "dim"); fs:SetPoint("LEFT", x, 0); return fs
+		local fs = W.Text(bar, t, "label", "dim"); fs:SetPoint("LEFT", x, 0); return fs
 	end
 	-- Raid Type
 	label(0, "Raid")
@@ -1125,7 +1125,7 @@ local function buildUI(panel)
 	end)
 
 	-- count line
-	ui.count = W.Text(main, "0 active listings", 12, "dim")
+	ui.count = W.Text(main, "0 active listings", "body", "dim")
 	ui.count:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -10)
 
 	-- opaque list well (dark panel) so the game world never shows through
@@ -1136,10 +1136,10 @@ local function buildUI(panel)
 	-- column header row (inside the well, opaque strip)
 	local hdr = W.Frame(well, "input")
 	hdr:SetPoint("TOPLEFT", 2, -2); hdr:SetPoint("TOPRIGHT", -2, 0); hdr:SetHeight(18)
-	local function colh(x, t) local fs = W.Text(hdr, t, 11, "accent"); fs:SetPoint("LEFT", x + 4, 0) end
+	local function colh(x, t) local fs = W.Text(hdr, t, "label", "accent"); fs:SetPoint("LEFT", x + 4, 0) end
 	-- centered header (over a fixed-width cell): x = cell left, w = cell width
 	local function colhC(x, w, t)
-		local fs = W.Text(hdr, t, 11, "accent"); fs:SetJustifyH("CENTER")
+		local fs = W.Text(hdr, t, "label", "accent"); fs:SetJustifyH("CENTER")
 		fs:SetPoint("LEFT", x, 0); fs:SetWidth(w)
 	end
 
@@ -1150,7 +1150,7 @@ local function buildUI(panel)
 	local function sortHeader(x, t, key)
 		local b = CreateFrame("Button", nil, hdr)
 		b:SetHeight(18); b:SetPoint("LEFT", x, 0)
-		local fs = W.Text(b, t, 11, "accent"); fs:SetPoint("LEFT", 4, 0)
+		local fs = W.Text(b, t, "label", "accent"); fs:SetPoint("LEFT", 4, 0)
 		b:SetWidth(fs:GetStringWidth() + 18)
 		b.label, b.key = t, key
 		b:SetScript("OnClick", function()

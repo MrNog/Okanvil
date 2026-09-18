@@ -64,7 +64,7 @@ local function build()
 	ico:SetSize(14, 14); ico:SetPoint("LEFT", 6, 0)
 	ico:SetTexture("Interface\\Icons\\INV_Misc_Bag_10")
 	ico:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local title = W.Text(hdr, "Farm", 12, "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0)
+	local title = W.Text(hdr, "Farm", "body", "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0)
 
 	local close = W.Button(hdr, "X"); close:SetSize(18, 16); close:SetPoint("RIGHT", -2, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
@@ -77,14 +77,14 @@ local function build()
 	f.collapseBtn = collapse
 
 	-- ---- the number ----
-	f.rate = W.Text(f, "0g", 24, "accent")
+	f.rate = W.Text(f, "0g", "huge", "accent")
 	f.rate:SetPoint("TOPLEFT", 12, -34)
-	f.rateLbl = W.Text(f, "|cff8a8d93gold / hour|r", 10, "dim")
+	f.rateLbl = W.Text(f, "|cff8a8d93gold / hour|r", "note", "dim")
 	f.rateLbl:SetPoint("TOPLEFT", 12, -64)
 
-	f.clock = W.Text(f, "0:00", 15)
+	f.clock = W.Text(f, "0:00", "head")
 	f.clock:SetPoint("TOPRIGHT", -12, -36)
-	f.zone = W.Text(f, "", 10, "dim")
+	f.zone = W.Text(f, "", "note", "dim")
 	f.zone:SetPoint("TOPRIGHT", -12, -60)
 
 	-- ---- buttons ----
@@ -113,9 +113,9 @@ local function build()
 	local function cell(row, label)
 		local c = {}
 		local y = GRID_Y - (row - 1) * GRID_ROW
-		c.lbl = W.Text(f, label, 11, "dim")
+		c.lbl = W.Text(f, label, "label", "dim")
 		c.lbl:SetPoint("TOPLEFT", 12, y)
-		c.val = W.Text(f, "", 11)
+		c.val = W.Text(f, "", "label")
 		c.val:SetPoint("TOPRIGHT", -12, y)
 		c.val:SetJustifyH("RIGHT")
 		f.cells[#f.cells + 1] = c
@@ -127,7 +127,7 @@ local function build()
 	f.cKills  = cell(4, "kills")
 	-- per-kill sits beside the "kills" label rather than on a fifth row: it is a
 	-- footnote to that number, and the value column is already taken.
-	f.perKill = W.Text(f, "", 10, "dim")
+	f.perKill = W.Text(f, "", "note", "dim")
 	f.perKill:SetPoint("LEFT", f.cKills.lbl, "RIGHT", 8, 0)
 
 	-- ---- loot rows ----
@@ -143,12 +143,12 @@ local function build()
 		r.icon:SetSize(12, 12); r.icon:SetPoint("LEFT", 0, 0)
 		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-		r.text = W.Text(r, "", 11)
+		r.text = W.Text(r, "", "label")
 		r.text:SetPoint("LEFT", 17, 0); r.text:SetPoint("RIGHT", -62, 0)
 		r.text:SetJustifyH("LEFT")
 		if r.text.SetWordWrap then r.text:SetWordWrap(false) end
 
-		r.val = W.Text(r, "", 11, "dim")
+		r.val = W.Text(r, "", "label", "dim")
 		r.val:SetPoint("RIGHT", 0, 0); r.val:SetJustifyH("RIGHT")
 
 		r:EnableMouse(true)
@@ -162,12 +162,12 @@ local function build()
 		f.rows[i] = r
 	end
 
-	f.empty = W.Text(f, "", 11, "dim")
+	f.empty = W.Text(f, "", "label", "dim")
 	f.empty:SetPoint("TOPLEFT", 12, -LIST_TOP)
 
 	-- "2 more v" under the last row, so a long list is visibly longer than the
 	-- window rather than silently truncated.
-	f.more = W.Text(f, "", 10, "dim")
+	f.more = W.Text(f, "", "note", "dim")
 	f.more:SetPoint("BOTTOMLEFT", 12, 8)
 	f.more:Hide()
 
@@ -323,7 +323,7 @@ function Okanvil:BuildFarm(host)
 	local wrap = { relayout = relayout }
 
 	local hint = W.Text(p, "Open the window, hit Start, farm. It counts cash, what your loot is "
-		.. "worth and quest gold, and divides by the time the timer was actually running.", 10, "dim")
+		.. "worth and quest gold, and divides by the time the timer was actually running.", "note", "dim")
 	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
 
 	local pv = W.Check(p, "Value loot at vendor price (off = use an auction addon)",
@@ -333,7 +333,7 @@ function Okanvil:BuildFarm(host)
 	pv:Tooltip("On: what a vendor pays -- matches what you get if you vendor everything.\n"
 		.. "Off: Auctionator / TSM price when installed, vendor price when not.")
 
-	local hh = W.Text(p, "PAST RUNS", 11, "accent"); hh:SetPoint("TOPLEFT", X, -72)
+	local hh = W.Text(p, "PAST RUNS", "label", "accent"); hh:SetPoint("TOPLEFT", X, -72)
 	local clr = W.Button(p, "Clear"):Size(60, 18)
 	clr:SetPoint("TOPLEFT", X + 90, -72)
 	clr:SetScript("OnClick", function() M.ClearHistory(); if wrap._rebuild then wrap._rebuild() end end)
@@ -347,9 +347,9 @@ function Okanvil:BuildFarm(host)
 			local r = wrap.rows[i]
 			if not r then
 				r = W.Frame(p, "input"); r:SetHeight(34)
-				r.top = W.Text(r, "", 11); r.top:SetPoint("TOPLEFT", 8, -5)
-				r.sub = W.Text(r, "", 10, "dim"); r.sub:SetPoint("TOPLEFT", 8, -19)
-				r.rate = W.Text(r, "", 13, "accent"); r.rate:SetPoint("RIGHT", -10, 0)
+				r.top = W.Text(r, "", "label"); r.top:SetPoint("TOPLEFT", 8, -5)
+				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("TOPLEFT", 8, -19)
+				r.rate = W.Text(r, "", "body", "accent"); r.rate:SetPoint("RIGHT", -10, 0)
 				wrap.rows[i] = r
 			end
 			r:ClearAllPoints()

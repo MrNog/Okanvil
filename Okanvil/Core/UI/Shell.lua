@@ -134,12 +134,12 @@ function Okanvil:BuildShell()
 	logo:SetSize(18, 18); logo:SetPoint("LEFT", 9, 0)
 	logo:SetTexture("Interface\\Icons\\Trade_BlackSmithing")   -- the anvil
 	logo:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local title = W.Text(hdr, "Okanvil", 16, "accent")
+	local title = W.Text(hdr, "Okanvil", "title", "accent")
 	title:SetPoint("LEFT", logo, "RIGHT", 7, 0); title:Color(1, 0.82, 0)
-	local ver = W.Text(hdr, "v" .. (self.version or "1.0"), 10, "dim")
+	local ver = W.Text(hdr, "v" .. (self.version or "1.0"), "note", "dim")
 	ver:SetPoint("LEFT", title, "RIGHT", 6, -1)
 	-- guild skin (editable) sits after the version as a dimmer suffix
-	local brandFS = W.Text(hdr, "", 13, "dim")
+	local brandFS = W.Text(hdr, "", "body", "dim")
 	brandFS:SetPoint("LEFT", ver, "RIGHT", 8, 1)
 	local function paintBrand()
 		local b = db.brand or ""
@@ -162,7 +162,7 @@ function Okanvil:BuildShell()
 	nav:SetPoint("TOPLEFT", 6, -(HEADER_H + 6))
 	nav:SetPoint("BOTTOMLEFT", 6, FOOTER_H + 4)
 	nav:SetWidth(NAV_W)
-	local navHdr = W.Text(nav, "NAVIGATION", 10, "dim"); navHdr:SetPoint("TOPLEFT", 10, -8)
+	local navHdr = W.Text(nav, "NAVIGATION", "note", "dim"); navHdr:SetPoint("TOPLEFT", 10, -8)
 	local navSF = CreateFrame("ScrollFrame", "Okanvil_NavSF", nav)
 	navSF:SetPoint("TOPLEFT", 4, -24); navSF:SetPoint("BOTTOMRIGHT", -6, 4)
 	Okanvil.Clip(navSF)
@@ -185,12 +185,12 @@ function Okanvil:BuildShell()
 	self:MountPageRat()
 
 	-- footer: fixed author credit (Okanvil is by Okanor) + a flavor line
-	local footer = W.Text(f, "|cffe0b860Okanvil by Okanor|r  |cff55575b--  the void in your stack trace|r", 10, "dim")
+	local footer = W.Text(f, "|cffe0b860Okanvil by Okanor|r  |cff55575b--  the void in your stack trace|r", "note", "dim")
 	footer:SetPoint("BOTTOMLEFT", 10, 6)
 	-- web-hub link in the footer (WeakAuras-style): click -> copyable URL popup.
 	local hubBtn = CreateFrame("Button", nil, f)
 	hubBtn:SetHeight(14); hubBtn:SetPoint("BOTTOM", 0, 6)
-	local hubTxt = W.Text(hubBtn, "", 10, "accent"); hubTxt:SetAllPoints(); hubTxt:SetJustifyH("CENTER")
+	local hubTxt = W.Text(hubBtn, "", "note", "accent"); hubTxt:SetAllPoints(); hubTxt:SetJustifyH("CENTER")
 	hubBtn.text = hubTxt
 	self.footerHub = hubBtn
 	local function paintHub()
@@ -203,7 +203,7 @@ function Okanvil:BuildShell()
 	hubBtn:SetScript("OnClick", function()
 		if Okanvil.ShowExport then Okanvil:ShowExport(self.db.hubURL or "", "Web Hub -- Ctrl+C to copy") end
 	end)
-	self.footerCount = W.Text(f, "", 10, "dim")
+	self.footerCount = W.Text(f, "", "note", "dim")
 	self.footerCount:SetPoint("BOTTOMRIGHT", -20, 6)
 
 	-- (No resize grip: the window is fixed-size. Grow it with the Scale slider in

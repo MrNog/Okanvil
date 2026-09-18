@@ -100,6 +100,39 @@ end
 -- ------------------------------------------------------------
 local OFFICER_MAX_RANK = 1
 
+-- ------------------------------------------------------------
+-- Guild ranks, read from the guild -- never assumed.
+--
+-- Okanvil ships to whatever guild installs it, so nothing may be keyed to one
+-- guild's rank NAMES. What is universal is the shape: index 0 is the guild
+-- master, indices count down in authority, and the last index is the bottom
+-- rank. The names are discovered from the roster and used for DISPLAY only.
+-- ------------------------------------------------------------
+
+-- Every rank the guild actually has, as { [index] = "Name" }, plus the highest
+-- index seen. Built from the roster because 3.3.5a has no reliable rank-name
+-- call outside the guild-control frame.
+function U.guildRanks()
+	local names, maxIdx = {}, -1
+	if not (IsInGuild and IsInGuild()) then return names, maxIdx end
+	for i = 1, (GetNumGuildMembers and GetNumGuildMembers() or 0) do
+		local _, rank, rankIndex = GetGuildRosterInfo(i)
+		if rankIndex and rank and rank ~= "" then
+			names[rankIndex] = rank
+			if rankIndex > maxIdx then maxIdx = rankIndex end
+		end
+	end
+	return names, maxIdx
+end
+
+-- A rank's own name, for labels and dropdowns. Falls back to "Rank N" so a UI
+-- built before the roster arrives still reads sensibly.
+function U.rankName(idx)
+	if not idx then return "" end
+	local names = U.guildRanks()
+	return names[idx] or ("Rank " .. idx)
+end
+
 -- rankIndex for a guild member by name, or nil when not in the guild / not found.
 function U.guildRankOf(name)
 	if not name or name == "" or not IsInGuild or not IsInGuild() then return nil end
@@ -127,6 +160,40 @@ function U.isMyChar(name)
 	if name == (UnitName("player") or "") then return true end
 	local mine = Okanvil.db and Okanvil.db.myChars
 	return (mine and mine[name]) and true or false
+end
+
+-- Colour for a rank, by POSITION rather than by name. Index 0 is the guild
+-- master and gets the top colour; the rest step down the scale toward the
+-- bottom rank. This used to match on one guild's rank names ("warchief rat",
+-- "sewer"), which meant every other guild fell through to the default grey.
+--
+-- Alts are handled by the caller: an alt keeps its own muted colour whatever
+-- rank it sits on.
+local RANK_COLORS = {
+	"ffc659ff",   -- guild master: purple
+	"ffff4d4d",   -- officers: red
+	"ffffa030",   -- orange
+	"ffffe049",   -- yellow
+	"ff9fd45a",   -- green
+	"ff8a8d93",   -- anything deeper: grey
+}
+function U.rankColor(idx)
+	if not idx then return RANK_COLORS[#RANK_COLORS] end
+	local _, maxIdx = U.guildRanks()
+	if not maxIdx or maxIdx <= 0 then return RANK_COLORS[1] end
+	-- Spread this guild's ranks across the whole scale, whether it has four ranks
+	-- or ten. Clamping instead (idx+1) left every rank past the fifth on the same
+	-- grey, so a ten-rank guild could not tell its lower half apart.
+	local step = math.floor(idx * (#RANK_COLORS - 1) / maxIdx + 0.5) + 1
+	return RANK_COLORS[math.max(1, math.min(step, #RANK_COLORS))]
+end
+
+-- The bottom rank, whatever it is called. What "the newest members" means in a
+-- guild that never renamed anything, and the sensible default for a welcome
+-- toast -- rather than hardcoding one guild's word for it.
+function U.lowestRankIndex()
+	local _, maxIdx = U.guildRanks()
+	return (maxIdx >= 0) and maxIdx or nil
 end
 
 -- The gate the loot-priority UI asks. Officer by rank, or a character the owner

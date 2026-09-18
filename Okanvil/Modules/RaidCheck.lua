@@ -502,7 +502,7 @@ local function buildToast()
 	for i = 1, #cols do gridW = gridW + colWidth(cols[i]) end
 	f:SetWidth(PAD * 2 + LEFT_W + gridW + 8)
 
-	f.title = W.Text(f, "Raid Check", 15, "accent")
+	f.title = W.Text(f, "Raid Check", "head", "accent")
 	f.title:SetPoint("TOPLEFT", PAD, -7)
 
 	local close = W.Button(f, "X")
@@ -577,7 +577,7 @@ local function getRow(f, i)
 	row.ready:SetSize(READY_S, READY_S)
 	row.ready:SetPoint("LEFT", row, "LEFT", 7, 0)
 
-	row.name = W.Text(row, nil, 13)
+	row.name = W.Text(row, nil, "body")
 	row.name:SetPoint("LEFT", row, "LEFT", 7 + READY_S + 4, 0)
 	row.name:SetWidth(NAME_W)
 	row.name:SetJustifyH("LEFT")

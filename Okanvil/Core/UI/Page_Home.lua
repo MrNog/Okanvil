@@ -20,17 +20,17 @@ function Okanvil:BuildHome()
 
 	-- header: product wordmark (fixed) + guild skin subtitle + version
 	-- product wordmark (there's no logo.blp; the text wordmark IS the logo)
-	local title = W.Text(p, "Okanvil", 26, "accent"); title:SetPoint("TOPLEFT", X, -20)
+	local title = W.Text(p, "Okanvil", "huge", "accent"); title:SetPoint("TOPLEFT", X, -20)
 	local anchor = title
 	-- guild skin (editable) as a subtitle under the product name
 	local gb = self.db.brand
 	local guildFS
 	if gb and gb ~= "" and gb ~= "Okanvil" then
-		guildFS = W.Text(p, gb, 14, "accent"); guildFS:Color(0.88, 0.72, 0.38)
+		guildFS = W.Text(p, gb, "head", "accent"); guildFS:Color(0.88, 0.72, 0.38)
 		guildFS:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -4)
 		anchor = guildFS
 	end
-	local sub = W.Text(p, "v" .. (self.version or "1.0") .. "  --  raid & guild toolkit by Okanor", 11, "dim")
+	local sub = W.Text(p, "v" .. (self.version or "1.0") .. "  --  raid & guild toolkit by Okanor", "label", "dim")
 	sub:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -6)
 
 	-- stat tiles: online / raiders / sewers / your rank. Anchored to the header's
@@ -53,7 +53,7 @@ function Okanvil:BuildHome()
 		end
 		-- label pinned near the bottom; the value sits just above it, so all three
 		-- values line up on the same baseline regardless of number vs name.
-		t.lbl = W.Text(t, label, 10, "dim"); t.lbl:SetPoint("BOTTOMLEFT", 12, 8)
+		t.lbl = W.Text(t, label, "note", "dim"); t.lbl:SetPoint("BOTTOMLEFT", 12, 8)
 		t.num = W.Text(t, "--", VAL_SZ, "accent")
 		t.num:SetPoint("BOTTOMLEFT", t.lbl, "TOPLEFT", 0, 5); t.num:SetPoint("RIGHT", t, "RIGHT", -10, 0); t.num:SetJustifyH("LEFT")
 		if t.num.SetWordWrap then t.num:SetWordWrap(false) end
@@ -101,7 +101,7 @@ function Okanvil:BuildHome()
 	gcard:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 	gcard:SetPoint("BOTTOM", p, "BOTTOM", 0, 12)
 	gcard:SetHeight(180)   -- fallback min; the BOTTOM anchor stretches it taller
-	local gh = W.Text(gcard, "GUILD ONLINE", 10, "dim"); gh:SetPoint("TOPLEFT", 10, -8)
+	local gh = W.Text(gcard, "GUILD ONLINE", "note", "dim"); gh:SetPoint("TOPLEFT", 10, -8)
 	-- flat scroll (no Blizzard template): plain ScrollFrame + our own slider
 	local gsf = CreateFrame("ScrollFrame", nil, gcard)
 	gsf:SetPoint("TOPLEFT", 8, -24); gsf:SetPoint("BOTTOMRIGHT", -12, 6)
@@ -123,7 +123,7 @@ function Okanvil:BuildHome()
 	gsf:EnableMouseWheel(true)
 	gsf:SetScript("OnMouseWheel", function(_, d) gsb:SetValue(gsb:GetValue() - d * 24) end)
 	wrap.gsf, wrap.gchild, wrap.gsb, wrap.gRows = gsf, gchild, gsb, {}
-	local gempty = W.Text(gcard, "", 12, "dim"); gempty:SetPoint("TOPLEFT", 10, -26)
+	local gempty = W.Text(gcard, "", "body", "dim"); gempty:SetPoint("TOPLEFT", 10, -26)
 	wrap.gempty = gempty
 
 	-- ---- SNAPSHOTS card: same space as the online list, shown by the tab ----
@@ -132,7 +132,7 @@ function Okanvil:BuildHome()
 	-- if a rewrite gets it wrong.
 	local scard = W.Frame(p, "input")
 	scard:SetAllPoints(gcard)
-	local sh = W.Text(scard, "SAVED SNAPSHOTS", 10, "dim"); sh:SetPoint("TOPLEFT", 10, -8)
+	local sh = W.Text(scard, "SAVED SNAPSHOTS", "note", "dim"); sh:SetPoint("TOPLEFT", 10, -8)
 	local snapNow = W.Button(scard, "Snapshot group now")
 	snapNow:SetSize(150, 22); snapNow:SetPoint("TOPRIGHT", -10, -4)
 	local ssf = CreateFrame("ScrollFrame", nil, scard)
@@ -167,7 +167,7 @@ function Okanvil:BuildHome()
 		local snaps = (Okanvil.db.guild and Okanvil.db.guild.snapshots) or {}
 		schild:SetWidth(math.max(40, ssf:GetWidth()))
 		if #snaps == 0 or not G then
-			wrap.snapEmpty = wrap.snapEmpty or W.Text(schild, "", 12, "dim")
+			wrap.snapEmpty = wrap.snapEmpty or W.Text(schild, "", "body", "dim")
 			wrap.snapEmpty:ClearAllPoints(); wrap.snapEmpty:SetPoint("TOPLEFT", 4, -6)
 			wrap.snapEmpty:SetText(G and "|cff888888No snapshots yet. They save at the first pull, or use the button above.|r"
 				or "|cff888888Guild module not loaded.|r")
@@ -180,8 +180,8 @@ function Okanvil:BuildHome()
 			local r = wrap.snapRows[i]
 			if not r then
 				r = W.Frame(schild, "dark")
-				r.title = W.Text(r, "", 13); r.title:SetPoint("TOPLEFT", 10, -6)
-				r.sub = W.Text(r, "", 10, "dim"); r.sub:SetPoint("BOTTOMLEFT", 10, 6)
+				r.title = W.Text(r, "", "body"); r.title:SetPoint("TOPLEFT", 10, -6)
+				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("BOTTOMLEFT", 10, 6)
 				r.del = W.Button(r, "X", "danger"); r.del:SetSize(24, 22); r.del:SetPoint("RIGHT", -8, 0)
 				r.export = W.Button(r, "Export"); r.export:SetSize(72, 22); r.export:SetPoint("RIGHT", r.del, "LEFT", -6, 0)
 				r.view = W.Button(r, "View"); r.view:SetSize(60, 22); r.view:SetPoint("RIGHT", r.export, "LEFT", -6, 0)
@@ -237,7 +237,7 @@ function Okanvil:BuildHome()
 				if not set then
 					set = {}
 					for c = 1, SNAP_COLS do
-						local t = W.Text(schild, "", 13)
+						local t = W.Text(schild, "", "body")
 						t:SetJustifyH("LEFT")
 						t:SetJustifyV("TOP")
 						-- NO SetWordWrap(false) here. It is right for the one-line row

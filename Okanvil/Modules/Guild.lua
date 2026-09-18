@@ -340,7 +340,7 @@ function G.ShowSnapshot(snap)
 	if not f then
 		f = Okanvil:Popup("Snapshot")
 		f:SetSize(360, 440)
-		f.meta = W.Text(f, "", 11, "dim"); f.meta:SetPoint("TOPLEFT", 12, -30)
+		f.meta = W.Text(f, "", "label", "dim"); f.meta:SetPoint("TOPLEFT", 12, -30)
 		f.meta:SetPoint("RIGHT", f, "RIGHT", -12, 0); f.meta:SetJustifyH("LEFT")
 
 		local box = Okanvil.W.Frame(f, "input")
@@ -359,7 +359,7 @@ function G.ShowSnapshot(snap)
 		sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 		sf:EnableMouseWheel(true)
 		sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 24) end)
-		f.sf, f.child, f.sb, f.body = sf, child, sb, W.Text(child, "", 12)
+		f.sf, f.child, f.sb, f.body = sf, child, sb, W.Text(child, "", "body")
 		f.body:SetPoint("TOPLEFT", 6, -6); f.body:SetPoint("TOPRIGHT", -6, -6); f.body:SetJustifyH("LEFT")
 		viewer = f
 	end

@@ -183,11 +183,11 @@ local function buildNeeds(p)
 		local rgb = ROLE_RGB[role]
 		cell:SetBackdropBorderColor(rgb[1], rgb[2], rgb[3], 0.55)
 
-		local nameFS = W.Text(cell, ROLE_COLOR[role] .. ROLE_LABEL[role] .. "|r", 12)
+		local nameFS = W.Text(cell, ROLE_COLOR[role] .. ROLE_LABEL[role] .. "|r", "body")
 		nameFS:SetPoint("TOPLEFT", 8, -5)
 
 		-- "3/8" -- in the raid over the target
-		local cnt = W.Text(cell, "0/0", 15, "accent")
+		local cnt = W.Text(cell, "0/0", "head", "accent")
 		cnt:SetPoint("TOPRIGHT", -8, -4)
 
 		local minus = W.Button(cell, "-", nil):Size(20, 18)
@@ -208,7 +208,7 @@ local function buildNeeds(p)
 			M.RefreshUI()
 		end)
 
-		local left = W.Text(cell, "", 11, "dim")
+		local left = W.Text(cell, "", "label", "dim")
 		left:SetPoint("BOTTOMRIGHT", -8, 8)
 
 		F.needCells[role] = { frame = cell, count = cnt, left = left }
@@ -247,7 +247,7 @@ local function ensureGhost()
 	g:SetFrameStrata("TOOLTIP")
 	g:SetSize(120, 20)
 	Okanvil:Skin(g, "raise")
-	g.text = W.Text(g, "", 12)
+	g.text = W.Text(g, "", "body")
 	g.text:SetPoint("CENTER")
 	g:Hide()
 	g:SetScript("OnUpdate", function(self)
@@ -319,11 +319,11 @@ local function buildBoard(p)
 		head:SetHeight(20)
 
 		local rgb = ROLE_RGB[key]
-		local title = W.Text(head, COL_TITLE[key], 12, key == "unassigned" and "dim" or nil)
+		local title = W.Text(head, COL_TITLE[key], "body", key == "unassigned" and "dim" or nil)
 		title:SetPoint("LEFT", 6, 0)
 		if rgb then title:SetTextColor(rgb[1], rgb[2], rgb[3]) end
 
-		local cnt = W.Text(head, "", 11, "dim")
+		local cnt = W.Text(head, "", "label", "dim")
 		cnt:SetPoint("RIGHT", -6, 0)
 
 		local rows = {}
@@ -335,7 +335,7 @@ local function buildBoard(p)
 			row:SetHeight(18)
 			row:Hide()
 
-			row.text = W.Text(row, "", 11)
+			row.text = W.Text(row, "", "label")
 			row.text:SetPoint("LEFT", 4, 0)
 			row.text:SetPoint("RIGHT", -4, 0)
 			row.text:SetJustifyH("LEFT")
@@ -386,7 +386,7 @@ local function buildBoard(p)
 		end
 
 		-- "+3 more" when a column overflows the drawn rows
-		local more = W.Text(col, "", 11, "dim")
+		local more = W.Text(col, "", "label", "dim")
 		more:SetPoint("BOTTOMLEFT", 6, 5)
 
 		F.cols[key] = { frame = col, rows = rows, count = cnt, more = more }
@@ -422,7 +422,7 @@ local function buildClassRow(p)
 	F.classBtns = {}
 	F.roleBtns = {}
 
-	local lbl = W.Text(p, "|cff8a8d93Want|r", 11, "dim")
+	local lbl = W.Text(p, "|cff8a8d93Want|r", "label", "dim")
 	lbl:SetPoint("LEFT", 4, 0)
 
 	-- role filter
@@ -493,7 +493,7 @@ local function buildSpecRow(p)
 	local d = db()
 	F.specBtns = {}
 
-	local lbl = W.Text(p, "|cff8a8d93Spec|r", 11, "dim")
+	local lbl = W.Text(p, "|cff8a8d93Spec|r", "label", "dim")
 	lbl:SetPoint("LEFT", 4, 0)
 
 	local x = 54
@@ -550,7 +550,7 @@ local function buildBottom(p)
 	F.preview:SetPoint("RIGHT", p, "RIGHT", -180, 0)
 	F.preview:SetHeight(40)
 
-	F.autoTag = W.Text(p, "", 11, "dim")
+	F.autoTag = W.Text(p, "", "label", "dim")
 	F.autoTag:SetPoint("TOPLEFT", 8, -50)
 
 	F.sendBtn = W.Button(p, "Send once", "primary"):Size(82, 22)
@@ -568,7 +568,7 @@ local function buildBottom(p)
 	end)
 	F.resetBtn:Tooltip("Throw away your hand-edits and rebuild the line\nfrom the raid, roles and reserves you picked.\nThis does NOT send anything.")
 
-	F.charCount = W.Text(p, "", 11, "dim")
+	F.charCount = W.Text(p, "", "label", "dim")
 	F.charCount:SetPoint("TOPRIGHT", p, "TOPRIGHT", -8, -34)
 end
 
@@ -581,7 +581,7 @@ local function buildReserveStrip(p)
 	local d = db()
 	F.resBtns = {}
 
-	local lbl = W.Text(p, "|cff8a8d93Reserve|r", 11, "dim")
+	local lbl = W.Text(p, "|cff8a8d93Reserve|r", "label", "dim")
 	lbl:SetPoint("LEFT", 6, 0)
 
 	-- Width per label, not one fixed size: "Fragments" needs ~72px while "Key"
@@ -623,7 +623,7 @@ local function buildReserveStrip(p)
 	F.resNoneBtn:Tooltip("Advertise that nothing is reserved.\nFills pugs faster than leaving people to ask.")
 
 	-- how many specific items are hard-reserved (they are set in the Reserves tab)
-	F.resItemTag = W.Text(p, "", 11, "dim")
+	F.resItemTag = W.Text(p, "", "label", "dim")
 	F.resItemTag:SetPoint("LEFT", x + 70, 0)
 end
 
@@ -658,7 +658,7 @@ local function buildExtras(p, y0)
 			M.RefreshUI()
 		end)
 	F.classRunChk:SetPoint("TOPLEFT", X + 2, Y - 80)
-	F.classRunTag = W.Text(p, "", 11, "dim")
+	F.classRunTag = W.Text(p, "", "label", "dim")
 	F.classRunTag:SetPoint("LEFT", F.classRunChk, "RIGHT", 210, 0)
 
 	-- ---- presets ----
@@ -812,7 +812,7 @@ local function lootRow(pool, i, parent, side)
 	row.icon:SetPoint("LEFT", 3, 0)
 	row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-	row.text = W.Text(row, "", 12)
+	row.text = W.Text(row, "", "body")
 	row.text:SetPoint("LEFT", 21, 0)
 	row.text:SetPoint("RIGHT", -6, 0)
 	row.text:SetJustifyH("LEFT")
@@ -854,7 +854,7 @@ local function buildLoot(p)
 	F.lootSearch = W.EditBox(p)
 	F.lootSearch:SetSize(300, 22)
 	F.lootSearch:SetPoint("TOPLEFT", X, -28)
-	local ghost = W.Text(F.lootSearch, "|cff777777search the raid's loot...|r", 11, "dim")
+	local ghost = W.Text(F.lootSearch, "|cff777777search the raid's loot...|r", "label", "dim")
 	ghost:SetPoint("LEFT", 6, 0)
 	F.lootSearch.edit:SetScript("OnTextChanged", function(s)
 		local t = s:GetText() or ""
@@ -863,14 +863,14 @@ local function buildLoot(p)
 		if M.RefreshLootList then M.RefreshLootList() end
 	end)
 
-	F.lootScope = W.Text(p, "", 11, "dim")
+	F.lootScope = W.Text(p, "", "label", "dim")
 	F.lootScope:SetPoint("LEFT", F.lootSearch, "RIGHT", 10, 0)
 
 	-- Column headers, then the two lists under them. Widths are proportional so the
 	-- pair fills whatever the tab page is given.
-	F.lootHdrL = W.Text(p, "|cff8a8d93DROPS IN THIS RAID|r", 11, "dim")
+	F.lootHdrL = W.Text(p, "|cff8a8d93DROPS IN THIS RAID|r", "label", "dim")
 	F.lootHdrL:SetPoint("TOPLEFT", X + 4, -58)
-	F.lootHdrR = W.Text(p, "|cffe0b860RESERVED|r", 11, "dim")
+	F.lootHdrR = W.Text(p, "|cffe0b860RESERVED|r", "label", "dim")
 
 	local card, child, relayout = makeList(p, X, 300, -74, 6)
 	F.lootCard, F.lootChild, F.lootRelayout = card, child, relayout

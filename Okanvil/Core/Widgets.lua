@@ -19,6 +19,30 @@ Okanvil.W = W
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 
 -- ------------------------------------------------------------
+-- Type scale -- ONE place that decides how big anything is.
+--
+-- Sizes used to be written at each call site, which grew to ten different
+-- values across 175 calls: section labels at 10 on one page and 11 on the next,
+-- list rows at 12 here and 13 there. Nothing was wrong on its own, and together
+-- the pages read as untidy because the same KIND of text was a different size
+-- depending on who wrote that page.
+--
+-- Now a call site names the ROLE and the scale decides the number. Change one
+-- line here and every page moves together.
+--
+-- The window's Scale slider does the zooming (it scales text, icons, spacing and
+-- padding alike, which is what "make it bigger" actually means), so these are
+-- fixed pixel sizes and there is no separate font slider fighting them.
+W.F = {
+	title   = 16,   -- the window wordmark, a page's own name
+	head    = 13,   -- section headers inside a page ("APPEARANCE", "TRINKETS")
+	body    = 12,   -- the default: list rows, values, anything you read
+	label   = 11,   -- field labels, button text, tab text
+	note    = 10,   -- hints, footnotes, the dim line under a control
+	huge    = 24,   -- standalone overlay readouts (timers, gold counters)
+}
+
+-- ------------------------------------------------------------
 -- Design tokens (one place -- keeps every panel consistent)
 -- ------------------------------------------------------------
 -- Palette mirrors the RATS Hub website (gold accent on neutral dark), so the
@@ -147,8 +171,17 @@ end
 -- ------------------------------------------------------------
 -- Text (registers with Okanvil:ApplyFonts via Okanvil:NewText)
 -- ------------------------------------------------------------
+-- size may be a number or a scale role name ("body", "head", "note"...). The
+-- names are what new code should use; the numbers stay accepted so a page that
+-- genuinely needs an odd size can still ask for one.
+function W.Size(size)
+	if type(size) == "string" then return W.F[size] or W.F.body end
+	return size
+end
+
 function W.Text(parent, text, size, role)
 	local fs = Okanvil:NewText(parent, "OVERLAY")
+	size = W.Size(size)
 	if size then fs._okSize = size; local f = Okanvil:Font(); fs:SetFont(f, size) end
 	if role == "dim" then fs:SetTextColor(unpack3(C.textDim))
 	elseif role == "accent" then fs:SetTextColor(unpack3(C.accentText))  -- bright gold, readable
@@ -176,7 +209,7 @@ function W.Button(parent, text, kind)
 	local primary = (kind == "primary")
 	-- Button labels get a FIXED size (12) so the global "Font size" slider can't
 	-- grow them past the button box. The slider is for body text, not chrome.
-	local t = W.Text(b, text, 12)
+	local t = W.Text(b, text, "body")
 	t:SetPoint("CENTER")
 	b.text = t
 	b._kind = kind
@@ -505,10 +538,10 @@ function W.DropDown(parent, listFn, getFn, setFn, preview)
 	Okanvil:Skin(dd, "input")
 	-- fixed size (12): the dropdown box is a fixed height, so its text must not
 	-- scale with the global body-font slider (it would clip / overflow).
-	local txt = W.Text(dd, nil, 12)
+	local txt = W.Text(dd, nil, "body")
 	txt:SetPoint("LEFT", 6, 0); txt:SetPoint("RIGHT", -16, 0); txt:SetJustifyH("LEFT")
 	dd.textFS = txt
-	local arrow = W.Text(dd, "v", 12, "dim")
+	local arrow = W.Text(dd, "v", "body", "dim")
 	arrow:SetPoint("RIGHT", -6, 0)
 	dd.listFn, dd.getFn, dd.setFn, dd.preview = listFn, getFn, setFn, preview
 	function dd:refreshText()
@@ -896,7 +929,7 @@ function Okanvil:ShowExport(text, label)
 	if not f then
 		f = self:Popup("Export")
 		f:SetSize(440, 320)
-		local hint = W.Text(f, "Ctrl+C to copy, then paste into the hub importer.", 10, "dim")
+		local hint = W.Text(f, "Ctrl+C to copy, then paste into the hub importer.", "note", "dim")
 		hint:SetPoint("TOPLEFT", 10, -30)
 
 		local box = W.Frame(f, "input")
@@ -956,7 +989,7 @@ function Okanvil:ShowImport(label, actionText, onAccept, hintText)
 	if not f then
 		f = self:Popup("Import")
 		f:SetSize(440, 320)
-		local hint = W.Text(f, "", 10, "dim")
+		local hint = W.Text(f, "", "note", "dim")
 		hint:SetPoint("TOPLEFT", 10, -30)
 
 		local go = W.Button(f, "Go", "primary")

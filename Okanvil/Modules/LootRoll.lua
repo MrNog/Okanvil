@@ -291,7 +291,7 @@ local function buildWindow()
 	ico:SetSize(16, 16); ico:SetPoint("LEFT", 8, 0)
 	ico:SetTexture("Interface\\Icons\\Trade_BlackSmithing")   -- anvil, like the shell
 	ico:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local title = W.Text(hdr, "", 13, "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0); title:Color(1, 0.82, 0)
+	local title = W.Text(hdr, "", "body", "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0); title:Color(1, 0.82, 0)
 	f.title = title
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)

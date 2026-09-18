@@ -927,7 +927,7 @@ function Rec_BuildContacts(drawer)
 		local num = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 		num:SetPoint("TOP", 0, -2); num:SetText("0")
 		num:SetTextColor(1, 1, 1)
-		local cap = W.Text(card, g[2], 9, "dim")
+		local cap = W.Text(card, g[2], "note", "dim")
 		cap:SetPoint("BOTTOM", 0, 2)
 		cap:SetText("|cff" .. g[3] .. g[2] .. "|r")
 		f.statCards[g[1]] = num

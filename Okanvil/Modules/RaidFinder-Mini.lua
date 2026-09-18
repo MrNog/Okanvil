@@ -94,7 +94,7 @@ local function make_row(parent)
 	r.ress = CreateFrame("Button", nil, r)
 	r.ress:SetSize(RESS_W, 15); r.ress:SetPoint("LEFT", M.ress, 0)
 	Okanvil:Skin(r.ress, "input")
-	r.ress.txt = W.Text(r.ress, "", 10); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
+	r.ress.txt = W.Text(r.ress, "", "note"); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
 	r.ress:SetScript("OnEnter", function(s) S.show_tip(s, s._res) end)
 	r.ress:SetScript("OnLeave", function() S.hide_tip() end)
 
@@ -210,7 +210,7 @@ local function build()
 	f:SetSize(WIN_W, 44 + 16 + rows * ROW_H + 12)  -- titlebar+count + colhdr + rows + pad
 
 	-- count / hint line under the title bar
-	f.count = W.Text(f, "", 10, "dim")
+	f.count = W.Text(f, "", "note", "dim")
 	f.count:SetPoint("TOPLEFT", 8, -30)
 
 	-- Straight through to the Raid Finder page, where the filters live. The mini list
@@ -239,7 +239,7 @@ local function build()
 	local hdr = W.Frame(well, "input")
 	hdr:SetPoint("TOPLEFT", 2, -2); hdr:SetPoint("TOPRIGHT", -2, 0); hdr:SetHeight(16)
 	local function colhC(x, w, t)
-		local fsx = W.Text(hdr, t, 10, "accent"); fsx:SetJustifyH("CENTER")
+		local fsx = W.Text(hdr, t, "note", "accent"); fsx:SetJustifyH("CENTER")
 		fsx:SetPoint("LEFT", x, 0); fsx:SetWidth(w)
 	end
 
@@ -247,7 +247,7 @@ local function build()
 	local function sortHeader(x, t, key)
 		local b = CreateFrame("Button", nil, hdr)
 		b:SetHeight(16); b:SetPoint("LEFT", x, 0)
-		local fsx = W.Text(b, t, 10, "accent"); fsx:SetPoint("LEFT", 2, 0)
+		local fsx = W.Text(b, t, "note", "accent"); fsx:SetPoint("LEFT", 2, 0)
 		b:SetWidth(fsx:GetStringWidth() + 16)
 		b.label, b.key, b.fs = t, key, fsx
 		b:SetScript("OnClick", function()

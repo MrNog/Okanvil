@@ -29,7 +29,7 @@ function Okanvil:BuildSettings()
 		drawerWidth = 0,
 		footerHeight = 0,
 		tabs = {
-			{ key = "general", label = "General",    height = 500,
+			{ key = "general", label = "General",    height = 470,
 			  build = function(pg) Okanvil:Settings_General(pg) end },
 			{ key = "raid",    label = "Raid Tools", height = 470,
 			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
@@ -54,9 +54,9 @@ function Okanvil:BuildSettings()
 	local bIcon = badge:CreateTexture(nil, "ARTWORK")
 	bIcon:SetSize(30, 30); bIcon:SetPoint("LEFT", 12, 0)
 	bIcon:SetTexture("Interface\\Icons\\Trade_BlackSmithing"); bIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local bName = W.Text(badge, "Okanvil", 14, "accent"); bName:SetPoint("LEFT", bIcon, "RIGHT", 10, 8); bName:Color(1, 0.82, 0)
-	local bVer = W.Text(badge, "v" .. (self.version or "1.0"), 10, "dim"); bVer:SetPoint("LEFT", bName, "RIGHT", 5, 0)
-	local bBy = W.Text(badge, "forged by |cffe0b860Okanor|r", 10, "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
+	local bName = W.Text(badge, "Okanvil", "head", "accent"); bName:SetPoint("LEFT", bIcon, "RIGHT", 10, 8); bName:Color(1, 0.82, 0)
+	local bVer = W.Text(badge, "v" .. (self.version or "1.0"), "note", "dim"); bVer:SetPoint("LEFT", bName, "RIGHT", 5, 0)
+	local bBy = W.Text(badge, "forged by |cffe0b860Okanor|r", "note", "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
 	-- size the badge to fit its contents (icon + the wider of the two text rows)
 	local wName = (bName:GetStringWidth() or 60) + (bVer:GetStringWidth() or 20) + 5
 	local wBy = bBy:GetStringWidth() or 80
@@ -79,56 +79,59 @@ function Okanvil:Settings_General(p)
 	-- NOTE: W.Slider anchors at its BAR; its own label sits ~5px ABOVE that anchor,
 	-- so each slider needs ~46px of vertical room.
 	-- APPEARANCE
-	local a = W.Text(p, "APPEARANCE", 10, "dim"); a:SetPoint("TOPLEFT", X, -8)
-	W.Slider(p, "Window scale", 0.6, 1.4, 0.05, function() return db.scale end,
+	local a = W.Text(p, "APPEARANCE", "note", "dim"); a:SetPoint("TOPLEFT", X, -8)
+	-- Scale is the ONE size control. It scales text, icons, spacing and padding
+	-- together, which is what "make it bigger" actually means -- a font slider
+	-- next to it only stretched text inside boxes that stayed put, and a separate
+	-- one for the window never made sense once this one existed.
+	-- Up to 1.8: at 1.4 the window was still small on a modern monitor.
+	W.Slider(p, "Window scale", 0.6, 1.8, 0.05, function() return db.scale end,
 		function(v) db.scale = v; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", X, -46)
 	W.Slider(p, "Background opacity", 0.3, 1.0, 0.05, function() return db.bgAlpha end,
 		function(v) db.bgAlpha = v; Okanvil:ReskinAll(v); Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -92)
-	W.Slider(p, "Font size", 8, 20, 1, function() return db.fontSize end,
-		function(v) db.fontSize = v; Okanvil:ApplyFonts() end):SetPoint("TOPLEFT", X, -138)
 	local showChk = W.Check(p, "Show rat art on pages",
 		function() return (db.ratArt or "on") ~= "off" end,
 		function(v) db.ratArt = v and "on" or "off"; Okanvil:RefreshRatArt() end)
-	showChk:SetPoint("TOPLEFT", X, -170)
+	showChk:SetPoint("TOPLEFT", X, -132)
 	local pullChk = W.Check(p, "Close all windows on a DBM pull",
 		function() return db.closeOnPull ~= false end,
 		function(v) db.closeOnPull = v end)
-	pullChk:SetPoint("TOPLEFT", X + 200, -170)
+	pullChk:SetPoint("TOPLEFT", X + 200, -132)
 	-- rat watermark intensity -- its OWN slider, independent of panel opacity.
 	W.Slider(p, "Rat art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
-		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -212)
+		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -174)
 
-	-- MEDIA
-	local m = W.Text(p, "MEDIA", 10, "dim"); m:SetPoint("TOPLEFT", X, -252)
-	local fl = W.Text(p, "Font", 11, "dim"); fl:SetPoint("TOPLEFT", X, -274)
+	-- MEDIA -- label on the left, control on the same line to its right
+	local m = W.Text(p, "MEDIA", "note", "dim"); m:SetPoint("TOPLEFT", X, -214)
+	local fl = W.Text(p, "Font", "label", "dim"); fl:SetPoint("TOPLEFT", X, -240)
 	W.DropDown(p, function() return (LSM and LSM:List("font")) or { db.font } end,
 		function() return db.font end, function(v) db.font = v; Okanvil:ApplyFonts() end, "font")
-		:Size(200, 22):Point("TOPLEFT", X + 90, -272)
-	local tl = W.Text(p, "Bar texture", 11, "dim"); tl:SetPoint("TOPLEFT", X, -304)
+		:Size(200, 22):Point("TOPLEFT", X + 90, -236)
+	local tl = W.Text(p, "Bar texture", "label", "dim"); tl:SetPoint("TOPLEFT", X, -270)
 	W.DropDown(p, function() return (LSM and LSM:List("statusbar")) or { db.statusbar } end,
 		function() return db.statusbar end, function(v) db.statusbar = v end, "statusbar")
-		:Size(200, 22):Point("TOPLEFT", X + 90, -302)
+		:Size(200, 22):Point("TOPLEFT", X + 90, -266)
 
 	-- BRANDING (product name is FIXED -- guilds only set their own skin)
-	local b = W.Text(p, "BRANDING", 10, "dim"); b:SetPoint("TOPLEFT", X, -344)
-	local nl = W.Text(p, "Guild skin (shown after Okanvil)", 11, "dim"); nl:SetPoint("TOPLEFT", X, -366)
+	local b = W.Text(p, "BRANDING", "note", "dim"); b:SetPoint("TOPLEFT", X, -306)
+	local nl = W.Text(p, "Guild skin (shown after Okanvil)", "label", "dim"); nl:SetPoint("TOPLEFT", X, -332)
 	local nameBox = W.EditBox(p, function(txt)
 		db.brand = txt or ""
 		if Okanvil.headerPaintBrand then Okanvil.headerPaintBrand() end
 		Okanvil.panels["__home"] = nil
 	end)
-	nameBox:SetSize(320, 22); nameBox:SetPoint("TOPLEFT", X, -384)
+	nameBox:SetSize(320, 22); nameBox:SetPoint("TOPLEFT", X, -352)
 	nameBox.edit:SetText((db.brand ~= "Okanvil" and db.brand) or "")
-	local nh = W.Text(p, "e.g. RATS Guild Hub -- leave empty for just \"Okanvil\".", 10, "dim")
-	nh:SetPoint("TOPLEFT", X, -410)
-	local ul = W.Text(p, "Web hub URL", 11, "dim"); ul:SetPoint("TOPLEFT", X, -434)
+	local nh = W.Text(p, "e.g. RATS Guild Hub -- leave empty for just \"Okanvil\".", "note", "dim")
+	nh:SetPoint("TOPLEFT", X, -378)
+
+	local ul = W.Text(p, "Web hub URL", "label", "dim"); ul:SetPoint("TOPLEFT", X, -404)
 	local urlBox = W.EditBox(p, function(txt)
 		db.hubURL = txt
 		if Okanvil.footerPaintHub then Okanvil.footerPaintHub() end   -- live-update footer link
 	end)
-	urlBox:SetSize(320, 22); urlBox:SetPoint("TOPLEFT", X, -452)
+	urlBox:SetSize(320, 22); urlBox:SetPoint("TOPLEFT", X, -424)
 	urlBox.edit:SetText(db.hubURL or "")
-
 end
 
 function Okanvil:Settings_RaidTools(p)
@@ -142,7 +145,7 @@ function Okanvil:Settings_RaidTools(p)
 	-- The setters below must store a REAL boolean, never nil: W.Check toggles by
 	-- inverting what getFn reads, so deleting the key leaves the tick stuck on.
 	local RX = X
-	local rt = W.Text(p, "RAID CHECK -- the ready-check popup", 10, "dim")
+	local rt = W.Text(p, "RAID CHECK -- the ready-check popup", "note", "dim")
 	rt:SetPoint("TOPLEFT", RX, -8)
 
 	local RC = Okanvil.RaidCheck
@@ -157,7 +160,7 @@ function Okanvil:Settings_RaidTools(p)
 			function(v) rcdb().onReadyCheck = v and true or false end)
 		rcOn:SetPoint("TOPLEFT", RX + 2, -30)
 
-		local rcHint = W.Text(p, "Who is missing a flask, food or a buff. Leader/assist only.", 10, "dim")
+		local rcHint = W.Text(p, "Who is missing a flask, food or a buff. Leader/assist only.", "note", "dim")
 		rcHint:SetPoint("TOPLEFT", RX + 20, -50); rcHint:SetWidth(270); rcHint:SetJustifyH("LEFT")
 
 		local rcClear = W.Check(p, "Close it once everyone is ready and buffed",
@@ -185,10 +188,10 @@ function Okanvil:Settings_RaidTools(p)
 			end)
 		rcGrey:SetPoint("TOPLEFT", RX + 2, -126)
 
-		local rcGreyHint = W.Text(p, "Off: only buffs people actually have are drawn.", 10, "dim")
+		local rcGreyHint = W.Text(p, "Off: only buffs people actually have are drawn.", "note", "dim")
 		rcGreyHint:SetPoint("TOPLEFT", RX + 20, -146); rcGreyHint:SetWidth(300); rcGreyHint:SetJustifyH("LEFT")
 
-		local rcSortL = W.Text(p, "Sort by", 11, "dim")
+		local rcSortL = W.Text(p, "Sort by", "label", "dim")
 		rcSortL:SetPoint("TOPLEFT", RX + 2, -172)
 		W.DropDown(p,
 			function() return RC.SORTS or { "group", "class", "name" } end,
@@ -213,7 +216,7 @@ function Okanvil:Settings_RaidTools(p)
 	-- DBM pull). Same deal: an overlay, not a page.
 	local MB = Okanvil.MarksBar
 	if MB then
-		local ut = W.Text(p, "RAID UTILS -- the floating marks bar", 10, "dim")
+		local ut = W.Text(p, "RAID UTILS -- the floating marks bar", "note", "dim")
 		ut:SetPoint("TOPLEFT", RX, -288)
 		local mbdb = function()
 			db.marksbar = db.marksbar or {}
@@ -225,7 +228,7 @@ function Okanvil:Settings_RaidTools(p)
 			function(v) if MB.Toggle then MB:Toggle(v and true or false) end end)
 		mbOn:SetPoint("TOPLEFT", RX + 2, -310)
 
-		local mbHint = W.Text(p, "Only visible while you are raid leader or assist.", 10, "dim")
+		local mbHint = W.Text(p, "Only visible while you are raid leader or assist.", "note", "dim")
 		mbHint:SetPoint("TOPLEFT", RX + 20, -330); mbHint:SetWidth(320); mbHint:SetJustifyH("LEFT")
 
 		W.Slider(p, "Bar size", 70, 160, 5,
@@ -243,7 +246,7 @@ function Okanvil:Settings_RaidTools(p)
 	-- COMBAT LOGGING -- the two switches off the old Combat Logs page. Starting and
 	-- stopping is a marks-bar button and the REC timer says when it is running, so
 	-- the page was carrying these two toggles and nothing else.
-	local lg = W.Text(p, "COMBAT LOGGING", 10, "dim")
+	local lg = W.Text(p, "COMBAT LOGGING", "note", "dim")
 	lg:SetPoint("TOPLEFT", RX, -460)
 	-- the logs settings live in OkanvilLogsDB (per character), not Okanvil.db
 	local LG = OkanvilLogs
@@ -260,10 +263,10 @@ function Okanvil:Settings_RaidTools(p)
 				if LG.ApplyRecLock then LG.ApplyRecLock() end
 			end)
 		lockChk:SetPoint("TOPLEFT", RX + 2, -504)
-		local lgHint = W.Text(p, "Start/stop logging from the marks bar. Dungeons never prompt.", 10, "dim")
+		local lgHint = W.Text(p, "Start/stop logging from the marks bar. Dungeons never prompt.", "note", "dim")
 		lgHint:SetPoint("TOPLEFT", RX + 2, -526)
 	else
-		local t = W.Text(p, "|cff8a8d93Combat Logs module not loaded.|r", 10, "dim")
+		local t = W.Text(p, "|cff8a8d93Combat Logs module not loaded.|r", "note", "dim")
 		t:SetPoint("TOPLEFT", RX + 2, -482)
 	end
 
@@ -276,7 +279,7 @@ function Okanvil:Settings_Advanced(p)
 	-- DEV MODE -- routes debug output to a dedicated "Okanvil" chat tab (next to
 	-- General / Combat Log) instead of spamming the default chat. Off by default,
 	-- so raiders never see it; the tab is only created when this is switched on.
-	local dv = W.Text(p, "DEV", 10, "dim"); dv:SetPoint("TOPLEFT", X, -8)
+	local dv = W.Text(p, "DEV", "note", "dim"); dv:SetPoint("TOPLEFT", X, -8)
 	local devChk = W.Check(p, "Dev mode -- debug output to its own \"Okanvil\" chat tab",
 		function() return db.devMode and true or false end,
 		function(v) Okanvil:SetDevMode(v) end)
@@ -285,8 +288,8 @@ function Okanvil:Settings_Advanced(p)
 	-- VERSION CHECK -- opens the RCLootCouncil-style checker popup. A stale client
 	-- is what makes "phantom" bugs (e.g. an old build showing the ML layout to a
 	-- plain raider), so this is the first thing to check on a bug report.
-	local vc = W.Text(p, "VERSION CHECK", 10, "dim"); vc:SetPoint("TOPLEFT", X, -62)
-	local vhint = W.Text(p, "Ask your group or the guild which Okanvil they run.", 10, "dim")
+	local vc = W.Text(p, "VERSION CHECK", "note", "dim"); vc:SetPoint("TOPLEFT", X, -62)
+	local vhint = W.Text(p, "Ask your group or the guild which Okanvil they run.", "note", "dim")
 	vhint:SetPoint("TOPLEFT", X, -82)
 
 	local vbtn = W.Button(p, "Open version checker", "primary")
@@ -310,7 +313,7 @@ function Okanvil:ShowVersionChecker()
 		local bGuild = W.Button(f, "Guild")
 		bGuild:SetSize(90, 22); bGuild:SetPoint("LEFT", bGroup, "RIGHT", 8, 0)
 
-		local status = W.Text(f, "", 10, "dim")
+		local status = W.Text(f, "", "note", "dim")
 		status:SetPoint("LEFT", bGuild, "RIGHT", 10, 0)
 		f.status = status
 
@@ -333,7 +336,7 @@ function Okanvil:ShowVersionChecker()
 		end)
 		f.scroll, f.child = scroll, child
 
-		local out = W.Text(child, "", 11)
+		local out = W.Text(child, "", "label")
 		out:SetPoint("TOPLEFT", 0, 0)
 		out:SetJustifyH("LEFT")
 		if out.SetJustifyV then out:SetJustifyV("TOP") end
@@ -420,12 +423,12 @@ function Okanvil:Settings_Invite(p)
 	local I = Okanvil.Invite
 	local X = 14
 	if not I then
-		local t = W.Text(p, "Invite engine not loaded.", 11, "dim")
+		local t = W.Text(p, "Invite engine not loaded.", "label", "dim")
 		t:SetPoint("TOPLEFT", X, -12)
 		return
 	end
 
-	local hdr = W.Text(p, "AUTO-INVITE", 10, "dim"); hdr:SetPoint("TOPLEFT", X, -10)
+	local hdr = W.Text(p, "AUTO-INVITE", "note", "dim"); hdr:SetPoint("TOPLEFT", X, -10)
 
 	-- master switch: OFF means nobody is pulled in by a keyword, whatever the
 	-- channel toggles below say
@@ -442,7 +445,7 @@ function Okanvil:Settings_Invite(p)
 	end)
 	syncMaster()
 
-	local warn = W.Text(p, "|cff8a8d93Can't run with Recruit (shared keyword) -- enabling one disables the other.|r", 10, "dim")
+	local warn = W.Text(p, "|cff8a8d93Can't run with Recruit (shared keyword) -- enabling one disables the other.|r", "note", "dim")
 	warn:SetPoint("TOPLEFT", X, -58); warn:SetWidth(420); warn:SetJustifyH("LEFT")
 
 	local wChk = W.Check(p, "On whisper", function() return I.db().whisperInvite end,
@@ -452,13 +455,13 @@ function Okanvil:Settings_Invite(p)
 		function(v) I.db().guildInvite = v end)
 	gChk:SetPoint("LEFT", wChk, "LEFT", 165, 0)
 
-	local kwLbl = W.Text(p, "KEYWORDS", 10, "dim"); kwLbl:SetPoint("TOPLEFT", X, -114)
+	local kwLbl = W.Text(p, "KEYWORDS", "note", "dim"); kwLbl:SetPoint("TOPLEFT", X, -114)
 
 	-- Live preview. Matching is WHOLE WORD, which is right ("reinvite" must not
 	-- trigger) but not obvious: "inv" alone does NOT match "invite", so the most
 	-- natural thing a person types was being ignored. Showing what does and does
 	-- not match means never having to guess again.
-	local preview = W.Text(p, "", 10, "dim")
+	local preview = W.Text(p, "", "note", "dim")
 	preview:SetPoint("TOPLEFT", X, -168); preview:SetWidth(430); preview:SetJustifyH("LEFT")
 
 	local SAMPLES = { "inv", "invite", "+", "inv pls", "invite me", "reinvite" }
@@ -484,13 +487,13 @@ function Okanvil:Settings_Invite(p)
 	kwBox.edit:SetText(I.db().keyword or "inv, invite, +")
 	kwBox.edit:SetScript("OnTextChanged", function(s) refreshPreview(s:GetText()) end)
 
-	local kwHint = W.Text(p, "comma-separated -- any of them triggers an invite", 10, "dim")
+	local kwHint = W.Text(p, "comma-separated -- any of them triggers an invite", "note", "dim")
 	kwHint:SetPoint("LEFT", kwBox, "RIGHT", 10, 0)
 
 	refreshPreview(kwBox.edit:GetText())
 
 	-- ---- login toast ----
-	local ltLbl = W.Text(p, "LOGIN TOAST", 10, "dim"); ltLbl:SetPoint("TOPLEFT", X, -206)
+	local ltLbl = W.Text(p, "LOGIN TOAST", "note", "dim"); ltLbl:SetPoint("TOPLEFT", X, -206)
 	local ltChk = W.Check(p, "Pop a toast when someone logs in, with an Invite button",
 		function() return I.db().loginToast ~= false end,
 		function(v) I.db().loginToast = v and true or false end)
@@ -499,6 +502,6 @@ function Okanvil:Settings_Invite(p)
 	local ltRanks = W.EditBox(p, function(t) I.db().loginToastRanks = t or "" end)
 	ltRanks:Size(200, 22); ltRanks:SetPoint("TOPLEFT", X, -252)
 	ltRanks.edit:SetText(I.db().loginToastRanks or "sewer")
-	local ltHint = W.Text(p, "which ranks to toast -- part of the rank name, comma-separated\n(e.g. \"sewer\" or \"sewer, raider\"). Empty = nobody.", 10, "dim")
+	local ltHint = W.Text(p, "which ranks to toast -- part of the rank name, comma-separated\n(e.g. \"sewer\" or \"sewer, raider\"). Empty = nobody.", "note", "dim")
 	ltHint:SetPoint("LEFT", ltRanks, "RIGHT", 10, 0); ltHint:SetJustifyH("LEFT")
 end

@@ -498,7 +498,7 @@ function P.ShowImport(onDone)
 		f = Okanvil:Popup("Import loot priority")
 		f:SetSize(460, 300)
 
-		local hint = W.Text(f, "Copy the site's \"Export reserved\", paste here (Ctrl+V), then Save.", 10, "dim")
+		local hint = W.Text(f, "Copy the site's \"Export reserved\", paste here (Ctrl+V), then Save.", "note", "dim")
 		hint:SetPoint("TOPLEFT", 10, -30)
 
 		local box = W.MultiEdit(f)
@@ -509,7 +509,7 @@ function P.ShowImport(onDone)
 		save:SetSize(100, 22); save:SetPoint("BOTTOMLEFT", 8, 8)
 		local cancel = W.Button(f, "Cancel")
 		cancel:SetSize(80, 22); cancel:SetPoint("LEFT", save, "RIGHT", 6, 0)
-		local msg = W.Text(f, "", 11, "dim")
+		local msg = W.Text(f, "", "label", "dim")
 		msg:SetPoint("LEFT", cancel, "RIGHT", 10, 0)
 
 		cancel:SetScript("OnClick", function() f:Hide() end)
@@ -537,11 +537,11 @@ end
 -- Prio tab -- the stored list, grouped by slot
 -- ------------------------------------------------------------
 -- Text sizes are derived from the user's global font size rather than fixed, so
--- the Settings > Font size slider scales this list along with the rest of the UI.
--- The offsets keep the hierarchy: group heading largest, then item, then ladder.
+-- Sizes come from the shared type scale (W.F), so this list matches every other
+-- page instead of drifting off on its own. The offsets keep the hierarchy:
+-- group heading largest, then item, then ladder.
 local function fsz(delta)
-	local _, base = Okanvil:Font()
-	return math.max(8, (base or 12) + (delta or 0))
+	return math.max(8, (W.F.body or 12) + (delta or 0))
 end
 
 -- Row geometry follows the font: two stacked lines of text plus padding. Fixed
