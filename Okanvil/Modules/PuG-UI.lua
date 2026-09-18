@@ -695,6 +695,12 @@ end
 -- alone stacked them edge to edge and the list read as one solid block.
 local LOOT_ROW_H = 24
 local LOOT_ROW_STEP = LOOT_ROW_H + 5
+-- Where the item name starts. ONE constant because two places set it -- the row
+-- builder and the refresh that re-anchors it for boss headers -- and they drifted:
+-- the refresh still used the offset from when the icon was 14px, so the name sat
+-- on top of an 18px icon.
+local LOOT_ICON = 18
+local LOOT_TEXT_X = 5 + LOOT_ICON + 8
 
 -- One scrolling list: returns the scroll child to draw rows into, plus a
 -- relayout() to call once the content height is known.
@@ -738,12 +744,12 @@ local function lootRow(pool, i, parent, side)
 	row:SetHeight(LOOT_ROW_H)
 
 	row.icon = row:CreateTexture(nil, "ARTWORK")
-	row.icon:SetSize(18, 18)
+	row.icon:SetSize(LOOT_ICON, LOOT_ICON)
 	row.icon:SetPoint("LEFT", 5, 0)
 	row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
 	row.text = W.Text(row, "", "head")
-	row.text:SetPoint("LEFT", 31, 0)
+	row.text:SetPoint("LEFT", LOOT_TEXT_X, 0)
 	row.text:SetPoint("RIGHT", -6, 0)
 	row.text:SetJustifyH("LEFT")
 	if row.text.SetWordWrap then row.text:SetWordWrap(false) end
@@ -929,7 +935,7 @@ function M.RefreshLootList()
 			local already = reserved[it.name] or (link and reserved[link]) or false
 
 			row.text:ClearAllPoints()
-			row.text:SetPoint("LEFT", 21, 0); row.text:SetPoint("RIGHT", -6, 0)
+			row.text:SetPoint("LEFT", LOOT_TEXT_X, 0); row.text:SetPoint("RIGHT", -6, 0)
 
 			local icon = GetItemIcon and GetItemIcon(it.id)
 			if icon then row.icon:SetTexture(icon); row.icon:Show() else row.icon:Hide() end
