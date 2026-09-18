@@ -895,6 +895,32 @@ function M.ApplicantList()
 end
 M.AddApplicant = addApplicant
 
+-- The line under a name on the board: "blood dk  5.8k".
+--
+-- Two sources and they are not equal. An INSPECT is measured -- it read their
+-- talents and their gear -- so it wins. A whisper is only what they claimed, and
+-- is used when nobody has inspected them yet, which is the normal state for
+-- someone who has not been invited.
+--
+-- Returns "" when neither knows anything: an empty second line reads better than
+-- one padded out with "unknown".
+function M.SubLabel(name)
+	if not name then return "" end
+	local bits = {}
+	local I = Okanvil.Inspect
+	local info = I and I.Info and I.Info(name)
+	local a = db.applicants and db.applicants[name]
+
+	if info and info.spec then bits[#bits + 1] = info.spec:lower()
+	elseif a and a.spec then bits[#bits + 1] = a.spec end
+
+	if info and info.gs then bits[#bits + 1] = info.gs
+	elseif info and info.ilvl then bits[#bits + 1] = "i" .. info.ilvl
+	elseif a and a.gs then bits[#bits + 1] = a.gs end
+
+	return table.concat(bits, "  ")
+end
+
 function M.RemoveApplicant(name)
 	db.applicants[name] = nil
 end

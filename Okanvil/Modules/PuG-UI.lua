@@ -30,7 +30,11 @@ local ROLE_RGB = {
 local ROLE_LABEL = { tank = "Tank", healer = "Healer", melee = "Melee", ranged = "Ranged" }
 
 local F                      -- built frame set (nil until BuildUI runs)
-local BOARD_ROWS = 11        -- name slots drawn per column
+-- Two lines per person: the name, then the spec and gearscore under it. Nine
+-- slots, not eleven -- a taller row is worth more than two more of them, and the
+-- column says "+N more" once it overflows.
+local BOARD_ROWS = 9
+local BOARD_ROW_H = 34
 
 local function db() return M.DB() end
 
@@ -231,8 +235,11 @@ end
 -- Assignments live in db.assign, so a /reload mid-forming keeps the comp.
 -- ------------------------------------------------------------
 local COLS = { "unassigned", "tank", "healer", "melee", "ranged" }
+-- "Applicants", not "Unassigned": the column used to be permanently empty --
+-- everyone already in the group has a role -- and it is where the people who
+-- whisper you land, which is the one thing it is actually for.
 local COL_TITLE = {
-	unassigned = "Unassigned", tank = "Tank", healer = "Healer",
+	unassigned = "Applicants", tank = "Tank", healer = "Healer",
 	melee = "Melee", ranged = "Ranged",
 }
 
@@ -339,13 +346,23 @@ local function buildBoard(p)
 			local row = W.Frame(col, "input")
 			row:SetPoint("TOPLEFT", 3, y)
 			row:SetPoint("TOPRIGHT", -3, y)
-			row:SetHeight(18)
+			row:SetHeight(BOARD_ROW_H)
 			row:Hide()
 
+			-- Two lines. The parser already reads the spec and the gearscore out of
+			-- every whisper; one 18px line could only hold the name, so all of it was
+			-- thrown away at the point where it would have been useful.
 			row.text = W.Text(row, "", "label")
-			row.text:SetPoint("LEFT", 4, 0)
+			row.text:SetPoint("TOPLEFT", 5, -4)
 			row.text:SetPoint("RIGHT", -4, 0)
 			row.text:SetJustifyH("LEFT")
+			if row.text.SetWordWrap then row.text:SetWordWrap(false) end
+
+			row.sub = W.Text(row, "", "note", "dim")
+			row.sub:SetPoint("TOPLEFT", 5, -19)
+			row.sub:SetPoint("RIGHT", -4, 0)
+			row.sub:SetJustifyH("LEFT")
+			if row.sub.SetWordWrap then row.sub:SetWordWrap(false) end
 
 			row:EnableMouse(true)
 			row:SetMovable(true)
@@ -364,7 +381,16 @@ local function buildBoard(p)
 					drag.justDropped = nil
 					return
 				end
-				if button == "RightButton" then
+				-- An APPLICANT is not on the board yet, so cycling their role would be
+				-- assigning a slot to someone who has not been invited. Left-click
+				-- invites them; right-click drops them off the list.
+				if self._pending then
+					if button == "RightButton" then
+						M.RemoveApplicant(self._name)
+					else
+						M.InviteApplicant(self._name)
+					end
+				elseif button == "RightButton" then
 					M.Assign(self._name, nil)
 				else
 					M.CycleRole(self._name)
@@ -389,7 +415,7 @@ local function buildBoard(p)
 			end)
 
 			rows[r] = row
-			y = y - 20
+			y = y - (BOARD_ROW_H + 3)
 		end
 
 		-- "+3 more" when a column overflows the drawn rows
@@ -999,13 +1025,29 @@ function M.RefreshUI()
 	local buckets = { unassigned = {} }
 	for _, r in ipairs(ROLES) do buckets[r] = {} end
 
+	local inGroup = {}
 	for _, pl in ipairs(list) do
+		inGroup[pl.name] = true
 		local assigned = M.AssignedRole(pl.name)
 		local key = assigned or "unassigned"
 		if buckets[key] then
 			buckets[key][#buckets[key] + 1] = pl
 		end
 		if assigned then have[assigned] = (have[assigned] or 0) + 1 end
+	end
+
+	-- APPLICANTS. Whoever whispered and is not in the group yet goes in the first
+	-- column -- which is what it is for, and why it was renamed. It used to sit
+	-- permanently empty, because anyone already in the group has a role.
+	--
+	-- `pending` marks them so a row can be drawn differently and clicking one can
+	-- invite rather than just move it between columns.
+	for _, a in ipairs(M.ApplicantList and M.ApplicantList() or {}) do
+		if not inGroup[a.name] then
+			buckets.unassigned[#buckets.unassigned + 1] = {
+				name = a.name, class = a.class, online = true, pending = true,
+			}
+		end
 	end
 
 	if F.cols then
@@ -1021,6 +1063,20 @@ function M.RefreshUI()
 					local txt = class_color(pl.class) .. pl.name .. "|r"
 					if pl.online == false then txt = "|cff5a5a5a" .. pl.name .. "|r" end
 					row.text:SetText(txt)
+					-- Second line: what they are and how geared, from whichever source
+					-- knows -- an inspect if we have one, otherwise whatever they said
+					-- in their whisper. Blank when neither knows, rather than padded
+					-- with "unknown".
+					row.sub:SetText("|cff8a8d93" .. (M.SubLabel and M.SubLabel(pl.name) or "") .. "|r")
+					-- A pending applicant gets a gold edge: it is the difference between
+					-- someone you HAVE and someone you could invite, and the two sit in
+					-- the same board.
+					row._pending = pl.pending
+					if pl.pending then
+						row:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 0.75)
+					else
+						row:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
+					end
 					row:Show()
 				else
 					row._name = nil
