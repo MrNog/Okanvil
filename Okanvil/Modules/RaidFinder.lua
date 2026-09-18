@@ -696,15 +696,35 @@ Okanvil.RaidFinder_BuildWhisper = build_whisper
 
 -- Join: send the whisper immediately.
 function Okanvil.RaidFinder_Join(info)
-	if not info or not info.sender then return end
-	SendChatMessage(build_whisper(info), "WHISPER", nil, info.sender)
+	if not info or not info.sender then
+		-- Say so rather than doing nothing: a button that silently no-ops is
+		-- indistinguishable from a button that is broken.
+		Okanvil:Print("|cffff5555No listing attached to that row -- try rescanning.|r")
+		return
+	end
+	local msg = build_whisper(info)
+	SendChatMessage(msg, "WHISPER", nil, info.sender)
+	Okanvil:Print("whispered |cffe0b860" .. info.sender .. "|r: " .. msg)
 end
 
 -- /w: just open a blank whisper to the leader (you type your own message).
 -- (Join sends the full "inv for ..." message; /w is a plain tell.)
 function Okanvil.RaidFinder_Whisper(info)
-	if not info or not info.sender then return end
-	ChatFrame_SendTell(info.sender)
+	if not info or not info.sender then
+		Okanvil:Print("|cffff5555No listing attached to that row -- try rescanning.|r")
+		return
+	end
+	-- ChatFrame_SendTell is a Blizzard UI helper; if a UI replacement has removed
+	-- it, fall back to opening the edit box by hand rather than erroring.
+	if ChatFrame_SendTell then
+		ChatFrame_SendTell(info.sender)
+	elseif ChatEdit_ActivateChat and ChatFrame1EditBox then
+		ChatFrame1EditBox:SetAttribute("chatType", "WHISPER")
+		ChatFrame1EditBox:SetAttribute("tellTarget", info.sender)
+		ChatEdit_ActivateChat(ChatFrame1EditBox)
+	else
+		Okanvil:Print("|cffff5555Could not open a whisper window.|r")
+	end
 end
 
 -- Verify the achievement-ID table against THIS server. Pops a copyable
