@@ -412,20 +412,67 @@ end
 -- ------------------------------------------------------------
 -- Class row (main page): "specifically looking for"
 -- ------------------------------------------------------------
+-- Want row: pick a ROLE first, then only the classes that can fill it.
+--
+-- All nine classes were offered for everything, which made the leader do the
+-- filtering -- "which of these can even tank?" -- every time. Picking Tank now
+-- leaves DK / Warr / Druid / Pala on screen and nothing else.
 local function buildClassRow(p)
 	local d = db()
 	F.classBtns = {}
+	F.roleBtns = {}
 
 	local lbl = W.Text(p, "|cff8a8d93Want|r", 11, "dim")
 	lbl:SetPoint("LEFT", 4, 0)
 
-	local x = 54
+	-- role filter
+	local x = 40
+	local ROLE_PICKS = {
+		{ key = "",       label = "Any" },
+		{ key = "tank",   label = "Tank" },
+		{ key = "healer", label = "Heal" },
+		{ key = "melee",  label = "Melee" },
+		{ key = "ranged", label = "Range" },
+	}
+	for _, r in ipairs(ROLE_PICKS) do
+		local b = W.Button(p, r.label, nil):Size(48, 20)
+		b:SetPoint("LEFT", x, 0)
+		b:OnClick(function()
+			d.wantRole = r.key
+			-- Drop picks the new role cannot show. Otherwise ticking Mage under
+			-- Range and then switching to Tank leaves "(Mage)" in the line with
+			-- no visible button to untick it.
+			if r.key ~= "" then
+				local ok = {}
+				for _, c in ipairs(M.ClassesForRole(r.key)) do ok[c.token] = true end
+				for tok in pairs(d.wantClasses) do
+					if not ok[tok] then d.wantClasses[tok] = nil end
+				end
+			end
+			M.RefreshUI()
+		end)
+		b:Tooltip(r.key == "" and "Show every class."
+			or ("Only classes that can " .. r.label:lower() .. "."))
+		F.roleBtns[r.key] = b
+		x = x + 50
+	end
+
+	-- separator, then the class buttons themselves
+	local sep = p:CreateTexture(nil, "ARTWORK")
+	sep:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
+	sep:SetSize(1, 16); sep:SetPoint("LEFT", x + 2, 0)
+	sep:SetVertexColor(1, 1, 1, 0.12)
+	x = x + 10
+
+	-- Every class button is built once and simply hidden when the picked role
+	-- cannot use it: rebuilding the row on each click would drop the buttons'
+	-- handlers and leak frames, which WoW never reclaims.
+	F.classX0 = x
 	for _, c in ipairs(OkanvilClasses or {}) do
 		local b = W.Button(p, c.short, nil):Size(50, 20)
 		b:SetPoint("LEFT", x, 0)
 		local tw = (b.text and b.text:GetStringWidth()) or 0
-		local bw = math.max(50, tw + 16)
-		b:SetWidth(bw)
+		b:SetWidth(math.max(50, tw + 16))
 		b:OnClick(function()
 			pickTakesOver()
 			d.wantClasses[c.token] = (not d.wantClasses[c.token]) or nil
@@ -433,7 +480,6 @@ local function buildClassRow(p)
 		end)
 		b:Tooltip(c.name .. "\nAdds it to the \"(DK/Rogue)\" part of the line.")
 		F.classBtns[c.token] = b
-		x = x + bw + 4
 	end
 end
 
@@ -1187,9 +1233,33 @@ function M.RefreshUI()
 			F.classRunTag:SetText("")
 		end
 	end
+	if F.roleBtns then
+		for key, b in pairs(F.roleBtns) do
+			b:SetKind((d.wantRole or "") == key and "primary" or nil)
+		end
+	end
 	if F.classBtns then
-		for token, b in pairs(F.classBtns) do
-			b:SetKind(d.wantClasses[token] and "primary" or nil)
+		-- Show only what the picked role can be, and re-flow so the visible
+		-- buttons sit shoulder to shoulder instead of leaving gaps where the
+		-- hidden ones used to be.
+		local allowed = {}
+		for _, c in ipairs(M.ClassesForRole(d.wantRole ~= "" and d.wantRole or nil)) do
+			allowed[c.token] = true
+		end
+		local x = F.classX0 or 54
+		for _, c in ipairs(OkanvilClasses or {}) do
+			local b = F.classBtns[c.token]
+			if b then
+				if allowed[c.token] then
+					b:ClearAllPoints()
+					b:SetPoint("LEFT", x, 0)
+					b:SetKind(d.wantClasses[c.token] and "primary" or nil)
+					b:Show()
+					x = x + b:GetWidth() + 4
+				else
+					b:Hide()
+				end
+			end
 		end
 	end
 	if F.specBtns then

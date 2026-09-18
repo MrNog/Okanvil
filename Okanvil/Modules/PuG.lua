@@ -42,6 +42,7 @@ local defaults = {
 	assign = {},             -- [name] = "tank"/"healer"/"melee"/"ranged"; the leader's
 	                         -- board. Persisted so a /reload mid-forming keeps the comp.
 	autoGroup = true,        -- move people into their role's raid group as they accept
+	wantRole = "",           -- which role the Want row is offering classes for ("" = any)
 	classRun = false,        -- VoA-style "one of each class" instead of role targets
 	classPer = 1,            -- how many of each class a class run wants
 	presets = {},            -- [name] = a saved setup (raid, size, needs, note...)
@@ -127,6 +128,38 @@ local MELEE_SPECS = {
 	["Frost"] = true, ["Unholy"] = true,      -- DK trees; the mage Frost is caught
 	                                          -- by the class check in specRole()
 }
+
+-- Which classes can actually fill a role, in WotLK. Showing all nine classes for
+-- every role asked the leader to remember that a mage cannot tank -- so the Want
+-- row now offers only the classes that can do the job being asked for.
+--
+-- Mirrors MELEE_SPECS above: ret, feral, enh, arms/fury, combat/assa/sub,
+-- frost/unholy DK. A druid appears in all four because it genuinely has a spec
+-- for each.
+local ROLE_CLASSES = {
+	tank   = { "DEATHKNIGHT", "WARRIOR", "DRUID", "PALADIN" },
+	healer = { "PALADIN", "DRUID", "SHAMAN", "PRIEST" },
+	melee  = { "DEATHKNIGHT", "WARRIOR", "DRUID", "PALADIN", "SHAMAN", "ROGUE" },
+	ranged = { "HUNTER", "MAGE", "WARLOCK", "PRIEST", "SHAMAN", "DRUID" },
+}
+M.ROLE_CLASSES = ROLE_CLASSES
+
+-- The classes to OFFER for a role. nil/unknown role = all of them, which is what
+-- "Any" means on the picker.
+function M.ClassesForRole(role)
+	local want = ROLE_CLASSES[role or ""]
+	local out = {}
+	for _, c in ipairs(OkanvilClasses or {}) do
+		if not want then
+			out[#out + 1] = c
+		else
+			for _, tok in ipairs(want) do
+				if tok == c.token then out[#out + 1] = c; break end
+			end
+		end
+	end
+	return out
+end
 
 -- What the INSPECTED spec says this player does. nil = we have not inspected them
 -- (or the answer is stale), so the caller falls through to its other guesses.
