@@ -101,11 +101,59 @@ local MAX_LOG_SESSIONS = 30
 -- the next login. Long enough to cover a reload, a zone-in or a disconnect and
 -- reconnect; short enough that logging off for the night never resumes.
 local STALE_AFTER = 30 * 60
+-- A session closed on login that reopens this soon after, in the same zone, is the
+-- same raid coming back from a /reload -- not a new one. Comfortably over the
+-- worst reload (the client reloads the whole UI and reconnects), well under the
+-- break where a raid really does end.
+local REOPEN_WITHIN = 10 * 60
+-- Standing back inside the same raid keeps a session alive past STALE_AFTER, but
+-- only this far: a long break is still one raid night, sleeping in the instance is
+-- not. Covers the worst DBM break plus wipes; well short of logging back in the
+-- next day.
+local SAME_RAID_GRACE = 90 * 60
 local function beginSession()
 	local zone = GetRealZoneText()
 	if not zone or zone == "" then zone = GetZoneText() end
-	db._cur = { start = time(), zone = zone or "", bosses = {} }
+	zone = zone or ""
+
+	-- Same raid, coming back? A reload mid-raid can still close the session (the
+	-- watchdog fires before we ever get to say the raid is alive), and starting a
+	-- fresh one there splits one night into two -- two entries in the history, and
+	-- two separate uploads at the log site. Reopening keeps the night whole.
+	local last = db.sessions and db.sessions[1]
+	if last and last.stop and last.zone == zone and zone ~= ""
+		and (time() - last.stop) <= REOPEN_WITHIN then
+		local gap = time() - last.stop
+		table.remove(db.sessions, 1)
+		last.stop = nil
+		last.seen = time()
+		-- the gap belongs to the raid now: the client log missed it, but the session
+		-- did not end there, and `note` is what says so when reading the history back
+		last.note = ("reopened after a %d min break (client log has a gap here)"):format(math.floor(gap / 60))
+		last.bosses = last.bosses or {}
+		db._cur = last
+		db._lastBosses = nil   -- those kills are the LIVE session's again, not a finished one's
+		return
+	end
+
+	db._cur = { start = time(), zone = zone, bosses = {} }
 end
+
+-- Heartbeat: the last moment we KNOW the session was live. Logout fires no event
+-- we can rely on (a crash fires none at all), so the next login reads this to tell
+-- a quick /reload from an overnight gap.
+--
+-- This used to live in the REC frame's OnUpdate, which meant it only ticked while
+-- REC was SHOWN -- hide the timer and the session's clock froze, so the next
+-- reload read a stale `seen`, called a live raid an overnight absence and split it
+-- in two. It ticks on its own frame now, tied to the session and nothing else.
+local beat = CreateFrame("Frame")
+beat:SetScript("OnUpdate", function(s, e)
+	s._t = (s._t or 0) + e
+	if s._t < 1 then return end
+	s._t = 0
+	if db and db._cur then db._cur.seen = time() end
+end)
 
 -- stopAt: when the session actually ended. Normally now, but a session closed on
 -- login ended whenever we last saw it -- stamping it "now" would write the hours
@@ -330,10 +378,8 @@ local function buildRec()
 		end
 		s._t = 0
 		if db._cur then
-			-- Heartbeat: the last moment we KNOW the session was live. Logout fires no
-			-- event we can rely on (a crash fires none at all), so the next login reads
-			-- this instead to tell a quick /reload from an overnight gap.
-			db._cur.seen = time()
+			-- (the session heartbeat runs on its own frame -- see `beat` above, so it
+			-- keeps ticking even while this REC timer is hidden)
 			s.label:SetText(fmtTime(time() - db._cur.start))
 			-- live-tick the panel's status sub-line if the page is open
 			local pn = OkanvilLogs.panel
@@ -716,7 +762,16 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		-- teleport or a short disconnect and still resumes silently.
 		if db._cur then
 			local idle = time() - (db._cur.seen or db._cur.start or time())
-			if idle > STALE_AFTER then
+			-- ...unless we land back INSIDE the same raid the session belongs to, and
+			-- not too long after. Then the raid is plainly still going and the idle
+			-- time is a break, not the end of the night -- closing here splits one
+			-- raid into two logs, which is what a long DBM break plus a /reload used
+			-- to do. The ceiling still matters: log out inside the instance and come
+			-- back tomorrow and that IS a new raid, however unchanged the zone looks.
+			local sameRaid = inInstance and itype == "raid"
+				and db._cur.zone == (GetRealZoneText() or GetZoneText() or "")
+				and idle <= SAME_RAID_GRACE
+			if idle > STALE_AFTER and not sameRaid then
 				local mins = math.floor(idle / 60)
 				endSession(db._cur.seen or db._cur.start)
 				if LoggingCombat() then LoggingCombat(false) end
@@ -729,6 +784,9 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		if db._cur then
 			-- Session still open: a /reload, relog or in-instance teleport turns the
 			-- client log back OFF. Silently RESUME -- never reset, never split, never re-ask.
+			-- Stamp `seen` first: it may be minutes old (that is how we just got here),
+			-- and leaving it stale would make the very next check call this idle again.
+			db._cur.seen = time()
 			if not LoggingCombat() then
 				buildRec()
 				LoggingCombat(true)
