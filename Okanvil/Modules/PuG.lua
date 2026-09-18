@@ -501,19 +501,10 @@ M.ReserveCats = RESERVE_CATS
 
 -- "(B+O+P res)" / "(B+O res + Frags)" / "HR: [Shadowmourne]" / "no res"
 local function reserveText()
-	-- "no res" used to return here and now, which threw away any hard-reserved
-	-- item below -- so a line could advertise "no res" while an item sat reserved
-	-- in the picker. A named item is the one thing that outranks the claim, so it
-	-- is still said: "no res except HR: <item>".
-	if db.reserveNone then
-		local items = db.reserveItems or {}
-		if #items == 0 then return "no res" end
-		local names = {}
-		for _, v in ipairs(items) do
-			names[#names + 1] = v:match("|h%[(.-)%]|h") or v
-		end
-		return "no res except HR: " .. table.concat(names, " ")
-	end
+	-- "no res" and a reserved item are mutually exclusive: setting either one
+	-- clears the other, so this says one thing plainly instead of explaining a
+	-- contradiction the UI should never have allowed in the first place.
+	if db.reserveNone then return "no res" end
 
 	local letters, words = {}, {}
 	for _, c in ipairs(RESERVE_CATS) do
@@ -539,12 +530,16 @@ local function reserveText()
 	-- leader keeps, as opposed to a whole category.
 	--
 	-- Stored entries may be full item LINKS (the reserve picker keeps those so the
-	-- UI can colour them and show a tooltip), but the LFM line is capped at 255
-	-- characters and one link costs ~60 of them in escape codes -- three reserved
-	-- items would blow the limit on their own. So the line carries the readable
-	-- NAME; anyone who wants the link can ask.
+	-- UI can colour them and show a tooltip). Chat caps a line at 255 bytes and one
+	-- link costs ~65 of them in escape codes against ~18 for the name, so:
+	--   ONE item  -> send the LINK. There is room, and a link people can click and
+	--               hover is worth far more than the bytes.
+	--   TWO+      -> send NAMES. Two links is ~130 bytes of escapes and a third
+	--               would push the line past the cap and get it truncated.
 	local items = db.reserveItems or {}
-	if #items > 0 then
+	if #items == 1 then
+		out[#out + 1] = "HR: " .. items[1]
+	elseif #items > 1 then
 		local names = {}
 		for _, v in ipairs(items) do
 			names[#names + 1] = v:match("|h%[(.-)%]|h") or v
@@ -560,6 +555,9 @@ M.ReserveText = reserveText
 -- duplicates are ignored so dragging the same item twice is harmless.
 function M.AddReserveItem(text)
 	if not text or text == "" then return end
+	-- Reserving something contradicts "no res", so claiming an item drops that
+	-- claim rather than letting both be true at once.
+	db.reserveNone = false
 	text = text:gsub("^%s+", ""):gsub("%s+$", "")
 	for _, v in ipairs(db.reserveItems) do
 		if v == text then return end
