@@ -97,15 +97,22 @@ end
 -- Combat Logs page is a real log, not just a live toggle. The desktop tool still
 -- does the actual WoWCombatLog.txt slicing; this is the in-game reference index.
 local MAX_LOG_SESSIONS = 30
+-- How long a session may sit untouched and still be treated as the same raid on
+-- the next login. Long enough to cover a reload, a zone-in or a disconnect and
+-- reconnect; short enough that logging off for the night never resumes.
+local STALE_AFTER = 30 * 60
 local function beginSession()
 	local zone = GetRealZoneText()
 	if not zone or zone == "" then zone = GetZoneText() end
 	db._cur = { start = time(), zone = zone or "", bosses = {} }
 end
 
-local function endSession()
+-- stopAt: when the session actually ended. Normally now, but a session closed on
+-- login ended whenever we last saw it -- stamping it "now" would write the hours
+-- spent logged off into the history as raid time.
+local function endSession(stopAt)
 	if db._cur then
-		db._cur.stop = time()
+		db._cur.stop = stopAt or time()
 		db._cur.recentDeaths = nil          -- transient, don't persist
 		db._lastBosses = db._cur.bosses     -- keep last session's kills visible after Stop
 		-- persist into the history list (newest first)
@@ -323,6 +330,10 @@ local function buildRec()
 		end
 		s._t = 0
 		if db._cur then
+			-- Heartbeat: the last moment we KNOW the session was live. Logout fires no
+			-- event we can rely on (a crash fires none at all), so the next login reads
+			-- this instead to tell a quick /reload from an overnight gap.
+			db._cur.seen = time()
 			s.label:SetText(fmtTime(time() - db._cur.start))
 			-- live-tick the panel's status sub-line if the page is open
 			local pn = OkanvilLogs.panel
@@ -355,6 +366,14 @@ end
 -- ------------------------------------------------------------
 -- start / stop
 -- ------------------------------------------------------------
+-- Public reader: the marks bar needs to know whether we are recording so its
+-- REC button can show the state, and isLogging() is a local.
+function OkanvilLogs.IsLogging() return isLogging() end
+
+-- Settings owns the two toggles now, and the lock one has to re-apply itself.
+function OkanvilLogs.ApplyRecLock() applyRecLock() end
+function OkanvilLogs.DB() return db end
+
 function OkanvilLogs.SetLogging(on)
 	buildRec()
 	if on then
@@ -687,6 +706,22 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 		-- Modulo desligado = nao faz auto-resume nem pergunta para gravar.
 		if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 		local inInstance, itype = IsInInstance()
+		-- A session left open across a long absence is not the same raid. The timer
+		-- counts wall clock, so resuming one after a night offline showed hours of
+		-- "recording" that never happened. Anything under the gap is a reload, a
+		-- teleport or a short disconnect and still resumes silently.
+		if db._cur then
+			local idle = time() - (db._cur.seen or db._cur.start or time())
+			if idle > STALE_AFTER then
+				local mins = math.floor(idle / 60)
+				endSession(db._cur.seen or db._cur.start)
+				if LoggingCombat() then LoggingCombat(false) end
+				if rec then rec:Hide() end
+				Okanvil:Print(("|cffc0943aLogs|r closed a session left open for %s -- starting fresh.")
+					:format(mins >= 120 and (math.floor(mins / 60) .. "h") or (mins .. " min")))
+			end
+		end
+
 		if db._cur then
 			-- Session still open: a /reload, relog or in-instance teleport turns the
 			-- client log back OFF. Silently RESUME -- never reset, never split, never re-ask.

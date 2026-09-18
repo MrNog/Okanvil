@@ -712,6 +712,13 @@ function W.Dashboard(parent, cfg)
 			sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
 			local function relayout()
 				page:SetWidth(sf:GetWidth() or 400)
+				-- A `fill` page is not a tall form that scrolls: it owns its own
+				-- scrolling list, so it takes the view's height and the outer
+				-- scrollbar stays out of the way.
+				if tab.fill then
+					local h = sf:GetHeight()
+					if h and h > 1 then page:SetHeight(h) end
+				end
 				local maxs = math.max(0, page:GetHeight() - sf:GetHeight())
 				sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
 			end

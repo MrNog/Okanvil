@@ -41,6 +41,14 @@ local SHORTCUTS = {
 		end,
 	},
 	{
+		key  = "prio",
+		icon = "Interface\\Icons\\INV_Misc_Book_11",
+		gate = function() return Okanvil.LootPrio ~= nil and Okanvil:IsModuleEnabled("__loot") end,
+		run  = function()
+			if Okanvil.LootPrio and Okanvil.LootPrio.Toggle then Okanvil.LootPrio.Toggle() end
+		end,
+	},
+	{
 		key  = "finder",
 		icon = "Interface\\Icons\\INV_Misc_GroupLooking",   -- the Raid Finder's own icon
 		gate = function() return Okanvil.RaidFinderMini_Toggle ~= nil end,
@@ -57,6 +65,12 @@ local SHORTCUTS = {
 			local RC = Okanvil.RaidCheck
 			if RC:IsToastShown() then RC:HideToast() else RC:ShowToast(true) end
 		end,
+	},
+	{
+		key  = "farm",
+		icon = "Interface\\Icons\\INV_Misc_Bag_10",
+		gate = function() return Okanvil.Farm_Toggle ~= nil end,
+		run  = function() Okanvil.Farm_Toggle() end,
 	},
 	{
 		key  = "ready",

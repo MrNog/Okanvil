@@ -39,6 +39,16 @@ local function db()
 		end
 	end
 	iv.autoLoginList = iv.autoLoginList or ""  -- which saved list is armed for on-login invite ("" = off)
+
+	-- Saved lists were removed from the Invite page, and with them the only switch
+	-- that could DISARM this. An armed list left over from that UI would keep
+	-- auto-inviting on every login with nothing on screen explaining why, so it is
+	-- stood down once here. The list data itself is left alone.
+	if iv.autoLoginList ~= "" and not iv._autoLoginRetired then
+		iv.autoLoginList = ""
+		iv._autoLoginRetired = true
+	end
+
 	return iv
 end
 
@@ -614,33 +624,164 @@ end)
 
 -- On-login auto-invite: watch GUILD roster online flips (more reliable than the
 -- friend line for guildies). Poll the roster diff on GUILD_ROSTER_UPDATE.
+-- ------------------------------------------------------------
+-- Login toast -- "<name> is online", with an Invite button.
+--
+-- The guild list on Home already shows who is on, but during an invite you are
+-- not looking at it. This puts the one action you want in front of you instead:
+-- somebody worth inviting logs in, a small panel says so, you click Invite.
+--
+-- Gated to the ranks that raid so a 108-member guild does not toast all night.
+-- ------------------------------------------------------------
+local loginToast          -- built on first use
+local toastQueue = {}     -- names waiting; one panel shows them in turn
+
+local function toastDB()
+	local iv = Okanvil.db and Okanvil.db.invite
+	if not iv then return nil end
+	if iv.loginToast == nil then iv.loginToast = true end
+	if iv.loginToastRanks == nil then iv.loginToastRanks = "sewer" end
+	return iv
+end
+
+-- Does this rank deserve a toast? Matched on the rank NAME, like everywhere else
+-- in the addon, so renaming a rank in game does not silently switch it off.
+local function rankWanted(rankName)
+	local iv = toastDB()
+	if not iv then return false end
+	local want = (iv.loginToastRanks or ""):lower()
+	if want == "" then return false end
+	local rn = (rankName or ""):lower()
+	for w in want:gmatch("[^%s,;]+") do
+		if rn:find(w, 1, true) then return true end
+	end
+	return false
+end
+
+local function buildLoginToast()
+	if loginToast then return loginToast end
+	local W = Okanvil.W
+	local f = CreateFrame("Frame", "OkanvilLoginToast", UIParent)
+	f:SetSize(250, 62)
+	f:SetFrameStrata("FULLSCREEN_DIALOG")
+	f:SetClampedToScreen(true)
+	Okanvil:Skin(f)
+	local iv = toastDB()
+	if iv and iv.toastPoint then
+		f:SetPoint(iv.toastPoint, UIParent, iv.toastPoint, iv.toastX or 0, iv.toastY or 0)
+	else
+		f:SetPoint("TOP", 0, -180)
+	end
+	f:EnableMouse(true); f:SetMovable(true); f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", function(s)
+		s:StopMovingOrSizing()
+		local p, _, _, x, y = s:GetPoint(1)
+		local d = toastDB()
+		if d then d.toastPoint, d.toastX, d.toastY = p, x, y end
+	end)
+
+	f.name = W.Text(f, "", 13); f.name:SetPoint("TOPLEFT", 12, -10)
+	f.sub = W.Text(f, "", 10, "dim"); f.sub:SetPoint("TOPLEFT", 12, -28)
+
+	f.inv = W.Button(f, "Invite", "primary")
+	f.inv:SetSize(70, 22); f.inv:SetPoint("BOTTOMRIGHT", -10, 9)
+	f.close = W.Button(f, "X")
+	f.close:SetSize(22, 22); f.close:SetPoint("RIGHT", f.inv, "LEFT", -6, 0)
+
+	-- Auto-hide, but slowly: this is a prompt to act on, not a notification to
+	-- read. Any mouse-over pauses it so it cannot vanish as you reach for Invite.
+	f:SetScript("OnUpdate", function(s, e)
+		if s.paused then return end
+		s.life = (s.life or 0) - e
+        if s.life <= 0 then s:Hide()
+		elseif s.life < 1 then s:SetAlpha(s.life) end
+	end)
+	f:SetScript("OnEnter", function(s) s.paused = true; s:SetAlpha(1) end)
+	f:SetScript("OnLeave", function(s) s.paused = nil end)
+	loginToast = f
+	return f
+end
+
+-- Show the next queued name (or hide when the queue runs dry).
+local function showNextToast()
+	local f = buildLoginToast()
+	local entry = table.remove(toastQueue, 1)
+	if not entry then f:Hide(); return end
+	f.name:SetText((entry.color or "|cffdcddde") .. entry.name .. "|r")
+	f.sub:SetText("|cff8a8d93" .. (entry.rank or "") .. " -- just logged in"
+		.. (#toastQueue > 0 and ("  |cff6f7176(+" .. #toastQueue .. ")|r") or "") .. "|r")
+	f.inv:SetScript("OnClick", function()
+		inviteOne(entry.name)
+		showNextToast()
+	end)
+	f.close:SetScript("OnClick", function() showNextToast() end)
+	f:SetAlpha(1); f.life = 20; f.paused = nil
+	f:Show()
+	PlaySound("UI_BnetToast")
+end
+
+function Okanvil.Invite_LoginToast(name, rankName, classFile)
+	local iv = toastDB()
+	if not iv or not iv.loginToast then return end
+	if not rankWanted(rankName) then return end
+	-- already queued or showing? do not stack the same person twice
+	for _, e in ipairs(toastQueue) do
+		if e.name == name then return end
+	end
+	local col = "|cffdcddde"
+	local c = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
+    if c then col = string.format("|cff%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255) end
+	toastQueue[#toastQueue + 1] = { name = name, rank = rankName, color = col }
+	if not (loginToast and loginToast:IsShown()) then showNextToast() end
+end
+
 local wasOnline = {}
 local gev = CreateFrame("Frame")
 gev:RegisterEvent("GUILD_ROSTER_UPDATE")
 gev:SetScript("OnEvent", function()
 	if not module_on() then return end
 	local iv = Okanvil.db and Okanvil.db.invite
-	if not iv or iv.autoLoginList == "" then return end
+	if not iv then return end
+
+	-- ONE roster read, two consumers. The toast must not sit behind the auto-login
+	-- guards below: that feature is retired (autoLoginList is force-cleared on
+	-- load), so anything gated on it never runs.
+	local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
+	local online = {}
+	for i = 1, total do
+		local name, rank, _, _, class, _, _, _, isOn = GetGuildRosterInfo(i)
+		if name then
+			local n = (name:gsub("%-.*$", ""))
+			online[n] = isOn and true or false
+			-- offline -> online, and a rank we care about: prompt to invite them.
+			-- wasOnline[n] == false means we have SEEN them offline; nil means this
+			-- is the first roster read, which would otherwise toast the whole guild.
+			if isOn and wasOnline[n] == false then
+				Okanvil.Invite_LoginToast(n, rank, class and class:upper())
+			end
+		end
+	end
+	-- Snapshot the PREVIOUS state before overwriting it: the auto-login block
+	-- below does its own offline->online test, and updating wasOnline here first
+	-- would make that test always false.
+	local prevOnline = {}
+	for n, v in pairs(wasOnline) do prevOnline[n] = v end
+	for n, v in pairs(online) do wasOnline[n] = v end
+
+	if iv.autoLoginList == "" then return end
 	-- SAFETY: only auto-invite when it's legitimate (solo, or lead/assist of a
 	-- pure-guild group). Never when in someone else's group or a pug raid.
 	if not canAutoInvite() then return end
 	local l = iv.lists[iv.autoLoginList]
 	local members = l and l.members
 	if not members or #members == 0 then return end
-	-- build a quick name->online map
-	local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
-	local online = {}
-	for i = 1, total do
-		local name, _, _, _, _, _, _, _, isOn = GetGuildRosterInfo(i)
-		if name then online[(name:gsub("%-.*$", ""))] = isOn and true or false end
-	end
 	for _, m in ipairs(members) do
 		local n = m.name
 		local now = online[n]
-		if now and wasOnline[n] == false then   -- just flipped offline->online
+		if now and prevOnline[n] == false then   -- just flipped offline->online
 			if inviteOne(n) then Print("Auto-invited " .. n .. " (came online).") end
 		end
-		if now ~= nil then wasOnline[n] = now end
 	end
 end)
 
