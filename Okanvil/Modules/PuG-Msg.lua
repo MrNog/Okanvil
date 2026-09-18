@@ -179,6 +179,14 @@ local function build()
 	f.convo:SetJustifyH("LEFT")
 	f.convoSF, f.convoSB, f.convoChild = csf, csb, cchild
 
+	-- With nobody to show, every control on the right is hidden -- so without this
+	-- the window is two empty rectangles that explain nothing. Say what has to
+	-- happen for anything to appear here.
+	f.empty = W.Text(ccard, "", "label", "dim")
+	f.empty:SetPoint("TOPLEFT", 14, -14)
+	f.empty:SetPoint("RIGHT", -14, 0)
+	f.empty:SetJustifyH("LEFT")
+
 	-- reply box
 	f.reply = W.EditBox(f, function(txt)
 		if not (selected and txt and txt ~= "") then return end
@@ -248,6 +256,18 @@ function M.Msg_Refresh()
 	win.scanBtn:SetShown(a ~= nil)
 	win.reply:SetShown(a ~= nil)
 	win.sendBtn:SetShown(a ~= nil)
+	if a then
+		win.empty:SetText("")
+	elseif not M.IsActive() then
+		win.empty:SetText("|cff8a8d93Whispers land here while you are spamming.|r\n\n"
+			.. "|cff6f7176Press |r|cffe0b860START spamming|r|cff6f7176 and anyone who "
+			.. "whispers you appears in this list, with the spec and gearscore read "
+			.. "out of what they wrote.|r")
+	else
+		win.empty:SetText("|cff8a8d93Spamming -- waiting for whispers.|r\n\n"
+			.. "|cff6f7176Whoever answers the LFM shows up here. Click a name to read "
+			.. "the conversation, reply, and invite them.|r")
+	end
 
 	local lines = {}
 	for _, e in ipairs((a and a.log) or {}) do
@@ -279,6 +299,13 @@ function M.Msg_Toggle()
 		win:SetPoint("CENTER", UIParent, "CENTER", 220, 0)
 	end
 	win:Show()
+	-- It is an extension of the main window, not a window of its own: closing
+	-- Okanvil (X, ESC, the DBM-pull hide) has to take this with it, or a panel is
+	-- left floating over the game with nothing to close it from.
+	if Okanvil.win and not win._hookedHost then
+		win._hookedHost = true
+		Okanvil.win:HookScript("OnHide", function() if win then win:Hide() end end)
+	end
 	M.Msg_Refresh()
 end
 

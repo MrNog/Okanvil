@@ -1163,6 +1163,13 @@ function M.BuildUI(parent)
 	-- text callback, which is the cheapest correct way to do that.
 	M.RefreshMsgBtn = function() if F and F.dash then F.dash:Refresh() end end
 
+	-- Messages belongs to THIS page. Switching to Loot or Home hides the panel, and
+	-- the floating window has to go with it -- otherwise it hangs beside a page it
+	-- has nothing to do with, with no button in sight to close it.
+	parent:HookScript("OnHide", function()
+		if M.Msg_IsShown and M.Msg_IsShown() then M.Msg_Toggle() end
+	end)
+
 	-- The single page is stacked inside dash.main: top strip, needs, board, bottom.
 	local main = dash.main
 
