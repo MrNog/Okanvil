@@ -21,7 +21,10 @@ local defaults = {
 	size = 25,
 	hc = false,
 	need = { tank = 2, healer = 5, melee = 8, ranged = 10 },  -- targets for the WHOLE raid
-	wantClasses = {},        -- { DEATHKNIGHT = true, ... } "specifically looking for"
+	-- Class picks, kept PER ROLE: { tank = { DRUID = true }, ranged = { MAGE = true } }.
+	-- One flat set meant picking Tank+Druid and then switching to Ranged threw the
+	-- Druid away, so the line could only ever name classes for one role.
+	wantClasses = {},
 	gs = "",                 -- gearscore requirement, free text ("5.8k"); "" = don't mention
 	note = "",               -- tail note appended to the line ("SR>MS>OS", "wsp me")
 	reserve = {},            -- { boe = true, orb = true, ... } reserved CATEGORIES
@@ -42,7 +45,7 @@ local defaults = {
 	assign = {},             -- [name] = "tank"/"healer"/"melee"/"ranged"; the leader's
 	                         -- board. Persisted so a /reload mid-forming keeps the comp.
 	autoGroup = true,        -- move people into their role's raid group as they accept
-	wantRole = "",           -- which role the Want row is offering classes for ("" = any)
+	wantRole = "tank",       -- which role's classes the Want row is showing right now
 	classRun = false,        -- VoA-style "one of each class" instead of role targets
 	classPer = 1,            -- how many of each class a class run wants
 	presets = {},            -- [name] = a saved setup (raid, size, needs, note...)
@@ -498,7 +501,19 @@ M.ReserveCats = RESERVE_CATS
 
 -- "(B+O+P res)" / "(B+O res + Frags)" / "HR: [Shadowmourne]" / "no res"
 local function reserveText()
-	if db.reserveNone then return "no res" end
+	-- "no res" used to return here and now, which threw away any hard-reserved
+	-- item below -- so a line could advertise "no res" while an item sat reserved
+	-- in the picker. A named item is the one thing that outranks the claim, so it
+	-- is still said: "no res except HR: <item>".
+	if db.reserveNone then
+		local items = db.reserveItems or {}
+		if #items == 0 then return "no res" end
+		local names = {}
+		for _, v in ipairs(items) do
+			names[#names + 1] = v:match("|h%[(.-)%]|h") or v
+		end
+		return "no res except HR: " .. table.concat(names, " ")
+	end
 
 	local letters, words = {}, {}
 	for _, c in ipairs(RESERVE_CATS) do
@@ -559,17 +574,43 @@ end
 -- ------------------------------------------------------------
 -- Message builder
 -- ------------------------------------------------------------
--- The classes the leader specifically asked for, as "DK/Rogue".
+-- The picks for ONE role, as a set. Created on demand so an untouched role costs
+-- nothing in the saved file.
+--
+-- Migration: wantClasses used to be one flat set shared by every role. An old
+-- profile is recognised by having class tokens at the top level, and is moved
+-- under whichever role was selected at the time.
+local function rolePicks(role)
+	role = (role and role ~= "" and role) or "tank"
+	db.wantClasses = db.wantClasses or {}
+	local w = db.wantClasses
+	if w[role] == nil or type(w[role]) ~= "table" then
+		local flat = nil
+		for k, v in pairs(w) do
+			if type(v) ~= "table" then flat = flat or {}; flat[k] = v end
+		end
+		if flat then
+			for k in pairs(flat) do w[k] = nil end
+			w[db.wantRole or "tank"] = flat
+		end
+		w[role] = w[role] or {}
+	end
+	return w[role]
+end
+M.RolePicks = rolePicks
+
+-- The classes asked for under one role, as "DK/Rogue".
 -- Specs first, then plain classes. A leader who ticked both "hpala" and "Pala"
 -- means "a holy one especially, but any paladin", and reading the specific ask
 -- first is how it gets said out loud.
-local function wantText()
+local function wantText(role)
+	local picks = rolePicks(role)
 	local want = {}
 	for _, s in ipairs(OkanvilClassSpecs or {}) do
-		if db.wantClasses[s.token] then want[#want + 1] = s.short end
+		if picks[s.token] then want[#want + 1] = s.short end
 	end
 	for _, c in ipairs(OkanvilClasses or {}) do
-		if db.wantClasses[c.token] then want[#want + 1] = c.short end
+		if picks[c.token] then want[#want + 1] = c.short end
 	end
 	return table.concat(want, "/")
 end
@@ -587,18 +628,15 @@ local function buildMessage()
 			bits[#bits + 1] = (c.missing > 1 and (c.missing .. " ") or "") .. c.short
 		end
 	else
-		-- The class picks belong to the ROLE they were chosen under: picking Tank
-		-- and then Druid/Pala means "2 Tank (Druid/Pala)", not "2 Tank ... 1 Ranged
-		-- (Druid/Pala)" with the classes stranded at the end of the line saying
-		-- nothing about which role wants them.
-		local wantRole = db.wantRole or ""
-		local classAsk = (wantRole ~= "") and wantText() or ""
+		-- Every role carries its own picks, so one line can say "2 Tank (Druid)
+		-- 1 Ranged (Hunter/Mage)". The Want row only shows one role at a time, but
+		-- what it shows is a VIEW of the picks -- switching roles no longer throws
+		-- the previous role's classes away.
 		for _, r in ipairs(ROLES) do
 			if need[r] > 0 then
 				local bit = need[r] .. " " .. ROLE_SHORT[r]
-				if classAsk ~= "" and r == wantRole then
-					bit = bit .. " (" .. classAsk .. ")"
-				end
+				local ask = wantText(r)
+				if ask ~= "" then bit = bit .. " (" .. ask .. ")" end
 				bits[#bits + 1] = bit
 			end
 		end
@@ -611,10 +649,10 @@ local function buildMessage()
 		parts[#parts + 1] = "almost full"
 	end
 
-	-- No role picked ("Any"), or a class run: the ask is not tied to one role, so
-	-- it goes at the end where it reads as "and by the way, these classes".
-	if (db.wantRole or "") == "" or db.classRun then
-		local w = wantText()
+	-- A class run asks by class, not by role, so its picks go at the end rather
+	-- than beside a role count that does not apply.
+	if db.classRun then
+		local w = wantText(db.wantRole)
 		if w ~= "" then parts[#parts + 1] = "(" .. w .. ")" end
 	end
 

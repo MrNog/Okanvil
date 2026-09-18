@@ -671,7 +671,10 @@ local function buildLoginToast()
 	if loginToast then return loginToast end
 	local W = Okanvil.W
 	local f = CreateFrame("Frame", "OkanvilLoginToast", UIParent)
-	f:SetSize(250, 62)
+	-- One line: the name, and the button. The rank and "just logged in" used to sit
+	-- on a second line that the 250px width clipped mid-word -- and neither told you
+	-- anything you act on. The toast appearing at all IS "just logged in".
+	f:SetSize(230, 36)
 	f:SetFrameStrata("FULLSCREEN_DIALOG")
 	f:SetClampedToScreen(true)
 	Okanvil:Skin(f)
@@ -679,7 +682,13 @@ local function buildLoginToast()
 	if iv and iv.toastPoint then
 		f:SetPoint(iv.toastPoint, UIParent, iv.toastPoint, iv.toastX or 0, iv.toastY or 0)
 	else
-		f:SetPoint("TOP", 0, -180)
+		-- Under the minimap, not the middle of the screen: it is a corner
+		-- notification, and dead centre is where you are trying to look.
+		if Minimap then
+			f:SetPoint("TOPRIGHT", Minimap, "BOTTOMRIGHT", 0, -14)
+		else
+			f:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -20, -200)
+		end
 	end
 	f:EnableMouse(true); f:SetMovable(true); f:RegisterForDrag("LeftButton")
 	f:SetScript("OnDragStart", f.StartMoving)
@@ -690,13 +699,18 @@ local function buildLoginToast()
 		if d then d.toastPoint, d.toastX, d.toastY = p, x, y end
 	end)
 
-	f.name = W.Text(f, "", "body"); f.name:SetPoint("TOPLEFT", 12, -10)
-	f.sub = W.Text(f, "", "note", "dim"); f.sub:SetPoint("TOPLEFT", 12, -28)
-
 	f.inv = W.Button(f, "Invite", "primary")
-	f.inv:SetSize(70, 22); f.inv:SetPoint("BOTTOMRIGHT", -10, 9)
+	f.inv:SetSize(66, 22); f.inv:SetPoint("RIGHT", -8, 0)
 	f.close = W.Button(f, "X")
-	f.close:SetSize(22, 22); f.close:SetPoint("RIGHT", f.inv, "LEFT", -6, 0)
+	f.close:SetSize(20, 22); f.close:SetPoint("RIGHT", f.inv, "LEFT", -4, 0)
+
+	-- the name takes whatever is left, so a long one shortens instead of running
+	-- under the buttons
+	f.name = W.Text(f, "", "body")
+	f.name:SetPoint("LEFT", 10, 0)
+	f.name:SetPoint("RIGHT", f.close, "LEFT", -8, 0)
+	f.name:SetJustifyH("LEFT")
+	if f.name.SetWordWrap then f.name:SetWordWrap(false) end
 
 	-- Auto-hide, but slowly: this is a prompt to act on, not a notification to
 	-- read. Any mouse-over pauses it so it cannot vanish as you reach for Invite.
@@ -717,9 +731,10 @@ local function showNextToast()
 	local f = buildLoginToast()
 	local entry = table.remove(toastQueue, 1)
 	if not entry then f:Hide(); return end
-	f.name:SetText((entry.color or "|cffdcddde") .. entry.name .. "|r")
-	f.sub:SetText("|cff8a8d93" .. (entry.rank or "") .. " -- just logged in"
-		.. (#toastQueue > 0 and ("  |cff6f7176(+" .. #toastQueue .. ")|r") or "") .. "|r")
+	-- Name, class-coloured, and nothing else -- except a "(+2)" when more are
+	-- waiting behind this one, which is the only extra that changes what you do.
+	f.name:SetText((entry.color or "|cffdcddde") .. entry.name .. "|r"
+		.. (#toastQueue > 0 and ("  |cff6f7176(+" .. #toastQueue .. ")|r") or ""))
 	f.inv:SetScript("OnClick", function()
 		inviteOne(entry.name)
 		showNextToast()

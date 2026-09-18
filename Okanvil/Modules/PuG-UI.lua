@@ -434,8 +434,9 @@ local function buildClassRow(p)
 
 	-- role filter
 	local x = 40
+	-- No "Any": a class pick is always FOR a role ("a druid... to do what?"), and
+	-- with picks stored per role there is nothing for an "any" bucket to hold.
 	local ROLE_PICKS = {
-		{ key = "",       label = "Any" },
 		{ key = "tank",   label = "Tank" },
 		{ key = "healer", label = "Heal" },
 		{ key = "melee",  label = "Melee" },
@@ -450,17 +451,10 @@ local function buildClassRow(p)
 			-- one control that left a hand-edited line frozen, so switching from
 			-- Range to Tank changed the buttons and nothing else.
 			pickTakesOver()
+			-- Only changes WHICH role's picks the row is showing. Each role keeps
+			-- its own, so switching from Tank to Ranged no longer throws the tank
+			-- classes away -- the line can name both.
 			d.wantRole = r.key
-			-- Drop picks the new role cannot show. Otherwise ticking Mage under
-			-- Range and then switching to Tank leaves "(Mage)" in the line with
-			-- no visible button to untick it.
-			if r.key ~= "" then
-				local ok = {}
-				for _, c in ipairs(M.ClassesForRole(r.key)) do ok[c.token] = true end
-				for tok in pairs(d.wantClasses) do
-					if not ok[tok] then d.wantClasses[tok] = nil end
-				end
-			end
 			M.RefreshUI()
 		end)
 		b:Tooltip(r.key == "" and "Show every class."
@@ -487,46 +481,14 @@ local function buildClassRow(p)
 		b:SetWidth(math.max(50, tw + 16))
 		b:OnClick(function()
 			pickTakesOver()
-			d.wantClasses[c.token] = (not d.wantClasses[c.token]) or nil
+			local picks = M.RolePicks(d.wantRole)
+			picks[c.token] = (not picks[c.token]) or nil
 			M.RefreshUI()
 		end)
 		b:Tooltip(c.name .. "\nAdds it to the \"(DK/Rogue)\" part of the line.")
 		F.classBtns[c.token] = b
 	end
 end
-
--- ------------------------------------------------------------
--- Spec row (main page): "specifically looking for a HOLY paladin"
---
--- Stored in the same d.wantClasses table as the plain classes -- a pick is a pick,
--- and the message builder reads both lists out of it.
--- ------------------------------------------------------------
-local function buildSpecRow(p)
-	local d = db()
-	F.specBtns = {}
-
-	local lbl = W.Text(p, "|cff8a8d93Spec|r", "label", "dim")
-	lbl:SetPoint("LEFT", 4, 0)
-
-	local x = 54
-	for _, s in ipairs(OkanvilClassSpecs or {}) do
-		local b = W.Button(p, s.short, nil):Size(50, 20)
-		b:SetPoint("LEFT", x, 0)
-		local tw = (b.text and b.text:GetStringWidth()) or 0
-		local bw = math.max(44, tw + 16)
-		b:SetWidth(bw)
-		b:OnClick(function()
-			pickTakesOver()
-			d.wantClasses[s.token] = (not d.wantClasses[s.token]) or nil
-			M.RefreshUI()
-		end)
-		b:Tooltip(s.name .. "\nAsks for the SPEC by name, so you don't get three\n"
-			.. "ret whispers when the raid needs a healer.")
-		F.specBtns[s.token] = b
-		x = x + bw + 4
-	end
-end
-
 -- ------------------------------------------------------------
 -- Bottom: the outgoing line + applicants
 -- ------------------------------------------------------------
@@ -638,89 +600,6 @@ local function buildReserveStrip(p)
 	F.resItemTag = W.Text(p, "", "label", "dim")
 	F.resItemTag:SetPoint("LEFT", x + 70, 0)
 end
-
--- ------------------------------------------------------------
--- Wanted tab: everything that shapes the LFM LINE.
---
--- These three strips used to sit on the main page as 26px rows of small buttons,
--- below the board and above nothing -- the part of the screen that was hardest
--- to read. They are one question ("what does the line ask for?"), so they get a
--- tab, headings, and room between them.
--- ------------------------------------------------------------
--- The rarely-touched asks. Reserves and classes stayed on the main page (those
--- are the everyday picks); this holds the things you set once per run.
-local function buildExtras(p, y0)
-	local X = 6
-	local Y = y0 or -8
-
-	label(p, "|cffe0b860Spec|r  |cff8a8d93when only one spec will do -- a HOLY paladin|r", X, Y)
-	local spc = W.Frame(p, "bare")
-	spc:SetPoint("TOPLEFT", X, Y - 20); spc:SetPoint("RIGHT", p, "RIGHT", -12, 0)
-	spc:SetHeight(26)
-	buildSpecRow(spc)
-
-	-- ---- class run ----
-	local d = db()
-	label(p, "|cffe0b860Class run|r  |cff8a8d93one of each class instead of role targets -- VoA|r", X, Y - 60)
-	F.classRunChk = W.Check(p, "Ask by class, not by role",
-		function() return d.classRun end,
-		function(v)
-			pickTakesOver()
-			d.classRun = v and true or false
-			M.RefreshUI()
-		end)
-	F.classRunChk:SetPoint("TOPLEFT", X + 2, Y - 80)
-	F.classRunTag = W.Text(p, "", "label", "dim")
-	F.classRunTag:SetPoint("LEFT", F.classRunChk, "RIGHT", 210, 0)
-
-	-- ---- presets ----
-	label(p, "|cffe0b860Presets|r  |cff8a8d93save this whole setup and pick it again next week|r", X, Y - 112)
-	F.presetDD = W.DropDown(p,
-		function()
-			local out = {}
-			for _, n in ipairs(M.PresetNames()) do out[#out + 1] = { text = n, value = n } end
-			if #out == 0 then out[1] = { text = "(none saved)", value = "" } end
-			return out
-		end,
-		function() return F._presetPick or "" end,
-		function(v)
-			F._presetPick = v
-			if v ~= "" and M.LoadPreset(v) then
-				Okanvil:Print("Loaded preset |cffe0b860" .. v .. "|r.")
-				M.RefreshUI()
-			end
-		end)
-	F.presetDD:Size(180, 22):Point("TOPLEFT", X, Y - 132)
-
-	F.presetName = W.EditBox(p):Size(150, 22):Point("TOPLEFT", X + 190, Y - 132)
-
-	local saveBtn = W.Button(p, "Save", "primary"):Size(60, 22)
-	saveBtn:SetPoint("TOPLEFT", X + 348, Y - 132)
-	saveBtn:Tooltip("Store the instance, size, targets, picks and note under this name.")
-	saveBtn:OnClick(function()
-		local n = F.presetName.edit:GetText() or ""
-		n = n:gsub("^%s+", ""):gsub("%s+$", "")
-		if n == "" then Okanvil:Print("Name the preset first."); return end
-		M.SavePreset(n)
-		F._presetPick = n
-		F.presetName.edit:SetText("")
-		Okanvil:Print("Saved preset |cffe0b860" .. n .. "|r.")
-		M.RefreshUI()
-	end)
-
-	local delBtn = W.Button(p, "Delete", "danger"):Size(60, 22)
-	delBtn:SetPoint("TOPLEFT", X + 414, Y - 132)
-	delBtn:OnClick(function()
-		local n = F._presetPick or ""
-		if n == "" then return end
-		Okanvil:Confirm("Delete the preset " .. n .. "?", "Delete", function()
-			M.DeletePreset(n)
-			F._presetPick = nil
-			M.RefreshUI()
-		end)
-	end)
-end
-
 -- ------------------------------------------------------------
 -- Loot tab: what the raid reserves
 -- ------------------------------------------------------------
@@ -1053,66 +932,6 @@ function M.RefreshLootList()
 end
 
 -- ------------------------------------------------------------
--- Channels tab
--- ------------------------------------------------------------
-local function buildChannels(p)
-	local d = db()
-	local X = 4
-
-	-- The line always goes to General + Global every 60s -- fixed, no toggles.
-	-- This tab is only for the two things that are genuinely optional.
-	label(p, "The line posts to |cffe0b860General|r and |cffe0b860Global|r every 60 seconds.", X, -6)
-
-	local y = -34
-	F.guildChk = W.Check(p, "Also post it in guild chat", function() return d.toGuild end,
-		function(v) d.toGuild = v end)
-	F.guildChk:SetPoint("TOPLEFT", X + 2, y)
-	y = y - 30
-
-	label(p, "One extra channel  |cff8a8d93(name or number; blank = none)|r", X, y)
-	y = y - 20
-	F.customCh = W.EditBox(p):Size(160, 22):Point("TOPLEFT", X, y)
-	F.customCh.edit:SetScript("OnTextChanged", function(s) d.customChannel = s:GetText() or "" end)
-	y = y - 36
-
-
-	label(p, "|cffe0b860Auto-reply|r  |cff8a8d93(answers anyone who whispers you while spamming)|r", X, y)
-	y = y - 22
-	F.replyChk = W.Check(p, "Auto-reply to applicants", function() return d.autoReply end,
-		function(v) d.autoReply = v end)
-	F.replyChk:SetPoint("TOPLEFT", X + 2, y)
-	y = y - 26
-
-	F.replyBox = W.MultiEdit(p, function(txt) d.replyText = txt or "" end)
-	F.replyBox:SetPoint("TOPLEFT", X, y)
-	F.replyBox:SetPoint("RIGHT", p, "RIGHT", -12, 0)
-	F.replyBox:SetHeight(56)
-	y = y - 70
-
-	-- ---- raid groups ----
-	-- The board already knows everyone's role. Dragging them into the matching
-	-- group in the raid frame afterwards is work the addon can do.
-	label(p, "|cffe0b860Raid groups|r  |cff8a8d93(tanks G1, healers G2, melee G3-4, ranged G5-6)|r", X, y)
-	y = y - 22
-	F.autoGroupChk = W.Check(p, "Move people into their role's group as they accept",
-		function() return d.autoGroup ~= false end,
-		function(v) d.autoGroup = v and true or false end)
-	F.autoGroupChk:SetPoint("TOPLEFT", X + 2, y)
-	y = y - 28
-
-	local arrange = W.Button(p, "Arrange raid now")
-	arrange:SetSize(140, 22); arrange:SetPoint("TOPLEFT", X, y)
-	arrange:Tooltip("Move everyone into their role's group.\n"
-		.. "Anyone you placed by hand keeps that spot.")
-	arrange:SetScript("OnClick", function() M.ArrangeRaid() end)
-	y = y - 40
-
-	-- spec picks, class-run mode and presets: set once per run, so they live here
-	-- rather than taking permanent space on the page
-	buildExtras(p, y)
-end
-
--- ------------------------------------------------------------
 -- Refresh
 -- ------------------------------------------------------------
 function M.RefreshPreview()
@@ -1255,7 +1074,7 @@ function M.RefreshUI()
 		-- buttons sit shoulder to shoulder instead of leaving gaps where the
 		-- hidden ones used to be.
 		local allowed = {}
-		for _, c in ipairs(M.ClassesForRole(d.wantRole ~= "" and d.wantRole or nil)) do
+		for _, c in ipairs(M.ClassesForRole(d.wantRole ~= "" and d.wantRole or "tank")) do
 			allowed[c.token] = true
 		end
 		local x = F.classX0 or 54
@@ -1265,7 +1084,7 @@ function M.RefreshUI()
 				if allowed[c.token] then
 					b:ClearAllPoints()
 					b:SetPoint("LEFT", x, 0)
-					b:SetKind(d.wantClasses[c.token] and "primary" or nil)
+					b:SetKind(M.RolePicks(d.wantRole)[c.token] and "primary" or nil)
 					b:Show()
 					x = x + b:GetWidth() + 4
 				else
@@ -1274,15 +1093,8 @@ function M.RefreshUI()
 			end
 		end
 	end
-	if F.specBtns then
-		for token, b in pairs(F.specBtns) do
-			b:SetKind(d.wantClasses[token] and "primary" or nil)
-		end
-	end
-	if F.customCh and not F.customCh.edit:HasFocus() then F.customCh.edit:SetText(d.customChannel or "") end
-	if F.guildChk then F.guildChk.refresh() end
-	if F.replyChk then F.replyChk.refresh() end
-	if F.replyBox and not F.replyBox.edit:HasFocus() then F.replyBox:SetText(d.replyText or "") end
+	-- (the spec row, the channel box, auto-reply and the presets lived on the
+	-- "More" page, which is gone -- nothing builds those widgets any more)
 
 	M.RefreshPreview()
 	-- the browse list is scoped to the picked raid + difficulty, so it has to
@@ -1316,11 +1128,9 @@ function M.BuildUI(parent)
 			-- scroll -- a page taller than the view would put a second scrollbar
 			-- around one that already works. 420 fits the overlay without spilling.
 			{ key = "loot",     label = "Reserves", height = 420, build = function(p) buildLoot(p) end },
-			-- 620, not 420: this tab now carries the channels, auto-reply, raid groups,
-			-- spec picks, class-run mode and presets. W.Dashboard scrolls a page
-			-- taller than the view, but the height must be honest or the last
-			-- controls sit below the scroll range and cannot be reached.
-			{ key = "channels", label = "More",     height = 620, build = function(p) buildChannels(p) end },
+			-- No "More" tab. It had grown to eight stacked sections -- channels,
+			-- auto-reply, raid groups, spec picks, class run, presets -- none of
+			-- which you touch while forming a raid.
 		},
 	})
 	F.dash = dash
