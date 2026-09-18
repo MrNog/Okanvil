@@ -61,11 +61,15 @@ function Okanvil:BuildHome()
 		return t
 	end
 	tiles.online = tile(1, "ONLINE")
-	-- Raider and Sewer counts instead of a MAINS total: "how many raiders do we
-	-- have" is the question actually asked, and a combined total answered none of
-	-- it. Alts are excluded from both, the way MAINS excluded them.
+	-- Two rank counts instead of a MAINS total: "how many raiders do we have" is
+	-- the question actually asked, and a combined total answered none of it. Alts
+	-- are excluded from both, the way MAINS excluded them.
+	--
+	-- The labels are the guild's OWN rank names, filled in once the roster is
+	-- known -- they used to read RAIDERS and SEWERS, which are this guild's words
+	-- and meant nothing in any other guild that installed Okanvil.
 	tiles.raiders = tile(2, "RAIDERS")
-	tiles.sewers = tile(3, "SEWERS")
+	tiles.sewers = tile(3, "MEMBERS")
 	tiles.rank = tile(4, "YOUR RANK")
 
 	-- guild online card -- a SCROLLABLE row list (shows everyone, not a capped
@@ -329,6 +333,14 @@ function Okanvil:BuildHome()
 		end
 		local online, mine, mineIdx = 0, "--", nil
 		local raiders, sewers = 0, 0
+		-- "Raiders" = officers and the rank just below them; everyone deeper is the
+		-- rest of the roster. Derived from how many ranks the guild actually has,
+		-- so a four-rank guild and a ten-rank guild both split sensibly.
+		local RAIDER_RANK = 2
+		if Okanvil.U and Okanvil.U.guildRanks then
+			local _, maxIdx = Okanvil.U.guildRanks()
+			if maxIdx and maxIdx >= 2 then RAIDER_RANK = math.min(2, maxIdx - 1) end
+		end
 		local myName = UnitName and UnitName("player")
 		local onlineList = {}
 		-- Alt rule -- MUST match the RATS website (loot/history tools): an entry is an
@@ -381,15 +393,13 @@ function Okanvil:BuildHome()
 		-- rank colour, still used for the RANK column + the "your rank" tile. The
 		-- NAME is class-coloured instead (far easier to read at a glance), and the
 		-- rank is conveyed by the icon in front of it.
+		-- Colour by rank POSITION, never by rank NAME. This used to match on one
+		-- guild's words ("warchief rat", "sewer"), so every other guild that
+		-- installed Okanvil got a roster of identical grey rows.
 		local function rankColor(rankName, rankIndex, alt)
 			if alt then return "ff8fb4d9" end            -- alt: muted blue-grey
-			local rn = (rankName or ""):lower()
-			-- Guild Master / Rat King ("King Rat" / "Rat King") -> purple
-			if rankIndex == 0 or rn:find("king", 1, true) then return "ffc659ff" end
-			if rn:find("warchief rat", 1, true) then return "ffff4d4d" end   -- Warchief Rat: officer red
-			if rn:find("raider", 1, true) then return "ffffa030" end          -- Raider Rat: orange
-			if rn:find("sewer", 1, true) then return "ffffe049" end           -- Sewer Rat: yellow
-			return "ff9aa0a6"                                                  -- Pug / unranked: grey
+			if Okanvil.U and Okanvil.U.rankColor then return Okanvil.U.rankColor(rankIndex) end
+			return "ff9aa0a6"
 		end
 		-- Walk the FULL roster (offline included) without leaving Blizzard's "Show
 		-- Offline" checkbox stuck on -- see Okanvil:WithFullRoster.
@@ -400,11 +410,12 @@ function Okanvil:BuildHome()
 				if name then
 					local alt = isAlt(rank, rankIndex, officernote)
 					if not alt then
-						-- matched on the rank NAME, like rankColor above, so renaming a
-						-- rank in game does not silently zero the count
-						local rn = (rank or ""):lower()
-						if rn:find("raider", 1, true) then raiders = raiders + 1
-						elseif rn:find("sewer", 1, true) then sewers = sewers + 1 end
+						-- By POSITION, not by rank name: the first rank below the
+						-- officers is "the raiders", and everything under it is the
+						-- rest of the roster. Matching names counted nothing at all in
+						-- a guild that had not picked this guild's words.
+						if rankIndex and rankIndex <= RAIDER_RANK then raiders = raiders + 1
+						elseif rankIndex then sewers = sewers + 1 end
 					end
 					if isOnline then
 						online = online + 1
@@ -424,6 +435,18 @@ function Okanvil:BuildHome()
 		tiles.online.num:SetText(tostring(online))
 		tiles.raiders.num:SetText(tostring(raiders))
 		tiles.sewers.num:SetText(tostring(sewers))
+		-- Label the two rank tiles with the guild's OWN words, now that the roster
+		-- has told us what they are. "RAIDERS/SEWERS" were this guild's names and
+		-- read as nonsense anywhere else.
+		if Okanvil.U and Okanvil.U.rankName then
+			if tiles.raiders.lbl then
+				tiles.raiders.lbl:SetText((Okanvil.U.rankName(RAIDER_RANK) or "RAIDERS"):upper())
+			end
+			if tiles.sewers.lbl then
+				local low = Okanvil.U.lowestRankIndex and Okanvil.U.lowestRankIndex()
+				tiles.sewers.lbl:SetText(low and (Okanvil.U.rankName(low) or "MEMBERS"):upper() or "MEMBERS")
+			end
+		end
 		-- your rank, coloured with the SAME rank colour used in the online list. Keep
 		-- the shared value size so it lines up with the two numbers; only step down a
 		-- point if a very long rank name would clip the tile.

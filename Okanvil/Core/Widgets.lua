@@ -587,6 +587,12 @@ function W.Dashboard(parent, cfg)
 	local footerH = cfg.footerHeight or 26
 
 	-- ---- header strip (fixed, top) ----
+	-- `pills` mode: the tabs are a segmented switch over ONE shared body, the way
+	-- the Home page swaps Online for Snapshots -- the landing is just the first
+	-- pill, so there is nothing to go "< Back" to. The overlay mode stays for
+	-- pages whose tabs really are separate screens on top of a landing page.
+	local pillMode = cfg.pills and true or false
+
 	local header = W.Frame(parent, "raise")
 	header:SetPoint("TOPLEFT", 0, 0); header:SetPoint("TOPRIGHT", 0, 0); header:SetHeight(30)
 	D.header = header
@@ -701,9 +707,16 @@ function W.Dashboard(parent, cfg)
 	end
 	D.footer = footer
 
-	-- ---- config overlay (full-cover page host, hidden until a tab is clicked) ----
+	-- ---- page host. In overlay mode it covers everything below the header and the
+	-- toolbar goes with it; in pill mode it starts BELOW the toolbar, because the
+	-- pills stay on screen as the switch between pages.
 	local overlay = W.Frame(parent, "dark")
-	overlay:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -4)
+	if pillMode then
+		overlay:SetPoint("TOPLEFT", toolbar, "BOTTOMLEFT", -PAD, -4)
+		overlay:SetPoint("TOPRIGHT", toolbar, "BOTTOMRIGHT", PAD, -4)
+	else
+		overlay:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -4)
+	end
 	overlay:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
 	overlay:Hide()
 	D.overlay = overlay
@@ -714,6 +727,10 @@ function W.Dashboard(parent, cfg)
 	otitle:SetPoint("LEFT", back, "RIGHT", 12, 0)
 
 	local function closeOverlay()
+		-- In pill mode there is nothing to close BACK to -- a pill is always the
+		-- current page -- so this is a no-op rather than a way to end up staring at
+		-- an empty body with every pill unlit.
+		if pillMode then return end
 		overlay:Hide(); toolbar:Show(); body:Show(); if footer then footer:Show() end
 		for _, b in pairs(D.tabBtns) do b._active = false; b._paint(false) end
 	end
@@ -729,14 +746,17 @@ function W.Dashboard(parent, cfg)
 		-- Blizzard template) so a tall config page never spills off the window.
 		-- tab.height gives the content height; the child scrolls if it exceeds the view.
 		if not D.pages[key] then
+			-- in pill mode there is no "< Back" row to clear, so the page starts at
+			-- the top of the overlay instead of 34px down
+			local topPad = pillMode and 6 or 34
 			local sf = CreateFrame("ScrollFrame", nil, overlay)
-			sf:SetPoint("TOPLEFT", PAD, -34); sf:SetPoint("BOTTOMRIGHT", -(PAD + 6), 8)
+			sf:SetPoint("TOPLEFT", PAD, -topPad); sf:SetPoint("BOTTOMRIGHT", -(PAD + 6), 8)
 			local page = W.Frame(sf, "bare")
 			page:SetSize(10, tab.height or 400)
 			sf:SetScrollChild(page)
 
 			local sb = CreateFrame("Slider", nil, overlay)
-			sb:SetPoint("TOPRIGHT", -PAD, -34); sb:SetPoint("BOTTOMRIGHT", -PAD, 8); sb:SetWidth(4)
+			sb:SetPoint("TOPRIGHT", -PAD, -topPad); sb:SetPoint("BOTTOMRIGHT", -PAD, 8); sb:SetWidth(4)
 			sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
 			local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetSize(4, 40)
 			th:SetVertexColor(unpack3(C.accent)); sb:SetThumbTexture(th)
@@ -763,8 +783,24 @@ function W.Dashboard(parent, cfg)
 		end
 		for k, p in pairs(D.pages) do p:SetShown(k == key); if p.sb then p.sb:SetShown(k == key and (select(2, p.sb:GetMinMaxValues()) > 4)) end end
 		if D.pages[key]._relayout then D.pages[key]._relayout() end
-		toolbar:Hide(); body:Hide(); if footer then footer:Hide() end; overlay:Show()
-		for _, b in pairs(D.tabBtns) do b._active = (b._key == key); b._paint(false) end
+		if pillMode then
+			-- the pills stay on screen and stay clickable: this is a switch, not a
+			-- drill-down, so the toolbar is part of the page rather than something
+			-- the page covers up
+			body:Hide(); overlay:Show()
+			back:Hide(); otitle:Hide()
+			if footer then footer:Show() end
+		else
+			toolbar:Hide(); body:Hide(); if footer then footer:Hide() end; overlay:Show()
+		end
+		for _, b in pairs(D.tabBtns) do
+			b._active = (b._key == key)
+			-- Pills read as a segmented switch, so the picked one takes the solid
+			-- gold fill the Home page uses for Online/Snapshots. Gold TEXT alone was
+			-- too quiet to say "you are here" when the pills never go away.
+			if pillMode and b.SetKind then b:SetKind(b._active and "primary" or "secondary") end
+			b._paint(false)
+		end
 	end
 	D.OpenPage = openPage
 
@@ -825,6 +861,13 @@ function W.Dashboard(parent, cfg)
 		if cfg.statusText then status:SetText(cfg.statusText() or "") end
 	end
 	D:Refresh()
+
+	-- In pill mode the first pill IS the landing -- there is no separate page
+	-- underneath for it to sit on top of, so open it now rather than showing an
+	-- empty body until something is clicked.
+	if pillMode and cfg.tabs and cfg.tabs[1] then
+		openPage(cfg.tabs[1].key)
+	end
 	return D
 end
 

@@ -28,15 +28,26 @@ function Okanvil:BuildSettings()
 		icon = Okanvil.ICONS.settings,
 		drawerWidth = 0,
 		footerHeight = 0,
+		-- One pill per area, and every module's settings are HERE. They used to be
+		-- split: a module with a page kept its own settings tab, a module without
+		-- one had them here, so configuring loot meant two places and neither was
+		-- obviously the right one to look in first.
+		pills = true,
 		tabs = {
 			{ key = "general", label = "General",    height = 470,
 			  build = function(pg) Okanvil:Settings_General(pg) end },
-			{ key = "raid",    label = "Raid Tools", height = 470,
-			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
+			-- loot capture, announce templates and the priority list
+			-- taller for an officer: the priority-list blocks below the announce
+			-- templates are only built for someone who can open that list
+			{ key = "loot",    label = "Loot",
+			  height = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) and 470 or 320,
+			  build = function(pg) Okanvil:Loot_BuildSettings(pg) end },
 			-- Auto-invite is two toggles and a keyword box. It had a whole nav page
 			-- to itself, next to Loot and Raid Finder, for something you set once.
 			{ key = "invite",  label = "Invite",     height = 360,
 			  build = function(pg) Okanvil:Settings_Invite(pg) end },
+			{ key = "raid",    label = "Raid",       height = 470,
+			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
 			{ key = "modules", label = "Modules",    height = 600,
 			  build = function(pg) Okanvil:Settings_Modules(pg) end },
 			{ key = "adv",     label = "Advanced",   height = 460,
@@ -44,12 +55,12 @@ function Okanvil:BuildSettings()
 		},
 	})
 	fill.dash = dash
-	local main = dash.main   -- the badge below anchors to it
 
 	-- app credit -- a small badge in the bottom-right corner (anvil + wordmark),
-	-- nicer than a bare line of text.
-	local badge = W.Frame(main, "panel")
-	badge:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", -12, 12)
+	-- nicer than a bare line of text. Anchored to the PAGE, not dash.main: in pill
+	-- mode the body it used to hang off is hidden, which took the badge with it.
+	local badge = W.Frame(host, "panel")
+	badge:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -12, 12)
 	badge:SetHeight(48)
 	local bIcon = badge:CreateTexture(nil, "ARTWORK")
 	bIcon:SetSize(30, 30); bIcon:SetPoint("LEFT", 12, 0)

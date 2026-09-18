@@ -13,23 +13,29 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
--- The Prio tab is officer material, so for everyone else it is not drawn at all
--- rather than drawn and refused: a tab that only exists to say "not for you" is a
+-- Three pills, and the first one IS the page you land on -- the same switch the
+-- Home page uses for Online/Snapshots. What used to be here as well, and is not
+-- any more: Messages and the capture settings, which are configuration and now
+-- live in Settings > Loot, where every other module's settings are.
+--
+-- The Prio pill is officer material, so for everyone else it is not built at all
+-- rather than built and refused: a tab that only exists to say "not for you" is a
 -- worse page for the raider and tells them nothing they can act on.
 local function lootTabs()
 	local t = {
-		{ key = "collectors", label = "Collectors", height = 330, build = function(pg) Okanvil:Loot_BuildCollectors(pg) end },
-		{ key = "messages",   label = "Messages",   height = 260, build = function(pg) Okanvil:Loot_BuildMessages(pg) end },
+		-- fill = the page tracks the window instead of a fixed height: these are
+		-- lists, so every extra pixel of window is another row on screen.
+		{ key = "history", label = "History", height = 400, fill = true,
+		  build = function(pg) Okanvil:Loot_BuildHistory(pg) end },
 	}
 	if Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() then
-		-- fill = the page tracks the window instead of a fixed height: this tab is
-		-- one long list, so every extra pixel of window is another item on screen.
-		t[#t + 1] = { key = "prio", label = "Prio", height = 400, fill = true, build = function(pg) Okanvil:Loot_BuildPrio(pg) end }
+		t[#t + 1] = { key = "prio", label = "Prio", height = 400, fill = true,
+		              build = function(pg) Okanvil:Loot_BuildPrio(pg) end }
 	end
-	-- taller for an officer: the priority-list and my-characters blocks below the
-	-- capture settings only exist for someone who can see the list
-	local settingsH = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) and 240 or 160
-	t[#t + 1] = { key = "settings", label = "Settings", height = settingsH, build = function(pg) Okanvil:Loot_BuildSettings(pg) end }
+	-- Collectors stays on the page: it is armed at the start of a raid, not set
+	-- once and forgotten, so it belongs where you already are when the raid forms.
+	t[#t + 1] = { key = "collectors", label = "Collectors", height = 300,
+	              build = function(pg) Okanvil:Loot_BuildCollectors(pg) end }
 	return t
 end
 
@@ -86,11 +92,13 @@ function Okanvil:BuildLoot()
 			end
 			return "|cffff5555not master loot|r"
 		end,
+		-- pills: the tabs switch one shared body instead of covering a landing page,
+		-- so there is no "< Back" and the switch never leaves the screen
+		pills = true,
 		tabs = lootTabs(),
 	})
 	fill.dash = dash
 
-	Okanvil:Loot_BuildHistory(dash.main)     -- sessions accordion (landing)
 	Okanvil:Loot_BuildTally(dash.drawer)     -- COLLECTED tally (drawer)
 
 	-- refresh both when loot changes / the page shows / loot method changes
@@ -190,25 +198,31 @@ function Okanvil:Loot_BuildCollectors(p)
 	wc:SetPoint("TOPLEFT", X + 2, -212)
 end
 
--- ---- Messages tab: editable MS/OS/Free/Whisper templates ([item] placeholder) --
-function Okanvil:Loot_BuildMessages(p)
+-- ---- Announce templates: MS/OS/Free/Whisper ([item] placeholder) ----
+-- Drawn as part of Settings > Loot (below), not a page of its own: four text
+-- boxes you fill in once were never worth a tab in front of the loot history.
+local function buildMessages(p, y0)
 	local L = Okanvil.Loot
 	local X = 8
-	if not (L and L.RollMsg) then return end
-	local hd = W.Text(p, "Announce templates -- |cffffd200[item]|r = the itemlink.", "label", "dim")
-	hd:SetPoint("TOPLEFT", X, -6); hd:SetPoint("RIGHT", -X, 0); hd:SetJustifyH("LEFT")
+	if not (L and L.RollMsg) then return y0 end
+	local hd = W.Text(p, "ANNOUNCE TEMPLATES", "note", "dim")
+	hd:SetPoint("TOPLEFT", X, y0)
+	local sub = W.Text(p, "|cffffd200[item]|r = the itemlink.", "note", "dim")
+	sub:SetPoint("TOPLEFT", X, y0 - 16)
+
 	local function row(label, y, getFn, setFn)
 		local lb = W.Text(p, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(58); lb:SetJustifyH("LEFT")
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
 		local eb = W.EditBox(p, function(t) setFn(t) end)
 		eb:SetSize(360, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(getFn())
 	end
-	row("MS", -30, function() return L.RollMsg("ms") end, function(t) L.SetRollMsg("ms", t) end)
-	row("OS", -60, function() return L.RollMsg("os") end, function(t) L.SetRollMsg("os", t) end)
-	row("Free", -90, function() return L.RollMsg("free") end, function(t) L.SetRollMsg("free", t) end)
-	row("Whisper", -128, function() return L.WhisperMsg() end, function(t) L.SetWhisperMsg(t) end)
+	row("MS",      y0 - 40, function() return L.RollMsg("ms") end,   function(t) L.SetRollMsg("ms", t) end)
+	row("OS",      y0 - 70, function() return L.RollMsg("os") end,   function(t) L.SetRollMsg("os", t) end)
+	row("Free",    y0 - 100, function() return L.RollMsg("free") end, function(t) L.SetRollMsg("free", t) end)
+	row("Whisper", y0 - 138, function() return L.WhisperMsg() end,    function(t) L.SetWhisperMsg(t) end)
 	local wh = W.Text(p, "Whisper is sent on Award when the boss loot window is already closed.", "note", "dim")
-	wh:SetPoint("TOPLEFT", X, -156); wh:SetPoint("RIGHT", -X, 0); wh:SetJustifyH("LEFT")
+	wh:SetPoint("TOPLEFT", X, y0 - 164); wh:SetPoint("RIGHT", -X, 0); wh:SetJustifyH("LEFT")
+	return y0 - 190
 end
 
 -- ---- COLLECTED drawer: per-person tally of main/frag/boe given ----
@@ -393,28 +407,28 @@ function Okanvil:Loot_BuildSettings(p)
 		function() return db.recordRaid ~= false end, function(v) db.recordRaid = v end)
 	cRaid:SetPoint("TOPLEFT", 160, -86)
 
-	-- ---- My characters ----------------------------------------------------
-	-- The Prio tab is gated on guild rank, but an officer's alt is usually ranked
-	-- as an alt -- which would lock the owner of the list out of it on every toon
-	-- but one. Claiming a character here is account-wide, so marking it once on
-	-- any toon is enough. Only shown to someone who can already see the list:
-	-- to everyone else it would just be a button that does nothing for them.
+	-- announce templates: everyone who awards loot needs these
+	buildMessages(p, -122)
+
+	-- Everything below is about the priority list, so it is only built for someone
+	-- who can see that list -- to anyone else these are controls for a thing they
+	-- cannot open.
 	if not (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) then return end
 
 	-- ---- Priority list ----------------------------------------------------
 	-- Lived as a button on the Prio tab's toolbar, which put a choice nobody
 	-- revisits after the first time in front of the list every single visit.
-	local ph = W.Text(p, "Priority list", "label", "dim"); ph:SetPoint("TOPLEFT", 8, -122)
+	local ph = W.Text(p, "Priority list", "label", "dim"); ph:SetPoint("TOPLEFT", 8, -330)
 	local cMulti = W.Check(p, "Send each name on its own line",
 		function() return Okanvil.LootPrio and Okanvil.LootPrio.MultiLine() end,
 		function() if Okanvil.LootPrio then Okanvil.LootPrio.ToggleMultiLine() end end)
-	cMulti:SetPoint("TOPLEFT", 8, -140)
+	cMulti:SetPoint("TOPLEFT", 8, -350)
 	cMulti:Tooltip("Off: the item and its ladder go out as one line.\n"
 		.. "On: the item first, then its top names one per line.")
 
 	local me = UnitName("player") or ""
-	local mh = W.Text(p, "My characters", "label", "dim"); mh:SetPoint("TOPLEFT", 8, -172)
-	local mhint = W.Text(p, "", "label", "dim"); mhint:SetPoint("TOPLEFT", 8, -208)
+	local mh = W.Text(p, "My characters", "label", "dim"); mh:SetPoint("TOPLEFT", 8, -382)
+	local mhint = W.Text(p, "", "label", "dim"); mhint:SetPoint("TOPLEFT", 8, -424)
 
 	local function claimed()
 		self.db.myChars = self.db.myChars or {}
@@ -432,7 +446,7 @@ function Okanvil:Loot_BuildSettings(p)
 	end
 
 	local claim = W.Button(p, "")
-	claim:SetSize(220, 22); claim:SetPoint("TOPLEFT", 8, -190)
+	claim:SetSize(220, 22); claim:SetPoint("TOPLEFT", 8, -402)
 	local function paintBtn()
 		claim.text:SetText(claimed()[me] and ("Forget " .. me) or ("This is me (" .. me .. ")"))
 	end
