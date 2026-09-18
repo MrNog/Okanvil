@@ -360,3 +360,38 @@ OkanvilBossGroups = {
 	["Shadron"] = "Sartharion",
 	["Vesperon"] = "Sartharion",
 }
+
+-- ============================================================
+--  LOOT CONTAINERS -- game-object entry id (or name) -> the encounter it belongs to.
+--
+--  Some encounters hand out their loot from a CHEST, not a corpse. The scanner only
+--  ever looks at NPCs, so a chest matched nothing and the drops inherited whatever boss
+--  was last remembered -- ToC's Champions' Cache filed its contents under Lord Jaraxxus,
+--  who died immediately before it. Faction Champions is the worst case: it has no single
+--  boss NPC and each champion is under the raid HP bar, so nothing ever displaced the
+--  previous name.
+--
+--  Keyed by the container's NAME as the tooltip shows it -- a chest has no GUID we can
+--  reach from Lua on 3.3.5a, so the name is the only handle we get. Add both apostrophe
+--  spellings when a name has one; servers and locales differ.
+-- ============================================================
+OkanvilLootContainers = {
+	-- Trial of the Crusader / Trial of the Grand Crusader
+	["Champions' Cache"] = "Faction Champions",
+	["Champion's Cache"] = "Faction Champions",   -- apostrophe varies by locale/server
+
+	-- Tribute chest (ToGC): the heroic run's reward, spawned after Anub'arak dies. Its
+	-- contents are Anub'arak's page -- it is the last encounter's payout, not a fight of
+	-- its own, so it must not mint a separate boss.
+	["Argent Crusade Tribute Chest"] = "Anub'arak",
+	["Tribute Chest"] = "Anub'arak",
+	["Cache of the Crusade"] = "Anub'arak",
+
+	-- Icecrown Citadel. All three of these are encounters the scanner can NEVER vet on its
+	-- own: the Gunship has no boss that dies (you win, a chest spawns on your deck) and
+	-- Valithria is HEALED to full and flies away, so there is no corpse and no UNIT_DIED.
+	-- Saurfang does die, but his loot is in a chest, so the corpse scan never sees it.
+	["Gunship Armory"] = "Gunship Battle",
+	["Deathbringer's Cache"] = "Deathbringer Saurfang",
+	["Cache of the Dreamwalker"] = "Valithria Dreamwalker",
+}

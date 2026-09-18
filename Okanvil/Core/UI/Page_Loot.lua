@@ -69,6 +69,9 @@ function Okanvil:BuildLoot()
 		tabs = {
 			{ key = "collectors", label = "Collectors", height = 330, build = function(pg) Okanvil:Loot_BuildCollectors(pg) end },
 			{ key = "messages",   label = "Messages",   height = 260, build = function(pg) Okanvil:Loot_BuildMessages(pg) end },
+			-- fill = the page tracks the window instead of a fixed height: this tab is
+			-- one long list, so every extra pixel of window is another item on screen.
+			{ key = "prio",       label = "Prio",       height = 400, fill = true, build = function(pg) Okanvil:Loot_BuildPrio(pg) end },
 			{ key = "settings",   label = "Settings",   height = 160, build = function(pg) Okanvil:Loot_BuildSettings(pg) end },
 		},
 	})
@@ -251,21 +254,10 @@ end
 function Okanvil:Loot_BuildHistory(main)
 	local L = Okanvil.Loot
 	local fill = Okanvil._lootFill
-	local X = 8
+	local X = Okanvil.UI.PAD_X
 
 	-- a scroll panel INSIDE main so the sessions list scrolls without resizing
-	local sf = CreateFrame("ScrollFrame", nil, main)
-	sf:SetPoint("TOPLEFT", X, -8); sf:SetPoint("BOTTOMRIGHT", -14, 8)
-	local p = CreateFrame("Frame", nil, sf); p:SetSize(10, 1); sf:SetScrollChild(p)
-	local sb = CreateFrame("Slider", nil, main)
-	sb:SetPoint("TOPRIGHT", -4, -8); sb:SetPoint("BOTTOMRIGHT", -4, 8); sb:SetWidth(4)
-	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
-	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetVertexColor(u3(C.accent)); th:SetSize(4, 40)
-	sb:SetThumbTexture(th)
-	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
-	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
-	sf:SetScript("OnSizeChanged", function() p:SetWidth(sf:GetWidth()) end)
+	local p, _, sf, sb = Okanvil.UI.DashScroll(main, X)
 
 	local rows, detailRows = {}, {}
 	local expanded = nil
@@ -387,6 +379,21 @@ function Okanvil:Loot_BuildSettings(p)
 	local cRaid = W.Check(p, "Raids",
 		function() return db.recordRaid ~= false end, function(v) db.recordRaid = v end)
 	cRaid:SetPoint("TOPLEFT", 160, -86)
+end
+
+-- ---- Prio tab: the officer page's ladder, pasted in and readable in-game ----
+--
+-- The website works the order out live from the roster, our logs and the loot
+-- history; a 3.3.5a client cannot reach it, so the page's export is pasted here
+-- and kept. This tab is both the paste box and the read-only copy of the list,
+-- so mid-raid you can check an item without alt-tabbing to the site.
+function Okanvil:Loot_BuildPrio(p)
+	if Okanvil.LootPrio and Okanvil.LootPrio.BuildTab then
+		Okanvil.LootPrio.BuildTab(p)
+	else
+		local t = W.Text(p, "Loot priority module not loaded.", 11, "dim")
+		t:SetPoint("TOPLEFT", 8, -8)
+	end
 end
 
 -- ------------------------------------------------------------

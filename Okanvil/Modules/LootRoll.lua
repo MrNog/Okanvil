@@ -694,6 +694,41 @@ function RM.Rebuild()
 		y = y - (srH + 6)
 	end
 
+	-- Send the selected item's prio to OFFICER chat. Deliberately NOT ML-gated:
+	-- the master looter is usually someone else, and this is how they find out
+	-- where the item should go without anyone reading the page mid-raid.
+	do
+		local P = Okanvil.LootPrio
+		local spH = compact and 22 or 26
+		local sp = keep(W.Button(body, "Send prio to officers"))
+		sp:SetSize(INNER, spH); sp:SetPoint("TOPLEFT", M, y)
+		sp:SetScript("OnClick", function()
+			if not (selected and (selected.item or selected.name)) then
+				Okanvil:Print("Pick an item first."); return
+			end
+			if not (P and P.Announce) then Okanvil:Print("Loot priority module not loaded."); return end
+			local ok, why = P.Announce(selected.item, selected.name)
+			if not ok then Okanvil:Print("|cff8a8d93No prio sent|r -- " .. (why or "?") .. ".") end
+		end)
+
+		-- Say up front whether this item is even on the list, so a click that will
+		-- do nothing is visible before it is clicked.
+		sp.SyncLabel = function()
+			local has = P and selected and P.ForLink(selected.item or selected.name)
+			if sp.text then
+				sp.text:SetText(has and "Send prio to officers"
+					or "Send prio |cff8a8d93(not on the list)|r")
+			end
+			sp:Tooltip(has
+				and "Posts the item link and its priority order to officer chat."
+				or "This item is not on the stored priority list.\n"
+				.. "Paste the site's export on the Loot page to load it.")
+		end
+		sp:SyncLabel()
+		RM._prioBtn = sp
+		y = y - (spH + 6)
+	end
+
 	-- (No separate rolls panel: the rolls render inside the list above, under whichever
 	--  item is expanded.)
 
@@ -705,6 +740,26 @@ function RM.Rebuild()
 	if ml then
 		local awH = compact and 22 or 26
 		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER, awH); award:SetPoint("TOPLEFT", M, y)
+
+		-- Say WHICH award this will be before it is clicked. GiveMasterLoot only works
+		-- from an OPEN loot window; once the corpse is closed the item is in the ML's
+		-- bags and the award can only be recorded, with the hand-over done by trade.
+		-- Both are fine -- but finding out afterwards is what made this feel broken.
+		award.SyncLabel = function()
+			local open = (GetNumLootItems and (GetNumLootItems() or 0) > 0)
+			if award.text then
+				award.text:SetText(open and "Award top roll" or "Award top roll |cff8a8d93(record)|r")
+			end
+			award:Tooltip(open
+				and "Hands the item straight to the winner through master loot."
+				or  "The loot window is closed, so the item is already in your bags.\n"
+				 .. "This records the winner and tells the raid -- you trade it over.\n\n"
+				 .. "Keep the corpse's loot window OPEN during the roll to hand it\n"
+				 .. "over automatically instead.")
+		end
+		award.SyncLabel()
+		RM._awardBtn = award
+
 		award:SetScript("OnClick", function()
 			if not selected then Okanvil:Print("|cffff5555Open an item in the list first.|r"); return end
 			-- Award the top roll of the OPEN item, from the rolls actually captured on
@@ -1189,6 +1244,13 @@ function RM.Refresh()
 	-- roll on it, no managed roll needed.
 	if L and L.WatchItem then L.WatchItem(selected) end
 
+	-- Same reason: "Send prio" says whether the OPEN item is on the list, so it has
+	-- to be relabelled wherever the selection changes, not once when the body is built.
+	if RM._prioBtn and RM._prioBtn.SyncLabel then
+		local ok, err = pcall(RM._prioBtn.SyncLabel)
+		if not ok and Okanvil.Err then Okanvil:Err("RollMgr prio label", err) end
+	end
+
 	-- (collector tally intentionally not shown here -- it's on the Loot page)
 end
 
@@ -1303,6 +1365,15 @@ end
 
 -- a loot window just opened with items in front of us -> always pop (forced).
 function RM.OnLootWindow() popOrRefresh(true) end
+
+-- The loot window opened or closed, so "Award top roll" may have just changed
+-- between handing the item over and only recording it. Cheap: relabels one button.
+function RM.SyncAward()
+	if RM._awardBtn and RM._awardBtn.SyncLabel then
+		local ok, err = pcall(RM._awardBtn.SyncLabel)
+		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SyncAward", err) end
+	end
+end
 
 -- Just hide (never toggle open). Used by Okanvil:CloseAll() on a DBM pull.
 function RM.Hide()
