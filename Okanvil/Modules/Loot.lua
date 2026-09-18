@@ -196,11 +196,9 @@ local function shouldRecordHere()
 end
 
 -- NPC GUID? (nibble tipo & 0x7 == 3)
-local function guidIsNPC(guid)
-	if not guid then return false end
-	local b = tonumber(guid:sub(5, 5), 16)
-	return b and (b % 8) == 3
-end
+-- Shared with the farm tracker: the same :sub() on a numeric GUID that broke its
+-- kill counter would break every boss-vetting call here too.
+local guidIsNPC = Okanvil.U.guidIsNPC
 
 -- ------------------------------------------------------------
 -- TOOLTIP SCAN. One hidden GameTooltip, read once, reused for both the BoE tag and
@@ -378,8 +376,11 @@ end
 -- creatureID a partir do GUID (MRT cidFromGUID): valida o triplet F13 (NPC) / F15
 -- (vehicle) do 3.3.5a e extrai o id.
 local function cidFromGUID(guid)
-	if type(guid) ~= "string" or guid == "" then return nil end
-	local hex = guid:match("^0x(%x+)$") or guid:match("^(%x+)$")
+	if guid == nil or guid == "" then return nil end
+	-- Accept a numeric GUID too: some cores pass one, and rejecting it here left
+	-- every boss unvetted on those servers (same shape of bug as guidIsNPC had).
+	guid = tostring(guid)
+	local hex = guid:match("^0[xX](%x+)$") or guid:match("^(%x+)$")
 	if not hex then return nil end
 	if #hex < 16 then hex = string.rep("0", 16 - #hex) .. hex end
 	if hex:sub(1, 4) == "0000" then return nil end

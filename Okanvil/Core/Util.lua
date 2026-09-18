@@ -39,6 +39,26 @@ function U.itemIDFromLink(link)
 	return link and tonumber(link:match("item:(%d+)")) or 0
 end
 
+-- Is this GUID a creature rather than a player?
+--
+-- A 3.3.5a GUID is "0xF130..." and the nibble at position 5 carries the unit
+-- type; 3 (mod 8) is a creature. The catch is that it does not always arrive as
+-- a STRING: some cores hand COMBAT_LOG_EVENT_UNFILTERED a number, and calling
+-- :sub() on that throws "attempt to index local 'destGUID' (a number value)" --
+-- which is exactly what the farm tracker's kill counter did, 42 times in one
+-- dungeon, leaving it stuck at zero. tostring() first and both shapes work.
+function U.guidIsNPC(guid)
+	if not guid then return false end
+	guid = tostring(guid)
+	-- a numeric GUID loses the "0x" and may be shorter, so read the type nibble
+	-- from a normalised 16-digit hex string rather than a fixed offset
+	local hex = guid:match("^0[xX](%x+)$") or guid:match("^(%x+)$")
+	if not hex then return false end
+	if #hex < 16 then hex = string.rep("0", 16 - #hex) .. hex end
+	local b = tonumber(hex:sub(3, 3), 16)
+	return b ~= nil and (b % 8) == 3
+end
+
 function U.shortLink(link)
 	return link and link:match("(item:[%-%d:]+)") or nil
 end

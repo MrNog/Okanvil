@@ -227,8 +227,40 @@ end
 -- ------------------------------------------------------------
 -- Capture
 -- ------------------------------------------------------------
+-- Things a farm run should not count as loot.
+--
+-- Emblems, marks and badges arrive through the same "You receive loot:" line as
+-- a real drop, but they are currency: the vendor pays 0 for them, so they land
+-- in the list worth nothing and push the actual drops down it. A dungeon run
+-- ends up reading as twenty "drops" that earned no gold.
+--
+-- Matched on the item's own SELL PRICE and class, never on its name -- "Emblem"
+-- is English and this has to hold on any client. Anything the vendor will not
+-- pay for is not farm income.
+local function isCurrency(link)
+	if not link then return false end
+	local _, _, _, _, _, class, _, _, _, _, vendor = GetItemInfo(link)
+	-- NOT CACHED YET: keep it. A drop the client has never seen returns nils, and
+	-- treating that as currency would silently bin a real item -- an orb the first
+	-- time you ever loot one. Warm it so the next paint prices it properly.
+	if class == nil then
+		if Okanvil.WarmItem then Okanvil:WarmItem(link) end
+		return false
+	end
+	-- Worth something to a vendor: real loot, whatever it is.
+	if (vendor or 0) > 0 then return false end
+	-- Worth nothing to a vendor, and the client knows what it is. Emblems, marks
+	-- and badges land here; so do quest items and keys, which are equally not farm
+	-- income. Anything actually valuable has a sell price, so this needs no list of
+	-- item classes -- and no English name to match on.
+	return true
+end
+
 local function addLoot(link, count)
 	if not link then return end
+	-- Not counted, not listed, not in the drop total: a run's drop count should
+	-- mean "things that earned me money".
+	if isCurrency(link) then return end
 	count = count or 1
 	local unit = M.ItemValue(link)
 	local val = unit * count
@@ -342,12 +374,7 @@ ev:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
 		-- Arg positions match Loot.lua's own handler: 2 = sub-event, 5 = destGUID.
 		if select(2, ...) == "UNIT_DIED" then
-			local destGUID = select(5, ...)
-			-- 3.3.5a GUID: the type nibble is 0 for a player, non-zero for a
-			-- creature/vehicle -- so this counts mobs and never counts a raider
-			-- dying next to you.
-			local t = destGUID and tonumber(destGUID:sub(5, 5), 16)
-			if t and t ~= 0 then S.kills = S.kills + 1 end
+			if Okanvil.U.guidIsNPC(select(5, ...)) then S.kills = S.kills + 1 end
 		end
 	end
 end)
