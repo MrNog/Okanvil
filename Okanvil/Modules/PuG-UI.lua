@@ -406,7 +406,12 @@ local function buildBoard(p)
 			end)
 			row:SetScript("OnEnter", function(self)
 				if not self._name then return end
-				self:SetBackdropBorderColor(C.borderHi[1], C.borderHi[2], C.borderHi[3], 1)
+				-- Brighten the row's OWN colour rather than replacing it: the border is
+				-- the player's class, and swapping it for a generic highlight threw
+				-- that away for as long as the mouse was over it.
+				local e = self._edge
+				if e then self:SetBackdropBorderColor(e[1], e[2], e[3], 1)
+				else self:SetBackdropBorderColor(C.borderHi[1], C.borderHi[2], C.borderHi[3], 1) end
 				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 				GameTooltip:AddLine(self._name, 1, 1, 1)
 				if self._sub then GameTooltip:AddLine(self._sub, 0.6, 0.6, 0.6) end
@@ -417,7 +422,9 @@ local function buildBoard(p)
 				GameTooltip:Show()
 			end)
 			row:SetScript("OnLeave", function(self)
-				self:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
+				local e = self._edge
+				if e then self:SetBackdropBorderColor(e[1], e[2], e[3], e[4] or 1)
+				else self:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1) end
 				GameTooltip:Hide()
 			end)
 
@@ -1041,7 +1048,10 @@ function M.RefreshUI()
 	local inGroup = {}
 	for _, pl in ipairs(list) do
 		inGroup[pl.name] = true
-		local assigned = M.AssignedRole(pl.name)
+		-- A HAND placement always wins -- that is the leader's decision and nothing
+		-- may undo it. Failing that, use what the inspect read: reading specs and
+		-- then leaving everyone where they were is the scan doing half its job.
+		local assigned = M.AssignedRole(pl.name) or M.GuessRole(pl.name, pl.class)
 		local key = assigned or "unassigned"
 		if buckets[key] then
 			buckets[key][#buckets[key] + 1] = pl
@@ -1094,12 +1104,15 @@ function M.RefreshUI()
 					-- things and neither reliably. Bright edge = still to invite, faint
 					-- edge = already yours.
 					local cc = RAID_CLASS_COLORS and pl.class and RAID_CLASS_COLORS[pl.class]
+					-- Remembered on the row so hover can brighten it and OnLeave can put
+					-- it back -- otherwise moving the mouse across the board repaints
+					-- every card it touches grey.
 					if cc then
-						row:SetBackdropBorderColor(cc.r, cc.g, cc.b, pl.pending and 0.95 or 0.45)
+						row._edge = { cc.r, cc.g, cc.b, pl.pending and 0.95 or 0.45 }
 					else
-						row:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3],
-							pl.pending and 0.95 or 1)
+						row._edge = { C.border[1], C.border[2], C.border[3], pl.pending and 0.95 or 1 }
 					end
+					row:SetBackdropBorderColor(row._edge[1], row._edge[2], row._edge[3], row._edge[4])
 					row:Show()
 				else
 					row._name = nil
@@ -1108,6 +1121,7 @@ function M.RefreshUI()
 					-- group would otherwise still think it was an applicant, and a click
 					-- would invite instead of opening the conversation
 					row._pending = nil
+					row._edge = nil
 					row:Hide()
 				end
 			end
