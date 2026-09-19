@@ -403,6 +403,7 @@ function M.GearOf(name)
 	return e.gs, e.ilvl, e.pvp or 0
 end
 
+
 -- "5807" / "5807 (4 PvP)" / "ilvl 245" -- one short string for a list cell.
 function M.GearLabel(name)
 	local gs, ilvl, pvp = M.GearOf(name)

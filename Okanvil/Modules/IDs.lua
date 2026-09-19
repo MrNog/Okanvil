@@ -24,7 +24,7 @@ local QMARK = "Interface\\Icons\\INV_Misc_QuestionMark"
 local MAX_SPELL_ID = 80000 -- WotLK 3.3.5a tops out well under this
 local MAX_ITEM_ID = 56000 -- upper bound for the optional full item scan
 local MAX_RESULTS = 300 -- cap matches per search (keeps the UI snappy)
-local ROW_H = 20 -- a touch of breathing room; names are clamped to one line
+local ROW_H = 28 -- room for an 18px icon plus air; names are clamped to one line
 
 local defaults = {
 	items = {}, -- [itemID] = name   (harvested; account-wide)
@@ -486,15 +486,28 @@ local function buildUI(host)
 		r:Show()
 	end
 
-	-- build one result column: a dark card with a gold header + scrolling list
-	local COL_W, COL_ROWS = 320, 13
-	local function makeColumn(x, header, key)
+	-- Build one result column: a dark card with a gold header + scrolling list.
+	--
+	-- The cards used to be 320px wide and 13 rows tall, anchored by a hard x --
+	-- so on any window bigger than the old one they sat in the left third with
+	-- dead space beside them, and a long item name was truncated while the panel
+	-- had room to spare. Each card now takes half the width and the full height,
+	-- and the row count follows from that.
+	-- BOTTOM_Y used to leave 34px for an "advanced" footer row. That row is gone,
+	-- so the lists get the space instead.
+	local COL_GAP, TOP_Y, BOTTOM_Y = 10, -78, 10
+	local function makeColumn(side, header, key)
 		local col = { results = {} }
-		local rowW = COL_W - 20
-		-- the card that frames the whole column (header + list share it)
 		local card = W.Frame(parent, "dark")
-		card:SetPoint("TOPLEFT", x, -64)
-		card:SetSize(COL_W, COL_ROWS * ROW_H + 30)
+		card:SetPoint("TOP", parent, "TOP", 0, TOP_Y)
+		card:SetPoint("BOTTOM", parent, "BOTTOM", 0, BOTTOM_Y)
+		if side == "left" then
+			card:SetPoint("LEFT", parent, "LEFT", X, 0)
+			card:SetPoint("RIGHT", parent, "CENTER", -COL_GAP / 2, 0)
+		else
+			card:SetPoint("LEFT", parent, "CENTER", COL_GAP / 2, 0)
+			card:SetPoint("RIGHT", parent, "RIGHT", -X, 0)
+		end
 		-- gold header sits INSIDE the card top
 		local h = newText(card, "OVERLAY", 12)
 		h:SetPoint("TOPLEFT", 8, -7)
@@ -505,43 +518,94 @@ local function buildUI(host)
 		col.count:SetTextColor(0.54, 0.55, 0.58)
 		local scroll = CreateFrame("ScrollFrame", "OkanvilIDs_Col" .. key, card, "FauxScrollFrameTemplate")
 		scroll:SetPoint("TOPLEFT", 4, -26)
-		scroll:SetSize(rowW, COL_ROWS * ROW_H)
+		scroll:SetPoint("BOTTOMRIGHT", -26, 4)   -- leave the scrollbar its gutter
+
+		-- Blizzard's template ships an up/down arrow and a stone-textured thumb
+		-- that belong to the 2004 UI. Strip them back to a flat gold bar: the
+		-- arrows were two 16px buttons nobody clicks when the wheel works, and
+		-- they sat on top of the first row.
+		do
+			local sb = _G[scroll:GetName() .. "ScrollBar"]
+			if sb then
+				local up, down = _G[sb:GetName() .. "ScrollUpButton"],
+				                 _G[sb:GetName() .. "ScrollDownButton"]
+				if up then up:Hide(); up:SetAlpha(0); up:EnableMouse(false) end
+				if down then down:Hide(); down:SetAlpha(0); down:EnableMouse(false) end
+				-- With the arrows gone the bar can run the full height.
+				sb:ClearAllPoints()
+				sb:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 4, 0)
+				sb:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 4, 0)
+				sb:SetWidth(12)
+				local thumb = sb:GetThumbTexture()
+				if thumb then
+					thumb:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
+					thumb:SetVertexColor(0.75, 0.58, 0.23, 0.8)
+					thumb:SetWidth(12)
+				end
+			end
+		end
+
+		-- Rows are made on demand and reused: how many fit is a question about the
+		-- card's height, which is now the window's, so it cannot be a constant.
 		local rows = {}
+		local function visibleRows()
+			local h = scroll:GetHeight() or 0
+			return math.max(1, math.floor(h / ROW_H))
+		end
+
+		local makeRow      -- defined below; update() calls it as the card grows
 		local function update()
+			local n = visibleRows()
 			local off = FauxScrollFrame_GetOffset(scroll)
-			for i = 1, COL_ROWS do
+			for i = 1, n do
+				if not rows[i] then makeRow(i) end
 				renderRow(rows[i], col.results[off + i])
 			end
-			FauxScrollFrame_Update(scroll, #col.results, COL_ROWS, ROW_H)
+			-- Hide any row left over from a taller window, or it keeps painting
+			-- an old result below the list.
+			for i = n + 1, #rows do
+				if rows[i] then rows[i]:Hide() end
+			end
+			FauxScrollFrame_Update(scroll, #col.results, n, ROW_H)
 		end
 		col.update = update
 		scroll:SetScript("OnVerticalScroll", function(self, o)
 			FauxScrollFrame_OnVerticalScroll(self, o, ROW_H, update)
 		end)
-		for i = 1, COL_ROWS do
+		-- The card resizes with the window; the list has to follow.
+		card:SetScript("OnSizeChanged", function() update() end)
+
+		makeRow = function(i)
 			local r = CreateFrame("Button", nil, card)
-			r:SetSize(rowW, ROW_H)
+			r:SetHeight(ROW_H)
 			if i == 1 then
 				r:SetPoint("TOPLEFT", scroll, "TOPLEFT", 0, 0)
+				r:SetPoint("TOPRIGHT", scroll, "TOPRIGHT", 0, 0)
 			else
 				r:SetPoint("TOPLEFT", rows[i - 1], "BOTTOMLEFT", 0, 0)
+				r:SetPoint("TOPRIGHT", rows[i - 1], "BOTTOMRIGHT", 0, 0)
 			end
 			r.icon = r:CreateTexture(nil, "ARTWORK")
-			r.icon:SetSize(16, 16)
-			r.icon:SetPoint("LEFT", 2, 0)
+			r.icon:SetSize(18, 18)
+			r.icon:SetPoint("LEFT", 4, 0)
 			r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-			r.name = newText(r, "OVERLAY")
-			r.name:SetPoint("LEFT", r.icon, "RIGHT", 4, 0)
+
+			r.id = newText(r, "OVERLAY", 13)
+			r.id:SetPoint("RIGHT", -6, 0)
+			r.id:SetTextColor(1.0, 0.82, 0.0)
+
+			r.name = newText(r, "OVERLAY", 13)
+			r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+			-- Anchored to the id rather than given a width: the card resizes, so a
+			-- fixed width either truncated early or ran under the id column.
+			r.name:SetPoint("RIGHT", r.id, "LEFT", -8, 0)
 			r.name:SetJustifyH("LEFT")
-			r.name:SetWidth(rowW - 16 - 46)
 			r.name:SetHeight(ROW_H)           -- clamp to one row so a long name
 			if r.name.SetWordWrap then         -- can't spill onto the next line
 				r.name:SetWordWrap(false)      -- (truncates instead of wrapping)
 			end
 			if r.name.SetMaxLines then r.name:SetMaxLines(1) end
-			r.id = newText(r, "OVERLAY")
-			r.id:SetPoint("RIGHT", -4, 0)
-			r.id:SetTextColor(1.0, 0.82, 0.0)
+
 			r.hl = r:CreateTexture(nil, "BACKGROUND")
 			r.hl:SetAllPoints()
 			r.hl:SetTexture(0.75, 0.58, 0.23, 0.22) -- gold hover, matches the shell
@@ -561,7 +625,9 @@ local function buildUI(host)
 				GameTooltip:Hide()
 			end)
 			rows[i] = r
+			return r
 		end
+
 		col.set = function(list)
 			col.results = list or {}
 			local sb = _G["OkanvilIDs_Col" .. key .. "ScrollBar"]
@@ -572,8 +638,8 @@ local function buildUI(host)
 		return col
 	end
 
-	colSpell = makeColumn(X, "Spells / Auras", "S")
-	colItem = makeColumn(X + COL_W + 10, "Items", "I")
+	colSpell = makeColumn("left", "Spells / Auras", "S")
+	colItem = makeColumn("right", "Items", "I")
 
 	-- ---- run a search: three lib calls, nothing else ----
 	local function runSearch()
@@ -605,8 +671,12 @@ local function buildUI(host)
 	sub:SetText("Type a name or id -> read the ID off the result. (Auras are spells -- same column.)")
 
 	searchBox = CreateFrame("EditBox", nil, parent)
-	searchBox:SetSize(380, 26)
-	searchBox:SetPoint("TOPLEFT", X, -30)
+	searchBox:SetHeight(28)
+	searchBox:SetPoint("TOPLEFT", X, -32)
+	-- Full width: this is the one control on the page, and it used to stop at
+	-- 380px with the Sweep button and a count beside it -- both of which the
+	-- Dashboard header already shows.
+	searchBox:SetPoint("RIGHT", parent, "RIGHT", -X, 0)
 	searchBox:SetAutoFocus(false)
 	searchBox:SetFontObject("GameFontHighlight")
 	searchBox:SetTextInsets(6, 6, 0, 0)
@@ -637,90 +707,30 @@ local function buildUI(host)
 	end)
 	searchBox:SetScript("OnEditFocusGained", function() ghost:Hide() end)
 
-	local sweep = flatButton(parent, "Sweep loaded", 110, 24)
-	sweep:SetPoint("LEFT", searchBox, "RIGHT", 10, 0)
-	sweep:SetScript("OnClick", function()
-		local added = IDs.SweepLoaded()
-		toast("Swept " .. added .. " new item(s). DB now holds " .. IDs.ItemCount() .. ".", "00ff00")
-		runSearch() -- refresh the Items column with anything new
-	end)
-	-- item-count readout beside Sweep (shows how full the shared DB is)
-	local dbInfo = newText(parent, "OVERLAY", 11)
-	dbInfo:SetPoint("LEFT", sweep, "RIGHT", 10, 0)
-	dbInfo:SetTextColor(0.54, 0.55, 0.58)
-	local function paintDbInfo() dbInfo:SetText(IDs.ItemCount() .. " items in DB") end
-	paintDbInfo()
-
-	-- Full scan + Stop are RISKY (a server request per uncached id -> lag/DC), and
-	-- rarely needed once the DB is seeded. Hide them behind a small "advanced" link
-	-- in the footer; Stop only shows while a scan is actually running.
-	local full, stopb -- created later in the footer (forward decl)
+	-- No Sweep button and no item count here: the Dashboard header carries both,
+	-- and having them twice on one page made it look unfinished.
 
 	-- (no copy bar / link library / row actions -- the id is right there in each
-	--  result row to read. Export DB below is the only copy dialog left.)
+	--  result row to read.)
 
-	statusFS = newText(parent, "OVERLAY")
-	statusFS:SetPoint("TOPLEFT", X, -364)
-	statusFS:SetWidth(660)
+	-- Under the search box, above the cards. It was pinned at -364, which put it
+	-- in the middle of the page once the columns grew to fill the height.
+	statusFS = newText(parent, "OVERLAY", 11)
+	statusFS:SetPoint("TOPLEFT", X, -66)
+	statusFS:SetPoint("RIGHT", parent, "RIGHT", -X, 0)
 	statusFS:SetJustifyH("LEFT")
 
-	-- ---- advanced (risky) footer: full item scan, tucked away ----
-	-- A small toggle reveals Full scan + Stop. Most people never need it: the
-	-- shared DB is seeded and hover/Sweep fills the rest. Full scan fires a
-	-- server request per uncached id (lag/DC risk) -- so it's opt-in, not up top.
-	local advToggle = flatButton(parent, "advanced", 84, 18)
-	advToggle:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", X, 8)
-	advToggle.text:SetText("|cff777777advanced +|r")
-
-	full = flatButton(parent, "Full scan", 90, 20, "danger")
-	full:SetPoint("LEFT", advToggle, "RIGHT", 8, 0)
-	full:SetScript("OnClick", function()
-		IDs.FullScan()
-		if stopb then stopb:Show() end
-	end)
-	full:Hide()
-
-	stopb = flatButton(parent, "Stop", 56, 20)
-	stopb:SetPoint("LEFT", full, "RIGHT", 8, 0)
-	stopb:SetScript("OnClick", function()
-		IDs.StopFullScan()
-		stopb:Hide()
-		paintDbInfo()
-	end)
-	stopb:Hide()
-
-	-- risk note sits ABOVE the advanced row so buttons don't overlap it
-	local advNote = newText(parent, "OVERLAY", 10)
-	advNote:SetPoint("BOTTOMLEFT", advToggle, "TOPLEFT", 0, 4)
-	advNote:SetTextColor(0.5, 0.42, 0.2)
-	advNote:SetText("Full scan brute-forces every item id -- risky (lag/disconnect). Run once, then Export DB to ship the data.")
-	advNote:Hide()
-
-	-- Export the whole item DB as a Lua chunk (paste into Okanvil-IDs-Data.lua and
-	-- ship it so guildmates open the finder already full -- no scan needed).
-	local exportBtn = flatButton(parent, "Export DB", 84, 20)
-	exportBtn:SetPoint("LEFT", stopb, "RIGHT", 8, 0)
-	exportBtn:Hide()
-	exportBtn:SetScript("OnClick", function()
-		local chunk, n = IDs.ExportItems()
-		-- shell's shared multi-line copy dialog (Ctrl+C, pre-highlighted)
-		Okanvil:ShowExport(chunk, "Item DB seed (" .. n .. " items) -> Okanvil-IDs-Data.lua")
-	end)
-
-	advToggle:SetScript("OnClick", function()
-		local show = not full:IsShown()
-		full:SetShown(show)
-		exportBtn:SetShown(show)
-		advNote:SetShown(show and not IDs.IsScanning())
-		advToggle.text:SetText(show and "|cff999999advanced -|r" or "|cff777777advanced +|r")
-	end)
+	-- No "advanced" row. It held Full scan, Stop and Export DB -- three controls
+	-- for one job that is not the player's: building the seed that SHIPS with the
+	-- addon. Export opened a dialog holding ten thousand lines of Lua, which is
+	-- useless to anyone who is not editing Modules/IDs-Data.lua. Both remain as
+	-- library calls for that: /run Okanvil.IDs.FullScan() then .ExportItems().
 
 	-- route lib status (index build / scan progress) into this panel's status line
 	OkanvilIDs._paintStatus = function() if dash then dash:Refresh() end end
 	IDs.OnStatus = function(msg)
 		if statusFS then statusFS:SetText("|cffaaaaaa" .. msg .. "|r") end
-		if dbInfo then paintDbInfo() end
-		if dash then dash:Refresh() end
+		if dash then dash:Refresh() end   -- the header shows the live item count
 	end
 
 	-- NEVER auto-SetFocus: grabbing the keyboard the moment the page opens steals

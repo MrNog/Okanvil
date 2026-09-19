@@ -679,6 +679,12 @@ function runKey()
 	return "day|" .. date("%Y-%m-%d") .. "|" .. name, name, diff, mapID
 end
 
+-- Shared: any module that needs to say "this run" should mean the SAME run loot
+-- does, or two features end up disagreeing about what one raid was. The key is
+-- the lockout, so a raid continued the next day is still the same run.
+--   returns key, zoneName, difficulty, mapID
+function L.RunKey() return runKey() end
+
 local function newSession(key, name, diff, mapID)
 	local list = sessions()
 	local s = { t = time(), day = date("%Y-%m-%d"), zone = name or "", difficulty = diff or 0,
@@ -1730,10 +1736,14 @@ end
 -- The "X won [item]" announce their addon sends is ignored (we don't use their winner).
 local externalRollDrop = nil
 local externalRollAt = 0
-local EXTERNAL_ROLL_WINDOW = 60   -- seconds a "Roll for:" stays the active target
+-- Last roll actually captured for externalRollDrop. The window slides off THIS, so a
+-- slow roll-off (ties, re-rolls, "top 5" calls where the ML waits for stragglers)
+-- keeps its target alive as long as people are still rolling.
+local externalRollLastAt = 0
+local EXTERNAL_ROLL_WINDOW = 60   -- seconds of SILENCE before the target goes cold
 -- resolve the drop for an announced item link, mark it the external-roll target, and
 -- tell the UI to select it. findOpenDrop (defined above) prefers an un-awarded copy.
-function L.NoteExternalRoll(link)
+function L.NoteExternalRoll(link, winners)
 	if not link then return end
 	local id = itemIDFromLink(link)
 	if not id or id == 0 then return end
@@ -1814,8 +1824,24 @@ function L.NoteExternalRoll(link)
 		if L.onLoot then L.onLoot() end
 	end
 
+	-- "top 5": five copies go out on one roll-off, so the top 5 rolls each win one.
+	-- Only ever RAISE it -- a re-post of the same call without the qualifier ("[Trophy]"
+	-- pasted again to nudge stragglers) must not silently drop it back to one winner.
+	if winners and winners > 1 and winners > (dp.winners or 1) then dp.winners = winners end
+
 	externalRollDrop = dp
 	externalRollAt = (GetTime and GetTime()) or 0
+	externalRollLastAt = 0   -- new call: the window restarts from this announce
+
+	-- A NEW call retires the previous hand-roll target. handRollDrop lives for 5 minutes
+	-- with nothing tying it to what the raid is actually rolling, so leaving it armed let
+	-- an item called earlier keep swallowing rolls meant for this one -- and because the
+	-- capture is silent, the rolls simply never appeared under the item on screen.
+	if handRollDrop ~= dp then
+		handRollDrop = nil
+		handRollAt = 0
+	end
+
 	if L.onRollStart then L.onRollStart(id) end   -- roll manager pages to + selects it
 	if L.onLootWindow then L.onLootWindow() end   -- and force it open: a roll is starting
 end
@@ -1852,6 +1878,7 @@ function L.StopRoll()
 	if chan then SendChatMessage(L.RollMsg("stop"), chan) end
 	activeRoll = nil
 	externalRollDrop = nil       -- someone else's "Roll for: [item]" call
+	externalRollLastAt = 0       -- and its sliding capture window
 	handRollDrop = nil           -- an item the ML opened for a hand roll-off
 	if L.onRoll then L.onRoll() end
 end
@@ -1883,7 +1910,13 @@ local function captureRoll(msg)
 	-- clicked around during a raid.
 	if not activeRoll then
 		local dp = externalRollDrop
-		local externalLive = dp and (GetTime() - externalRollAt) <= EXTERNAL_ROLL_WINDOW
+		-- The window runs from the LAST activity, not from the announce. A roll-off
+		-- routinely outlives a fixed window from the call: people alt-tab, tie and
+		-- re-roll, and the ML waits. Measuring from the announce let the target go
+		-- cold mid-roll-off, and because the capture is silent the remaining rolls
+		-- landed nowhere -- the item just sat there reading "no rolls yet".
+		local since = externalRollLastAt > externalRollAt and externalRollLastAt or externalRollAt
+		local externalLive = dp and (GetTime() - since) <= EXTERNAL_ROLL_WINDOW
 		if not externalLive then
 			dp = L.HandRollDrop()     -- an item the ML explicitly opened for rolls
 		end
@@ -1892,6 +1925,7 @@ local function captureRoll(msg)
 		for _, e in ipairs(dp.rolls) do if e.player == key then return end end   -- first roll counts
 		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
 		dp.lastRollAt = GetTime()   -- keeps the roll-off "open" while people are rolling
+		if dp == externalRollDrop then externalRollLastAt = dp.lastRollAt end
 		L.AttributeByRoll(dp)
 		if L.onLoot then L.onLoot() end
 		if L.onRoll then L.onRoll() end
@@ -1940,13 +1974,44 @@ local function canOpenRoll(who, event)
 	return false
 end
 
+-- Words that only ever qualify HOW MANY are up or how many winners to take. They may
+-- trail a roll call without making it chatter -- "[Trophy of the Crusade] top 5" is a
+-- roll call, and rejecting it sent the whole raid's rolls to a stale target.
+local ROLL_QUALIFIERS = {
+	"top", "best", "first", "x", "each", "copies", "copy", "pcs", "pieces", "for",
+}
+
+-- HOW MANY WINNERS did the call ask for? "roll first 5" / "top 5" / "best 3" / "x2" /
+-- "2x" / "5 copies" all mean several copies go out on ONE roll-off, so the top N rolls
+-- each win one. Returns nil when the call names no count (an ordinary single winner).
+--
+-- The number must sit next to a counting word. A bare trailing number is NOT a count:
+-- raid calls carry stray digits all the time (item levels, "ICC 25", a roll addon's
+-- "(39)" counter), and reading those as a winner count handed items to half the raid.
+local COUNT_WORDS = { "top", "first", "best" }
+local function winnerCount(lower)
+	-- strip the link: its itemString is nothing but digits and would match everything
+	local rest = lower:gsub("|c%x+|hitem:.-|h.-|h|r", " "):gsub("|hitem:[^|]+|h%[.-%]|h", " ")
+	for _, w in ipairs(COUNT_WORDS) do
+		local n = rest:match("%f[%w]" .. w .. "%f[%W]%s*(%d+)")
+		if n then return tonumber(n) end
+	end
+	local n = rest:match("%f[%w]x%s*(%d+)%f[%W]") or rest:match("%f[%w](%d+)%s*x%f[%W]")
+	if n then return tonumber(n) end
+	n = rest:match("(%d+)%s*%f[%w]cop") or rest:match("(%d+)%s*%f[%w]p[ci]")
+	return n and tonumber(n) or nil
+end
+
 local function onRollAnnounce(msg, sender, event)
 	if type(msg) ~= "string" then return end
 	local lower = msg:lower()
 	-- Winner / result lines carry an item link too -> never treat them as a new roll,
 	-- or a "won" line would steal the selection back to the item that just finished.
-	if lower:find("won") or lower:find("congrat") or lower:find("wins") then return end
-	if lower:find("passed") or lower:find("disenchant") then return end
+	-- WHOLE WORDS (%f is Lua's frontier pattern). As bare substrings these hide inside
+	-- ordinary words -- "won" sits in "wound"/"wonder", "wins" in "winsome" -- so a
+	-- legitimate call carrying one was thrown away and the raid's rolls went nowhere.
+	if lower:find("%f[%w]won%f[%W]") or lower:find("congrat") or lower:find("%f[%w]wins%f[%W]") then return end
+	if lower:find("%f[%w]passed%f[%W]") or lower:find("disenchant") then return end
 
 	local link = msg:match("|c%x+|Hitem:.-|h.-|h|r") or msg:match("|Hitem:[^|]+|h%[.-%]|h")
 	if not link then return end
@@ -1966,7 +2031,7 @@ local function onRollAnnounce(msg, sender, event)
 	-- any raid warning look like a roll call.
 	if lower:find("roll") or lower:find("%f[%w]ms%f[%W]") or lower:find("%f[%w]os%f[%W]")
 		or lower:find("%f[%w]offspec%f[%W]") or lower:find("%f[%w]mainspec%f[%W]") then
-		L.NoteExternalRoll(link)
+		L.NoteExternalRoll(link, winnerCount(lower))
 		return
 	end
 
@@ -1977,8 +2042,17 @@ local function onRollAnnounce(msg, sender, event)
 	-- their own counter ("(39) [Boots of the Harsh Winter]"), and requiring a bare
 	-- link would reject every one of those and send the rolls to the wrong item.
 	local rest = msg:gsub("|c%x+|Hitem:.-|h.-|h|r", ""):gsub("|Hitem:[^|]+|h%[.-%]|h", "")
+
+	-- QUALIFIERS. A call routinely carries a short word after the link saying how many
+	-- copies are up or how many winners to take: "[Trophy] top 5", "[Trophy] best 2",
+	-- "[Trophy] x2", "[Trophy] 2x". Those are part of the call, not chatter, so drop
+	-- them before deciding whether anything meaningful is left.
+	for _, w in ipairs(ROLL_QUALIFIERS) do
+		rest = rest:gsub("%f[%w]" .. w .. "%f[%W]", " ")
+	end
+
 	rest = rest:gsub("[%s%p%d]", "")
-	if rest == "" then L.NoteExternalRoll(link) end
+	if rest == "" then L.NoteExternalRoll(link, winnerCount(lower)) end
 end
 
 -- ------------------------------------------------------------
@@ -2121,6 +2195,34 @@ function L.RollWinner(dp)
 	return best
 end
 
+-- Rolls ranked best-first, same order RollWinner picks by: MS outranks OS outright,
+-- then the higher number. Returns a NEW array -- dp.rolls keeps its arrival order,
+-- which is what the roll list on screen shows.
+function L.RollsRanked(dp)
+	if not (dp and dp.rolls) then return {} end
+	local out = {}
+	for _, e in ipairs(dp.rolls) do out[#out + 1] = e end
+	table.sort(out, function(a, b)
+		if a.kind ~= b.kind then return a.kind ~= "os" end   -- MS first
+		if (a.roll or 0) ~= (b.roll or 0) then return (a.roll or 0) > (b.roll or 0) end
+		return tostring(a.player) < tostring(b.player)        -- stable: never compares equal
+	end)
+	return out
+end
+
+-- The top N rolls, for a call that puts several copies up at once ("[Trophy of the
+-- Crusade] roll first 5" = five winners off one roll-off). n defaults to the count the
+-- call itself carried (dp.winners, set by the announce parser), else 1 -- so an
+-- ordinary single-winner roll behaves exactly as before.
+function L.RollWinners(dp, n)
+	n = n or (dp and dp.winners) or 1
+	if n < 1 then n = 1 end
+	local ranked = L.RollsRanked(dp)
+	local out = {}
+	for i = 1, math.min(n, #ranked) do out[i] = ranked[i] end
+	return out
+end
+
 -- Is a roll-off still OPEN on this drop? While it is, the top roll is only the leader --
 -- more people may yet roll higher, so nothing may be recorded as won.
 --
@@ -2167,6 +2269,20 @@ function L.AttributeByRoll(dp)
 	if not (best and best.player and best.player ~= "") then return end
 	dp.receivedBy = best.player
 	dp.rollWon    = true          -- attributed by roll, not by watching the handover
+
+	-- MULTI-WINNER call ("roll first 5"): several copies went out on one roll-off, so
+	-- the top N rolls each take one. receivedBy stays the TOP roll -- every existing
+	-- reader (the row, the export, the guild hub) understands one name -- and the full
+	-- ranked list goes alongside it for the ones that want all of them.
+	if (dp.winners or 1) > 1 then
+		local won = L.RollWinners(dp)
+		dp.wonBy = {}
+		for i, e in ipairs(won) do
+			if e.player and e.player ~= "" then
+				dp.wonBy[i] = { player = e.player, roll = e.roll or 0, kind = e.kind }
+			end
+		end
+	end
 end
 
 -- Write the winner onto the drop the UI is ACTUALLY showing.

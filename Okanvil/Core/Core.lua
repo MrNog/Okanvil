@@ -550,6 +550,9 @@ end
 -- opt-in inside each module later.
 -- ------------------------------------------------------------
 function Okanvil:IsModuleEnabled(name)
+	-- A `core` module has no switch in the Modules list any more, so a stored
+	-- `false` from before would have stuck with no way back. Always on.
+	if name == "__guild" then return true end
 	local m = self.cdb and self.cdb.modules and self.cdb.modules[name]
 	if m and m.enabled == false then
 		return false
@@ -573,6 +576,10 @@ function Okanvil:SetModuleEnabled(name, enabled)
 	cdb.modules[name] = cdb.modules[name] or {}
 	cdb.modules[name].enabled = enabled and true or false
 	if self.RefreshNav then self:RefreshNav() end
+	-- The marks bar carries shortcuts INTO modules, so it has to repaint too --
+	-- it only re-read its gates on login and roster events, which left a button
+	-- for a module you had just switched off, still working.
+	if self.MarksBar and self.MarksBar.Refresh then self.MarksBar:Refresh() end
 	-- if the active panel was just disabled, fall back to Home
 	if not enabled and self._current == name and self.ShowPanel then
 		self:ShowPanel("__home")

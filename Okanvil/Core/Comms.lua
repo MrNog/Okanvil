@@ -46,6 +46,13 @@ local function encField(s)
 	return (tostring(s == nil and "" or s):gsub("|", "/"))   -- '|' -> '/' (names never contain either meaningfully)
 end
 
+-- The other half. Needed since big payloads carry raid notes, which are full of
+-- '|' in their colour codes -- without putting them back the text arrives
+-- mangled, or split across fields that were never meant to be separate.
+local function decField(s)
+	return (tostring(s or ""):gsub("/", "|"))
+end
+
 local function pack(msgType, ...)
 	local parts = { VERSION, msgType }
 	local n = select("#", ...)
@@ -100,8 +107,21 @@ end
 -- Receive: split the payload, gate on version, dispatch to the type handler.
 -- The sender name is passed through un-trusted -- handlers validate by role.
 -- ------------------------------------------------------------
+-- Debug: /okcomms shows every Okanvil addon message as it arrives. Off by
+-- default; it is a firehose in a raid.
+C.debug = false
+_G.SLASH_OKCOMMS1 = "/okcomms"
+_G.SlashCmdList["OKCOMMS"] = function()
+	C.debug = not C.debug
+	Okanvil:Print("Comms debug " .. (C.debug and "|cff7cfc8aON|r" or "|cffff5555OFF|r"))
+end
+
 local function onMessage(prefix, message, channel, sender)
 	if prefix ~= PREFIX or not message then return end
+	if C.debug then
+		Okanvil:Print(("|cff6f7176<- %s [%s] %s|r"):format(
+			tostring(sender), tostring(channel), tostring(message):sub(1, 60)))
+	end
 	-- split on SEP
 	local fields = {}
 	for f in (message .. SEP):gmatch("(.-)" .. "%" .. SEP) do fields[#fields + 1] = f end
@@ -193,7 +213,14 @@ function C.SendBig(tag, text, chan, target)
 		-- spread the series over time: firing 20 messages in one frame trips the
 		-- client's own throttle and the tail is silently dropped.
 		C.After(BIG_GAP * (i - 1), function()
-			local body = table.concat({ VERSION, "BIG", encField(tag), encField(id), i, total, part }, SEP)
+			-- The PART is escaped too, not just the tag and id.
+			--
+			-- It used to go on the wire raw, which worked for as long as the only
+			-- payload was the loot list. A raid note is full of '|' -- every
+			-- colour code is |cff......|r -- and the receiver splits on exactly
+			-- that character, so the note shattered into fragments and only the
+			-- piece before the first colour survived.
+			local body = table.concat({ VERSION, "BIG", encField(tag), encField(id), i, total, encField(part) }, SEP)
 			if target then SendAddonMessage(PREFIX, body, chan, target)
 			else SendAddonMessage(PREFIX, body, chan) end
 		end)
@@ -213,7 +240,7 @@ C.On("BIG", function(sender, tag, id, seq, total, part)
 		slot = { id = id, total = total, parts = {}, at = GetTime() or 0 }
 		bigIn[key] = slot
 	end
-	slot.parts[seq] = part or ""
+	slot.parts[seq] = decField(part or "")
 	slot.at = GetTime() or 0
 	for i = 1, total do if slot.parts[i] == nil then return end end   -- still incomplete
 	bigIn[key] = nil

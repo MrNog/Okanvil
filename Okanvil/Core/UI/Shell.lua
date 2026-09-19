@@ -17,6 +17,11 @@ Okanvil.panels = {}       -- key -> { panel, scroll, child }
 Okanvil._navButtons = {}
 Okanvil._navHeaders = {}   -- section labels, pooled separately from the clickable rows
 local HOME, LOOT, SETTINGS = "__home", "__loot", "__settings"
+-- Pages that are their own nav entry rather than a tab inside Settings. Both
+-- used to be buried: Modules was a Settings pill, and Invite had no entry at
+-- all -- a module with no menu row and its options somewhere else is a module
+-- nobody finds.
+local MODULES, INVITE = "__modules", "__invite"
 
 -- FIXED window size (MRT-style): the window is NOT resizable -- a hand-tuned size
 -- that always looks right. Users make it bigger/smaller with the Scale slider in
@@ -302,9 +307,13 @@ Okanvil.ICONS = {
 }
 
 Okanvil.NATIVE = {
-	{ key = "__invite", title = "Invite", icon = Okanvil.ICONS.invite, noNav = true,
-	  desc = "Auto-invite on a keyword. Set it up in Settings > Invite; invite people from Home." },
-	{ key = "__guild",  title = "Guild",  icon = Okanvil.ICONS.guild, noNav = true,
+	{ key = "__invite", title = "Invite", icon = Okanvil.ICONS.invite,
+	  desc = "Auto-invite on a keyword, plus the login toast. Off = neither fires. "
+	      .. "The inv buttons on Home stay either way -- those are manual invites." },
+	-- `core` = not a module you switch: the guild roster IS Home, and turning it
+	-- off only broke the page it lives on. It stays out of the Modules list
+	-- rather than offering a switch nobody has a reason to touch.
+	{ key = "__guild",  title = "Guild",  icon = Okanvil.ICONS.guild, noNav = true, core = true,
 	  desc = "Attendance snapshots + roster export. Both live on Home." },
 	{ key = "__loot",   title = "Loot",   icon = Okanvil.ICONS.loot,
 	  desc = "Per-boss loot tracking + Mini Roll Manager (MS/OS roll-offs, award, speed-run sweep)." },
@@ -321,10 +330,17 @@ Okanvil.NATIVE = {
 -- is FOR. A section with nothing enabled in it prints no header.
 Okanvil.NAV_GROUPS = {
 	{ section = nil,      items = { "Home" } },
-	{ section = "RAID",   items = { "Loot", "Raid Finder", "PuG" } },
-	{ section = "GUILD",  items = { "Recruit" } },
-	{ section = "TOOLS",  items = { "ID Finder", "Settings" } },
+	{ section = "RAID",   items = { "Loot", "Notes", "Raid Finder", "PuG" } },
+	{ section = "GUILD",  items = { "Invite", "Recruit" } },
+	-- Modules and Settings last: neither is a feature, they are what the addon
+	-- has and how it behaves. Settings is the very last row -- see below, where
+	-- anything unnamed is appended BEFORE it rather than after.
+	{ section = "TOOLS",  items = { "ID Finder", "Farm", "Modules", "Settings" } },
 }
+-- Settings is pinned to the bottom of the list. An unnamed module falls through
+-- to the end alphabetically, which put Farm under Settings the moment it got a
+-- nav row -- and "how the addon behaves" reads wrong anywhere but last.
+Okanvil.NAV_LAST = "Settings"
 -- flat order, derived: anything not named above still falls through alphabetically
 Okanvil.NAV_ORDER = {}
 for _, g in ipairs(Okanvil.NAV_GROUPS) do
@@ -359,30 +375,53 @@ function Okanvil:RefreshNav()
 		end
 	end
 
-	-- Home and Settings are the shell's own, not modules, so they are not in the
-	-- pool -- put them there so the group table can place them like anything else.
+	-- Home, Modules and Settings are the shell's own, not modules, so they are not
+	-- in the pool -- put them there so the group table can place them like
+	-- anything else. Modules never turns itself off, for obvious reasons.
 	pool["Home"] = { key = HOME, title = "Home", icon = self.ICONS.home }
+	pool["Modules"] = { key = MODULES, title = "Modules", icon = self.ICONS.modules }
 	pool["Settings"] = { key = SETTINGS, title = "Settings", icon = self.ICONS.settings }
 
 	-- emit group by group. A header is only printed once we know the section has
 	-- at least one enabled entry, so switching a module off never leaves a lone
 	-- heading behind.
 	local emitted = {}
+	-- Held back and appended at the very end, after the leftovers. Emitting it in
+	-- its group put every unnamed module BELOW it.
+	local last = self.NAV_LAST
+	local emittedLast = false
 	for _, g in ipairs(self.NAV_GROUPS) do
 		local rows = {}
 		for _, title in ipairs(g.items) do
-			if pool[title] then rows[#rows + 1] = pool[title]; emitted[title] = true end
+			if pool[title] and title ~= last then
+				rows[#rows + 1] = pool[title]; emitted[title] = true
+			end
 		end
 		if #rows > 0 then
 			if g.section then list[#list + 1] = { header = g.section } end
 			for _, r in ipairs(rows) do list[#list + 1] = r end
+			-- Remember we printed the section that owns the pinned row, so it does
+			-- not need a header of its own below.
+			for _, title in ipairs(g.items) do
+				if title == last then emittedLast = true end
+			end
 		end
 	end
 	-- any enabled module not named above (future plugins), alphabetical, under TOOLS
 	local leftover = {}
-	for title in pairs(pool) do if not emitted[title] then leftover[#leftover + 1] = title end end
+	for title in pairs(pool) do
+		if not emitted[title] and title ~= last then leftover[#leftover + 1] = title end
+	end
 	table.sort(leftover)
 	for _, title in ipairs(leftover) do list[#list + 1] = pool[title] end
+
+	if last and pool[last] then
+		-- No section had anything else in it, so the header never printed: print it
+		-- now, or the row hangs under whatever group came before.
+		if not emittedLast then list[#list + 1] = { header = "TOOLS" } end
+		list[#list + 1] = pool[last]
+		emitted[last] = true
+	end
 
 	-- Headers and rows come from two separate pools: reusing a Button as a label
 	-- would leave it clickable, so a section title would open whatever page that
@@ -568,6 +607,8 @@ function Okanvil:ShowPanel(key)
 		if key == HOME then entry = self:BuildHome()
 		elseif key == LOOT then entry = self:BuildLoot()
 		elseif key == SETTINGS then entry = self:BuildSettings()
+		elseif key == MODULES then entry = self:BuildModules()
+		elseif key == INVITE then entry = self:BuildInvite()
 		else
 			local plug = self.entries[key]
 			if plug and plug.build then

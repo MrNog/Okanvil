@@ -13,8 +13,25 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
--- Modules is a list of on/off switches -- configuration, which is what Settings
--- is for. It had its own nav row purely because it predated the Settings tabs.
+-- Modules is its own nav entry under TOOLS. It was a Settings pill, which read
+-- as configuration -- but this is not a setting, it is what the addon HAS, and
+-- somebody looking for a feature they remember will not think to open Settings.
+function Okanvil:BuildModules()
+	local fill = newFillPanel()
+	local host = fill.child
+
+	local dash = W.Dashboard(host, {
+		title = "Modules",
+		icon = Okanvil.ICONS.modules or "Interface\\Icons\\INV_Misc_Gear_01",
+		drawerWidth = 0,
+		footerHeight = 0,
+	})
+	self:Settings_Modules(dash.main)
+	return fill
+end
+
+-- The list itself. Still callable on any panel, so the page above and anything
+-- else that wants it draw the same thing.
 function Okanvil:Settings_Modules(panel)
 	local X = 4
 	local p = panel
@@ -32,7 +49,11 @@ function Okanvil:Settings_Modules(panel)
 		-- and the nav use.
 		local items = {}
 		for _, m in ipairs(Okanvil.NATIVE) do
-			items[#items + 1] = { key = m.key, title = m.title, icon = m.icon, desc = m.desc }
+			-- `core` modules have no switch: they are part of a page rather than a
+			-- feature you turn on, and listing them only offers a way to break it.
+			if not m.core then
+				items[#items + 1] = { key = m.key, title = m.title, icon = m.icon, desc = m.desc }
+			end
 		end
 		local names = {}
 		for name in pairs(Okanvil.entries) do names[#names + 1] = name end
