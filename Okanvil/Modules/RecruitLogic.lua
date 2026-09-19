@@ -58,11 +58,37 @@ function RecruitLogic.matchList(msg, list)
 	return false
 end
 
+-- Which auto-reply rule answers this whisper? Rules are tried in order and the
+-- FIRST match wins -- two rules matching one whisper send one reply, not two, and
+-- the order in the list is the tie-break you control.
+--
+-- A rule with no keywords of its own answers the SAME words that trigger an
+-- invite (db.keywords). There used to be a second keyword box per rule, seeded
+-- from db.keywords, so the identical list sat in two places that had to be kept
+-- in step by hand -- and when they drifted, the reply stopped going to people
+-- who were still being invited.
+-- Returns the rule and its index, or nil.
+function RecruitLogic.matchReply(db, msg)
+	for i, r in ipairs(db.replies or {}) do
+		local kw = (r.keywords and r.keywords ~= "") and r.keywords or db.keywords
+		if r.enabled ~= false and r.text and r.text ~= ""
+			and RecruitLogic.matchList(msg, kw) then
+			return r, i
+		end
+	end
+	return nil
+end
+
 -- Pure decision: what should happen for one whisper?
---   db  = config (keywords, reply, afkReply, afkMode, autoInvite,
---                 replyCooldown, inviteCooldown, blacklist)
---   ctx = { known=bool, now=number, lastInvite=num|nil, lastReply=num|nil, isEcho=bool }
--- returns { invite=bool, reply=string|nil }
+--   db  = config (keywords, replies, autoInvite, repliesNeedActive,
+--                 repliesSkipGroup, replyCooldown, inviteCooldown, blacklist)
+--   ctx = { known=bool, now=number, lastInvite=num|nil, lastReply=num|nil,
+--           isEcho=bool, active=bool, inGroup=bool }
+-- returns { invite=bool, reply=string|nil, ruleIndex=number|nil }
+--
+-- Invite and reply are decided INDEPENDENTLY: answering "what's the discord?"
+-- must not drag a guild invite along with it, and inviting someone who only said
+-- "inv" must not require a reply rule to exist.
 function RecruitLogic.decide(db, msg, ctx)
 	local out = { invite = false, reply = nil }
 	if ctx.isEcho or ctx.known then
@@ -73,20 +99,30 @@ function RecruitLogic.decide(db, msg, ctx)
 	if db.blacklist and db.blacklist ~= "" and RecruitLogic.matchList(msg, db.blacklist) then
 		return out
 	end
-	if not db.autoInvite then
-		return out
-	end
-	if not RecruitLogic.matchList(msg, db.keywords) then
-		return out
-	end
-	if ctx.lastInvite and (ctx.now - ctx.lastInvite) <= (db.inviteCooldown or 300) then
-		return out -- on invite cooldown: do nothing
+
+	-- ---- invite ----
+	if db.autoInvite and RecruitLogic.matchList(msg, db.keywords) then
+		if not (ctx.lastInvite and (ctx.now - ctx.lastInvite) <= (db.inviteCooldown or 300)) then
+			out.invite = true
+		end
 	end
 
-	out.invite = true
-	local text = (db.afkMode and db.afkReply ~= "") and db.afkReply or db.reply
-	if text and text ~= "" and (not ctx.lastReply or (ctx.now - ctx.lastReply) > (db.replyCooldown or 600)) then
-		out.reply = text
+	-- ---- reply ----
+	-- Two guards, both independent of the invite. The group one is what keeps the
+	-- Discord link from going out to a pug who asks for it mid-raid.
+	local repliesOk = true
+	if db.repliesNeedActive ~= false and not ctx.active then
+		repliesOk = false
+	end
+	if db.repliesSkipGroup ~= false and ctx.inGroup then
+		repliesOk = false
+	end
+	if repliesOk and not (ctx.lastReply and (ctx.now - ctx.lastReply) <= (db.replyCooldown or 600)) then
+		local rule, idx = RecruitLogic.matchReply(db, msg)
+		if rule then
+			out.reply = rule.text
+			out.ruleIndex = idx
+		end
 	end
 	return out
 end

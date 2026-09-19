@@ -135,17 +135,29 @@ local function buildTopStrip(p)
 	F.gsBox = W.EditBox(p):Size(56, 22):Point("TOPLEFT", 398, -4)
 	F.gsBox.edit:SetScript("OnTextChanged", function(s) d.gs = s:GetText() or ""; M.RefreshPreview() end)
 
-	-- The "note" box is gone from the strip. Everything it used to carry is said
-	-- by a control that means it -- reserves by the Reserve row, gs by min gs --
-	-- and a free-text tail is the kind of field that is filled once and then
-	-- silently appended to every line for the rest of the night. d.note is still
-	-- honoured by the message builder, so an old profile keeps its text.
+	-- A free-text tail, back on the strip.
+	--
+	-- It was taken off on the grounds that every ask has its own control. That
+	-- was wrong for the things no control covers -- "Gbid DC", "link achieve",
+	-- "no dc" -- and the only way left to say them was hand-editing the line,
+	-- which Rebuild then threw away along with the edit.
+	--
+	-- Living in db.note means the builder appends it to every generated line, so
+	-- Rebuild keeps it and Send carries it.
+	local noteLbl = W.Text(p, "say", "label", "dim")
+	noteLbl:SetPoint("TOPLEFT", 462, -9)
+	F.noteBox = W.EditBox(p):Size(120, 22):Point("TOPLEFT", 486, -4)
+	F.noteBox.edit:SetScript("OnTextChanged", function(s)
+		d.note = s:GetText() or ""
+		M.RefreshPreview()
+	end)
+	F.noteBox:Tooltip("Tacked onto the end of every line -- \"Gbid DC\", \"link achieve\".\nSurvives Rebuild, unlike editing the line by hand.")
 
 	-- Read everyone's actual spec instead of guessing from class. Without this the
 	-- board files every paladin the same way and the leader sorts 25 people by hand,
 	-- remembering who heals. Explicit button, not automatic: inspecting the whole
 	-- raid is a burst of server traffic and should happen when asked for.
-	F.scanBtn = W.Button(p, "Read specs", nil):Size(96, 22):Point("TOPLEFT", 470, -4)
+	F.scanBtn = W.Button(p, "Read specs", nil):Size(96, 22):Point("TOPLEFT", 616, -4)
 	F.scanBtn:OnClick(function()
 		local I = Okanvil.Inspect
 		if not (I and I.ScanGroup) then
@@ -192,13 +204,20 @@ end
 -- right-click drops it back to Unassigned.
 -- Assignments live in db.assign, so a /reload mid-forming keeps the comp.
 -- ------------------------------------------------------------
-local COLS = { "unassigned", "tank", "healer", "melee", "ranged" }
--- "Applicants", not "Unassigned": the column used to be permanently empty --
--- everyone already in the group has a role -- and it is where the people who
--- whisper you land, which is the one thing it is actually for.
+-- Four columns, one per role. There used to be a fifth -- "Applicants" -- for
+-- people who whispered but had not been invited yet. It went with the whisper
+-- catching: the board is about the raid you HAVE, and who wants in is a
+-- conversation that belongs in the chat frame.
+local COLS = { "tank", "healer", "melee", "ranged" }
 local COL_TITLE = {
-	unassigned = "Applicants", tank = "Tank", healer = "Healer",
-	melee = "Melee", ranged = "Ranged",
+	tank = "Tank", healer = "Healer", melee = "Melee", ranged = "Ranged",
+}
+
+-- Where to PARK a hybrid whose spec nobody has read. Not a claim about what they
+-- play -- the board marks these rows as guesses and leaves them out of the
+-- counts -- just somewhere to show them while you press Read specs.
+local HYBRID_PARK = {
+	DRUID = "ranged", SHAMAN = "ranged", PRIEST = "ranged", PALADIN = "melee",
 }
 
 -- ------------------------------------------------------------
@@ -296,17 +315,12 @@ local function buildBoard(p)
 		head:SetHeight(24)
 
 		local rgb = ROLE_RGB[key]
-		local title = W.Text(head, COL_TITLE[key], "body", key == "unassigned" and "dim" or nil)
+		local title = W.Text(head, COL_TITLE[key], "body")
 		title:SetPoint("LEFT", 6, 0)
 		if rgb then title:SetTextColor(rgb[1], rgb[2], rgb[3]) end
 
 		local cnt, minus, plus
-		if key == "unassigned" then
-			-- Applicants has no target -- you take who turns up -- so it shows a plain
-			-- count and no stepper.
-			cnt = W.Text(head, "", "label", "dim")
-			cnt:SetPoint("RIGHT", -6, 0)
-		else
+		do
 			plus = W.Button(head, "+", nil):Size(18, 16)
 			plus:SetPoint("RIGHT", -4, 0)
 			minus = W.Button(head, "-", nil):Size(18, 16)
@@ -391,19 +405,7 @@ local function buildBoard(p)
 					drag.justDropped = nil
 					return
 				end
-				-- An APPLICANT is not on the board yet, so cycling their role would be
-				-- assigning a slot to someone who has not been invited. Left-click
-				-- invites them; right-click drops them off the list.
-				if self._pending then
-					-- Left opens the conversation: before inviting a stranger you read
-					-- what they actually wrote. Right invites outright, for when the
-					-- line already told you everything.
-					if button == "RightButton" then
-						M.InviteApplicant(self._name)
-					else
-						M.Msg_Open(self._name)
-					end
-				elseif button == "RightButton" then
+				if button == "RightButton" then
 					M.Assign(self._name, nil)
 				else
 					M.CycleRole(self._name)
@@ -1043,39 +1045,40 @@ function M.RefreshUI()
 		F.diffBtn:SetKind((canHC and d.hc) and "primary" or nil)
 	end
 	if F.gsBox and not F.gsBox.edit:HasFocus() then F.gsBox.edit:SetText(d.gs or "") end
+	if F.noteBox and not F.noteBox.edit:HasFocus() then F.noteBox.edit:SetText(d.note or "") end
 
 	-- ---- roster + board ----
 	local list = M.RosterList()
 	local have = {}
 	for _, r in ipairs(ROLES) do have[r] = 0 end
-	local buckets = { unassigned = {} }
+	local buckets = {}
 	for _, r in ipairs(ROLES) do buckets[r] = {} end
 
-	local inGroup = {}
 	for _, pl in ipairs(list) do
-		inGroup[pl.name] = true
 		-- A HAND placement always wins -- that is the leader's decision and nothing
 		-- may undo it. Failing that, use what the inspect read: reading specs and
 		-- then leaving everyone where they were is the scan doing half its job.
 		local assigned = M.AssignedRole(pl.name) or M.GuessRole(pl.name, pl.class)
-		local key = assigned or "unassigned"
-		if buckets[key] then
-			buckets[key][#buckets[key] + 1] = pl
-		end
-		if assigned then have[assigned] = (have[assigned] or 0) + 1 end
-	end
 
-	-- APPLICANTS. Whoever whispered and is not in the group yet goes in the first
-	-- column -- which is what it is for, and why it was renamed. It used to sit
-	-- permanently empty, because anyone already in the group has a role.
-	--
-	-- `pending` marks them so a row can be drawn differently and clicking one can
-	-- invite rather than just move it between columns.
-	for _, a in ipairs(M.ApplicantList and M.ApplicantList() or {}) do
-		if not inGroup[a.name] then
-			buckets.unassigned[#buckets.unassigned + 1] = {
-				name = a.name, class = a.class, online = true, pending = true,
-			}
+		-- A hybrid nobody has inspected has no role at all now. Rather than drop
+		-- them off the board, park them in the column their class most often
+		-- plays and MARK it -- an uninspected resto shaman sitting silently in
+		-- Ranged is how "4 Heal" went out while three healers were in the raid.
+		local guessed = false
+		if not assigned then
+			assigned = HYBRID_PARK[pl.class or ""] or "ranged"
+			guessed = true
+		elseif not M.RoleIsKnown(pl.name, pl.class) then
+			guessed = true
+		end
+
+		if buckets[assigned] then
+			pl.guessed = guessed
+			buckets[assigned][#buckets[assigned] + 1] = pl
+			-- A guess does NOT count toward the role's tally: the LFM line is
+			-- built from these numbers, and advertising for four healers you
+			-- already have is worse than advertising for none.
+			if not guessed then have[assigned] = (have[assigned] or 0) + 1 end
 		end
 	end
 
@@ -1091,12 +1094,19 @@ function M.RefreshUI()
 					row._sub = pl.class or nil
 					local txt = class_color(pl.class) .. pl.name .. "|r"
 					if pl.online == false then txt = "|cff5a5a5a" .. pl.name .. "|r" end
+					-- A guessed row is flagged in the name itself: this column is
+					-- where the class usually plays, not where this player does.
+					if pl.guessed then txt = txt .. " |cffe0b860?|r" end
 					row.text:SetText(txt)
 					-- Second line: what they are and how geared, from whichever source
 					-- knows -- an inspect if we have one, otherwise whatever they said
 					-- in their whisper. Blank when neither knows, rather than padded
 					-- with "unknown".
-					row.sub:SetText("|cff8a8d93" .. (M.SubLabel and M.SubLabel(pl.name) or "") .. "|r")
+					local sub = M.SubLabel and M.SubLabel(pl.name) or ""
+					if pl.guessed and sub == "" then
+						sub = "|cffe0b860spec not read|r"
+					end
+					row.sub:SetText("|cff8a8d93" .. sub .. "|r")
 					-- A pending applicant gets a gold edge: it is the difference between
 					-- someone you HAVE and someone you could invite, and the two sit in
 					-- the same board.
@@ -1132,14 +1142,12 @@ function M.RefreshUI()
 				end
 			end
 			local n = #members
-			-- "1/8" for a role, a plain count for Applicants: a target you never set
-			-- would be a slash with nothing after it.
-			if key == "unassigned" then
-				col.count:SetText(n > 0 and tostring(n) or "")
-			else
-				local want = tonumber(d.need[key]) or 0
-				col.count:SetText((have[key] or 0) .. "|cff8a8d93/" .. want .. "|r")
-			end
+			local want = tonumber(d.need[key]) or 0
+			-- Count the rows we are ACTUALLY drawing, not a parallel tally. The
+			-- header used to say "6/8" over five names, because `have` and the
+			-- column were filled by different rules -- one counted the whole
+			-- roster, the other only what fit in a column.
+			col.count:SetText(n .. "|cff8a8d93/" .. want .. "|r")
 			-- The column scrolls, so "+N more" is only for what BOARD_ROWS itself
 			-- cannot hold -- the pooled rows are the hard limit, not the height.
 			local overflow = n - BOARD_ROWS
@@ -1229,21 +1237,15 @@ function M.BuildUI(parent)
 
 	local dash = W.Dashboard(parent, {
 		title = "PuG",
-		icon = "Interface\\Icons\\INV_Misc_GroupLooking",
+		icon = "Interface\\Icons\\Ability_Warrior_RallyingCry",
 		drawerWidth = 0,          -- one full-width page; the board needs the room
 		footerHeight = 0,
 		primaryText = function() return M.IsActive() and "STOP spamming" or "START spamming" end,
 		primaryKind = function() return M.IsActive() and "primary" or "secondary" end,
 		onPrimary = function() M.Toggle(); M.RefreshUI() end,
-		-- Opens the Messages window beside this one. The count is people waiting on
-		-- a reply, so the button says whether there is anything to go and read.
-		secondaryText = function()
-			local n = M.UnreadCount and M.UnreadCount() or 0
-			return n > 0 and ("Messages (" .. n .. ")") or "Messages"
-		end,
-		secondaryWidth = 110,
-		secondaryShown = function() return true end,
-		onSecondary = function() if M.Msg_Toggle then M.Msg_Toggle() end end,
+		-- No Messages button. Whispers from people wanting in are read in the chat
+		-- frame, where every other whisper already is -- a second inbox for the
+		-- same messages was one more place to look, not one fewer.
 		statusText = function()
 			if M.IsActive() then return "|cff7cfc8aSpamming ON|r" end
 			return "|cffff5555Spamming OFF|r"
@@ -1260,18 +1262,6 @@ function M.BuildUI(parent)
 		},
 	})
 	F.dash = dash
-
-	-- A whisper arriving has to move the unread count on the Messages button even
-	-- when nothing else about the page changed. Dashboard:Refresh() re-reads every
-	-- text callback, which is the cheapest correct way to do that.
-	M.RefreshMsgBtn = function() if F and F.dash then F.dash:Refresh() end end
-
-	-- Messages belongs to THIS page. Switching to Loot or Home hides the panel, and
-	-- the floating window has to go with it -- otherwise it hangs beside a page it
-	-- has nothing to do with, with no button in sight to close it.
-	parent:HookScript("OnHide", function()
-		if M.Msg_IsShown and M.Msg_IsShown() then M.Msg_Toggle() end
-	end)
 
 	-- The single page is stacked inside dash.main: top strip, needs, board, bottom.
 	local main = dash.main
