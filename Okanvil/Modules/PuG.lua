@@ -46,7 +46,9 @@ local defaults = {
 	applicants = {},
 	assign = {},             -- [name] = "tank"/"healer"/"melee"/"ranged"; the leader's
 	                         -- board. Persisted so a /reload mid-forming keeps the comp.
-	autoGroup = true,        -- move people into their role's raid group as they accept
+	assignSpec = {},         -- [name] = the spec they had when you placed them, so a
+	                         -- respec can expire the placement instead of outliving it
+	autoGroup = true,        -- seat joiners who land outside the raid's groups
 	wantRole = "tank",       -- which role's classes the Want row is showing right now
 	classRun = false,        -- VoA-style "one of each class" instead of role targets
 	classPer = 1,            -- how many of each class a class run wants
@@ -117,11 +119,20 @@ local CAN_HEAL = { PRIEST = true, DRUID = true, PALADIN = true, SHAMAN = true }
 -- Where a class lands with NO other information. Only the unambiguous ones are
 -- listed: a rogue is always melee, a mage always ranged. Hybrids are deliberately
 -- absent -- the leader clicks those into place, which is the whole point of the board.
+-- Where to put someone whose spec we could NOT read.
+--
+-- Only the classes that can play one role are listed. A rogue is melee whatever
+-- they specced; a druid could be a bear, a cat, a boomkin or a tree, and a
+-- shaman or paladin is no better -- so those are left out and the board says it
+-- does not know rather than guessing.
+--
+-- Guessing is what put resto shamans in Ranged and holy paladins in Melee: the
+-- default was stated as confidently as a real inspect, and the leader had no
+-- way to see which rows were facts and which were coin flips.
 local CLASS_DEFAULT = {
 	ROGUE   = "melee",  WARRIOR = "melee",  DEATHKNIGHT = "melee",
 	MAGE    = "ranged", WARLOCK = "ranged", HUNTER      = "ranged",
-	PRIEST  = "ranged", SHAMAN  = "ranged", DRUID       = "ranged",
-	PALADIN = "melee",
+	-- PRIEST, SHAMAN, DRUID, PALADIN: hybrids. No default worth having.
 }
 
 -- Melee or ranged for a DPS spec. The board splits dps two ways, but a talent
@@ -188,7 +199,10 @@ end
 --   3. what they said in their own whisper ("bdk 5.8k")
 --   4. the class default, which cannot tell a holy paladin from a ret
 function M.GuessRole(name, class)
-	if name and db.assign[name] then return db.assign[name] end
+	-- Through AssignedRole, not db.assign directly: a placement made before a
+	-- respec no longer counts, and that test lives there.
+	local byHand = name and M.AssignedRole(name)
+	if byHand then return byHand end
 
 	local bySpec = name and specRole(name, class)
 	if bySpec then return bySpec end
@@ -196,31 +210,88 @@ function M.GuessRole(name, class)
 	local a = name and db.applicants[name]
 	if a and a.role then return a.role end
 
-	return (class and CLASS_DEFAULT[class]) or "ranged"
+	-- A hybrid we could not inspect has no default (see CLASS_DEFAULT), so this
+	-- can be nil. Callers must handle that: the board marks the row as a guess
+	-- rather than filing a resto shaman under Ranged and calling it a fact.
+	return class and CLASS_DEFAULT[class] or nil
+end
+
+-- Did we actually READ this, or is the board guessing? The row is drawn
+-- differently for the two, because "Ranged 7/10" means nothing if three of the
+-- seven are coin flips.
+function M.RoleIsKnown(name, class)
+	if not name then return false end
+	if M.AssignedRole(name) then return true end     -- placed by hand: a decision
+	if specRole(name, class) then return true end    -- inspected
+	local a = db.applicants[name]
+	return (a and a.role) ~= nil                     -- they told us themselves
 end
 
 -- Put a player in a bucket (nil = back to Unassigned).
+--
+-- The SPEC they had at the time is remembered alongside the choice. A manual
+-- placement outranks the inspect, which is right -- but only while it is about
+-- the same character: someone placed as a healer who then respecs to ret is not
+-- a healer any more, and the board has no business insisting otherwise.
 function M.Assign(name, role)
 	if not name then return end
 	db.assign[name] = role
+	db.assignSpec = db.assignSpec or {}
+	if role == nil then
+		db.assignSpec[name] = nil
+	else
+		local I = Okanvil.Inspect
+		local spec = I and I.Get and select(1, I.Get(name))
+		db.assignSpec[name] = spec or ""   -- "" = placed before we knew a spec
+	end
 end
 
+-- The hand placement, if it still applies. Dropped once the player's spec no
+-- longer matches the one they had when you placed them.
 function M.AssignedRole(name)
-	return name and db.assign[name] or nil
+	if not name then return nil end
+	local role = db.assign[name]
+	if not role then return nil end
+
+	db.assignSpec = db.assignSpec or {}
+	local placedAt = db.assignSpec[name]
+	local I = Okanvil.Inspect
+	local now = I and I.Get and select(1, I.Get(name))
+
+	-- No remembered spec: either the placement predates this bookkeeping, or it
+	-- was made before anyone had been inspected. Adopt whatever we know now and
+	-- keep the placement -- the point is to catch a CHANGE, and there is nothing
+	-- yet to compare against.
+	if placedAt == nil or placedAt == "" then
+		if now then db.assignSpec[name] = now end
+		return role
+	end
+
+	if now and now ~= placedAt then
+		-- They respecced. Forget the placement and let the spec speak.
+		db.assign[name] = nil
+		db.assignSpec[name] = nil
+		return nil
+	end
+	return role
 end
 
 -- Click cycles: Unassigned -> tank -> healer -> melee -> ranged -> Unassigned.
+--
+-- Goes through Assign rather than writing db.assign, so every placement records
+-- the spec it was made against -- otherwise a click here would outlive a respec
+-- exactly the way a drag used to.
 function M.CycleRole(name)
 	if not name then return end
 	local cur = db.assign[name]
-	if not cur then db.assign[name] = ROLES[1]; return end
+	if not cur then M.Assign(name, ROLES[1]); return end
 	for i, r in ipairs(ROLES) do
 		if r == cur then
-			db.assign[name] = ROLES[i + 1]   -- nil past the end = Unassigned
+			M.Assign(name, ROLES[i + 1])     -- nil past the end = Unassigned
 			return
 		end
 	end
-	db.assign[name] = nil
+	M.Assign(name, nil)
 end
 
 -- Everyone in the group right now: { name=, class=, role=, online= }, in raid order.
@@ -290,7 +361,7 @@ local function assignedCounts()
 	local have = {}
 	for _, r in ipairs(ROLES) do have[r] = 0 end
 	for _, p in ipairs(M.RosterList()) do
-		local a = db.assign[p.name]
+		local a = M.AssignedRole(p.name)      -- honours the respec check
 		if a and have[a] then have[a] = have[a] + 1 end
 	end
 	return have
@@ -736,7 +807,10 @@ M.SendTo = sendTo
 -- "rs", and "prot" before "pro". Each entry is { pattern, role, label }.
 local SPEC_WORDS = {
 	-- tanks
-	{ "blood%s*dk",   "tank",   "Blood DK"  }, { "bdk",        "tank",   "Blood DK"  },
+	-- "bdk" is frontier-anchored. Unanchored it matched inside any word that
+	-- happened to contain those letters, and an abbreviation that short turns up
+	-- in names and in the middle of sentences.
+	{ "blood%s*dk",   "tank",   "Blood DK"  }, { "%f[%w]bdk%f[%W]", "tank", "Blood DK" },
 	{ "prot%s*pal",   "tank",   "Prot Pala" }, { "ppal",       "tank",   "Prot Pala" },
 	{ "prot%s*warr",  "tank",   "Prot Warr" }, { "pwar",       "tank",   "Prot Warr" },
 	{ "prot",         "tank",   "Prot"      }, { "bear",       "tank",   "Bear"      },
@@ -809,10 +883,23 @@ M.ParseGS = parseGS
 local function classify(msg, class)
 	local low = (msg or ""):lower()
 	local role, spec
+
+	-- Take the LONGEST match, not the first one in the table.
+	--
+	-- Stopping at the first hit made the table's order the real rule, so a word
+	-- sitting near the top beat a more specific one further down: an Unholy DK
+	-- who wrote anything containing "blood" was filed as a Blood tank, because
+	-- the tank block is listed first. Length is a decent proxy for specificity
+	-- -- "blood dk" beats "dk", "resto sham" beats "resto" -- and it does not
+	-- depend on anyone maintaining the order by hand.
+	local bestLen = -1
 	for _, e in ipairs(SPEC_WORDS) do
-		if low:find(e[1]) then
-			role, spec = e[2], e[3]
-			break
+		local s, fin = low:find(e[1])
+		if s then
+			local len = fin - s + 1
+			if len > bestLen then
+				bestLen, role, spec = len, e[2], e[3]
+			end
 		end
 	end
 	-- No usable spec word (or a bare "dps"): the class decides the bucket, but only
@@ -827,73 +914,15 @@ local function classify(msg, class)
 end
 M.Classify = classify
 
--- Record (or update) an applicant. Returns the row.
--- Lines kept per conversation. Enough to see how an exchange went; not so many
--- that a night of pugging bloats the saved file.
-local MAX_LOG_LINES = 30
-
-local function addApplicant(name, msg, guid)
-	local class
-	if guid and GetPlayerInfoByGUID then
-		local _, token = GetPlayerInfoByGUID(guid)
-		class = token
-	end
-	local a = db.applicants[name]
-	if not a then
-		a = { name = name, t = time(), invited = false }
-		db.applicants[name] = a
-	end
-	local role, spec, gs = classify(msg, class or a.class)
-	a.class = class or a.class
-	a.role  = role or a.role
-	a.spec  = spec or a.spec
-	a.gs    = gs or a.gs
-	a.msg   = msg
-	a.t     = time()
-	-- Keep the CONVERSATION, not just the last line: the messages window shows
-	-- what was said on both sides, and "5.2" three messages later only means
-	-- anything next to the "whats your gs?" it answers.
-	a.log = a.log or {}
-	a.log[#a.log + 1] = { them = true, msg = msg, t = a.t }
-	while #a.log > MAX_LOG_LINES do table.remove(a.log, 1) end
-	a.unread = (a.unread or 0) + 1
-	return a
-end
-
--- Record something WE sent, so the window reads as a conversation rather than a
--- list of their lines with our replies missing.
-function M.LogOutgoing(name, msg)
-	if not (name and msg and msg ~= "") then return end
-	local a = db.applicants[name]
-	if not a then return end
-	a.log = a.log or {}
-	a.log[#a.log + 1] = { them = false, msg = msg, t = time() }
-	while #a.log > MAX_LOG_LINES do table.remove(a.log, 1) end
-end
-
--- Send a whisper AND log it. One call so a reply can never land in the chat
--- without showing up in the window that sent it.
-function M.Whisper(name, msg)
-	if not (name and msg and msg ~= "") then return false end
-	SendChatMessage(msg, "WHISPER", nil, name)
-	M.LogOutgoing(name, msg)
-	return true
-end
-
-function M.MarkRead(name)
-	local a = db.applicants[name]
-	if a then a.unread = 0 end
-end
-
--- Applicants, newest conversation first -- the list in the window is ordered by
--- who spoke last, the way any messages app is.
-function M.ApplicantList()
-	local out = {}
-	for _, a in pairs(db.applicants or {}) do out[#out + 1] = a end
-	table.sort(out, function(x, y) return (x.t or 0) > (y.t or 0) end)
-	return out
-end
-M.AddApplicant = addApplicant
+-- No applicant list and no conversation log.
+--
+-- Whispers from people wanting in are read in the chat frame, where every other
+-- whisper already is. The Messages window that used to hold them was a second
+-- inbox for the same text: one more place to check, rather than one fewer.
+--
+-- `db.applicants` survives as a table because the spec parser still files what
+-- it learns from a whisper there (see classify / GuessRole) -- that is a cache
+-- of "this name said they were a Ret paladin", not a queue of people waiting.
 
 -- Role tints, the same four the board columns use, so a spec on a row and the
 -- column it belongs in are the same colour.
@@ -974,26 +1003,10 @@ function M.SubLabel(name)
 	return table.concat(bits, "  ")
 end
 
-function M.RemoveApplicant(name)
-	db.applicants[name] = nil
-end
-
+-- Clear the spec cache. Not a list of people any more -- just what past
+-- whispers said about each name -- but it is still worth being able to empty.
 function M.ClearApplicants()
 	db.applicants = {}
-end
-
--- Applicants as a sorted array (newest first) for the UI to walk.
-function M.ApplicantList()
-	local out = {}
-	for _, a in pairs(db.applicants) do out[#out + 1] = a end
-	table.sort(out, function(x, y) return (x.t or 0) > (y.t or 0) end)
-	return out
-end
-
-function M.InviteApplicant(name)
-	if InviteUnit then InviteUnit(name) end
-	local a = db.applicants[name]
-	if a then a.invited = true end
 end
 
 -- ------------------------------------------------------------
@@ -1010,6 +1023,14 @@ local SPAM_EVERY = 60
 
 core:SetScript("OnUpdate", function(self, e)
 	if not db or not db.active then return end
+	-- Disabled means disabled, in the loudest place it could fail to.
+	--
+	-- The OnEvent handler on this same frame gates properly; this one was left
+	-- checking db.active alone, so switching the module off in Modules did not
+	-- stop the advertiser -- it kept posting LFM lines to General, Global, the
+	-- custom channel and guild chat. Public output, from a module the user
+	-- believes is off.
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 	local msg = outgoing()
 	if msg == "" then return end
 
@@ -1148,7 +1169,7 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		Okanvil_Plugins[ADDON] = {
 			title = "PuG",
 			desc = "Build a raid: pick the instance, the roles you need, and spam the LFM line. Whispers become an invite list.",
-			icon = "Interface\\Icons\\INV_Misc_GroupLooking",
+			icon = "Interface\\Icons\\Ability_Warrior_RallyingCry",
 			build = function(panel) M.BuildUI(panel) end,
 			refresh = function() if M.RefreshUI then M.RefreshUI() end end,
 		}
@@ -1167,15 +1188,32 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 		-- Only act while forming. Off-hours whispers are just chat.
 		if not db.active then return end
-		-- Applicants are always collected while forming: there IS a window to show
-		-- them in now, and a whisper you did not catch is a raider you did not see.
+
+		-- Whispers are no longer collected into an applicant list. They are read
+		-- in the chat frame like every other whisper -- a second inbox for the
+		-- same messages was one more place to look, not one fewer.
+		--
+		-- What IS still worth keeping is what the line tells us about the person:
+		-- "ret pala 5.4" names a spec and a gearscore, and when they accept the
+		-- invite the board can label their row before any inspect comes back.
 		local msg, sender = arg1, stripRealm(arg2)
 		if not sender then return end
-		-- CHAT_MSG_* args: 1 msg, 2 sender, ... 11 guid. We already consumed the
-		-- first two, so the GUID is the 9th of the rest.
-		local guid = select(9, ...)
-		addApplicant(sender, msg, guid)
-		if M.onApplicant then M.onApplicant(sender) end
+		do
+			local class
+			local guid = select(9, ...)
+			if guid and GetPlayerInfoByGUID then
+				class = select(2, GetPlayerInfoByGUID(guid))
+			end
+			local a = db.applicants[sender] or { name = sender }
+			local role, spec, gs = classify(msg, class or a.class)
+			a.class = class or a.class
+			a.role, a.spec, a.gs = role or a.role, spec or a.spec, gs or a.gs
+			a.t = time()
+			db.applicants[sender] = a
+		end
+
+		-- The auto-reply stays: answering "what gs?" twenty times a night is work
+		-- worth handing to the addon, and it needs no list to do it.
 		if db.autoReply and db.replyText ~= "" then
 			local last = replied[sender]
 			if not last or (time() - last) > 60 then
@@ -1198,16 +1236,15 @@ end)
 -- for RAID_ROSTER_UPDATE rather than happening at invite time.
 -- ------------------------------------------------------------
 
--- Which groups each role owns. The WotLK standard: a group each for tanks and
--- healers, two each for melee and ranged -- that holds 2-3 tanks, 5-6 healers,
--- and up to 10 of each dps flavour in a 25.
-local ROLE_GROUPS = {
-	tank   = { 1 },
-	healer = { 2 },
-	melee  = { 3, 4 },
-	ranged = { 5, 6 },
-}
-M.ROLE_GROUPS = ROLE_GROUPS
+-- NO role-to-group map.
+--
+-- This used to own the comp: tanks to group 1, healers to 2, melee 3-4, ranged
+-- 5-6. It fought the raid leader -- you arrange the groups for buffs and
+-- assignments, the addon shoves someone back because their spec says "ranged",
+-- and the board you built comes apart as people join.
+--
+-- A joiner just needs A seat. Ordering is the leader's call, made once when the
+-- raid is full, and nothing here should undo it.
 
 -- Only ever move people when it is OUR raid to arrange. Never reshuffle someone
 -- else's group.
@@ -1240,28 +1277,34 @@ local function groupCount(g)
 	return c
 end
 
--- The group this role wants: the first of its groups with room. Returns nil when
--- the role's groups are all full, so we leave the player alone rather than
--- pushing them somewhere arbitrary.
-local function groupForRole(role)
-	local list = ROLE_GROUPS[role]
-	if not list then return nil end
-	for _, g in ipairs(list) do
+-- The first group with a free seat, lowest first, within the raid's real size:
+-- a 10-man has 2 groups, not 8, and filling group 5 of a ToC10 puts someone
+-- outside the raid entirely.
+local function firstOpenGroup()
+	local size = (db.size == 10) and 2 or 5
+	for g = 1, size do
 		if groupCount(g) < 5 then return g end
 	end
 	return nil
 end
-M.GroupForRole = groupForRole
+M.FirstOpenGroup = firstOpenGroup
 
--- Move ONE raider into their role's group. Returns true when it actually moved.
-local function placeOne(name, role)
+-- Seat ONE raider. Only ever moves someone who landed OUTSIDE the raid's
+-- groups -- a 25-man joiner dropped into group 6+, or a 10-man one into 3+.
+--
+-- Anyone already sitting in a valid group is left exactly where they are, role
+-- or no role. Ordering the comp is the leader's job; this only makes sure
+-- nobody is stranded where the raid frame will not show them.
+local function placeOne(name)
 	if not canArrange() then return false end
-	role = role or M.GuessRole(name)
-	local want = groupForRole(role)
-	if not want then return false end
 	local idx, cur = raidIndexOf(name)
 	if not idx then return false end          -- not in the raid (yet)
-	if cur == want then return false end      -- already where they belong
+
+	local size = (db.size == 10) and 2 or 5
+	if cur and cur <= size then return false end   -- already seated; hands off
+
+	local want = firstOpenGroup()
+	if not want or cur == want then return false end
 	if not SetRaidSubgroup then return false end
 	SetRaidSubgroup(idx, want)
 	return true
@@ -1270,6 +1313,8 @@ M.PlaceOne = placeOne
 
 -- Everyone we have a role for, in one pass. Safe to run repeatedly: anyone
 -- already in the right group is skipped.
+-- Pull in anyone stranded outside the raid's groups. It does NOT reorder the
+-- comp: everyone already seated stays put, whatever their role.
 function M.ArrangeRaid()
 	if not canArrange() then
 		Print("Not in a raid you lead -- nothing to arrange.")
@@ -1278,21 +1323,22 @@ function M.ArrangeRaid()
 	local n = (GetNumRaidMembers and GetNumRaidMembers()) or 0
 	local moved = 0
 	for i = 1, n do
-		local rn, _, _, _, _, class = GetRaidRosterInfo(i)
-		if rn then
-			-- GuessRole honours a manual board placement first, so arranging can
-			-- never undo a decision the leader made by hand.
-			if placeOne(rn, M.GuessRole(rn, class and class:upper())) then
-				moved = moved + 1
-			end
-		end
+		local rn = GetRaidRosterInfo(i)
+		if rn and placeOne(rn) then moved = moved + 1 end
 	end
-	Print("Arranged " .. moved .. " raider(s) into their role groups.")
+	if moved > 0 then
+		Print("Seated " .. moved .. " raider(s) who were outside the raid's groups.")
+	else
+		Print("Everyone already has a seat.")
+	end
 	return moved
 end
 
--- As people accept, place them. Only newly-seen names are touched, so someone
--- the leader moved by hand is not dragged back on the next roster event.
+-- As people accept, make sure they have a seat -- nothing more.
+--
+-- placeOne leaves anyone already inside the raid's groups alone, so this cannot
+-- undo the leader's arrangement. The `seenInRaid` guard stays anyway: without
+-- it a full raid would re-walk the roster on every roster event for nothing.
 local seenInRaid = {}
 local aev = CreateFrame("Frame")
 aev:RegisterEvent("RAID_ROSTER_UPDATE")
@@ -1303,12 +1349,12 @@ aev:SetScript("OnEvent", function()
 	local n = (GetNumRaidMembers and GetNumRaidMembers()) or 0
 	local present = {}
 	for i = 1, n do
-		local rn, _, _, _, _, class = GetRaidRosterInfo(i)
+		local rn = GetRaidRosterInfo(i)
 		if rn then
 			present[rn] = true
 			if not seenInRaid[rn] then
 				seenInRaid[rn] = true
-				placeOne(rn, M.GuessRole(rn, class and class:upper()))
+				placeOne(rn)
 			end
 		end
 	end
@@ -1323,6 +1369,13 @@ end)
 -- ------------------------------------------------------------
 SLASH_OKPUG1 = "/pug"
 SlashCmdList["OKPUG"] = function(arg)
+	-- A slash command is a door into the module like any other. /pug start
+	-- reached the advertiser directly, so the switch in Modules could be
+	-- bypassed by typing six characters.
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then
+		Okanvil:Print("|cff8a8d93The PuG module is switched off.|r")
+		return
+	end
 	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
 	if arg == "start" then M.Start()
 	elseif arg == "stop" then M.Stop()

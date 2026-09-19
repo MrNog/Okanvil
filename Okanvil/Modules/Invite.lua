@@ -631,7 +631,6 @@ end)
 -- not looking at it. This puts the one action you want in front of you instead:
 -- somebody worth inviting logs in, a small panel says so, you click Invite.
 --
--- Gated to the ranks that raid so a 108-member guild does not toast all night.
 -- ------------------------------------------------------------
 local loginToast          -- built on first use
 local toastQueue = {}     -- names waiting; one panel shows them in turn
@@ -640,31 +639,7 @@ local function toastDB()
 	local iv = Okanvil.db and Okanvil.db.invite
 	if not iv then return nil end
 	if iv.loginToast == nil then iv.loginToast = true end
-	if iv.loginToastRanks == nil then
-		-- Default to this guild's LOWEST rank -- the newest members, whatever they
-		-- are called here. It used to default to "sewer", which is one guild's word
-		-- and matched nothing anywhere else.
-		local low = Okanvil.U and Okanvil.U.lowestRankIndex and Okanvil.U.lowestRankIndex()
-		local name = low and Okanvil.U.rankName and Okanvil.U.rankName(low)
-		-- left nil until the roster can answer, so the real name is stored rather
-		-- than a placeholder that would stick
-		if name and name ~= "" and not name:find("^Rank %d") then iv.loginToastRanks = name end
-	end
 	return iv
-end
-
--- Does this rank deserve a toast? Matched on the rank NAME, like everywhere else
--- in the addon, so renaming a rank in game does not silently switch it off.
-local function rankWanted(rankName)
-	local iv = toastDB()
-	if not iv then return false end
-	local want = (iv.loginToastRanks or ""):lower()
-	if want == "" then return false end
-	local rn = (rankName or ""):lower()
-	for w in want:gmatch("[^%s,;]+") do
-		if rn:find(w, 1, true) then return true end
-	end
-	return false
 end
 
 local function buildLoginToast()
@@ -748,18 +723,10 @@ end
 function Okanvil.Invite_LoginToast(name, rankName, classFile)
 	local iv = toastDB()
 	if not iv or not iv.loginToast then return end
-	-- An ALT is ranked "Alt", not by what its owner is, so a filter naming a real
-	-- rank never matched one and the alts of the very people you want to invite
-	-- logged in silently. Judge an alt by its MAIN's rank instead.
-	local judged = rankName
-	if Okanvil.U and Okanvil.U.mainOf then
-		local main = Okanvil.U.mainOf(name)
-		if main then
-			local mr = Okanvil.U.guildRankOf(main)
-			if mr and Okanvil.U.rankName then judged = Okanvil.U.rankName(mr) end
-		end
-	end
-	if not rankWanted(judged) then return end
+	if not name or name == "" then return end
+	-- Never toast yourself, whoever calls this. The caller checks too, but this
+	-- is a global anyone can reach, and "invite yourself" is never right.
+	if name == ((UnitName("player") or ""):gsub("%-.*$", "")) then return end
 	-- already queued or showing? do not stack the same person twice
 	for _, e in ipairs(toastQueue) do
 		if e.name == name then return end
@@ -783,6 +750,7 @@ gev:SetScript("OnEvent", function()
 	-- guards below: that feature is retired (autoLoginList is force-cleared on
 	-- load), so anything gated on it never runs.
 	local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
+	local me = (UnitName("player") or ""):gsub("%-.*$", "")
 	local online = {}
 	for i = 1, total do
 		local name, rank, _, _, class, _, _, _, isOn = GetGuildRosterInfo(i)
@@ -792,7 +760,12 @@ gev:SetScript("OnEvent", function()
 			-- offline -> online, and a rank we care about: prompt to invite them.
 			-- wasOnline[n] == false means we have SEEN them offline; nil means this
 			-- is the first roster read, which would otherwise toast the whole guild.
-			if isOn and wasOnline[n] == false then
+			--
+			-- Never yourself. Your own character reads as offline in the first
+			-- roster the server sends and online in the next, so logging in -- or
+			-- any /reload -- popped a toast offering to invite you to your own
+			-- group.
+			if isOn and wasOnline[n] == false and n ~= me then
 				Okanvil.Invite_LoginToast(n, rank, class and class:upper())
 			end
 		end
@@ -825,6 +798,10 @@ end)
 local rev = CreateFrame("Frame")
 rev:RegisterEvent("RAID_ROSTER_UPDATE")
 rev:SetScript("OnEvent", function()
+	-- The other two event frames in this file gate; this one did not, so a
+	-- disabled Invite still MOVED people between raid groups -- a visible action
+	-- taken on other players by a module the user switched off.
+	if not module_on() then return end
 	local iv = Okanvil.db and Okanvil.db.invite
 	if not iv or not iv.autoAssign or not activeComp then return end
 	if (GetNumRaidMembers and GetNumRaidMembers() or 0) == 0 then return end

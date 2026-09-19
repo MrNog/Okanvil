@@ -644,6 +644,56 @@ function P.BuildTab(p)
 		r.ibg:SetPoint("TOPLEFT", r.icon, -1, 1)
 		r.ibg:SetPoint("BOTTOMRIGHT", r.icon, 1, -1)
 
+		-- The real in-game tooltip over the icon and the name, so the stats can be
+		-- read without alt-tabbing to a database site. An invisible button rather
+		-- than the row itself: the row carries a Send button, and a tooltip that
+		-- followed the whole row would sit over it.
+		r.hover = CreateFrame("Button", nil, r)
+		r.hover:SetPoint("TOPLEFT", 0, 0)
+		r.hover:SetPoint("BOTTOMLEFT", 0, 0)
+		r.hover:SetWidth(iconSz() + 14 + 220)
+		r.hover:SetScript("OnEnter", function(self)
+			local rec = self:GetParent()._rec
+			if not rec then return end
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			-- By ID when we have one: GetItemInfo only answers for items already in
+			-- the client's cache, and SetHyperlink on an id makes the server fetch
+			-- it. A name alone silently shows nothing for anything never looted.
+			local id = rec.id
+			-- The import only carries an id when the hub exported one. Failing
+			-- that, look the name up in the ID Finder's own index -- twelve
+			-- thousand items the addon already ships -- and cache what it finds on
+			-- the record so the next hover is immediate.
+			if not id and rec.n and Okanvil.IDs and Okanvil.IDs.FindItem then
+				local hits = Okanvil.IDs.FindItem(rec.n, 1)
+				local hit = hits and hits[1]
+				if hit and hit.name and hit.name:lower() == rec.n:lower() then
+					id = hit.id
+					rec.id = id
+				end
+			end
+
+			if id then
+				GameTooltip:SetHyperlink("item:" .. id)
+			else
+				local link = rec.n and select(2, GetItemInfo(rec.n))
+				if link then
+					GameTooltip:SetHyperlink(link)
+				else
+					-- Neither an id nor a cached name: say what it is rather than
+					-- showing an empty frame that reads as a broken tooltip.
+					GameTooltip:AddLine(rec.n or "?", 0.64, 0.21, 0.93)
+					if rec.bo and rec.bo ~= "" then
+						GameTooltip:AddLine(rec.bo, 0.55, 0.55, 0.58)
+					end
+					GameTooltip:AddLine("Stats unavailable -- this item is not in the"
+						.. " client's cache yet.", 0.5, 0.5, 0.5, true)
+				end
+			end
+			GameTooltip:Show()
+		end)
+		r.hover:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
 		-- Reserved gets a gold bar down the left edge: the council's calls are
 		-- findable at a glance without reading a star into every row.
 		r.bar = r:CreateTexture(nil, "ARTWORK")
@@ -864,6 +914,10 @@ local Comms = Okanvil.Comms
 -- READ the list, but a toon that is not an officer never sends one, and never
 -- accepts one over the list its owner imported by hand.
 local function syncAllowed()
+	-- The priority list belongs to the Loot module, which is where its page and
+	-- its switch live. This checked rank only, so an officer who had switched
+	-- Loot off still broadcast and accepted prio lists over addon messages.
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive("__loot") then return false end
 	return Okanvil.U and Okanvil.U.isOfficer and Okanvil.U.isOfficer(UnitName("player"))
 end
 

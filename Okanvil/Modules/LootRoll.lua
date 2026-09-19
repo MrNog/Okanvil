@@ -1404,25 +1404,54 @@ local function mlChanged()
 	end
 end
 
+-- This file has no plugin key of its own: the roll manager is part of the Loot
+-- module, so it answers to the same switch. Without this it announced master
+-- looter changes in chat and kept its callbacks live with Loot switched off --
+-- a module that has no nav row is easy to forget when the gate goes in.
+local function lootOn()
+	return not (Okanvil.ModuleActive and not Okanvil:ModuleActive("__loot"))
+end
+
 ev:SetScript("OnEvent", function(_, event)
-	if event ~= "PLAYER_LOGIN" then mlChanged(); return end
+	-- PLAYER_LOGIN still runs with the module off: it only WIRES the callbacks,
+	-- and each of them checks the gate when it fires. Skipping it would leave
+	-- the roll manager permanently dead for anyone who enabled Loot later in
+	-- the session.
+	if event ~= "PLAYER_LOGIN" then
+		if lootOn() then mlChanged() end
+		return
+	end
 	if not Okanvil.Loot then return end
 	L = Okanvil.Loot
 	lastML = isML()
 	lastMethod = isMLMethod()
-	-- chain onto Loot's callbacks without clobbering them
+	-- chain onto Loot's callbacks without clobbering them. Each checks the gate
+	-- as it fires, so the chain can be wired once at login and still stay quiet
+	-- while the module is off.
 	local prevLoot = L.onLoot
-	L.onLoot = function() if prevLoot then prevLoot() end; onLoot() end
-	L.onRoll = function() RM.OnRollOpen() end
+	L.onLoot = function() if prevLoot then prevLoot() end; if lootOn() then onLoot() end end
+	L.onRoll = function() if lootOn() then RM.OnRollOpen() end end
 	-- a roll just STARTED on an item id -> page to it and select it (no tab hunting)
-	L.onRollStart = function(id) local ok, err = pcall(RM.SelectItemById, id)
-		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SelectItemById", err) end end
+	L.onRollStart = function(id)
+		if not lootOn() then return end
+		local ok, err = pcall(RM.SelectItemById, id)
+		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SelectItemById", err) end
+	end
 	-- fired the instant a loot window opens with items (RaidRoll / RCLootCouncil
 	-- model) -- pop the mini roll even if the item is filtered from recording, and
 	-- regardless of the InLiveRun timing race (we KNOW a corpse is open).
 	local prevWin = L.onLootWindow
-	L.onLootWindow = function() if prevWin then prevWin() end; RM.OnLootWindow() end
+	L.onLootWindow = function()
+		if prevWin then prevWin() end
+		if lootOn() then RM.OnLootWindow() end
+	end
 end)
 
 SLASH_OKROLL1 = "/okroll"
-SlashCmdList["OKROLL"] = function() RM.Toggle() end
+SlashCmdList["OKROLL"] = function()
+	if not lootOn() then
+		Okanvil:Print("|cff8a8d93The Loot module is switched off.|r")
+		return
+	end
+	RM.Toggle()
+end
