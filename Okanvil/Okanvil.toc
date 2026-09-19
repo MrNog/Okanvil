@@ -3,7 +3,7 @@
 ## Notes: Raid & guild toolkit -- forged by Okanor. The void in your stack trace.
 ## Author: Okanor
 ## Version: 1.2.1
-## SavedVariables: Okanvil_DB, RecruitDB, OkanvilIDsDB, OkanvilRaidFinderDB, OkanvilBugDB, OkanvilPuGDB
+## SavedVariables: Okanvil_DB, RecruitDB, OkanvilIDsDB, OkanvilRaidFinderDB, OkanvilBugDB, OkanvilPuGDB, OkanvilNotesDB
 ## SavedVariablesPerCharacter: OkanvilLogsDB, Okanvil_CharDB
 
 Libs\LibStub\LibStub.lua
@@ -42,7 +42,11 @@ Modules\RaidFinder-Mini.lua
 Modules\Raids-Data.lua
 Modules\RaidLoot-Data.lua
 Modules\PuG.lua
-Modules\PuG-Msg.lua
 Modules\PuG-UI.lua
+Modules\Notes-Data.lua
+Modules\Notes.lua
+Modules\NotesParse.lua
+Modules\NotesWindow.lua
+Modules\NotesSync.lua
 Modules\Farm.lua
 Modules\Farm-UI.lua
