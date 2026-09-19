@@ -267,32 +267,43 @@ local function buildMessages(p, y0)
 	wc:SetPoint("TOPLEFT", X, wy)
 	wy = wy - 26
 
+	-- Same width as the three announce templates above it, rather than stretched
+	-- to the panel's right edge. A box twice the length of anything anyone types
+	-- into it reads as asking for a paragraph.
 	local web = W.EditBox(p, function(t) L.SetWhisperMsg(t) end)
-	web:SetHeight(24); web:SetPoint("TOPLEFT", X + 21, wy); web:SetPoint("RIGHT", -X, 0)
+	web:SetHeight(24)
+	web:SetPoint("TOPLEFT", X + 21, wy)
+	-- Ends where the announce boxes above it end (they start at X+66 and run 360),
+	-- so the right edges of every text field on this page line up.
+	web:SetWidth(405)
 	web.edit:SetText(L.WhisperMsg() or "")
-	-- An empty box with the switch on sends nothing, which is the state the
-	-- screenshot caught. Say so where the box is, not in a line underneath.
+
+	-- The "nothing to send" warning sits BESIDE the box, not over it. Printed
+	-- inside the edit area it looked like text already typed in -- red characters
+	-- sharing the line with the cursor, which reads as a bad value rather than an
+	-- empty one.
 	local wph = W.Text(p, "", "note", "dim")
-	wph:SetPoint("LEFT", web, "LEFT", 8, 0)
+	wph:SetPoint("LEFT", web, "RIGHT", 10, 0)
 	p._paintWhisper = function()
 		local on = L.WhisperWinner()
 		local txt = web.edit:GetText() or ""
 		web:SetAlpha(on and 1 or 0.4)
-		if not on then
-			wph:SetText("")
-		elseif txt == "" then
-			wph:SetText("|cffff5555nothing to send -- type the message here|r")
+		if on and txt == "" then
+			wph:SetText("|cffff5555nothing to send|r")
 		else
 			wph:SetText("")
 		end
 	end
 	web.edit:HookScript("OnTextChanged", function() p._paintWhisper() end)
 	p._paintWhisper()
-	wy = wy - 22
+
+	-- Room between the box and its note: at 22 they touched, and the hint read as
+	-- part of the field.
+	wy = wy - 32
 	local whh = W.Text(p, "|cff6f7176sent when the boss loot window has already closed|r", "note", "dim")
 	whh:SetPoint("TOPLEFT", X + 21, wy)
 
-	return wy - 26
+	return wy - 30
 end
 
 -- ---- History (landing/main): sessions accordion with an internal-scroll detail
@@ -402,7 +413,20 @@ end
 
 function Okanvil:Loot_BuildSettings(p)
 	local db = self.db
-	local ll = W.Text(p, "Log items of quality", "label", "dim"); ll:SetPoint("TOPLEFT", 8, -8)
+	-- Section headings on this page are dim all-caps notes, the same as
+	-- ANNOUNCE TEMPLATES and ON AWARD below. Three of them were normal-case
+	-- "label" text, so half the page's headings looked like control labels.
+	-- Section headings on this page are dim all-caps notes, the same as
+	-- ANNOUNCE TEMPLATES and ON AWARD below. This block's headings were
+	-- normal-case "label" text, so half the page's headings looked like the
+	-- label of a control rather than the name of a group.
+	--
+	-- The quality dropdown and the two capture checkboxes sit side by side: both
+	-- are narrow, and stacked they used 90px of height for two short controls.
+	local ll = W.Text(p, "CAPTURE", "note", "dim"); ll:SetPoint("TOPLEFT", 8, -8)
+
+	local llx = W.Text(p, "Log items of quality", "label", "dim")
+	llx:SetPoint("TOPLEFT", 8, -32)
 	local RARITY = {
 		{ text = "|cff9d9d9dPoor+|r", value = 0 }, { text = "|cffffffffCommon+|r", value = 1 },
 		{ text = "|cff1eff00Uncommon+|r", value = 2 }, { text = "|cff0070ddRare+|r", value = 3 },
@@ -410,7 +434,7 @@ function Okanvil:Loot_BuildSettings(p)
 	}
 	local lootDD = W.DropDown(p, function() return RARITY end,
 		function() return db.lootThreshold or 3 end, function(v) db.lootThreshold = v end)
-	lootDD:Size(160, 22):Point("TOPLEFT", 8, -26)
+	lootDD:Size(160, 22):Point("TOPLEFT", 8, -50)
 	lootDD.refreshText = function(self)
 		local cur = db.lootThreshold or 3
 		for _, o in ipairs(RARITY) do
@@ -418,16 +442,21 @@ function Okanvil:Loot_BuildSettings(p)
 		end
 	end
 	lootDD:refreshText()
-	local rhint = W.Text(p, "Auto-capture in:", "label", "dim"); rhint:SetPoint("TOPLEFT", 8, -66)
+
+	local rhint = W.Text(p, "Auto-capture in", "label", "dim")
+	rhint:SetPoint("TOPLEFT", 220, -32)
 	local cDun = W.Check(p, "Dungeons",
 		function() return db.recordDungeon ~= false end, function(v) db.recordDungeon = v end)
-	cDun:SetPoint("TOPLEFT", 8, -86)
+	cDun:SetPoint("TOPLEFT", 220, -52)
 	local cRaid = W.Check(p, "Raids",
 		function() return db.recordRaid ~= false end, function(v) db.recordRaid = v end)
-	cRaid:SetPoint("TOPLEFT", 160, -86)
+	cRaid:SetPoint("TOPLEFT", 340, -52)
 
-	-- announce templates: everyone who awards loot needs these
-	buildMessages(p, -122)
+	-- announce templates: everyone who awards loot needs these. It reports where
+	-- it ended, and the next block starts there -- a hard -330 below drifts the
+	-- moment anything above changes height, which is how the whisper box came to
+	-- sit on top of the priority toggle.
+	local y = buildMessages(p, -96)
 
 	-- Everything below is about the priority list, so it is only built for someone
 	-- who can see that list -- to anyone else these are controls for a thing they
@@ -437,11 +466,11 @@ function Okanvil:Loot_BuildSettings(p)
 	-- ---- Priority list ----------------------------------------------------
 	-- Lived as a button on the Prio tab's toolbar, which put a choice nobody
 	-- revisits after the first time in front of the list every single visit.
-	local ph = W.Text(p, "Priority list", "label", "dim"); ph:SetPoint("TOPLEFT", 8, -330)
+	local ph = W.Text(p, "Priority list", "label", "dim"); ph:SetPoint("TOPLEFT", 8, y)
 	local cMulti = W.Check(p, "Send each name on its own line",
 		function() return Okanvil.LootPrio and Okanvil.LootPrio.MultiLine() end,
 		function() if Okanvil.LootPrio then Okanvil.LootPrio.ToggleMultiLine() end end)
-	cMulti:SetPoint("TOPLEFT", 8, -350)
+	cMulti:SetPoint("TOPLEFT", 8, y - 20)
 	cMulti:Tooltip("Off: the item and its ladder go out as one line.\n"
 		.. "On: the item first, then its top names one per line.")
 

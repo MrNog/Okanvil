@@ -34,7 +34,9 @@ function Okanvil:BuildSettings()
 		-- obviously the right one to look in first.
 		pills = true,
 		tabs = {
-			{ key = "general", label = "General",    height = 380,
+			-- Two columns, so this is shorter than it looks: 380 left a third of
+			-- the pill empty below About.
+			{ key = "general", label = "General",    height = 300,
 			  build = function(pg) Okanvil:Settings_General(pg) end },
 			-- loot capture, announce templates and the priority list
 			-- taller for an officer: the priority-list blocks below the announce
@@ -42,16 +44,14 @@ function Okanvil:BuildSettings()
 			{ key = "loot",    label = "Loot",
 			  height = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) and 470 or 320,
 			  build = function(pg) Okanvil:Loot_BuildSettings(pg) end },
-			-- Auto-invite is two toggles and a keyword box. It had a whole nav page
-			-- to itself, next to Loot and Raid Finder, for something you set once.
-			{ key = "invite",  label = "Invite",     height = 360,
-			  build = function(pg) Okanvil:Settings_Invite(pg) end },
-			{ key = "raid",    label = "Raid",       height = 470,
+			-- Two columns: the ready-check popup and the marks bar side by side.
+			{ key = "raid",    label = "Raid",       height = 300,
 			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
-			-- No Advanced pill. It held a dev toggle (which is /okanvil tab) and one
-			-- button, now under ABOUT in General.
-			{ key = "modules", label = "Modules",    height = 600,
-			  build = function(pg) Okanvil:Settings_Modules(pg) end },
+			-- No Invite or Modules pill: both are nav entries now. A module with no
+			-- menu row and its options in Settings is one nobody finds, and Modules
+			-- is not configuration -- it is what the addon has.
+			-- No Advanced pill either. It held a dev toggle (which is /okanvil tab)
+			-- and one button, now under ABOUT in General.
 		},
 	})
 	fill.dash = dash
@@ -92,64 +92,76 @@ function Okanvil:Settings_General(p)
 	-- looked like it belonged to anything.
 	-- NOTE: W.Slider anchors at its BAR, with its label ~5px ABOVE that anchor, so a
 	-- slider needs more room above it than a checkbox does.
-	local y = -8
+	-- Two columns. Every control here is narrow -- a slider, a checkbox, a
+	-- dropdown -- so a single column left the right half of the page empty and
+	-- pushed About below the fold.
+	--
+	-- A section header spans both columns and resets them to the same line, so a
+	-- group never straddles a heading.
+	local COL_W = 250
+	local C1, C2 = X, X + COL_W + 30
+	local y1, y2 = -8, -8
+
+	-- A section spans both columns and resets them to the same line, so a group
+	-- never straddles a heading.
 	local function head(text)
-		local t = W.Text(p, text, "note", "dim"); t:SetPoint("TOPLEFT", X, y)
-		y = y - 26
-		return t
+		local top = math.min(y1, y2) - 14
+		y1 = (W.Section(p, text, C1, top))
+		y2 = y1
 	end
-	local function hint(text, indent)
-		local t = W.Text(p, "|cff6f7176" .. text .. "|r", "note", "dim")
-		t:SetPoint("TOPLEFT", X + (indent or 0), y); y = y - 20
-		return t
+	local function hint(text, col)
+		if col == 2 then
+			y2 = W.Hint(p, text, C2 + 2, y2, COL_W - 10)
+		else
+			y1 = W.Hint(p, text, C1 + 2, y1, COL_W - 10)
+		end
 	end
 
 	head("APPEARANCE")
-	-- Scale is the ONE size control. It scales text, icons, spacing and padding
-	-- together, which is what "make it bigger" actually means -- a font slider
-	-- next to it only stretched text inside boxes that stayed put.
-	-- Up to 1.8: at 1.4 the window was still small on a modern monitor.
-	y = y - 12
-	W.Slider(p, "Window scale", 0.6, 1.8, 0.05, function() return db.scale end,
-		function(v) db.scale = v; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", X, y)
-	y = y - 24
-	hint("text, icons and spacing together", 2)
 
-	-- The art toggle and the art's opacity, together. They were separated by a
-	-- toggle about closing windows, which has nothing to do with either -- and the
-	-- slider does nothing at all while the toggle is off.
-	y = y - 6
+	local SLIDER_TOP = W.SLIDER_TOP
+
+	-- LEFT: size. Scale is the ONE size control -- it scales text, icons, spacing
+	-- and padding together, which is what "make it bigger" actually means.
+	y1 = y1 - SLIDER_TOP
+	W.Slider(p, "Window scale", 0.6, 1.8, 0.05, function() return db.scale end,
+		function(v) db.scale = v; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", C1, y1)
+	y1 = y1 - 22
+	hint("text, icons and spacing together", 1)
+
+	-- RIGHT: the art, its toggle and its opacity as one block. The slider does
+	-- nothing while the toggle is off, so they have to be read together.
 	local showChk = W.Check(p, "Background art",
 		function() return (db.ratArt or "on") ~= "off" end,
 		function(v) db.ratArt = v and "on" or "off"; Okanvil:RefreshRatArt() end)
-	showChk:SetPoint("TOPLEFT", X, y); y = y - 34
+	showChk:SetPoint("TOPLEFT", C2, y2)
+	y2 = y2 - 24 - SLIDER_TOP
 	W.Slider(p, "Art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
-		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, y)
-	y = y - 34
+		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", C2, y2)
+	y2 = y2 - 22
 
+	head("BEHAVIOUR")
 	local pullChk = W.Check(p, "Close all windows on a DBM pull",
 		function() return db.closeOnPull ~= false end,
 		function(v) db.closeOnPull = v end)
-	pullChk:SetPoint("TOPLEFT", X, y); y = y - 22
+	pullChk:SetPoint("TOPLEFT", C1, y1); y1 = y1 - 26
 
 	-- Background opacity and Bar texture used to be here. Both are set once and
 	-- never touched again -- and the addon has almost no status bars for a texture
 	-- to apply to. db.bgAlpha and db.statusbar still drive the panels and
 	-- Okanvil:Texture(); they are just no longer worth a row each.
-	y = y - 20
 	head("FONT")
 	W.DropDown(p, function() return (LSM and LSM:List("font")) or { db.font } end,
 		function() return db.font end, function(v) db.font = v; Okanvil:ApplyFonts() end, "font")
-		:Size(200, 22):Point("TOPLEFT", X, y)
-	y = y - 30
+		:Size(220, 22):Point("TOPLEFT", C1, y1)
+	y1 = y1 - 30
 
 	-- Guild skin and Web hub URL used to sit here too. Both are set on the day a
 	-- guild installs Okanvil and then never again, so they live on /okanvil brand
 	-- and /okanvil hub instead of taking a third of this page.
-	y = y - 20
 	head("ABOUT")
 	local vbtn = W.Button(p, "Version check", "secondary")
-	vbtn:SetSize(140, 24); vbtn:SetPoint("TOPLEFT", X, y)
+	vbtn:SetSize(140, 24); vbtn:SetPoint("TOPLEFT", C1, y1)
 	vbtn:SetScript("OnClick", function() Okanvil:ShowVersionChecker() end)
 	local vh = W.Text(p, "|cff6f7176who in your group or guild runs which Okanvil|r", "note", "dim")
 	vh:SetPoint("LEFT", vbtn, "RIGHT", 10, 0)
@@ -168,23 +180,38 @@ function Okanvil:Settings_RaidTools(p)
 	--
 	-- The setters below must store a REAL boolean, never nil: W.Check toggles by
 	-- inverting what getFn reads, so deleting the key leaves the tick stuck on.
-	local y = -8
+	-- Two columns, one per tool. The ready-check popup and the marks bar are
+	-- independent things you configure once each; stacked they ran off the bottom
+	-- of the pill while the right half of the page stayed empty.
+	-- Wide enough that the explanatory lines fit on ONE line: at 300 every hint
+	-- wrapped, which is what made the left column feel cramped.
+	local COL_W = 380
+	local C1, C2 = X, X + COL_W + 30
+	local col, y1, y2 = 1, -8, -8
+
+	local SLIDER_TOP = W.SLIDER_TOP
+
+	local function cx() return (col == 1) and C1 or C2 end
+	local function cy() return (col == 1) and y1 or y2 end
+	local function setY(v)
+		if col == 1 then y1 = v else y2 = v end
+	end
+	local function step(n) setY(cy() - n) end
+
 	local function head(text)
-		local t = W.Text(p, text, "note", "dim"); t:SetPoint("TOPLEFT", X, y)
-		y = y - 26
-		return t
+		-- The left column's rule stops where the right column starts; the right
+		-- one runs to the page edge.
+		local reach = (col == 1) and (C2 - C1 - 100) or nil
+		setY((W.Section(p, text, cx(), cy(), reach)))
 	end
 	local function chk(label, getFn, setFn, tip)
 		local c = W.Check(p, label, getFn, setFn)
-		c:SetPoint("TOPLEFT", X, y); y = y - 24
+		c:SetPoint("TOPLEFT", cx(), cy()); step(28)
 		if tip then c:Tooltip(tip) end
 		return c
 	end
 	local function hint(text)
-		local t = W.Text(p, "|cff6f7176" .. text .. "|r", "note", "dim")
-		t:SetPoint("TOPLEFT", X + 21, y); t:SetWidth(360); t:SetJustifyH("LEFT")
-		y = y - 20
-		return t
+		setY(W.Hint(p, text, cx() + 21, cy(), COL_W - 30, 8))
 	end
 
 	local RC = Okanvil.RaidCheck
@@ -220,28 +247,26 @@ function Okanvil:Settings_RaidTools(p)
 			end)
 		hint("off: only buffs people actually have are drawn")
 
-		y = y - 6
+		step(6)
 		local rcSortL = W.Text(p, "Sort by", "label", "dim")
-		rcSortL:SetPoint("TOPLEFT", X, y + 4)
+		rcSortL:SetPoint("TOPLEFT", cx(), cy() + 4)
 		W.DropDown(p,
 			function() return RC.SORTS or { "group", "class", "name" } end,
 			function() return rcdb().sort or "group" end,
 			function(v) rcdb().sort = v; if RC.RenderToast then RC:RenderToast() end end)
-			:Size(130, 22):Point("TOPLEFT", X + 60, y + 6)
-		y = y - 32
+			:Size(130, 22):Point("TOPLEFT", cx() + 60, cy() + 6)
+		step(30 + SLIDER_TOP)
 
-		-- W.Slider anchors at its BAR and prints its label ABOVE -- hence the gap.
-		y = y - 14
 		W.Slider(p, "Size", 70, 160, 5,
 			function() return rcdb().scale or 100 end,
 			function(v)
 				rcdb().scale = v
 				if RC.SetToastScale then RC:SetToastScale(v) end
-			end):SetPoint("TOPLEFT", X, y)
+			end):SetPoint("TOPLEFT", cx(), cy())
 		local rcTest = W.Button(p, "Preview")
-		rcTest:SetSize(90, 22); rcTest:SetPoint("TOPLEFT", X + 250, y - 2)
+		rcTest:SetSize(90, 22); rcTest:SetPoint("TOPLEFT", cx() + 210, cy() - 4)
 		rcTest:SetScript("OnClick", function() if RC.ShowToast then RC:ShowToast(true) end end)
-		y = y - 26
+		step(26)
 	end
 
 	local MB = Okanvil.MarksBar
@@ -251,24 +276,26 @@ function Okanvil:Settings_RaidTools(p)
 			return db.marksbar
 		end
 
-		y = y - 20
+		-- Second column: a separate tool, not a continuation of the one above.
+		col = 2
 		head("MARKS BAR")
 		chk("Show the marks bar",
 			function() return mbdb().enabled and true or false end,
 			function(v) if MB.Toggle then MB:Toggle(v and true or false) end end)
 		hint("marks, ready check and pull -- only while you are leader or assist")
 
-		y = y - 14
+		step(SLIDER_TOP)
 		W.Slider(p, "Size", 70, 160, 5,
 			function() return mbdb().scale or 100 end,
 			function(v)
 				mbdb().scale = v
 				if MB.Refresh then MB:Refresh() end
-			end):SetPoint("TOPLEFT", X, y)
-		y = y - 46
+			end):SetPoint("TOPLEFT", cx(), cy())
+		step(24 + SLIDER_TOP)
 		W.Slider(p, "Pull timer (seconds)", 3, 30, 1,
 			function() return mbdb().pullTime or 10 end,
-			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", X, y)
+			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", cx(), cy())
+		step(24)
 	end
 
 	-- No COMBAT LOG block. Logging starts by itself at the first pull and the REC
@@ -398,6 +425,41 @@ end
 -- plus a mass-invite-by-rank block that went unused, because inviting is faster
 -- from the per-row buttons on Home.
 -- ------------------------------------------------------------
+-- Invite as its own nav entry under GUILD. It was a module with no menu row and
+-- its options inside Settings, which meant the only way to find it was to
+-- already know it existed.
+function Okanvil:BuildInvite()
+	local fill = newFillPanel()
+	local host = fill.child
+
+	-- The master switch lives in the header, where every other page puts its one
+	-- real action. It used to be the first thing in the body, under a label, so
+	-- the single most important state on the page -- is auto-invite running? --
+	-- read as just another setting in the list.
+	local I = Okanvil.Invite
+	local dash
+	dash = W.Dashboard(host, {
+		title = "Invite",
+		icon = Okanvil.ICONS.invite,
+		drawerWidth = 0,
+		footerHeight = 0,
+		primaryText = function()
+			if not I then return "Auto-Invite: OFF" end
+			return I.KeywordEnabled() and "Auto-Invite: ON" or "Auto-Invite: OFF"
+		end,
+		primaryKind = function()
+			return (I and I.KeywordEnabled()) and "primary" or "secondary"
+		end,
+		onPrimary = function()
+			if not I then return end
+			I.SetKeywordEnabled(not I.KeywordEnabled())
+			if dash then dash:Refresh() end
+		end,
+	})
+	self:Settings_Invite(dash.main)
+	return fill
+end
+
 function Okanvil:Settings_Invite(p)
 	local I = Okanvil.Invite
 	local X = 14
@@ -407,41 +469,27 @@ function Okanvil:Settings_Invite(p)
 		return
 	end
 
-	local hdr = W.Text(p, "AUTO-INVITE", "note", "dim"); hdr:SetPoint("TOPLEFT", X, -10)
-
-	-- master switch: OFF means nobody is pulled in by a keyword, whatever the
-	-- channel toggles below say
-	local master = W.Button(p, "", "primary")
-	master:SetSize(150, 24); master:SetPoint("TOPLEFT", X, -28)
-	local function syncMaster()
-		local on = I.KeywordEnabled()
-		if master.text then master.text:SetText(on and "Auto-Invite: ON" or "Auto-Invite: OFF") end
-		master:SetKind(on and "primary" or nil)
-	end
-	master:SetScript("OnClick", function()
-		I.SetKeywordEnabled(not I.KeywordEnabled())
-		syncMaster()
-	end)
-	syncMaster()
-
+	-- The ON/OFF switch and its "AUTO-INVITE" label are gone from here: the switch
+	-- is the header CTA now, which is where every other page keeps its one real
+	-- action, and a label for a control that is no longer below it was noise.
 	local warn = W.Text(p, "|cff8a8d93Can't run with Recruit (shared keyword) -- enabling one disables the other.|r", "note", "dim")
-	warn:SetPoint("TOPLEFT", X, -58); warn:SetWidth(420); warn:SetJustifyH("LEFT")
+	warn:SetPoint("TOPLEFT", X, -10); warn:SetWidth(420); warn:SetJustifyH("LEFT")
 
 	local wChk = W.Check(p, "On whisper", function() return I.db().whisperInvite end,
 		function(v) I.db().whisperInvite = v end)
-	wChk:SetPoint("TOPLEFT", X, -80)
+	wChk:SetPoint("TOPLEFT", X, -32)
 	local gChk = W.Check(p, "On guild chat", function() return I.db().guildInvite end,
 		function(v) I.db().guildInvite = v end)
 	gChk:SetPoint("LEFT", wChk, "LEFT", 165, 0)
 
-	local kwLbl = W.Text(p, "KEYWORDS", "note", "dim"); kwLbl:SetPoint("TOPLEFT", X, -114)
+	local kwLbl = W.Text(p, "KEYWORDS", "note", "dim"); kwLbl:SetPoint("TOPLEFT", X, -66)
 
 	-- Live preview. Matching is WHOLE WORD, which is right ("reinvite" must not
 	-- trigger) but not obvious: "inv" alone does NOT match "invite", so the most
 	-- natural thing a person types was being ignored. Showing what does and does
 	-- not match means never having to guess again.
 	local preview = W.Text(p, "", "note", "dim")
-	preview:SetPoint("TOPLEFT", X, -168); preview:SetWidth(430); preview:SetJustifyH("LEFT")
+	preview:SetPoint("TOPLEFT", X, -120); preview:SetWidth(430); preview:SetJustifyH("LEFT")
 
 	local SAMPLES = { "inv", "invite", "+", "inv pls", "invite me", "reinvite" }
 	local function refreshPreview(text)
@@ -462,7 +510,7 @@ function Okanvil:Settings_Invite(p)
 	end
 
 	local kwBox = W.EditBox(p, function(t) I.db().keyword = t or ""; refreshPreview(t) end)
-	kwBox:Size(300, 22); kwBox:SetPoint("TOPLEFT", X, -134)
+	kwBox:Size(300, 22); kwBox:SetPoint("TOPLEFT", X, -86)
 	kwBox.edit:SetText(I.db().keyword or "inv, invite, +")
 	kwBox.edit:SetScript("OnTextChanged", function(s) refreshPreview(s:GetText()) end)
 
@@ -472,24 +520,18 @@ function Okanvil:Settings_Invite(p)
 	refreshPreview(kwBox.edit:GetText())
 
 	-- ---- login toast ----
-	local ltLbl = W.Text(p, "LOGIN TOAST", "note", "dim"); ltLbl:SetPoint("TOPLEFT", X, -206)
+	--
+	-- One switch, no rank filter. The filter box narrowed the toast to named
+	-- ranks, which is a setting nobody reaches for: you either want to know when
+	-- guildies log in or you do not, and the checkbox already says which. Leaving
+	-- the box there made the page look like it had a decision in it that it did
+	-- not.
+	local ltLbl = W.Text(p, "LOGIN TOAST", "note", "dim"); ltLbl:SetPoint("TOPLEFT", X, -158)
 	local ltChk = W.Check(p, "Pop a toast when someone logs in, with an Invite button",
 		function() return I.db().loginToast ~= false end,
 		function(v) I.db().loginToast = v and true or false end)
-	ltChk:SetPoint("TOPLEFT", X, -226)
+	ltChk:SetPoint("TOPLEFT", X, -178)
 
-	local ltRanks = W.EditBox(p, function(t) I.db().loginToastRanks = t or "" end)
-	ltRanks:Size(200, 22); ltRanks:SetPoint("TOPLEFT", X, -252)
-	ltRanks.edit:SetText(I.db().loginToastRanks or "")
-	-- The example uses THIS guild's lowest rank, read from the roster. It used to
-	-- name ours ("sewer", "raider"), which is meaningless in any other guild.
-	local egRank = "the rank name"
-	if Okanvil.U and Okanvil.U.lowestRankIndex then
-		local low = Okanvil.U.lowestRankIndex()
-		local nm = low and Okanvil.U.rankName(low)
-		if nm and nm ~= "" and not nm:find("^Rank %d") then egRank = "\"" .. nm .. "\"" end
-	end
-	local ltHint = W.Text(p, "which ranks to toast -- part of the rank name, comma-separated\n(e.g. "
-		.. egRank .. "). Empty = nobody.", "note", "dim")
-	ltHint:SetPoint("LEFT", ltRanks, "RIGHT", 10, 0); ltHint:SetJustifyH("LEFT")
+	local ltHint = W.Text(p, "Shown for everyone in the guild.", "note", "dim")
+	ltHint:SetPoint("TOPLEFT", X, -202); ltHint:SetJustifyH("LEFT")
 end

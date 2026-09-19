@@ -147,7 +147,21 @@ Okanvil.Mod = Mod
 -- is what lets a tip carry a short explanation and not just a label.
 local function tipEnter(self)
 	if not self._tip then return end
-	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+	-- Anchor by where there is room, not by a fixed side. A tall tip on a button
+	-- near the top of the screen grows past the edge with ANCHOR_RIGHT, because
+	-- the tooltip hangs DOWN from the anchor and the client then shoves the whole
+	-- thing up and off-screen. Picking the corner nearest the middle keeps it in.
+	local cx, cy = self:GetCenter()
+	local sw, sh = UIParent:GetWidth(), UIParent:GetHeight()
+	local anchor = "ANCHOR_RIGHT"
+	if cx and cy then
+		local right = cx < sw / 2
+		local down  = cy > sh / 2
+		anchor = right and (down and "ANCHOR_BOTTOMRIGHT" or "ANCHOR_RIGHT")
+			or (down and "ANCHOR_LEFT" or "ANCHOR_LEFT")
+	end
+	GameTooltip:SetOwner(self, anchor)
+	if GameTooltip.SetClampedToScreen then GameTooltip:SetClampedToScreen(true) end
 	for line in (tostring(self._tip) .. "\n"):gmatch("(.-)\n") do
 		if line == "" then
 			GameTooltip:AddLine(" ")            -- blank spacer line
@@ -192,6 +206,64 @@ function W.Text(parent, text, size, role)
 	function fs:Justify(h) fs:SetJustifyH(h); return fs end
 	return fs
 end
+
+-- ------------------------------------------------------------
+-- Hint: the dim explanatory line under a control.
+--
+--   local y = W.Hint(parent, "what this does", x, y, width)
+--
+-- Returns the NEXT y, stepped by the height the text actually took. That return
+-- is the whole point of the widget: every page that laid a hint out by hand
+-- stepped a flat 18 or 20px, so a hint that wrapped to two lines ran into the
+-- control below it -- the same bug, written three separate times.
+--
+-- Give it a real width. Without one a FontString does not wrap at all, it just
+-- runs off the panel.
+-- ------------------------------------------------------------
+function W.Hint(parent, text, x, y, width, gap)
+	local t = W.Text(parent, "|cff6f7176" .. (text or "") .. "|r", "note", "dim")
+	t:SetPoint("TOPLEFT", x, y)
+	if width then t:SetWidth(width) end
+	t:SetJustifyH("LEFT")
+	if t.SetWordWrap then t:SetWordWrap(true) end
+	local h = (t:GetStringHeight() or 0)
+	return y - math.max(18, h + (gap or 6)), t
+end
+
+-- ------------------------------------------------------------
+-- Section heading: dim all-caps label with a hairline to the right edge.
+--
+--   local y = W.Section(parent, "APPEARANCE", x, y)          -- to the parent's right
+--   local y = W.Section(parent, "READY CHECK", x, y, 360)    -- fixed reach
+--
+-- One definition of what a section looks like, so a page cannot end up with
+-- half its headings in all-caps notes and the other half in normal-case labels
+-- -- which is exactly what Settings and the Loot page had drifted into.
+-- ------------------------------------------------------------
+function W.Section(parent, text, x, y, reach)
+	local t = W.Text(parent, text, "note", "dim")
+	t:SetPoint("TOPLEFT", x, y)
+	local rule = parent:CreateTexture(nil, "ARTWORK")
+	rule:SetTexture("Interface\\Buttons\\WHITE8x8")
+	rule:SetVertexColor(C.border[1], C.border[2], C.border[3], 1)
+	rule:SetHeight(1)
+	rule:SetPoint("LEFT", t, "RIGHT", 8, 0)
+	if reach then
+		rule:SetWidth(reach)
+	else
+		rule:SetPoint("RIGHT", parent, "RIGHT", -10, 0)
+	end
+	return y - 26, t
+end
+
+-- ------------------------------------------------------------
+-- How much clear space a slider needs ABOVE its anchor point.
+--
+-- W.Slider anchors at its BAR and paints its label above that, so anchoring one
+-- directly under a heading prints the label over the heading. Pages used to
+-- carry their own magic number for this, or forget it.
+-- ------------------------------------------------------------
+W.SLIDER_TOP = 20
 
 -- ------------------------------------------------------------
 -- Button. kind:
@@ -328,6 +400,8 @@ function W.EditBox(parent, onEnter)
 	e:SetPoint("BOTTOMRIGHT", -6, 1)
 	e:SetAutoFocus(false)
 	e:SetFontObject(GameFontHighlightSmall)
+	-- A caller that needs bigger text sets box:SetTextSize(n) after building --
+	-- the note editor is read as much as it is typed in.
 	local fp = Okanvil:Font()
 	e:SetFont(fp, 12)                 -- fixed size: the box height is fixed, so the
 	e:SetTextColor(unpack3(C.text))   -- global font slider must not overflow it
@@ -341,6 +415,12 @@ function W.EditBox(parent, onEnter)
 	box.edit = e
 	function box:Size(w, h) box:SetSize(w, h); return box end
 	function box:Point(...) box:SetPoint(...); return box end
+	-- Per-box override of the fixed 12: a box you READ as much as you type in
+	-- wants bigger text than a one-line field.
+	function box:SetTextSize(px)
+		e:SetFont(Okanvil:Font(), px or 12)
+		return box
+	end
 	return box
 end
 
@@ -357,6 +437,8 @@ function W.MultiEdit(parent, onDone)
 	e:SetMultiLine(true)
 	e:SetAutoFocus(false)
 	e:SetFontObject(GameFontHighlightSmall)
+	-- A caller that needs bigger text sets box:SetTextSize(n) after building --
+	-- the note editor is read as much as it is typed in.
 	local fp = Okanvil:Font()
 	e:SetFont(fp, 12)                 -- fixed size: the box height is fixed, so the
 	e:SetTextColor(unpack3(C.text))   -- global font slider must not overflow it
@@ -397,6 +479,12 @@ function W.MultiEdit(parent, onDone)
 	function box:GetText() return e:GetText() end
 	function box:Size(w, h) box:SetSize(w, h); return box end
 	function box:Point(...) box:SetPoint(...); return box end
+	-- Per-box override of the fixed 12: a box you READ as much as you type in
+	-- wants bigger text than a one-line field.
+	function box:SetTextSize(px)
+		e:SetFont(Okanvil:Font(), px or 12)
+		return box
+	end
 	return box
 end
 
@@ -570,6 +658,8 @@ end
 --     title = "Recruit", icon = "Interface\\Icons\\...",
 --     primaryText = fn() -> "START advertising",  -- header CTA label
 --     onPrimary   = fn(),                          -- header CTA click
+--     onSecondary / onTertiary = fn(),             -- extra header buttons, right to left
+--     secondaryText / tertiaryText = fn() -> "",   -- their labels (live)
 --     statusText  = fn() -> "|cff..Advertising OFF|r",
 --     tabs = { {key=, label=, build=fn(page)}, ... },  -- config overlays
 --     drawerWidth = 168, footerHeight = 26,
@@ -629,10 +719,26 @@ function W.Dashboard(parent, cfg)
 		cta2:SetScript("OnClick", function() cfg.onSecondary() end)
 		D.cta2 = cta2
 	end
+	-- optional third header button, left of the secondary. Same contract as
+	-- cta2: a module with three header actions (do it / share it / check it)
+	-- should not have to hide the third one on a config tab nobody opens.
+	local cta3
+	if cfg.onTertiary then
+		cta3 = W.Button(header, cfg.tertiaryText and cfg.tertiaryText() or "", "secondary")
+		cta3:SetSize(cfg.tertiaryWidth or 120, 22)
+		if cta2 then cta3:SetPoint("RIGHT", cta2, "LEFT", -6, 0)
+		elseif cta then cta3:SetPoint("RIGHT", cta, "LEFT", -6, 0)
+		else cta3:SetPoint("RIGHT", -10, 0) end
+		cta3:SetScript("OnClick", function() cfg.onTertiary() end)
+		if cfg.tertiaryTip then cta3:Tooltip(cfg.tertiaryTip) end
+		D.cta3 = cta3
+	end
+
 	-- header status text (between title and CTA)
 	local status = W.Text(header, "", nil, "dim")
 	status:SetJustifyH("RIGHT")
-	if cta2 then status:SetPoint("RIGHT", cta2, "LEFT", -10, 0)
+	if cta3 then status:SetPoint("RIGHT", cta3, "LEFT", -10, 0)
+	elseif cta2 then status:SetPoint("RIGHT", cta2, "LEFT", -10, 0)
 	elseif cta then status:SetPoint("RIGHT", cta, "LEFT", -10, 0)
 	else status:SetPoint("RIGHT", -8, 0) end
 	status:SetPoint("LEFT", htitle, "RIGHT", 10, 0)
@@ -858,6 +964,12 @@ function W.Dashboard(parent, cfg)
 				if cfg.secondaryShown() then cta2:Show() else cta2:Hide() end
 			end
 		end
+		if cta3 then
+			if cfg.tertiaryText then cta3.text:SetText(cfg.tertiaryText()) end
+			if cfg.tertiaryShown then
+				if cfg.tertiaryShown() then cta3:Show() else cta3:Hide() end
+			end
+		end
 		if cfg.statusText then status:SetText(cfg.statusText() or "") end
 	end
 	D:Refresh()
@@ -924,6 +1036,10 @@ function Okanvil:Confirm(text, acceptLabel, onAccept, onCancel)
 		msg:SetPoint("TOPRIGHT", -14, -34)
 		msg:SetJustifyH("LEFT")
 		msg:SetJustifyV("TOP")
+		-- Anchoring both sides gives a width but NOT wrapping: without this a
+		-- question longer than the dialog is silently cut off mid-word.
+		if msg.SetWordWrap then msg:SetWordWrap(true) end
+		msg:SetHeight(60)
 		f.msg = msg
 
 		local ok = W.Button(f, "", "primary")
@@ -958,6 +1074,75 @@ function Okanvil:Confirm(text, acceptLabel, onAccept, onCancel)
 	if f.ok._paint then f.ok._paint(f.ok._hover) end
 	f._accept = onAccept
 	f._cancel = onCancel
+	f:Show()
+	return f
+end
+
+-- ------------------------------------------------------------
+-- Ask for one short string.
+--
+--   Okanvil:Prompt(title, label, initial, onAccept[, onCancel])
+--
+-- Confirm's shape with a single-line box in it. ShowImport was the only text
+-- entry we had, and it is a 440x320 multiline panel built for pasting blocks of
+-- JSON -- far too much furniture for "name this note".
+--
+-- The box does NOT take focus by itself. A captured EditBox eats W/A/S/D, and
+-- an unexpected one is how you die in a fight; click it to type.
+-- ------------------------------------------------------------
+local promptDlg
+function Okanvil:Prompt(title, label, initial, onAccept, onCancel)
+	local f = promptDlg
+	if not f then
+		f = self:Popup("Prompt")
+		f:SetSize(340, 150)
+		f:SetFrameStrata("FULLSCREEN_DIALOG")
+
+		local lbl = W.Text(f, "", "note", "dim")
+		lbl:SetPoint("TOPLEFT", 14, -36)
+		lbl:SetPoint("TOPRIGHT", -14, -36)
+		lbl:SetJustifyH("LEFT")
+		f.lbl = lbl
+
+		local box = W.EditBox(f)
+		box:SetHeight(24)
+		box:SetPoint("TOPLEFT", 14, -56)
+		box:SetPoint("TOPRIGHT", -14, -56)
+		f.box = box
+
+		local ok = W.Button(f, OKAY, "primary")
+		ok:SetSize(140, 24)
+		ok:SetPoint("BOTTOMRIGHT", f, "BOTTOM", -4, 10)
+		f.ok = ok
+
+		local no = W.Button(f, CANCEL, "secondary")
+		no:SetSize(140, 24)
+		no:SetPoint("BOTTOMLEFT", f, "BOTTOM", 4, 10)
+
+		local function accept()
+			local v = f.box.edit:GetText() or ""
+			f.box.edit:ClearFocus()
+			f:Hide()
+			if f._accept then f._accept(v) end
+		end
+		ok:SetScript("OnClick", accept)
+		box.edit:SetScript("OnEnterPressed", accept)
+		box.edit:SetScript("OnEscapePressed", function() f:Hide() end)
+		no:SetScript("OnClick", function()
+			f.box.edit:ClearFocus()
+			f:Hide()
+			if f._cancel then f._cancel() end
+		end)
+		-- Whatever closed it, the keyboard goes back to the game.
+		f:HookScript("OnHide", function() f.box.edit:ClearFocus() end)
+		promptDlg = f
+	end
+
+	if f.title then f.title:SetText(title or "") end
+	f.lbl:SetText(label or "")
+	f.box.edit:SetText(initial or "")
+	if f.ok._paint then f.ok._paint(f.ok._hover) end
+	f._accept, f._cancel = onAccept, onCancel
 	f:Show()
 	return f
 end

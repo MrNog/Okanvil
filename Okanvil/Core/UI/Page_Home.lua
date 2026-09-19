@@ -463,10 +463,15 @@ function Okanvil:BuildHome()
 
 		-- render the online list as scrollable rows, each with a quick [inv] button.
 		-- Order: Rat King > Warchief > Raider > Sewer > ... , alts ALWAYS last
-		-- (regardless of their own rankIndex), then alphabetical within a tier.
+		-- (regardless of their own rankIndex), then by CLASS within a tier, then
+		-- alphabetical. Grouping by class puts the row colours in blocks, so you
+		-- can see at a glance which classes are on without reading every name --
+		-- the question you are actually asking when you open this list.
 		table.sort(onlineList, function(a, b)
 			if a.alt ~= b.alt then return not a.alt end          -- alts sink to the bottom
 			if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end
+			local ca, cb = a.classTok or "", b.classTok or ""
+			if ca ~= cb then return ca < cb end
 			return a.name:lower() < b.name:lower()
 		end)
 		-- three ALIGNED columns per row so it reads like a clean table:
