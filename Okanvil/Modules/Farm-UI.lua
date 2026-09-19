@@ -333,23 +333,79 @@ function Okanvil:BuildFarm(host)
 	pv:Tooltip("On: what a vendor pays -- matches what you get if you vendor everything.\n"
 		.. "Off: Auctionator / TSM price when installed, vendor price when not.")
 
-	local hh = W.Text(p, "PAST RUNS", "label", "accent"); hh:SetPoint("TOPLEFT", X, -72)
+	-- What every run adds up to. The per-run rows answer "how did that one go";
+	-- this answers "is this spot worth farming at all", which is the reason to
+	-- keep a history in the first place.
+	local totals = W.Text(p, "", "body", "dim")
+	totals:SetPoint("TOPLEFT", X, -72)
+	wrap.totals = totals
+
+	local hh = W.Text(p, "PAST RUNS", "label", "accent")
+	hh:SetPoint("TOPLEFT", X, -100)
+	-- Clear sits at the far RIGHT of the heading row, away from the rows it wipes.
+	-- At X+90 it butted against the heading and read as part of it.
 	local clr = W.Button(p, "Clear"):Size(60, 18)
-	clr:SetPoint("TOPLEFT", X + 90, -72)
-	clr:SetScript("OnClick", function() M.ClearHistory(); if wrap._rebuild then wrap._rebuild() end end)
+	clr:SetPoint("TOPRIGHT", p, "TOPRIGHT", -X, -98)
+	clr:SetScript("OnClick", function()
+		if #M.History() == 0 then return end
+		Okanvil:Confirm("Clear the farm history?\n\nAll saved runs go with it.", "Clear",
+			function()
+				M.ClearHistory()
+				if wrap._rebuild then wrap._rebuild() end
+			end)
+	end)
+
+	-- An empty list needs to say WHY it is empty. A blank panel under a "PAST RUNS"
+	-- heading reads as a broken feature, when usually the last run was simply too
+	-- short to bank.
+	local empty = W.Text(p, "", "label", "dim")
+	empty:SetPoint("TOPLEFT", X, -128)
+	empty:SetPoint("RIGHT", p, "RIGHT", -X, 0)
+	empty:SetJustifyH("LEFT")
 
 	wrap.rows = {}
 	local function rebuild()
 		for _, r in ipairs(wrap.rows) do r:Hide() end
 		local h = M.History()
-		local y = 96
+		empty:SetText(#h == 0
+			and "|cff8a8d93No runs yet.|r\n\n|cff6f7176Open the farm window, press Start, and Finish when you are done.\nA run is only saved if it lasted at least 30 seconds and earned something.|r"
+			or "")
+
+		-- Totals across every saved run, and the rate they work out to together --
+		-- not the average of the rates, which would weigh a 2-minute run the same
+		-- as an hour.
+		local tDur, tGold, tKills = 0, 0, 0
+		for _, e in ipairs(h) do
+			tDur = tDur + (e.dur or 0)
+			tGold = tGold + (e.total or 0)
+			tKills = tKills + (e.kills or 0)
+		end
+		if #h == 0 then
+			totals:SetText("")
+		else
+			local avg = (tDur > 0) and math.floor(tGold / tDur * 3600) or 0
+			totals:SetText(("|cff8a8d93%d run%s|r  ·  |cffdcddde%s|r farmed  ·  |cffdcddde%s|r  ·  |cff8a8d93%d kills|r  ·  %s%s/h|r overall")
+				:format(#h, #h == 1 and "" or "s", M.Clock(tDur), M.Money(tGold, true),
+					tKills, rateColor(avg), M.Money(avg, true)))
+		end
+
+		local y = 124
 		for i, e in ipairs(h) do
 			local r = wrap.rows[i]
 			if not r then
-				r = W.Frame(p, "input"); r:SetHeight(34)
-				r.top = W.Text(r, "", "label"); r.top:SetPoint("TOPLEFT", 8, -5)
-				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("TOPLEFT", 8, -19)
-				r.rate = W.Text(r, "", "body", "accent"); r.rate:SetPoint("RIGHT", -10, 0)
+				r = W.Frame(p, "input"); r:SetHeight(36)
+				r.top = W.Text(r, "", "label"); r.top:SetPoint("TOPLEFT", 10, -6)
+				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("TOPLEFT", 10, -21)
+				-- The rate is the number you compare between runs, so it is the
+				-- biggest thing on the row -- with "/h" on it, because a bare
+				-- "397g 56s" beside a run that made 12g reads as a contradiction.
+				r.rate = W.Text(r, "", "body", "accent"); r.rate:SetPoint("RIGHT", -12, 4)
+				r.rateLbl = W.Text(r, "|cff6f7176per hour|r", "note", "dim")
+				r.rateLbl:SetPoint("TOPRIGHT", r.rate, "BOTTOMRIGHT", 0, -1)
+				local hl = r:CreateTexture(nil, "HIGHLIGHT")
+				hl:SetAllPoints()
+				hl:SetTexture("Interface\\Buttons\\WHITE8X8")
+				hl:SetVertexColor(1, 1, 1, 0.04)
 				wrap.rows[i] = r
 			end
 			r:ClearAllPoints()
@@ -357,11 +413,13 @@ function Okanvil:BuildFarm(host)
 			r:Show()
 			local gph = (e.dur > 0) and math.floor(e.total / e.dur * 3600) or 0
 			r.top:SetText("|cffdcddde" .. (e.zone ~= "" and e.zone or "Somewhere") .. "|r"
-				.. "  |cff6f7176" .. date("%d %b %H:%M", e.at) .. "|r")
-			r.sub:SetText("|cff8a8d93" .. M.Clock(e.dur) .. "  ·  " .. M.Money(e.total, true)
-				.. "  ·  " .. (e.kills or 0) .. " kills|r")
+				.. "   |cff6f7176" .. date("%d %b  %H:%M", e.at) .. "|r")
+			-- Each figure carries its own unit. "1:49 · 12g 03s · 10 kills" left the
+			-- middle number unlabelled, and it is the one that matters most.
+			r.sub:SetText(("|cff8a8d93%s farming  ·  |cffdcddde%s|cff8a8d93 earned  ·  %d kills|r")
+				:format(M.Clock(e.dur), M.Money(e.total, true), e.kills or 0))
 			r.rate:SetText(rateColor(gph) .. M.Money(gph, true) .. "|r")
-			y = y + 38
+			y = y + 40
 		end
 		if #h == 0 then
 			p:SetHeight(math.max(140, sf:GetHeight()))
@@ -384,13 +442,14 @@ end
 Okanvil_Plugins = Okanvil_Plugins or {}
 Okanvil_Plugins[ADDON] = {
 	title = "Farm",
-	-- The tool IS the floating window; the page only held a button that opened it
-	-- and a single checkbox. No nav row -- the marks bar opens it.
-	noNav = true,
-	desc  = "Gold per hour while you farm. Opens from the marks bar.",
+	-- The floating window is the tool you run WHILE farming; this page is where
+	-- you look back at what the past runs made. It used to be noNav, on the
+	-- grounds that the marks bar opened the module -- but the marks bar opens
+	-- the window, so the history had nowhere to be reached from and the runs
+	-- banked into a list nobody could see.
+	desc  = "Gold per hour while you farm, and a log of past runs.",
 	icon  = "Interface\\Icons\\INV_Misc_Bag_10",
 	build = function(panel) Okanvil:BuildFarm(panel) end,
-	navAction = function() Okanvil.Farm_Toggle() end,
 }
 if Okanvil and Okanvil.Register then
 	Okanvil:Register(ADDON)

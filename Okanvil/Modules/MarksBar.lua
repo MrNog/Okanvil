@@ -33,6 +33,14 @@ local bar
 -- shown at all -- a button into a module you switched off would do nothing.
 local SHORTCUTS = {
 	{
+		-- The addon itself, first on the bar. Every other shortcut here opens one
+		-- particular tool; this one opens the window they all live in, so it does
+		-- not need a gate -- there is nothing to switch it off.
+		key  = "okanvil",
+		icon = "Interface\\Icons\\Trade_BlackSmithing",   -- the anvil, same as the minimap
+		run  = function() Okanvil:Toggle() end,
+	},
+	{
 		key  = "loot",
 		icon = "Interface\\Icons\\INV_Misc_Coin_02",
 		gate = function() return Okanvil:IsModuleEnabled("__loot") end,
@@ -55,8 +63,28 @@ local SHORTCUTS = {
 	{
 		key  = "finder",
 		icon = "Interface\\Icons\\INV_Misc_GroupLooking",   -- the Raid Finder's own icon
-		gate = function() return Okanvil.RaidFinderMini_Toggle ~= nil end,
+		-- Gate on the MODULE, not on the function existing. The file loads either
+		-- way, so the function is always there -- switching the module off in
+		-- Modules left its button on the bar, still working.
+		gate = function()
+			return Okanvil.RaidFinderMini_Toggle ~= nil
+				and Okanvil:IsModuleEnabled("Okanvil-RaidFinder")
+		end,
 		run  = function() Okanvil.RaidFinderMini_Toggle() end,
+	},
+	{
+		key  = "pug",
+		-- Same texture as the PuG nav entry and page header, so the shortcut and the
+		-- page it opens read as one thing.
+		icon = "Interface\\Icons\\Ability_Warrior_RallyingCry",
+		gate = function() return Okanvil:IsModuleEnabled("Okanvil-PuG") end,
+		-- The only shortcut that opens a PAGE rather than a floating window, so it
+		-- has to raise the main window first -- ShowPanel on a hidden window would
+		-- switch the page behind it and look like nothing happened.
+		run  = function()
+			if not Okanvil.win or not Okanvil.win:IsShown() then Okanvil:Toggle() end
+			Okanvil:ShowPanel("Okanvil-PuG")
+		end,
 	},
 	{
 		key  = "buffs",
@@ -73,7 +101,9 @@ local SHORTCUTS = {
 	{
 		key  = "farm",
 		icon = "Interface\\Icons\\INV_Misc_Bag_10",
-		gate = function() return Okanvil.Farm_Toggle ~= nil end,
+		gate = function()
+			return Okanvil.Farm_Toggle ~= nil and Okanvil:IsModuleEnabled("Okanvil-Farm")
+		end,
 		run  = function() Okanvil.Farm_Toggle() end,
 	},
 	{

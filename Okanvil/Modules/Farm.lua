@@ -179,13 +179,24 @@ function M.Toggle()
 	if S.running then M.Pause() else M.Start() end
 end
 
--- Bank the run into history, then clear. Nothing is written for an empty run --
--- a mis-click that started and stopped the timer is not a farm session.
+-- Bank the run into history, then clear.
+--
+-- A run that is too short or made nothing is not banked -- a mis-click that
+-- started and stopped the timer is not a farm session. But it SAYS so: this used
+-- to drop the run without a word, so pressing Finish after a real session that
+-- happened to miss a threshold looked exactly like the history being broken.
+local MIN_RUN = 30       -- seconds
+
 function M.Stop()
 	-- `total` stays the AH figure so the history row matches the rate the window
 	-- showed while the run was going; the vendor figure rides along beside it.
 	local dur, total = M.Duration(), M.TotalAH()
-	if dur >= 60 and total > 0 then
+	if dur < MIN_RUN then
+		Okanvil:Print(("|cff8a8d93Run not saved -- only %s. A session has to last %ds.|r")
+			:format(M.Clock(dur), MIN_RUN))
+	elseif total <= 0 then
+		Okanvil:Print("|cff8a8d93Run not saved -- nothing was looted or earned.|r")
+	else
 		local h = db().history
 		table.insert(h, 1, {
 			at = time(), zone = S.zone, dur = dur, total = total,
@@ -196,6 +207,9 @@ function M.Stop()
 		})
 		-- keep the last 20; the window shows a handful and the file stays small
 		while #h > 20 do table.remove(h) end
+		local gph = (dur > 0) and math.floor(total / dur * 3600) or 0
+		Okanvil:Print(("Run saved -- |cffffd200%s|r in %s (|cffe0b860%s/h|r)."):format(
+			M.Money(total, true), M.Clock(dur), M.Money(gph, true)))
 	end
 	M.Reset()
 end
@@ -372,9 +386,13 @@ ev:SetScript("OnEvent", function(_, event, ...)
 		if M.onChange then M.onChange() end
 
 	elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
-		-- Arg positions match Loot.lua's own handler: 2 = sub-event, 5 = destGUID.
+		-- 3.3.5a layout, which has no raid-flag fields:
+		--   1 timestamp, 2 sub-event, 3 sourceGUID, 4 sourceName, 5 sourceFlags,
+		--   6 destGUID, 7 destName, 8 destFlags
+		-- This read destGUID from 5, which is sourceFlags -- a NUMBER. Every kill
+		-- threw, and none was ever counted.
 		if select(2, ...) == "UNIT_DIED" then
-			if Okanvil.U.guidIsNPC(select(5, ...)) then S.kills = S.kills + 1 end
+			if Okanvil.U.guidIsNPC(select(6, ...)) then S.kills = S.kills + 1 end
 		end
 	end
 end)
