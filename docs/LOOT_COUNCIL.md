@@ -386,7 +386,7 @@ sharing it with a list of items that is mostly not being looked at.
 │  Tchilly        Pass           —      Fire    5.7k   —          │
 │  Yahmom         —              #3     Frost   5.5k   —          │
 │ ───────────────────────────────────────────────────────────────│
-│  [Give to Kobee]                        [Disenchant]    [Skip]  │
+│  [Give to Kobee]                                        [Skip]  │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -470,40 +470,13 @@ not a decision. Clicking any row changes who the button names.
 
 - `Give to <name>` → the existing `L.AwardWinner` path, master-loot give and
   all its confirmation handling (`Loot.lua:2454-2548`).
-- `Disenchant` → see below.
 - `Skip` → decided outside the addon, or not decided tonight. The round closes
-  and the item stays undecided, so the picker can offer it again later.
+  and the item stays undecided, so it can be offered again later.
 
-#### Disenchant
-
-Nobody wanted it, so it becomes a shard. Two things have to happen, and only
-one of them is a give.
-
-**The record.** The drop is marked `de = true` rather than given an owner. The
-history and the website export already understand this — the export sends the
-sentinel `"Disenchant"` in the player field so the hub excludes it from win
-counts (`Loot.lua:2877-2879`), and the history row prints
-`-> Disenchant` in purple (`Loot.lua:2930`).
-
-**There is a bug waiting here.** `d.de` is read in four places and **written in
-none**. The reader was built for Blizzard's native Disenchant roll, which never
-arrives under master loot — so today every disenchanted item is recorded as
-belonging to whoever shattered it, and the hub counts it as a win. The council's
-Disenchant button is the first thing that would ever set the flag.
-
-**The give.** The item still has to reach an enchanter. Under master loot with
-the window open, that is a normal `GiveMasterLoot` to whoever is disenchanting
-— so the button needs to know who that is:
-
-- A **disenchanter is named** for the raid, once, the way the master looter is.
-  The button then reads `Disenchant → Tchilly` and gives it to them.
-- With nobody named, it asks the first time and remembers for the night.
-- With auto loot on and the corpse gone, there is no give — the item is already
-  in someone's bags. The button only writes the record, and says so.
-
-`de = true` and a `receivedBy` are not exclusive: the shard went *to* someone,
-and knowing who held it matters for the same reason `heldBy` does. What the flag
-changes is that it does not count as loot they won.
+**No Disenchant button.** A shard is given to an enchanter like any other item,
+so `Give to <name>` already does it — and the council has nothing to add to a
+decision nobody argues about. See the note on `dp.de` below for why marking it
+as a disenchant is a separate job from this plan.
 
 **No votes, no quorum, no tally.** RATS decides by talking. The board's job is
 to have the facts on screen while they do.
@@ -655,7 +628,7 @@ able to act on it differently, is worse than one window with one more column.
 │ ☐ ⬛ [Shadowfrost Shard]         │
 │      Saurfang · asked            │
 │ ☐ ⬛ [Sanctified Legplates]      │
-│      Festergut · Disenchant      │
+│      Festergut · Tchilly         │
 │ ☐ ⬛ [Cryptmaker]                │
 │      Festergut · Kobee           │
 ├──────────────────────────────────┤
@@ -722,35 +695,26 @@ to answer, more to build; `dp.winners` (`Loot.lua:1855`) already exists for
 multi-copy roll-offs and would be the way in.
 
 **An item nobody wants.** Everyone answered Pass, or nobody answered at all.
-The board shows an empty candidate list and the only sensible actions are
-`Disenchant` and `Skip` — which is exactly what those buttons are for, and the
-board saying `nobody wants this` is a real answer rather than a failure.
+The board shows an empty candidate list, and `Give to <name>` still works —
+the shard goes to an enchanter the same way any item goes to anyone. `Skip`
+leaves it undecided, so it comes back later, which is right: an item nobody
+wanted at 21:00 may find an owner at 23:00 when the raid has changed.
 
-Pressing `Disenchant` marks the drop and it stays on the list showing
-`-> Disenchant`, like any other decided item. `Skip` leaves it undecided, so it
-comes back ticked next time — which is right: an item nobody wanted at 21:00
-may find an owner at 23:00 when the raid has changed.
+A board saying `nobody wants this` is a real answer, not a failure.
 
-**Most shards are obvious before anyone is asked**, though, and a council round
-on an item the leader already knows is scrap wastes twenty-five clicks. So the
-loot list takes a **right-click on the row**, opening a small menu:
+**Scrap should not need a round at all.** A right-click on the row:
 
 ```
         ┌──────────────────┐
-        │  Disenchant      │
         │  Skip            │
         │  ─────────────   │
         │  Clear decision  │
         └──────────────────┘
 ```
 
-A menu rather than right-click *being* disenchant, because a mis-click would
-otherwise mark an item as scrap with nothing to catch it — and `Clear decision`
-is there for exactly that, putting a row back to undecided whatever was done
-to it.
-
-That is the common path for a shard. Going through the council is for the item
-that *might* have had a taker and turned out not to.
+`Clear decision` puts a row back to undecided whatever was done to it —
+including undoing the name on a mistaken award, which is the half of a wrong
+give that can still be taken back.
 
 #### Two problems this creates
 
@@ -936,8 +900,14 @@ enchanter like any other give. So today a disenchanted item is recorded as
 belonging to whoever shattered it, the loot history shows it as theirs, and the
 website counts it against them in the fair-loot metric.
 
-This is worth fixing whether or not the council is built. The council's
-`Disenchant` button would be the first thing to ever set the flag.
+This is worth fixing whether or not the council is built, and it is **not part
+of this plan** — a council has nothing to add to a decision nobody argues
+about, and building a Disenchant button around a flag nothing sets would have
+hidden the real bug behind a new feature.
+
+Fixing it properly means deciding how a shard is marked at all: the enchanter
+is given the item like anyone else, so the addon needs to be told rather than
+being able to tell. That is its own small job.
 
 ---
 
