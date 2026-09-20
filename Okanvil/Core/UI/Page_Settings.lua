@@ -311,16 +311,18 @@ function Okanvil:ShowVersionChecker()
 	local f = verDlg
 	if not f then
 		f = Okanvil:Popup("Okanvil version check")
-		f:SetSize(320, 380)
+		-- Wider and taller: this is a list you read across a raid, and at 320px
+		-- the names sat in a narrow column with most of the window empty.
+		f:SetSize(420, 460)
 
 		-- scope buttons, RCLoot-style: Group | Guild
 		local bGroup = W.Button(f, "Group", "primary")
-		bGroup:SetSize(90, 22); bGroup:SetPoint("TOPLEFT", 10, -32)
+		bGroup:SetSize(110, 26); bGroup:SetPoint("TOPLEFT", 12, -34)
 		local bGuild = W.Button(f, "Guild")
-		bGuild:SetSize(90, 22); bGuild:SetPoint("LEFT", bGroup, "RIGHT", 8, 0)
+		bGuild:SetSize(110, 26); bGuild:SetPoint("LEFT", bGroup, "RIGHT", 8, 0)
 
-		local status = W.Text(f, "", "note", "dim")
-		status:SetPoint("LEFT", bGuild, "RIGHT", 10, 0)
+		local status = W.Text(f, "", "body", "dim")
+		status:SetPoint("LEFT", bGuild, "RIGHT", 12, 0)
 		f.status = status
 
 		-- results list inside a clipped scroll (long guild rosters must not spill)
@@ -342,7 +344,9 @@ function Okanvil:ShowVersionChecker()
 		end)
 		f.scroll, f.child = scroll, child
 
-		local out = W.Text(child, "", "label")
+		-- Body size, not "label": this is the content of the window, read at a
+		-- glance while a raid waits, not a field caption.
+		local out = W.Text(child, "", "body")
 		out:SetPoint("TOPLEFT", 0, 0)
 		out:SetJustifyH("LEFT")
 		if out.SetJustifyV then out:SetJustifyV("TOP") end

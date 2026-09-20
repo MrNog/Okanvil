@@ -93,10 +93,28 @@ function C.Send(msgType, ...)
 	return true
 end
 
+-- Send to the GUILD channel rather than the current group. Most Okanvil traffic
+-- is about the group you are in, but some of it is about the guild and has to
+-- reach officers who are not standing next to you -- the recruit message is the
+-- first. Returns false when you are not in a guild.
+function C.SendGuild(msgType, ...)
+	if not (IsInGuild and IsInGuild()) then return false end
+	local text = pack(msgType, ...)
+	if #text > 240 then return false end
+	SendAddonMessage(PREFIX, text, "GUILD")
+	return true
+end
+
 -- Whisper a typed message straight to one player (for targeted ACKs). target is
 -- a unit name. Works even when the recipient isn't in your subgroup channel.
 function C.Whisper(msgType, target, ...)
 	if not target or target == "" then return false end
+	-- NEVER whisper ourselves. The client refuses it and the SERVER answers with a
+	-- visible "Player not found." in chat -- an addon message the player was never
+	-- meant to see, printed once per reply. Callers that need to answer themselves
+	-- go through C.Reply, which delivers locally instead.
+	local me = UnitName and UnitName("player")
+	if me and target == me then return false end
 	local text = pack(msgType, ...)
 	if #text > 240 then return false end
 	SendAddonMessage(PREFIX, text, "WHISPER", target)
@@ -356,4 +374,232 @@ function C.GroupRoster(scope)
 		if n then out[#out + 1] = (n:gsub("%-.*$", "")) end
 	end
 	return out
+end
+
+-- ============================================================
+-- ASK / ANSWER -- broadcast a question, collect one reply per client.
+--
+-- This is VERQ/VERR (above) with the version string taken out: ask the group
+-- something, every client answers, the caller gets the replies together after a
+-- timeout. The loot council is the first user; the notes module's hand-rolled
+-- NOTEWHO/NOTEACK pair is the same shape and can move onto this later.
+--
+-- WIRE:
+--   ASK | <topic> | <round> | <payload>        broadcast to the group
+--   ANS | <topic> | <round> | <payload>        whispered back to the asker
+--
+-- THE ROUND ID is the point of this layer. Nothing else on the Okanvil wire
+-- carries session identity, so two questions on the same topic -- two bosses in
+-- a row, or one re-broadcast after a dropped packet -- would pool their answers
+-- into one list and the caller could not tell them apart. Every reply carries
+-- the round it belongs to and anything from a round we are not running is
+-- dropped. That is also what makes a RE-BROADCAST free: a client that already
+-- answered answers again, and the second reply lands on the same slot.
+--
+-- TRUST: unchanged from the rest of this file. An answer is DATA. Ask() records
+-- who said what; deciding whether that person was entitled to say it is the
+-- caller's job, and the caller re-checks live game state before acting.
+-- ============================================================
+
+local askRounds   = {}   -- round id -> { topic, replies, roster, onReply, onDone, done }
+local answerFns   = {}   -- topic -> fn(sender, payload) -> reply payload
+local askSeq      = 0
+
+-- Mint a round id that cannot collide with another player's. The name matters:
+-- two clients both asking about the same boss within the same second would
+-- otherwise generate the same id, and their answers would cross.
+local function newRound()
+	askSeq = askSeq + 1
+	local me = (UnitName and UnitName("player")) or "?"
+	return ("%s-%d-%d"):format(me, (time and time() or 0) % 100000, askSeq)
+end
+
+-- Register what THIS client replies with when someone asks about `topic`.
+-- fn(sender, payload) returns the reply string (or nil to stay silent -- but
+-- see the note in the council plan: silence is ambiguous, so prefer an explicit
+-- "not applicable" reply over nil wherever a count depends on it).
+function C.Answer(topic, fn)
+	answerFns[topic] = fn
+end
+
+-- Ask the group a question.
+--   topic    -- string, namespaces the question (e.g. "COUNCIL")
+--   payload  -- string carried to every client (keep it SHORT; see the cap below)
+--   opts     -- { timeout = 20, onReply = fn(sender, payload, replies),
+--                 onDone = fn(replies, round) }
+-- Returns the round id, or false when there is nobody to ask.
+--
+-- SIZE: this goes through C.Send, which silently refuses anything over 240
+-- bytes. A question is expected to be small (an item link and a flag). Anything
+-- carrying a LIST must go out with C.SendBig under its own tag and use Ask only
+-- to announce it.
+function C.Ask(topic, payload, opts)
+	opts = opts or {}
+	local round = newRound()
+	local rec = {
+		topic   = topic,
+		replies = {},                 -- sender -> payload
+		count   = 0,
+		onReply = opts.onReply,
+		onDone  = opts.onDone,
+		roster  = C.GroupRoster("group"),
+	}
+	askRounds[round] = rec
+
+	local sent = C.Send("ASK", topic, round, payload or "")
+
+	-- SOLO LOOPBACK. C.Send no-ops when we are not in a group, which would make
+	-- the whole feature untestable without a second person online -- and this
+	-- addon's wire bugs are exactly the ones that only show up at raid time.
+	-- So when there is no channel we hand the question to our OWN answer handler
+	-- on the next frame.
+	--
+	-- Only the SEND is skipped; the answer handler, the round bookkeeping and the
+	-- timeout are the same code the group path runs. Nothing downstream of the
+	-- send can tell the difference, which is what makes the test worth anything.
+	if not sent then
+		local me = (UnitName and UnitName("player")) or "?"
+		C.After(0, function()
+			local fn = answerFns[topic]
+			if not fn then return end
+			-- Same signature as the wire path, round included: a handler that
+			-- answers late must behave identically solo, or the test proves nothing.
+			local ok, reply = pcall(fn, me, payload or "", round)
+			if ok and reply ~= nil then C.DeliverAnswer(me, topic, round, tostring(reply)) end
+		end)
+	end
+
+	C.After(opts.timeout or 20, function()
+		local r = askRounds[round]
+		if not r or r.done then return end
+		r.done = true
+		askRounds[round] = nil
+		if type(r.onDone) == "function" then
+			local ok, err = pcall(r.onDone, r.replies, round)
+			if not ok and Okanvil.Err then Okanvil:Err("Comms.Ask onDone " .. tostring(topic), err) end
+		end
+	end)
+
+	return round
+end
+
+-- Record one answer against an open round. Exposed (rather than local) so the
+-- loopback path above and the wire handler below share ONE code path -- if this
+-- ever diverges, solo testing stops proving anything about a real raid.
+function C.DeliverAnswer(sender, topic, round, payload)
+	local rec = askRounds[round]
+	if not rec or rec.topic ~= topic then return end   -- stale/unknown round -> drop
+	if rec.replies[sender] == nil then rec.count = rec.count + 1 end
+	rec.replies[sender] = payload or ""
+	if type(rec.onReply) == "function" then
+		local ok, err = pcall(rec.onReply, sender, payload, rec.replies)
+		if not ok and Okanvil.Err then Okanvil:Err("Comms.Ask onReply " .. tostring(topic), err) end
+	end
+end
+
+-- Someone asked us something -> run our handler and whisper the reply back.
+--
+-- The handler is called as fn(sender, payload, round). Most answers are a pure
+-- function of the question and ignore `round`, but a handler that answers OVER
+-- TIME -- the loot council frame, which replies as the raider clicks -- needs it
+-- to whisper back later. Returning nil means "not yet, I will send my own"; the
+-- round is the only way to address that reply to the right question.
+C.On("ASK", function(sender, topic, round, payload)
+	if not sender or sender == "" or not topic or not round then return end
+	local fn = answerFns[topic]
+	if not fn then return end                       -- we have nothing to say on this topic
+	local ok, reply = pcall(fn, sender, payload or "", round)
+	if not ok then
+		if Okanvil.Err then Okanvil:Err("Comms.Answer " .. tostring(topic), reply) end
+		return
+	end
+	if reply == nil then return end                 -- handler will answer later, or chose silence
+	C.Whisper("ANS", sender, topic, round, tostring(reply))
+end)
+
+-- Send a late answer to a question asked earlier. The counterpart to a handler
+-- that returned nil: the round id is what pairs it with the right question, so a
+-- reply arriving after the next boss cannot land on that boss's round.
+--
+-- ANSWERING YOURSELF. The client does NOT deliver an addon whisper addressed to
+-- the sender -- it is dropped with no error. That matters well beyond testing:
+-- the master looter is usually IN the raid and eligible for the item, so their
+-- own answer would silently never reach their own board. Short-circuit straight
+-- into the round instead of going near the wire.
+function C.Reply(asker, topic, round, payload)
+	if not (asker and topic and round) then return false end
+	local me = UnitName and UnitName("player")
+	if me and asker == me then
+		C.DeliverAnswer(me, topic, round, tostring(payload or ""))
+		return true
+	end
+	return C.Whisper("ANS", asker, topic, round, tostring(payload or ""))
+end
+
+-- A reply came back.
+C.On("ANS", function(sender, topic, round, payload)
+	if not sender or sender == "" or not round then return end
+	C.DeliverAnswer(sender, topic, round, payload)
+end)
+
+-- Close a round early -- every expected answer is in, or the caller gave up.
+-- Fires onDone exactly once (the timeout then finds it gone and does nothing).
+function C.CloseAsk(round)
+	local rec = askRounds[round]
+	if not rec or rec.done then return false end
+	rec.done = true
+	askRounds[round] = nil
+	if type(rec.onDone) == "function" then
+		local ok, err = pcall(rec.onDone, rec.replies, round)
+		if not ok and Okanvil.Err then Okanvil:Err("Comms.Ask onDone " .. tostring(rec.topic), err) end
+	end
+	return true
+end
+
+-- Re-send an open question to the group. The plan's stage 2b calls for this on a
+-- timer: an addon message can be dropped with no error and no retry, so one lost
+-- packet must not cost the round. Clients that already answered land on the same
+-- reply slot, so this is safe to call repeatedly.
+function C.ReAsk(round, payload)
+	local rec = askRounds[round]
+	if not rec or rec.done then return false end
+	return C.Send("ASK", rec.topic, round, payload or "")
+end
+
+-- Re-open collection on a round that was started BEFORE a reload. The round id
+-- already exists on every other client and answers are still coming back, but
+-- this client has forgotten it -- without adopting it those replies are dropped
+-- as an unknown round and the leader's board stays empty for ever.
+--
+-- Same shape as C.Ask minus the broadcast: the question is already out there.
+function C.Adopt(topic, round, opts)
+	if not (topic and round) then return false end
+	if askRounds[round] then return true end       -- already collecting
+	opts = opts or {}
+	askRounds[round] = {
+		topic   = topic,
+		replies = {},
+		count   = 0,
+		onReply = opts.onReply,
+		onDone  = opts.onDone,
+		roster  = C.GroupRoster("group"),
+	}
+	C.After(opts.timeout or 20, function()
+		local r = askRounds[round]
+		if not r or r.done then return end
+		r.done = true
+		askRounds[round] = nil
+		if type(r.onDone) == "function" then
+			local ok, err = pcall(r.onDone, r.replies, round)
+			if not ok and Okanvil.Err then Okanvil:Err("Comms.Adopt onDone " .. tostring(topic), err) end
+		end
+	end)
+	return true
+end
+
+-- Is this round still collecting?  (for a UI that draws "4 of 5")
+function C.AskStatus(round)
+	local rec = askRounds[round]
+	if not rec then return nil end
+	return rec.count, rec.replies, rec.roster
 end

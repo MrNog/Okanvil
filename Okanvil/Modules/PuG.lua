@@ -258,10 +258,45 @@ function M.AssignedRole(name)
 	local I = Okanvil.Inspect
 	local now = I and I.Get and select(1, I.Get(name))
 
-	-- No remembered spec: either the placement predates this bookkeeping, or it
-	-- was made before anyone had been inspected. Adopt whatever we know now and
-	-- keep the placement -- the point is to catch a CHANGE, and there is nothing
-	-- yet to compare against.
+	-- No remembered spec: the placement was made before this player had been
+	-- inspected. Adopting the spec blindly kept the placement even when the read
+	-- CONTRADICTED it -- a paladin parked in Healer who turned out to be
+	-- Protection stayed in Healer, showing "protection" under a healer heading.
+	--
+	-- So the first real read is allowed to correct an uninspected guess: if the
+	-- spec now says a different role, the placement goes. A placement made AFTER
+	-- the inspect still wins, because then placedAt is set and this branch is
+	-- never reached -- the leader's deliberate move is still untouchable.
+	-- THE SPEC OVERRULES A PLACEMENT THAT CONTRADICTS IT, always -- not only on the
+	-- first read. Checking this once and then stamping assignSpec meant the very
+	-- next /reload found placedAt filled in and skipped the test for ever, so a
+	-- prot paladin sat in Healer and a boomkin in Healer with the right spec
+	-- printed underneath them.
+	--
+	-- Tank and healer are the two the spec can state outright; "dps" cannot say
+	-- melee from ranged, so a dps placement is always left alone.
+	local inspectRole
+	if I and I.Get then inspectRole = select(3, I.Get(name)) end
+	if inspectRole == "tank" or inspectRole == "healer" then
+		-- The spec says tank/healer: any other column is wrong.
+		if role ~= inspectRole then
+			db.assign[name] = nil
+			db.assignSpec[name] = nil
+			return nil
+		end
+	elseif inspectRole == "dps" then
+		-- The spec says dps, which does not choose between melee and ranged -- so
+		-- those two placements stand. But a DPS sitting in Tank or Healer is wrong
+		-- whichever half they belong to, and that is how a boomkin stayed in the
+		-- healer column with "balance" written under the name.
+		if role == "tank" or role == "healer" then
+			db.assign[name] = nil
+			db.assignSpec[name] = nil
+			return nil
+		end
+	end
+
+	-- First sighting: nothing to compare a respec against yet, so adopt.
 	if placedAt == nil or placedAt == "" then
 		if now then db.assignSpec[name] = now end
 		return role
@@ -423,12 +458,30 @@ function M.FitNeedsToSize()
 end
 
 -- Counts of who is IN the group right now, per role.
+-- Where to PARK a hybrid whose spec nobody has read. Public because the board
+-- (PuG-UI) shows them in the same column the count puts them in -- two different
+-- fallbacks is what let the header and the LFM line disagree.
+M.HYBRID_PARK = {
+	DRUID = "ranged", SHAMAN = "ranged", PRIEST = "ranged", PALADIN = "melee",
+}
+local HYBRID_PARK = M.HYBRID_PARK
+
 local function rosterCounts()
 	local have = {}
 	for _, r in ipairs(ROLES) do have[r] = 0 end
 	local list = rosterList()
 	for _, p in ipairs(list) do
-		if p.role then have[p.role] = (have[p.role] or 0) + 1 end
+		-- EVERY body counts, including one whose spec was never read. GuessRole
+		-- returns nil for an uninspected hybrid, and skipping those made the LFM
+		-- line ask for players who were already standing in the raid: the board
+		-- showed Ranged 9/9 while the message still said "need 2 Ranged".
+		--
+		-- The board parks an unknown in the column its class usually plays and
+		-- marks it with a "?" -- this is the same fallback, so the count and the
+		-- board finally agree. A wrong guess is moved by hand; asking the whole
+		-- server for someone you already have cannot be taken back.
+		local role = p.role or HYBRID_PARK[p.class or ""] or "ranged"
+		have[role] = (have[role] or 0) + 1
 	end
 	return have, #list
 end
@@ -577,7 +630,9 @@ local RESERVE_CATS = {
 M.ReserveCats = RESERVE_CATS
 
 -- "(B+O+P res)" / "(B+O res + Frags)" / "HR: [Shadowmourne]" / "no res"
-local function reserveText()
+-- `budget` = bytes the rest of the LFM line already uses, so the reserved items
+-- can be sent as LINKS when they fit and names when they do not.
+local function reserveText(budget)
 	-- "no res" and a reserved item are mutually exclusive: setting either one
 	-- clears the other, so this says one thing plainly instead of explaining a
 	-- contradiction the UI should never have allowed in the first place.
@@ -614,14 +669,30 @@ local function reserveText()
 	--   TWO+      -> send NAMES. Two links is ~130 bytes of escapes and a third
 	--               would push the line past the cap and get it truncated.
 	local items = db.reserveItems or {}
-	if #items == 1 then
-		out[#out + 1] = "HR: " .. items[1]
-	elseif #items > 1 then
+	if #items > 0 then
+		-- LINKS IF THEY FIT, names if they do not -- measured against the line
+		-- actually being sent rather than a fixed item count. Chat drops anything
+		-- past 255 bytes silently, and a link costs ~69 against ~22 for a name,
+		-- so the old "one link, then names" rule threw away a clickable link that
+		-- had room to spare while a long LFM could still overflow.
+		-- `budget` is how many bytes the rest of the LFM line already uses; the
+		-- caller knows that and this function does not. Without it we would be
+		-- sizing the reserve text against itself.
+		local sofar = (budget or 0) + #table.concat(out, " ")
+		-- HR or GBid. Both are server idiom for "the leader keeps this drop", but
+		-- they promise different things: HR is reserved outright, GBid goes to a
+		-- gold bid among the raid. Saying the wrong one costs an argument at the
+		-- boss, so it is a switch rather than a fixed word.
+		local tag = (db.reserveTag == "gbid") and "GBid: " or "HR: "
+		local linked = tag .. table.concat(items, " ")
 		local names = {}
 		for _, v in ipairs(items) do
 			names[#names + 1] = v:match("|h%[(.-)%]|h") or v
 		end
-		out[#out + 1] = "HR: " .. table.concat(names, " ")
+		-- Comma-separated: a space alone ran them together, and item names
+		-- contain spaces of their own.
+		local plain = tag .. table.concat(names, ", ")
+		out[#out + 1] = ((sofar + #linked + 1) <= 240) and linked or plain
 	end
 
 	return table.concat(out, " ")
@@ -733,7 +804,9 @@ local function buildMessage()
 
 	if db.gs ~= "" then parts[#parts + 1] = db.gs .. "+ gs" end
 
-	local res = reserveText()
+	-- Sized against what the line already holds, so a long "need" list pushes the
+	-- reserved items from links to names rather than overflowing the 255-byte cap.
+	local res = reserveText(#table.concat(parts, " "))
 	if res ~= "" then parts[#parts + 1] = res end
 
 	if db.note ~= "" then parts[#parts + 1] = db.note end

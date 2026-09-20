@@ -25,6 +25,8 @@ Modules\Inspect.lua
 Modules\Guild.lua
 Modules\Bosses-Data.lua
 Modules\ItemBoss-Data.lua
+Modules\Proficiency-Data.lua
+Modules\Council.lua
 Modules\LootPrio.lua
 Modules\Loot.lua
 Modules\LootRoll.lua
@@ -50,3 +52,7 @@ Modules\NotesWindow.lua
 Modules\NotesSync.lua
 Modules\Farm.lua
 Modules\Farm-UI.lua
+
+# Council foundation test harness -- TEMPORARY, remove with the file once the
+# council module ships. Provides /okask and /okprof only.
+Modules\CouncilTest.lua

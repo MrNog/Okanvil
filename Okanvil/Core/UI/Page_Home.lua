@@ -23,7 +23,10 @@ function Okanvil:BuildHome()
 	local title = W.Text(p, "Okanvil", "huge", "accent"); title:SetPoint("TOPLEFT", X, -20)
 	local anchor = title
 	-- guild skin (editable) as a subtitle under the product name
+	-- Same rule as the title bar: no guild, no guild skin. The brand is stored
+	-- account-wide, so without this an alt in no guild wore the main's guild name.
 	local gb = self.db.brand
+	if IsInGuild and not IsInGuild() then gb = "" end
 	local guildFS
 	if gb and gb ~= "" and gb ~= "Okanvil" then
 		guildFS = W.Text(p, gb, "head", "accent"); guildFS:Color(0.88, 0.72, 0.38)

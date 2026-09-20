@@ -21,7 +21,14 @@ local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 local defaults = {
 	guildName = "Guild", -- used by the {guild} token and the join toast
 	message = "",
-	keywords = "",
+	-- The ADVERTISE text is empty (it is the guild's own words), but these two
+	-- lists are not guild-specific at all -- every recruiter wants the same
+	-- trigger words and the same scam filter, and leaving them blank meant
+	-- auto-invite silently did nothing until you guessed what to type.
+	keywords = "inv, invite, join, guild, raid, recruit, lf guild",
+	-- Whispers that must NEVER trigger an invite or a reply: gold sellers,
+	-- boosting services and anything carrying a link.
+	blacklist = "gold, sell, selling, buy, boost, carry, gdkp, swipe, powerlevel, http, www, .com",
 	-- Auto-replies: a list of { keywords, text, enabled }. Independent of the
 	-- invite -- answering "what's the discord?" must not also invite the asker.
 	replies = {},
@@ -46,7 +53,6 @@ local defaults = {
 	channelIntervals = { Global = 0, LookingForGroup = 0, General = 0 },
 	customChannel = "",
 	customInterval = 0,
-	blacklist = "", -- block words (gold sellers / ads); user fills it in
 	log = {},
 	session = {}, -- per-name recruiting tally (uncapped); cleared from the Summary tab
 }
@@ -596,6 +602,70 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 	end
 end)
 
+-- ------------------------------------------------------------
+-- SHARE THE ADVERTISE LINE with the other officers.
+--
+-- Four officers recruiting with four slightly different messages is how a guild
+-- ends up advertising two different raid nights. Same shape as the notes sync:
+-- officer-gated on BOTH ends, because it overwrites what the receiver has.
+--
+--   RECMSG | <text>     guild channel, officers only
+--
+-- Trust is by ROLE, checked on receipt -- the prefix proves nothing, so the
+-- receiver re-asks "is this sender actually an officer?" before taking it.
+-- ------------------------------------------------------------
+local function recruitSyncAllowed(who)
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return false end
+	local U = Okanvil.U
+	return U and U.isOfficer and U.isOfficer(who or UnitName("player"))
+end
+
+function Rec_ShareMessage()
+	local C = Okanvil.Comms
+	if not C then return end
+	if not recruitSyncAllowed() then
+		Okanvil:Print("|cffff5555Recruit:|r officers only.")
+		return
+	end
+	local msg = db.message or ""
+	if msg == "" then
+		Okanvil:Print("|cffff5555Recruit:|r nothing to share -- write the advertise line first.")
+		return
+	end
+	if not (IsInGuild and IsInGuild()) then
+		Okanvil:Print("|cffff5555Recruit:|r you are not in a guild.")
+		return
+	end
+	-- One message: an advertise line is ~200 bytes and C.Send caps at 240. A
+	-- longer one is refused rather than arriving truncated, which would leave
+	-- every other officer spamming half a sentence.
+	local ok = C.SendGuild and C.SendGuild("RECMSG", msg)
+	if ok then
+		Okanvil:Print("|cff7cfc8aRecruit:|r message sent to the other officers.")
+	else
+		Okanvil:Print("|cffff5555Recruit:|r could not send -- the message may be too long.")
+	end
+end
+
+if Okanvil.Comms then
+	Okanvil.Comms.On("RECMSG", function(sender, text)
+		if not text or text == "" then return end
+		if sender == (UnitName and UnitName("player")) then return end   -- our own echo
+		-- The SENDER must be an officer, checked here rather than trusted from the
+		-- wire: anyone can put a prefix on an addon message.
+		if not recruitSyncAllowed(sender) then return end
+		if not recruitSyncAllowed() then return end        -- and so must we
+		if db.message == text then return end
+		db.message = text
+		Okanvil:Print(("|cffe0b860Recruit:|r advertise message updated by |cffffd200%s|r."):format(
+			tostring(sender)))
+		-- Repaint the box if the page is open, so the new text is visible rather
+		-- than only taking effect on the next spam.
+		local rf = RecruitFrame
+		if rf and rf.msg and rf.msg.SetText then pcall(rf.msg.SetText, rf.msg, text) end
+	end)
+end
+
 function Rec_ToggleActive(state)
 	if state == nil then
 		state = not db.active
@@ -859,6 +929,16 @@ function Rec_BuildUI(parent)
 		footerHeight = 0,
 		primaryText = function() return db.active and "STOP advertising" or "START advertising" end,
 		onPrimary = function() Rec_ToggleActive() end,
+		-- Share the advertise line with the other officers, so the guild spams ONE
+		-- message instead of four slightly different ones -- the same reason notes
+		-- and the priority ladder sync. Officer-gated both ways: it overwrites what
+		-- the receiver has.
+		secondaryText = function() return "Share message" end,
+		secondaryWidth = 120,
+		secondaryShown = function()
+			return Okanvil.U and Okanvil.U.isOfficer and Okanvil.U.isOfficer(UnitName("player"))
+		end,
+		onSecondary = function() Rec_ShareMessage() end,
 		-- State, then the night's tally, on one line in the header. The counts used
 		-- to sit at the bottom of Setup, which is the one place you are not looking
 		-- while a campaign runs -- and they are the whole answer to "is this

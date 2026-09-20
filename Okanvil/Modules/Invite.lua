@@ -757,7 +757,10 @@ gev:SetScript("OnEvent", function()
 		if name then
 			local n = (name:gsub("%-.*$", ""))
 			online[n] = isOn and true or false
-			-- offline -> online, and a rank we care about: prompt to invite them.
+			-- offline -> online: prompt to invite them, whatever their rank. There
+			-- is deliberately NO rank filter -- an alt or a new sewer rat logging
+			-- in is exactly who you want to catch for a pug, and the toast has a
+			-- dismiss button for the rest.
 			-- wasOnline[n] == false means we have SEEN them offline; nil means this
 			-- is the first roster read, which would otherwise toast the whole guild.
 			--

@@ -214,11 +214,12 @@ local COL_TITLE = {
 }
 
 -- Where to PARK a hybrid whose spec nobody has read. Not a claim about what they
--- play -- the board marks these rows as guesses and leaves them out of the
--- counts -- just somewhere to show them while you press Read specs.
-local HYBRID_PARK = {
-	DRUID = "ranged", SHAMAN = "ranged", PRIEST = "ranged", PALADIN = "melee",
-}
+-- play -- the board marks these rows with a "?" -- just somewhere to show them
+-- while you press Read specs.
+--
+-- Shared from PuG.lua: the roster COUNT has to park them the same way the board
+-- does, or the column reads 9/9 while the LFM line still asks for two more.
+local HYBRID_PARK = M.HYBRID_PARK
 
 -- ------------------------------------------------------------
 -- Drag & drop
@@ -651,9 +652,22 @@ local function buildReserveStrip(p)
 	end)
 	F.resNoneBtn:Tooltip("Advertise that nothing is reserved.\nFills pugs faster than leaving people to ask.\n\nTurning this on drops any reserved item.")
 
+	-- HR or GBid: the word the reserved ITEMS go out under. Two different
+	-- promises -- HR keeps the drop, GBid puts it to a gold bid among the raid --
+	-- so the leader picks which one the spam claims.
+	F.resTagBtn = W.Button(p, "HR", nil):Size(52, 20)
+	F.resTagBtn:SetPoint("LEFT", x + 68, 0)
+	F.resTagBtn:OnClick(function()
+		d.reserveTag = (d.reserveTag == "gbid") and "hr" or "gbid"
+		M.RefreshUI()
+	end)
+	F.resTagBtn:Tooltip("How reserved items are announced.\n\n"
+		.. "|cffe0b860HR|r -- the leader keeps the drop.\n"
+		.. "|cffe0b860GBid|r -- it goes to a gold bid among the raid.")
+
 	-- how many specific items are hard-reserved (they are set in the Reserves tab)
 	F.resItemTag = W.Text(p, "", "label", "dim")
-	F.resItemTag:SetPoint("LEFT", x + 70, 0)
+	F.resItemTag:SetPoint("LEFT", x + 126, 0)
 end
 -- ------------------------------------------------------------
 -- Loot tab: what the raid reserves
@@ -1075,10 +1089,14 @@ function M.RefreshUI()
 		if buckets[assigned] then
 			pl.guessed = guessed
 			buckets[assigned][#buckets[assigned] + 1] = pl
-			-- A guess does NOT count toward the role's tally: the LFM line is
-			-- built from these numbers, and advertising for four healers you
-			-- already have is worse than advertising for none.
-			if not guessed then have[assigned] = (have[assigned] or 0) + 1 end
+			-- A GUESS COUNTS. It used to be left out, on the reasoning that
+			-- advertising for healers you already have is worse than advertising
+			-- for none -- but the column header counts every row it draws, so a
+			-- full column read "9/9" while the LFM line still asked for two more.
+			-- Asking for players you already have, in front of the whole server,
+			-- is the worse of the two: a guessed ranged is still a body in the
+			-- raid, and the leader can move them by hand if the guess is wrong.
+			have[assigned] = (have[assigned] or 0) + 1
 		end
 	end
 
@@ -1173,6 +1191,18 @@ function M.RefreshUI()
 	if F.resItemTag then
 		local n = #(d.reserveItems or {})
 		F.resItemTag:SetText(n > 0 and ("|cffe0b860+" .. n .. " item" .. (n > 1 and "s" or "") .. "|r") or "")
+		-- The HR/GBid switch only means something when there ARE reserved items,
+		-- so it is hidden rather than sitting there claiming something about
+		-- nothing.
+		if F.resTagBtn then
+			if n > 0 then
+				F.resTagBtn:Show()
+				F.resTagBtn:SetKind(d.reserveTag == "gbid" and "primary" or nil)
+				F.resTagBtn.text:SetText(d.reserveTag == "gbid" and "GBid" or "HR")
+			else
+				F.resTagBtn:Hide()
+			end
+		end
 	end
 	-- (the reserved list is the RIGHT column of the Reserves tab now;
 	--  M.RefreshLootList below paints both columns)

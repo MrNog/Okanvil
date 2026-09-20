@@ -283,9 +283,23 @@ local runKey
 -- with a WALL-CLOCK stamp (time(), not GetTime(): GetTime is uptime and resets to 0 on
 -- every login/reload, so it can't measure "how long ago" across the reload). On load we
 -- read it back ONLY if it belongs to the run we are in and is still within the label TTL.
+-- The PER-CHARACTER store, and nothing else. This used to be written
+-- `Okanvil.cdb or Okanvil.db`, which looks like a harmless guard and is not:
+-- Okanvil.cdb does not exist until ADDON_LOADED, so anything running before that
+-- silently wrote the whole loot history into the ACCOUNT db -- where every other
+-- character then read it. That is why one toon's loot showed up on another.
+--
+-- Returning an empty scratch table when cdb is missing keeps callers working
+-- without persisting anything: a drop captured that early is not worth
+-- corrupting the account file for.
+local earlyScratch = {}
+local function charDB()
+	return Okanvil.cdb or earlyScratch
+end
+
 local function saveBossCtx(name)
 	if not name or name == "" or name == "Trash" then return end
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	local key = runKey and (runKey())
 	if not key then return end   -- not in a resolvable run; nothing to pin it to
 	cdb.lootBossCtx = { key = key, boss = name, at = time() }
@@ -328,7 +342,7 @@ local BOSS_LABEL_TTL = 180    -- seconds a confirmed boss name stays authoritati
 -- lands on the right boss page instead of a new "Trash". (Assigns the forward-declared
 -- upvalue -- callers in onEnterWorld reach it through that local.)
 function restoreBossCtx()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	local ctx = cdb.lootBossCtx
 	if not ctx or not ctx.boss or ctx.boss == "" then return end
 	local key = runKey and (runKey())
@@ -538,13 +552,21 @@ local function db()
 	-- (the real loot is per-character; leaving it here gave TWO sources that
 	-- diverged -- the old alias). We do this once per game session.
 	Okanvil.db.loot.sessions = nil
+	-- The other keys the old `Okanvil.cdb or Okanvil.db` fallback could leak into
+	-- the ACCOUNT db when it ran before ADDON_LOADED. They belong to one
+	-- character; left here every toon read the same boss context and run token,
+	-- which is what made another character's loot appear in the list.
+	Okanvil.db.lootSessions = nil
+	Okanvil.db.lootBossCtx  = nil
+	Okanvil.db.lootRunToken = nil
+	Okanvil.db.trashMigrated = nil
 	return Okanvil.db.loot
 end
 
 -- sessions() returns the PER-CHARACTER list (cdb.lootSessions). This is the ONLY
 -- source of truth for loot history. All code/UI reads from here.
 local function sessions()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	cdb.lootSessions = cdb.lootSessions or {}
 	return cdb.lootSessions
 end
@@ -574,7 +596,7 @@ local function isRaidSession(s)
 end
 
 local function migrateTrashLabels()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	if not cdb or cdb.trashMigrated then return end
 	cdb.trashMigrated = true
 	local list = cdb.lootSessions
@@ -615,7 +637,7 @@ L.MigrateTrashLabels = migrateTrashLabels
 -- Persisted in cdb so it survives a /reload mid-run.
 -- ------------------------------------------------------------
 local function runToken(bump)
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	cdb.lootRunToken = cdb.lootRunToken or 0
 	if bump then cdb.lootRunToken = cdb.lootRunToken + 1 end
 	return cdb.lootRunToken
@@ -833,7 +855,12 @@ local DROP_MATCH_WINDOW = 300
 -- (The UI draws the same distinction as `heldByML` when it decides what to show.)
 local function unowned(dp)
 	if not dp then return false end
+	-- Sitting in the ML's bags waiting to be handed out: still open.
+	if dp.heldBy and dp.heldBy ~= "" and (not dp.receivedBy or dp.receivedBy == "") then
+		return true
+	end
 	if not dp.receivedBy or dp.receivedBy == "" then return true end
+	-- Rows captured before `heldBy` existed stored the ML in receivedBy.
 	local ml = L.MasterLooterName and L.MasterLooterName()
 	return ml ~= nil and dp.receivedBy == ml
 end
@@ -1423,7 +1450,26 @@ local function tagReceiver(player, link)
 		target = storeDrop(boss, id, link, name, rarity, isBoE(link))
 	end
 	if target then
-		target.receivedBy = player
+		-- Under MASTER LOOT, picking an item up is not winning it.
+		--
+		-- Every drop is given to somebody to hold before it is rolled for: usually
+		-- the master looter, but just as often whoever has bag space -- the point
+		-- is that the roll happens minutes later, in chat, and THAT is what
+		-- decides the owner. Recording the holder as the winner filled the mini
+		-- roll with one name on every row, which then had to be retyped.
+		--
+		-- So under master loot a "receives loot" line records who is HOLDING it.
+		-- A roll, an award, or a give replaces that with a real owner (those
+		-- paths write receivedBy directly and clear heldBy). Under any other loot
+		-- method the receiver IS the winner -- group loot and need-before-greed
+		-- hand the item straight to whoever won Blizzard's own roll.
+		local mlMethod = L.IsMasterLootMethod and L.IsMasterLootMethod()
+		if mlMethod and not target.receivedBy then
+			target.heldBy = player
+		else
+			target.receivedBy = player
+			target.heldBy = nil
+		end
 		-- An "everyone passed" roll can still be handed out by the master looter
 		-- afterwards, so a receiver retires the passed flag rather than coexisting
 		-- with it -- otherwise the row keeps reading "passed" over a real owner.
@@ -1573,6 +1619,7 @@ local function recordRollWon(player, link)
 	local dp = findOpenDrop(s, id, true)
 	if dp then
 		dp.receivedBy = player
+		dp.heldBy = nil                       -- a winner outranks whoever carried it
 		dp.passed = nil                       -- someone has it: it was not passed on
 		dp.rollID = nil; dp.rollStart = nil   -- para de mostrar "rolling"
 		-- Won via Disenchant: the item is about to be shattered into a shard. Remember
@@ -2268,6 +2315,7 @@ function L.AttributeByRoll(dp)
 	local best = L.RollWinner(dp)
 	if not (best and best.player and best.player ~= "") then return end
 	dp.receivedBy = best.player
+	dp.heldBy     = nil           -- a winner outranks whoever was carrying it
 	dp.rollWon    = true          -- attributed by roll, not by watching the handover
 
 	-- MULTI-WINNER call ("roll first 5"): several copies went out on one roll-off, so
@@ -2302,6 +2350,7 @@ local function markWinner(id, winner)
 			-- being awarded, so the winner must be allowed to overwrite the ML's name.
 			if s.drops[i].id == id and unowned(s.drops[i]) then
 				s.drops[i].receivedBy = winner
+				s.drops[i].heldBy = nil
 				s.drops[i].passed = nil
 				return true
 			end
@@ -2482,19 +2531,48 @@ local function commitAward(id, winner)
 
 		-- Tell the raid who won regardless, so the winner is not left guessing and
 		-- nobody has to read back through chat.
+		local meName = UnitName("player") or "the ML"
 		if announceChannel then
 			local ch = announceChannel()
 			if ch then
 				local rollTag = (roll and roll > 0) and (" (" .. roll .. (kind == "os" and " OS" or "") .. ")") or ""
 				SendChatMessage((link or nm) .. " >> " .. winner .. rollTag
-					.. " -- trade " .. (UnitName("player") or "the ML") .. " for it", ch)
+					.. " -- trade " .. meName .. " for it", ch)
 			end
+		end
+
+		-- ...and WHISPER the winner. Raid chat during a pull scrolls past in
+		-- seconds, and this item needs an action FROM THEM -- they have to come and
+		-- trade. A line in the raid feed is an announcement; a whisper is a task.
+		-- Skipped when the winner is us (the client refuses a self-whisper and the
+		-- server answers with a visible "Player not found.").
+		local cdb = Okanvil.db and Okanvil.db.council
+		if winner ~= meName and (not cdb or cdb.whisperWinner ~= false) then
+			SendChatMessage(("You won %s -- trade %s for it."):format(link or nm, meName),
+				"WHISPER", nil, winner)
 		end
 		activeRoll = nil
 	end
 
 	if L.onLoot then L.onLoot() end
 	if L.onRoll then L.onRoll() end
+end
+
+-- Mark a drop as decided by the COUNCIL rather than by a roll, with the response
+-- the winner gave ("bis", "os", ...). Called just before the award, so the fields
+-- are already on the drop whichever way the hand-over goes (master-loot give, or
+-- the trade fallback under auto loot).
+--
+-- Without this the history cannot tell a council award from a roll win, and the
+-- site export loses the one fact the council produced: WHY they got it.
+function L.NoteCouncilAward(id, winner, response)
+	if not (id and winner) then return end
+	local s = activeBucket()
+	local dp = s and findAnyOpenDrop(s, id)
+	if not dp then return end
+	dp.council = true
+	dp.councilResponse = response          -- nil when they never answered
+	dp.councilAt = time()
 end
 
 -- AWARD with CONFIRMATION -- SAME flow as RaidRoll RR_GiveLoot (where the idea came from):
@@ -2513,10 +2591,10 @@ function L.AwardWinner(id, winner, topRoll, spec)
 	local link
 	if activeRoll and activeRoll.id == id then link = activeRoll.link end
 	local itemStr = link or ("[" .. ((GetItemInfo(id)) or "item") .. "]")
-	local rollTag = (topRoll and topRoll > 0) and (" (rolou " .. topRoll .. (spec == "off" and " OS" or "") .. ")") or ""
+	local rollTag = (topRoll and topRoll > 0) and (" (rolled " .. topRoll .. (spec == "off" and " OS" or "") .. ")") or ""
 	Okanvil:Confirm(
-		"Tens a certeza?\nDar " .. itemStr .. " a |cffffd200" .. winner .. "|r" .. rollTag .. "?",
-		"Dar a " .. winner,                                  -- botao com o nome, como o RaidRoll
+		"Are you sure?\nGive " .. itemStr .. " to |cffffd200" .. winner .. "|r" .. rollTag .. "?",
+		"Give to " .. winner,                                -- button carries the name, like RaidRoll
 		function() commitAward(id, winner) end)
 end
 
@@ -2611,7 +2689,7 @@ end
 -- na guild, lembramos a classe para sempre.
 -- ------------------------------------------------------------
 local function classCache()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	cdb.classCache = cdb.classCache or {}
 	return cdb.classCache
 end
@@ -2779,7 +2857,7 @@ function L.ScanIDs(text)
 		if id and id > 0 and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
 	end
 	if #ids == 0 then
-		Okanvil:Print("Scan: nao encontrei nenhum item id no texto colado.")
+		Okanvil:Print("Scan: no item id found in the pasted text.")
 		return
 	end
 	local out = {}    -- id -> lines
@@ -2904,6 +2982,13 @@ function L.RenderInline(s, rowFn, idx, y)
 			who = "  |cff8a8d93->|r |cff8a5ad9Disenchant|r"
 		elseif d.receivedBy and d.receivedBy ~= "" then
 			who = "  |cff5e6166->|r " .. L.ClassColorName(d.receivedBy)
+		elseif d.heldBy and d.heldBy ~= "" then
+			-- Under master loot somebody carries the drop until it is rolled for --
+			-- often not the master looter, just whoever had bag space. Naming them
+			-- as the receiver put one player's name against every item of the
+			-- night; this says what is actually true, and reads as unfinished
+			-- business rather than a settled award.
+			who = "  |cff5e6166with|r |cff8a8d93" .. d.heldBy .. "|r"
 		end
 		if d.rollValue then
 			who = who .. "  |cff7cfc8a[roll " .. tostring(d.rollValue)
@@ -3135,9 +3220,9 @@ local function runAutoGive()
 				if (d.action == "give" or d.action == "confirm") and not warnedThreshold then
 					local rarity = select(3, GetItemInfo(link)) or 4
 					if rarity < thr then
-						Okanvil:Print("|cffff5555Aviso:|r ha loot (ex.: " .. (iname or "orb")
-							.. ") ABAIXO do threshold do ML (" .. thr .. ") -- nao passa pelo master loot,"
-							.. " qualquer um pode pegar. Baixa o Loot Threshold para o apanhares.")
+						Okanvil:Print("|cffff5555Warning:|r there is loot (e.g. " .. (iname or "orb")
+							.. ") BELOW the ML threshold (" .. thr .. ") -- it does not go through master"
+							.. " loot, anyone can take it. Lower the Loot Threshold to catch it.")
 						warnedThreshold = true
 					end
 				end
@@ -3295,7 +3380,7 @@ local DBG_MAX = 200
 -- o buffer vive no per-character DB (onde ja vive o loot) -> persiste entre
 -- /reload sem precisar de registar um global novo no .toc.
 local function dbgBuf()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	cdb.lootDbgLog = cdb.lootDbgLog or {}
 	return cdb.lootDbgLog
 end
@@ -3318,6 +3403,69 @@ end
 -- toggles live in Settings.
 
 -- ------------------------------------------------------------
+-- Inject a fake drop through the REAL pipeline, for another module's test mode
+-- (the council's). Same path /okloottest uses -- storeDrop, the session, the
+-- roll manager -- so the mini roll lists it exactly as it lists a real drop.
+--
+-- Returns the drop, or nil + a reason. Callers must respect `world`: outside an
+-- instance nothing records unless OkanvilLootWorldTest is set, which is what
+-- makes a solo test possible at all.
+-- Remove drops the council's test mode created, wherever they landed. Hiding
+-- via ClearActiveDrops was not enough: the test injects with world recording on
+-- (often in a city), and by the time it is switched off activeBucket() can be a
+-- different session entirely -- so the fake items came back the next time the
+-- mini roll opened. These are marked on creation and deleted by that mark.
+function L.PurgeTestDrops()
+	local n = 0
+	for _, s in ipairs(sessions() or {}) do
+		for i = #(s.drops or {}), 1, -1 do
+			-- `isTest` is the mark; the boss labels catch drops made before the
+			-- mark existed, which would otherwise sit in the list for ever with
+			-- nothing able to identify them.
+			local d = s.drops[i]
+			if d.isTest or d.boss == "Council test" or d.boss == "Loot test" then
+				table.remove(s.drops, i)
+				n = n + 1
+			end
+		end
+	end
+	-- The pending buffer too: a test run before any session existed parks there.
+	for i = #pendingDrops, 1, -1 do
+		local d = pendingDrops[i]
+		if d.isTest or d.boss == "Council test" or d.boss == "Loot test" then
+			table.remove(pendingDrops, i)
+			n = n + 1
+		end
+	end
+	if n > 0 and L.onLoot then L.onLoot() end
+	return n
+end
+
+function L.InjectTestDrop(id, bossLabel)
+	id = tonumber(id)
+	if not id then return nil, "bad id" end
+	local name, link = GetItemInfo(id)
+	if not name then return nil, "not cached" end
+	if not shouldRecordHere() then return nil, "not recording here" end
+	local _, _, rarity = GetItemInfo(id)
+	-- allowDup: two test rounds on the same item are two drops, not one.
+	local dp = storeDrop(bossLabel or "Loot test", id, link, name, rarity or 4, false, nil, nil, true)
+	if not dp then return nil, "filtered out (quality below the Log threshold)" end
+	-- MARKED as fake, so PurgeTestDrops can find it later whatever session it
+	-- ended up in, and so it can never be mistaken for a real drop in the export.
+	dp.isTest = true
+	return dp
+end
+
+-- Whether a test drop would be recorded right now, and the switch for it. The
+-- council's test mode turns this on so a solo test works outside an instance,
+-- and turns it back off when the test ends.
+function L.WorldTest(on)
+	if on == nil then return OkanvilLootWorldTest and true or false end
+	OkanvilLootWorldTest = on and true or nil
+	return OkanvilLootWorldTest and true or false
+end
+
 -- /okloottest -- put a fake drop through the REAL pipeline
 -- ------------------------------------------------------------
 -- Waiting for a raid to test a loot change is a slow feedback loop, and faking

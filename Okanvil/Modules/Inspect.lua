@@ -348,6 +348,12 @@ ev:SetScript("OnEvent", function()
 		end
 	end
 
+	-- RELEASE the inspect cache before asking about the next player. The client
+	-- keeps ONE inspected unit's talents at a time, and GetTalentTabInfo(i, true)
+	-- reads whatever is in there -- so without this the next scan could answer
+	-- with the PREVIOUS player's trees, and a ret paladin came back as holy.
+	if ClearInspectPlayer then ClearInspectPlayer() end
+
 	done = done + 1
 	fireNext()
 end)
@@ -359,6 +365,10 @@ tick:SetScript("OnUpdate", function(_, elapsed)
 	if not (active and curUnit) then return end
 	waited = waited + elapsed
 	if waited < TIMEOUT then return end
+	-- A timed-out inspect leaves the client holding whoever it last managed to
+	-- read, so release it here too -- otherwise the next player's scan can answer
+	-- with a stale unit's talents.
+	if ClearInspectPlayer then ClearInspectPlayer() end
 	done = done + 1
 	fireNext()
 end)

@@ -22,6 +22,7 @@ local HOME, LOOT, SETTINGS = "__home", "__loot", "__settings"
 -- all -- a module with no menu row and its options somewhere else is a module
 -- nobody finds.
 local MODULES, INVITE = "__modules", "__invite"
+local COUNCIL = "__council"
 
 -- FIXED window size (MRT-style): the window is NOT resizable -- a hand-tuned size
 -- that always looks right. Users make it bigger/smaller with the Scale slider in
@@ -148,6 +149,11 @@ function Okanvil:BuildShell()
 	brandFS:SetPoint("LEFT", ver, "RIGHT", 8, 1)
 	local function paintBrand()
 		local b = db.brand or ""
+		-- NO GUILD, NO SKIN. The brand is stored account-wide but being in a guild
+		-- is a fact about THIS character, so an alt in no guild was wearing the
+		-- main's guild name in the title bar. Hidden rather than cleared: the
+		-- setting is still there for the characters it belongs to.
+		if IsInGuild and not IsInGuild() then brandFS:SetText(""); return end
 		if b == "" or b == "Okanvil" then brandFS:SetText("") -- no guild skin set
 		else brandFS:SetText("|cff8a8d93\194\183  " .. b .. "|r") end -- "· <guild>"
 	end
@@ -199,11 +205,21 @@ function Okanvil:BuildShell()
 	hubBtn.text = hubTxt
 	self.footerHub = hubBtn
 	local function paintHub()
-		hubTxt:SetText("|cffe0b860Web Hub:|r |cff8a8d93" .. (self.db.hubURL or "") .. "|r")
+		-- No URL, no link. It used to render "Web Hub:" with nothing after it,
+		-- which reads as a broken label rather than an unset option -- and a guild
+		-- without a website has no reason to see the row at all.
+		local url = self.db.hubURL or ""
+		if url == "" then hubBtn:Hide(); return end
+		hubBtn:Show()
+		hubTxt:SetText("|cffe0b860Web Hub:|r |cff8a8d93" .. url .. "|r")
 		hubBtn:SetWidth(hubTxt:GetStringWidth() + 8)
 	end
 	paintHub(); self.footerPaintHub = paintHub
-	hubBtn:SetScript("OnEnter", function() hubTxt:SetText("|cffffd200Web Hub:|r |cffffffff" .. (self.db.hubURL or "") .. "|r") end)
+	hubBtn:SetScript("OnEnter", function()
+		local url = self.db.hubURL or ""
+		if url == "" then return end
+		hubTxt:SetText("|cffffd200Web Hub:|r |cffffffff" .. url .. "|r")
+	end)
 	hubBtn:SetScript("OnLeave", paintHub)
 	hubBtn:SetScript("OnClick", function()
 		if Okanvil.ShowExport then Okanvil:ShowExport(self.db.hubURL or "", "Web Hub -- Ctrl+C to copy") end
@@ -313,10 +329,20 @@ Okanvil.NATIVE = {
 	-- `core` = not a module you switch: the guild roster IS Home, and turning it
 	-- off only broke the page it lives on. It stays out of the Modules list
 	-- rather than offering a switch nobody has a reason to touch.
-	{ key = "__guild",  title = "Guild",  icon = Okanvil.ICONS.guild, noNav = true, core = true,
-	  desc = "Attendance snapshots + roster export. Both live on Home." },
+	-- Switchable now (it used to be `core`, i.e. no switch at all). It is the web
+	-- hub's half of the addon -- roster export and attendance snapshots -- and a
+	-- guild without a hub has no use for either.
+	{ key = "__guild",  title = "Guild",  icon = Okanvil.ICONS.guild, noNav = true,
+	  desc = "Attendance snapshots + roster export for a guild web hub. "
+	      .. "Off = neither is captured; Home still lists who is online." },
 	{ key = "__loot",   title = "Loot",   icon = Okanvil.ICONS.loot,
 	  desc = "Per-boss loot tracking + Mini Roll Manager (MS/OS roll-offs, award, speed-run sweep)." },
+	-- The raider only ever sees a popup; the officer board is its own window. The
+	-- PAGE is where the council is configured and where a round is started by hand
+	-- -- the settings a master looter wants before the pull, not during it.
+	{ key = "__council", title = "Loot Council", icon = Okanvil.ICONS.loot,
+	  desc = "Ask the raid what an item is worth to them, then award it. Off = no popups, "
+	      .. "no comms handlers, and the proficiency tables are released." },
 }
 
 -- Nav display order (top to bottom), by module TITLE. This is the ONE place to
@@ -331,7 +357,9 @@ Okanvil.NATIVE = {
 Okanvil.NAV_GROUPS = {
 	{ section = nil,      items = { "Home" } },
 	{ section = "RAID",   items = { "Loot", "Notes", "Raid Finder", "PuG" } },
-	{ section = "GUILD",  items = { "Invite", "Recruit" } },
+	-- Loot Council under GUILD, not RAID: what it configures is the guild's own
+	-- loot rules and its priority ladder, which outlive any one raid night.
+	{ section = "GUILD",  items = { "Invite", "Recruit", "Loot Council" } },
 	-- Modules and Settings last: neither is a feature, they are what the addon
 	-- has and how it behaves. Settings is the very last row -- see below, where
 	-- anything unnamed is appended BEFORE it rather than after.
@@ -609,6 +637,11 @@ function Okanvil:ShowPanel(key)
 		elseif key == SETTINGS then entry = self:BuildSettings()
 		elseif key == MODULES then entry = self:BuildModules()
 		elseif key == INVITE then entry = self:BuildInvite()
+		elseif key == COUNCIL then
+			entry = newFillPanel()
+			if Okanvil.Council and Okanvil.Council.BuildPage then
+				Okanvil.Council.BuildPage(entry.child)
+			end
 		else
 			local plug = self.entries[key]
 			if plug and plug.build then

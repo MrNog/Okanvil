@@ -21,24 +21,12 @@ local newScrollPanel = Okanvil.UI.newScrollPanel
 -- The Prio pill is officer material, so for everyone else it is not built at all
 -- rather than built and refused: a tab that only exists to say "not for you" is a
 -- worse page for the raider and tells them nothing they can act on.
-local function lootTabs()
-	local t = {
-		-- fill = the page tracks the window instead of a fixed height: these are
-		-- lists, so every extra pixel of window is another row on screen.
-		{ key = "history", label = "History", height = 400, fill = true,
-		  build = function(pg) Okanvil:Loot_BuildHistory(pg) end },
-	}
-	if Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() then
-		t[#t + 1] = { key = "prio", label = "Prio", height = 400, fill = true,
-		              build = function(pg) Okanvil:Loot_BuildPrio(pg) end }
-	end
-	-- Collectors stays on the page: it is armed at the start of a raid, not set
-	-- once and forgotten, so it belongs where you already are when the raid forms.
-	t[#t + 1] = { key = "collectors", label = "Collectors", height = 300,
-	              build = function(pg) Okanvil:Loot_BuildCollectors(pg) end }
-	return t
-end
-
+-- ONE page, no pills. Collectors is three fields armed at the start of a raid
+-- and the history is the list you read for the rest of it -- two clicks apart
+-- for no reason. The fields go on top, the list takes the rest of the window.
+--
+-- The Prio ladder moved to Loot Council: that is the council's decision about
+-- who SHOULD get an item, while this page records who DID.
 function Okanvil:BuildLoot()
 	local L = Okanvil.Loot
 	local fill = newFillPanel()
@@ -96,10 +84,24 @@ function Okanvil:BuildLoot()
 		end,
 		-- pills: the tabs switch one shared body instead of covering a landing page,
 		-- so there is no "< Back" and the switch never leaves the screen
-		pills = true,
-		tabs = lootTabs(),
+		-- No tabs: the page is one body now (see below).
 	})
 	fill.dash = dash
+
+	-- ONE body: collectors on top, then the history list filling what is left.
+	-- The collectors block is a fixed height, so the history can anchor to its
+	-- bottom and still track the window.
+	local main = dash.main
+	local top = W.Frame(main, "page")
+	top:SetPoint("TOPLEFT", 0, 0)
+	top:SetPoint("TOPRIGHT", 0, 0)
+	top:SetHeight(128)
+	Okanvil:Loot_BuildCollectors(top)
+
+	local hist = W.Frame(main, "page")
+	hist:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
+	hist:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", 0, 0)
+	Okanvil:Loot_BuildHistory(hist)
 
 	-- refresh when loot changes / the page shows / loot method changes
 	local function refreshAll()
@@ -250,14 +252,19 @@ local function buildMessages(p, y0)
 		local eb = W.EditBox(p, function(t) setFn(t) end)
 		eb:SetSize(360, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(getFn())
 	end
+	-- MS and OS only. The Free button is gone from the mini roll (four buttons in
+	-- a 270px row were unreadable), so a box to word a message nothing sends was
+	-- a setting for a feature that no longer exists. The "free" mode itself stays
+	-- as StartRoll's fallback, and its default wording with it.
 	row("MS",      y0 - 40, function() return L.RollMsg("ms") end,   function(t) L.SetRollMsg("ms", t) end)
 	row("OS",      y0 - 70, function() return L.RollMsg("os") end,   function(t) L.SetRollMsg("os", t) end)
-	row("Free",    y0 - 100, function() return L.RollMsg("free") end, function(t) L.SetRollMsg("free", t) end)
 	-- ON AWARD: the switch and the message it sends, as one control. They used to
 	-- be on separate pages -- the toggle under Collectors, the text here -- so
 	-- neither half said anything about the other, and the box sat empty with the
 	-- switch on and nothing to explain why nothing was sent.
-	local wy = y0 - 148
+	-- 30px higher than it used to be: the Free template above is gone, and the
+	-- gap it left read as a missing control.
+	local wy = y0 - 118
 	local wh = W.Text(p, "ON AWARD", "note", "dim"); wh:SetPoint("TOPLEFT", X, wy)
 	wy = wy - 24
 

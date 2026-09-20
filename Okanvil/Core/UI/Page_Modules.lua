@@ -34,12 +34,33 @@ end
 -- else that wants it draw the same thing.
 function Okanvil:Settings_Modules(panel)
 	local X = 4
-	local p = panel
-	local wrap = { relayout = function() end }
-	local sf = panel
 
-	local hint = W.Text(p, "Turn modules on/off for THIS character (off = hidden from the menu). Each module's settings stay shared across your toons.", "label", "dim")
-	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", p, "RIGHT", -X, 0); hint:SetJustifyH("LEFT")
+	local hint = W.Text(panel, "Turn modules on/off for THIS character (off = hidden from the menu). Each module's settings stay shared across your toons.", "label", "dim")
+	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", panel, "RIGHT", -X, 0); hint:SetJustifyH("LEFT")
+
+	-- SCROLLED. Twelve modules is taller than the page, so the last few were cut
+	-- off with nothing to say they existed -- the list grows every time a module
+	-- is added, and the window does not.
+	local sf = CreateFrame("ScrollFrame", nil, panel)
+	sf:SetPoint("TOPLEFT", 0, -34)
+	sf:SetPoint("BOTTOMRIGHT", 0, 0)
+	Okanvil.Clip(sf)
+	local child = CreateFrame("Frame", nil, sf)
+	child:SetSize(1, 1)
+	sf:SetScrollChild(child)
+	sf:EnableMouseWheel(true)
+	sf:SetScript("OnMouseWheel", function(self, delta)
+		local cur = self:GetVerticalScroll()
+		local max = math.max(0, child:GetHeight() - self:GetHeight())
+		local nxt = cur - delta * 40
+		if nxt < 0 then nxt = 0 elseif nxt > max then nxt = max end
+		self:SetVerticalScroll(nxt)
+	end)
+	-- The child must track the scrollframe's width or the rows anchor to nothing.
+	sf:SetScript("OnSizeChanged", function(self, w) child:SetWidth(w or 1) end)
+
+	local p = child
+	local wrap = { relayout = function() end }
 
 	wrap.rows = {}
 	local function rebuild()
@@ -66,7 +87,9 @@ function Okanvil:Settings_Modules(panel)
 		end
 		if wrap.empty then wrap.empty:SetText("") end
 
-		local y = 44
+		-- Starts at 0: the hint is outside the scroll frame now, so the rows no
+		-- longer need to leave room for it.
+		local y = 0
 		for i, it in ipairs(items) do
 			local name = it.key
 			local r = wrap.rows[i]

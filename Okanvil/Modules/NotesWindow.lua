@@ -378,8 +378,19 @@ function WIN.Toggle(state)
 	c.shown = state and true or false
 	if state then
 		applyPoint(); applyLook()
-		win:Show()
-		WIN.Refresh()
+		-- Switching the window ON does not force it onto the screen. With "follow
+		-- the room" set (the default) the note belongs to a boss's room, so
+		-- pressing the button in Dalaran used to paint an ICC note over the world
+		-- and leave it there. ApplyVisibility is the one place that decides, and
+		-- it will bring the window up by itself the moment you walk into the room.
+		WIN.ApplyVisibility()
+		if win:IsShown() then
+			WIN.Refresh()
+		elseif c.onlyInRoom ~= false then
+			Okanvil:Print("|cffe0b860Notes:|r fight window is |cff7cfc8aon|r -- "
+				.. "it appears when you are in the boss's room. "
+				.. "|cff8a8d93(Follow the room is on.)|r")
+		end
 	else
 		win:Hide()
 	end
@@ -417,9 +428,16 @@ function WIN.ApplyVisibility()
 		if not win:IsShown() then win:Show(); WIN.Refresh() end
 		return
 	end
-	if N.InNoteRoom() and not win:IsShown() then
+	-- Following the room means BOTH ways. This only ever opened the window; the
+	-- closing lived in onZone and needed a real in->out transition to have been
+	-- seen, so a window that was already up in the wrong place (opened by hand,
+	-- or left over from a reload in another zone) stayed up for ever.
+	local inRoom = N.InNoteRoom()
+	if inRoom and not win:IsShown() then
 		win:Show()
 		WIN.Refresh()
+	elseif not inRoom and win:IsShown() then
+		win:Hide()
 	end
 end
 

@@ -187,8 +187,12 @@ local defaults = {
 	bgAlpha = 0.95,
 	minimapAngle = 200,
 	modules = {},      -- name -> { enabled = bool }. Absent = enabled by default.
-	brand = "RATS Guild Hub", -- GUILD SKIN shown after the fixed "Okanvil" wordmark (editable per guild; "" = none)
-	hubURL = "https://mrnog.github.io/RATS/", -- the guild's web hub
+	-- GUILD SKIN and web hub: EMPTY by default. Okanvil is not one guild's addon,
+	-- and shipping RATS in the defaults meant a fresh install -- or a character
+	-- in no guild at all -- advertised a guild it had nothing to do with.
+	-- Both are set in Settings > Branding, or with /okanvil brand|hub.
+	brand = "",
+	hubURL = "",
 	lootThreshold = 3, -- min item rarity to log: 0 poor,1 common,2 uncommon,3 rare,4 epic
 	recordDungeon = true, -- capture attendance/loot in 5-man dungeons (party instances)
 	recordRaid = true,    -- capture attendance/loot in raids
@@ -550,9 +554,11 @@ end
 -- opt-in inside each module later.
 -- ------------------------------------------------------------
 function Okanvil:IsModuleEnabled(name)
-	-- A `core` module has no switch in the Modules list any more, so a stored
-	-- `false` from before would have stuck with no way back. Always on.
-	if name == "__guild" then return true end
+	-- __guild used to be forced on here, which made it impossible to switch off
+	-- even though the Modules list had a row for it. It drives the roster JSON
+	-- export and the automatic attendance capture -- both of which only matter to
+	-- a guild running a web hub -- so a guild without one, or a character in no
+	-- guild at all, must be able to turn it off.
 	local m = self.cdb and self.cdb.modules and self.cdb.modules[name]
 	if m and m.enabled == false then
 		return false
@@ -709,6 +715,21 @@ SlashCmdList["Okanvil"] = function(arg)
 	-- Branding lives here rather than on the Settings page: a guild sets its skin
 	-- and hub link once, on the day it installs Okanvil, and then never again --
 	-- which is not worth a third of the page you open to change the window scale.
+	-- /okanvil generic -- strip every guild-specific setting in one go.
+	--
+	-- The defaults ship empty now, but SavedVariables is account-wide and already
+	-- written: a brand set months ago is still there on a brand-new character in
+	-- no guild. This is the "make this install not about my guild" button.
+	if arg:find("^generic") then
+		Okanvil.db.brand  = ""
+		Okanvil.db.hubURL = ""
+		if Okanvil.headerPaintBrand then Okanvil.headerPaintBrand() end
+		if Okanvil.footerPaintHub then Okanvil.footerPaintHub() end
+		Okanvil.panels["__home"] = nil
+		Okanvil:Print("Guild skin and web hub cleared. "
+			.. "|cff8a8d93Loot priority and notes are separate -- clear those on their own pages.|r")
+		return
+	end
 	local brand = arg:find("^brand") and raw:match("^%S+%s*(.*)$") or nil
 	if brand then
 		Okanvil.db.brand = (brand ~= "" and brand) or ""
@@ -762,6 +783,16 @@ end
 
 -- /okerr        -- show the persisted error log (copyable; survives logout)
 -- /okerr clear  -- wipe it
+-- /okver -- who in the group or guild is running Okanvil, and which build.
+-- Not council-specific: a version mismatch is the first thing to rule out for
+-- ANY "it works for me but not for him" report, and the window was previously
+-- reachable only by opening the Settings page and scrolling to find it.
+SLASH_OKVER1 = "/okver"
+SlashCmdList["OKVER"] = function()
+	if Okanvil.ShowVersionChecker then Okanvil:ShowVersionChecker()
+	else Okanvil:Print("|cffff5555Version checker unavailable.|r") end
+end
+
 SLASH_OKERR1 = "/okerr"
 SlashCmdList["OKERR"] = function(arg)
 	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")

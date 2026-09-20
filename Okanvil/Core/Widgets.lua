@@ -407,9 +407,22 @@ function W.EditBox(parent, onEnter)
 	e:SetTextColor(unpack3(C.text))   -- global font slider must not overflow it
 	e:SetScript("OnEscapePressed", e.ClearFocus)
 	e:SetScript("OnEditFocusGained", function() box:SetBackdropBorderColor(unpack3(C.borderHi)) end)
-	e:SetScript("OnEditFocusLost", function() box:SetBackdropBorderColor(unpack3(C.border)) end)
+	-- COMMIT ON FOCUS LOSS as well as on Enter. Only firing on Enter meant typing
+	-- a value and then clicking away silently threw it out -- the field still
+	-- showed the text, so it looked saved, and the setting only "worked" after a
+	-- /reload repainted the box from the unchanged db.
+	e:SetScript("OnEditFocusLost", function(s)
+		box:SetBackdropBorderColor(unpack3(C.border))
+		if onEnter and s._committed ~= s:GetText() then
+			s._committed = s:GetText()
+			onEnter(s:GetText())
+		end
+	end)
 	if onEnter then
-		e:SetScript("OnEnterPressed", function(s) onEnter(s:GetText()); s:ClearFocus() end)
+		e:SetScript("OnEnterPressed", function(s)
+			s._committed = s:GetText()
+			onEnter(s:GetText()); s:ClearFocus()
+		end)
 	end
 	Okanvil:TrackEditBox(e)   -- so the window can release keyboard focus on hide
 	box.edit = e
@@ -1027,7 +1040,7 @@ local confirmDlg
 function Okanvil:Confirm(text, acceptLabel, onAccept, onCancel)
 	local f = confirmDlg
 	if not f then
-		f = self:Popup("Confirmar")
+		f = self:Popup("Confirm")
 		f:SetSize(340, 150)
 		f:SetFrameStrata("FULLSCREEN_DIALOG")   -- above plugin popups + the loot window
 

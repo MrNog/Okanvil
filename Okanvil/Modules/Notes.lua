@@ -59,6 +59,11 @@ local defaults = {
 	selected = nil,    -- which note the page is showing
 	share = true,      -- swap notes with other officers automatically
 	stamps = {},       -- [name] = time() of the last edit, for the sync
+	-- Role slots -> names, for the {Holy1} style tags the shipped pack uses.
+	-- EMPTY by default: they are a roster, and a roster belongs to whoever
+	-- installs this. An unset slot renders as "{Holy1}" in the note, which says
+	-- "nobody assigned" far better than someone else's guild's paladin would.
+	slots = {},
 }
 
 -- ------------------------------------------------------------
@@ -107,6 +112,11 @@ local wasOfficer = false
 
 function N.CanEdit()
 	if not (Okanvil.U and Okanvil.U.isOfficer) then return true end   -- no roster API: do not lock anyone out
+	-- NO GUILD, NO GATE. The lock exists because an officer's Send overwrites
+	-- what a raider typed -- an edit that looks like it worked and then quietly
+	-- does not. Outside a guild nobody can Send to you, so the notes are yours
+	-- alone and locking them only stopped you using the module at all.
+	if IsInGuild and not IsInGuild() then return true end
 	local me = UnitName("player") or ""
 	if Okanvil.U.isOfficer(me) then
 		wasOfficer = true
@@ -115,6 +125,16 @@ function N.CanEdit()
 	if wasOfficer then return true end      -- known officer, roster just went cold
 	if GuildRoster then GuildRoster() end   -- warm it for the next check
 	return false
+end
+
+-- May this character SEND notes to other people?  Stricter than CanEdit: it
+-- needs a guild (there is nobody to send to without one) and officer rank (the
+-- receiving side refuses anyone else anyway, so the button would lie).
+function N.CanShare()
+	if not (IsInGuild and IsInGuild()) then return false end
+	local U = Okanvil.U
+	if not (U and U.isOfficer) then return false end
+	return N.CanEdit()
 end
 
 function N.Set(name, text)
@@ -149,7 +169,37 @@ end
 -- "entered combat" -- which is also true for a dungeon trash pack, a duel, or a
 -- mob on the way in. This is the question that separates those: the note only
 -- belongs here if the subzone asked for it.
+-- Saying YES outside a raid is always a bug: every route to yes below is meant
+-- to describe a boss room, and a 5-man or the open world is neither. Rather
+-- than ask the player to catch it live with a /dump they will not remember,
+-- record which route answered and where -- it persists in OkanvilBugDB and
+-- reads back with /okerr, or straight out of the SavedVariables file.
+local function yes(route)
+	local kind = IsInInstance and select(2, IsInInstance()) or nil
+	if kind ~= "raid" then
+		local sub = GetSubZoneText()
+		if not sub or sub == "" then sub = "-" end
+		Okanvil:Err("Notes.InNoteRoom", ("said yes via %s outside a raid -- %s / %s (instanceType=%s), note=%s")
+			:format(route, tostring(GetZoneText()), sub, tostring(kind or "none"),
+				tostring(db and db.selected)))
+		-- ...and REFUSE. This used to log the bug and then answer yes anyway, so
+		-- an ICC note ran its timers in a 5-man -- "High Energy" counting down in
+		-- Halls of Reflection. Every route to yes describes a boss room; a
+		-- dungeon or the open world is neither, so no route may say yes there.
+		--
+		-- Test mode is the one exception: it exists to run a note anywhere.
+		if not N.testMode then return false end
+	end
+	return true
+end
+
 function N.InNoteRoom()
+	-- Off is off. The module table exists whether or not the module is enabled --
+	-- the .toc always loads this file -- so an aura asking this question gets a
+	-- real answer from a module the player has switched off unless we say no
+	-- here. Without this, disabling Notes hid the tab and left the timers running.
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return false end
+
 	-- Test mode: pretend we are standing in the selected note's room, wherever
 	-- we actually are. For trying the timers on a target dummy -- the raider
 	-- running only the aura has no Okanvil and is never gated, so without this
@@ -157,13 +207,19 @@ function N.InNoteRoom()
 	--
 	-- Deliberately not persisted: it turns itself off at logout, because a
 	-- forgotten bypass means every trash pull runs a boss note.
-	if N.testMode then return (db and db.selected) ~= nil end
+	if N.testMode then
+		if (db and db.selected) ~= nil then return yes("testMode") end
+		return false
+	end
 
 	-- No special case for the test note: Valley of Honor is in ZONE_NOTE, so the
 	-- ordinary zone lookup below answers for it exactly as it does for a boss
 	-- room. That is the point -- the test exercises the real path.
 	local here = N.NoteForHere()
-	if here then return here == (db and db.selected) end
+	if here then
+		if here == (db and db.selected) then return yes("zone:" .. here) end
+		return false
+	end
 
 	-- A one-room raid has no subzone to ask. Trial of the Crusader is a single
 	-- arena for five bosses, so the lookup above can never succeed there -- and
@@ -171,7 +227,8 @@ function N.InNoteRoom()
 	-- note was picked. Here the CHOICE is the signal: you selected it, you are
 	-- standing in the raid it belongs to, that is as much as can be known.
 	if N.IsOneRoomRaid and N.IsOneRoomRaid() then
-		return (db and db.selected) ~= nil
+		if (db and db.selected) ~= nil then return yes("oneRoomRaid") end
+		return false
 	end
 	return false
 end
@@ -549,7 +606,10 @@ local function build(panel)
 		-- that is what a raider opens.
 		secondaryText = function() return "Send to raid" end,
 		secondaryWidth = 100,
-		secondaryShown = function() return N.CanEdit() end,
+		-- CanEdit is now true outside a guild (your notes are yours alone there),
+		-- but sending needs an officer AND a guild to send to -- so these two ask
+		-- the stricter question rather than riding on the edit gate.
+		secondaryShown = function() return N.CanShare and N.CanShare() end,
 		onSecondary = function()
 			if N.SendNow then N.SendNow() end
 			-- Repaint immediately: the header shows the send tally, and without
@@ -561,7 +621,7 @@ local function build(panel)
 		tertiaryText = function() return "Who has them?" end,
 		tertiaryWidth = 110,
 		tertiaryTip = "Ask the group to report back. Anyone who does not answer\nis not running Okanvil -- which is what you want to know\nbefore a pull, not after one.",
-		tertiaryShown = function() return N.CanEdit() end,
+		tertiaryShown = function() return N.CanShare and N.CanShare() end,
 		onTertiary = function() N.RunAudit() end,
 
 		-- After a Send, the header carries the tally: how many notes went and
@@ -647,6 +707,9 @@ function N.BuildPage(p)
 	F.title = W.Text(p, "", "head", "accent")
 	F.title:SetPoint("TOPLEFT", RX, -42)
 
+	-- No "Fill names" button. The slots resolve as you type now, so writing the
+	-- names into the text bought nothing and cost the note its link to the slot
+	-- table -- change a paladin and that one note would have been left behind.
 	F.clear = W.Button(p, "Clear")
 	F.clear:SetSize(54, 20); F.clear:SetPoint("TOPRIGHT", -10, -38)
 	F.clear:Tooltip("Undo your edits to this note.\nIt goes back to the one Okanvil ships with.")
@@ -727,7 +790,7 @@ function N.BuildPage(p)
 	F.count = W.Text(p, "", "note", "dim")
 	F.count:SetPoint("BOTTOMLEFT", RX, 12)
 
-	F.hint = W.Text(p, "MRT note format. Role slots are filled in a later version.", "note", "dim")
+	F.hint = W.Text(p, "MRT note format. {Holy1} {Prot} and friends fill from Fight window > Role slots.", "note", "dim")
 	F.hint:SetPoint("BOTTOMRIGHT", -10, 12)
 
 	N.Refresh()
@@ -787,6 +850,48 @@ function N.BuildWindowPage(p)
 	local sHint = W.Text(p, "The window grows to fit the note at whatever size you pick.", "note", "dim")
 	sHint:SetPoint("TOPLEFT", X, y)
 	y = y - 42
+
+	-- ---- role slots ----
+	-- The shipped pack writes {Holy1} {Prot} and so on instead of names, so a
+	-- roster change is ONE edit here rather than eleven notes. Empty slots stay
+	-- visible as {Holy1} in the note, which is the honest way to show that
+	-- nobody is assigned yet.
+	local slHead = W.Text(p, "ROLE SLOTS", "head", "accent")
+	slHead:SetPoint("TOPLEFT", X, y)
+	y = y - 24
+
+	local slHint = W.Text(p,
+		"Names for the slots the shipped notes use. Change a paladin here and "
+		.. "every boss follows.", "note", "dim")
+	slHint:SetPoint("TOPLEFT", X, y)
+	slHint:SetPoint("RIGHT", p, "RIGHT", -X, 0)
+	slHint:SetJustifyH("LEFT")
+	y = y - 26
+
+	db.slots = db.slots or {}
+	local SLOTS = { "Holy1", "Holy2", "Prot", "Ret" }
+	for i, slot in ipairs(SLOTS) do
+		local col = ((i - 1) % 2)
+		local row = math.floor((i - 1) / 2)
+		local bx  = X + col * 250
+		local by  = y - row * 30
+		local lb = W.Text(p, slot, "label", "dim")
+		lb:SetPoint("TOPLEFT", bx, by - 4)
+		lb:SetWidth(48); lb:SetJustifyH("LEFT")
+		local eb = W.EditBox(p, function(t)
+			db.slots[slot] = (t ~= "" and t) or nil
+			-- Repaint both readers: the page list and the floating fight window
+			-- render from the same text, and neither refreshes on its own.
+			if N.PaintLines then pcall(N.PaintLines) end
+			if Okanvil.NotesWindow and Okanvil.NotesWindow.Refresh then
+				pcall(Okanvil.NotesWindow.Refresh)
+			end
+		end)
+		eb:SetSize(180, 22)
+		eb:SetPoint("TOPLEFT", bx + 50, by)
+		eb.edit:SetText(db.slots[slot] or "")
+	end
+	y = y - 30 * math.ceil(#SLOTS / 2) - 14
 
 	-- ---- sharing ----
 	local shHead = W.Text(p, "SHARING", "head", "accent")

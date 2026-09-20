@@ -95,11 +95,48 @@ end
 
 -- Turn the display half of a line into something readable: spell icons inline,
 -- raid markers as textures, colour codes left alone (the UI honours them).
+-- ROLE SLOTS. A note written with {Holy1} instead of a name is a note that
+-- survives a roster change: set the slot once in Settings and every boss updates
+-- at the same time. Writing the names in by hand meant a paladin leaving the
+-- guild was eleven separate edits, and any you missed called the wrong person.
+--
+-- Slots live in Okanvil.db.notes.slots as { Holy1 = "Okanor", ... }. Unknown
+-- slots are left as written, so a typo shows up as {Hooly1} rather than
+-- silently vanishing from the line.
+--
+-- Applied here, in the ONE place every reader goes through: the display, the
+-- fight window, and IsMine (which decides whether a line is about you) all call
+-- Render, so all three see the same substituted text.
+-- Notes live in their OWN SavedVariable (OkanvilNotesDB), not under Okanvil.db
+-- like most modules -- reading Okanvil.db.notes found nothing, so a slot you
+-- filled in changed nothing on screen.
+function P.Slots()
+	return (OkanvilNotesDB and OkanvilNotesDB.slots) or {}
+end
+
+function P.FillSlots(text)
+	if not text or text == "" then return text end
+	local slots = P.Slots()
+	if not next(slots) then return text end
+	return (text:gsub("{(%a+%d*)}", function(tag)
+		-- Raid-target icons win. {skull} and friends are drawn as icons further
+		-- down Render, so a slot that happened to be named "star" would have
+		-- eaten the marker before it ever got there.
+		if ICONS[tag:lower()] then return "{" .. tag .. "}" end
+		local who = slots[tag] or slots[tag:lower()]
+		-- Class-coloured the same way a hand-written name is, so a filled slot is
+		-- indistinguishable from a name typed in.
+		if who and who ~= "" then return "|cfff58cba" .. who .. "|r" end
+		return "{" .. tag .. "}"
+	end))
+end
+
 function P.Render(text)
 	if not text or text == "" then return "" end
 	-- Notes copied out of MRT carry escaped pipes (||cff...), which a FontString
 	-- prints literally instead of colouring. Unescape first.
 	text = text:gsub("||", "|")
+	text = P.FillSlots(text)
 	text = text:gsub("{spell:(%d+):?%d*}", function(id)
 		return "|T" .. P.SpellIcon(id) .. ":18|t"
 	end)

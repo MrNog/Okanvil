@@ -35,8 +35,16 @@ function U.escPattern(t)
 	return (tostring(t or ""):gsub("([%%%(%)%.%+%-%*%?%[%]%^%$])", "%%%1"))
 end
 
+-- Accepts a link, a bare "item:50735", or a plain item ID (string or number).
+-- The number case is not hypothetical: GetInventoryItemID and the council's wire
+-- both hand IDs straight over, and `link:match` on a number throws "attempt to
+-- index local 'link' (a number value)" -- the same shape as the guidIsNPC bug
+-- documented below. tostring() first and every form works.
 function U.itemIDFromLink(link)
-	return link and tonumber(link:match("item:(%d+)")) or 0
+	if not link then return 0 end
+	if type(link) == "number" then return link end
+	link = tostring(link)
+	return tonumber(link:match("item:(%d+)")) or tonumber(link) or 0
 end
 
 -- Is this GUID a creature rather than a player?
