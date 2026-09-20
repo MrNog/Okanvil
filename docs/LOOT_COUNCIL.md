@@ -233,7 +233,7 @@ grow), because this is a table.
 │  Tchilly        Pass           —         Fire    5.7k     —                 │
 │  Yahmom         —              #3        Frost   5.5k     —                 │
 │ ───────────────────────────────────────────────────────────────────────────│
-│  [Give to Kobee]          [Announce list]        [Disenchant]   [Skip]      │
+│  [Give to Kobee]                                 [Disenchant]   [Skip]      │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -264,7 +264,6 @@ not a decision. Clicking any row changes who the button names.
 
 - `Give to <name>` → the existing `L.AwardWinner` path, master-loot give and
   all its confirmation handling (`Loot.lua:2454-2548`).
-- `Announce list` → posts the candidates to officer chat, for the voice call.
 - `Disenchant`, `Skip` → the two endings that are not an award.
 
 **No votes, no quorum, no tally.** RATS decides by talking. The board's job is
