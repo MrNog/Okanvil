@@ -192,8 +192,6 @@ Rules:
 - Auto-passes on timeout rather than waiting forever.
 - One popup at a time; several items open together queue up, and the header
   says `2 of 3` so the raider knows more is coming.
-- A raider who wants nothing all night can mute the round from the popup
-  (`Pass everything this boss`), rather than clicking Pass five times.
 
 #### What a raider sees the rest of the time
 
