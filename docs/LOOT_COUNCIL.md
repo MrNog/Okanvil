@@ -178,18 +178,24 @@ ML changes — the new master looter is asked once:
 ```
 ┌──────────────────────────────────────────────────┐
 │  You are the master looter.                      │
-│  Run loot council for this raid?                 │
+│  Use loot council tonight?                       │
 │                                                  │
-│          [ Yes, run council ]     [ No ]         │
+│          [ Yes ]              [ No ]             │
 └──────────────────────────────────────────────────┘
 ```
 
-Answered once per raid, not per boss. `No` means the council never opens and
-the mini roll works as it does today.
+This turns the council **buttons** on, not the council itself. Nothing is asked
+of the raid until the ML presses Ask on an actual item — saying yes here just
+means the tools are on the table.
+
+That matters because rolls do not go away: a council night still has pieces the
+ML calls as a plain roll, so both rows sit in the mini roll and each item goes
+one way or the other. `No` hides the council row entirely and the mini roll is
+exactly what it is today.
 
 It is a question rather than a setting because whether tonight is a council
-night is a decision about tonight, not a preference. A stored setting is the
-one that silently does the wrong thing three weeks later.
+night is a decision about tonight. A stored setting is the one that silently
+does the wrong thing three weeks later.
 
 #### The popup
 
@@ -493,46 +499,53 @@ whoever is collecting them, fragments and shards to someone else again.
 The items are then in bags, the loot window is shut, and the council still has
 to happen.
 
-#### The mini roll changes shape when council is on
+#### Council and rolls live side by side
 
-Once the ML has answered *yes* to the council question, the mini roll's ML
-button row is not "Start roll MS / OS / Free / Stop" any more
-(`LootRoll.lua:654-657`). It becomes the council's:
+The two are **not** modes of the night. A master looter running council will
+still say *"this one just roll"* for a piece nobody is arguing about, and both
+have to be one click away on the same item.
+
+So the council does not replace the existing ML row
+(`LootRoll.lua:654-657`) — it is added beside it:
 
 ```
+  Start roll (announces)
+  ┌────┐ ┌────┐ ┌──────┐ ┌──────┐
+  │ MS │ │ OS │ │ Free │ │ Stop │        ← unchanged
+  └────┘ └────┘ └──────┘ └──────┘
+
   Council
-  ┌──────────────┐ ┌──────────────┐ ┌────────────┐
-  │ Ask this one │ │  Pick items  │ │    Stop    │
-  └──────────────┘ └──────────────┘ └────────────┘
+  ┌──────────────┐ ┌────────┐
+  │ Ask this one │ │  Pick  │              ← only when council is on
+  └──────────────┘ └────────┘
 ```
-
-- **Ask this one** — opens a round on the selected item, immediately.
-- **Pick items** — opens the picker below, for a handful at a time.
-- **Stop** — closes the open rounds.
 
 `Ask` rather than `Send`, because it is the same verb as `Comms.Ask` and it
 says what happens next: the raid is asked, and answers come back.
 
-#### Picking: in the mini roll, or its own window?
+The council row appears only after the ML has said yes to the council question,
+so a guild that never uses it sees the mini roll exactly as it is today.
 
-**Not settled.** Both are defensible and the cost falls in different places.
+**An item is one or the other.** Starting a roll on something with an open
+council round closes the round first and says so; asking the council about
+something being rolled on does the same in reverse. Two ways of deciding one
+item at once is how a raid ends up with two winners.
 
-**In the mini roll.** It already *is* this list — every drop of the boss,
-per-boss tabs, icons, links. A picker window would be the same list twice, and
-three windows open on a pull is one too many.
+#### Picking happens in the mini roll
 
-**Its own window**, the way RCLootCouncil does it (`sessionFrame.lua:114-143`).
-`LootRoll.lua` is 1400 lines and already juggles an accordion, roll rows, a
-trade timer, the ML button row and a roll progress bar. A council mode inside
-it is another state interacting with all of those — and the mini roll works
-today, every raid night. A separate window that breaks breaks only itself.
+Because rolls and council share the same item, they have to share the same
+list. A separate picker window — the way RCLootCouncil does it
+(`sessionFrame.lua:114-143`) — would mean the ML deciding *"roll this, council
+that"* while looking at two copies of the same loot in two windows, and having
+to keep track of which is which.
 
-**The trade:** one fewer window, or one less thing that can break the tool the
-raid already depends on. Worth deciding before building; a checkbox column is
-cheap to add and expensive to unpick once the modes are entangled.
+The cost is real and worth naming: `LootRoll.lua` is 1400 lines already
+juggling an accordion, roll rows, a trade timer and the ML button row, and it
+works every raid night. Adding a checkbox column and a council row is another
+state threaded through all of it.
 
-The mock below assumes the mini roll. If it becomes its own window, the rows
-and the rules are the same — only the frame around them changes.
+It is still the right trade. Two windows showing the same boss's loot, each
+able to act on it differently, is worse than one window with one more column.
 
 ```
 ┌──────────────────────────────────┐
@@ -638,14 +651,19 @@ decided. Sits next to the mini roll rather than replacing it.
 opening the hub mid-raid and the board competing with the rest of that page for
 width. The mini roll exists as a floating window for exactly this reason.
 
-### A2. Where the ML picks items — open
+### A2. Where the ML picks items — settled
 
-Checkboxes in the mini roll (two windows, one more mode in a 1400-line file
-that works today), or a picker window of its own (three windows, no risk to the
-tool the raid depends on every night).
+**The mini roll**, with a checkbox column and a council button row beside the
+existing roll buttons.
 
-See stage 3b. This one decides how much of `LootRoll.lua` the council touches,
-so it is worth settling before any of it is written.
+Settled by a fact about how RATS actually raids: a master looter running
+council still calls *"this one just roll"* on individual pieces. The two are
+per-item, not per-night, so both have to act on the same list — and a separate
+picker window would mean two copies of one boss's loot, each able to do
+something different to it.
+
+The cost is a checkbox column and one more mode in a 1400-line file that works
+today. Accepted; see stage 3b.
 
 ### B. What the raider popup costs them
 
