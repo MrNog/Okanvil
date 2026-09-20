@@ -470,7 +470,40 @@ not a decision. Clicking any row changes who the button names.
 
 - `Give to <name>` → the existing `L.AwardWinner` path, master-loot give and
   all its confirmation handling (`Loot.lua:2454-2548`).
-- `Disenchant`, `Skip` → the two endings that are not an award.
+- `Disenchant` → see below.
+- `Skip` → decided outside the addon, or not decided tonight. The round closes
+  and the item stays undecided, so the picker can offer it again later.
+
+#### Disenchant
+
+Nobody wanted it, so it becomes a shard. Two things have to happen, and only
+one of them is a give.
+
+**The record.** The drop is marked `de = true` rather than given an owner. The
+history and the website export already understand this — the export sends the
+sentinel `"Disenchant"` in the player field so the hub excludes it from win
+counts (`Loot.lua:2877-2879`), and the history row prints
+`-> Disenchant` in purple (`Loot.lua:2930`).
+
+**There is a bug waiting here.** `d.de` is read in four places and **written in
+none**. The reader was built for Blizzard's native Disenchant roll, which never
+arrives under master loot — so today every disenchanted item is recorded as
+belonging to whoever shattered it, and the hub counts it as a win. The council's
+Disenchant button is the first thing that would ever set the flag.
+
+**The give.** The item still has to reach an enchanter. Under master loot with
+the window open, that is a normal `GiveMasterLoot` to whoever is disenchanting
+— so the button needs to know who that is:
+
+- A **disenchanter is named** for the raid, once, the way the master looter is.
+  The button then reads `Disenchant → Tchilly` and gives it to them.
+- With nobody named, it asks the first time and remembers for the night.
+- With auto loot on and the corpse gone, there is no give — the item is already
+  in someone's bags. The button only writes the record, and says so.
+
+`de = true` and a `receivedBy` are not exclusive: the shard went *to* someone,
+and knowing who held it matters for the same reason `heldBy` does. What the flag
+changes is that it does not count as loot they won.
 
 **No votes, no quorum, no tally.** RATS decides by talking. The board's job is
 to have the facts on screen while they do.
@@ -786,6 +819,23 @@ class restrictions. No ilvl, no stats, no spec. Two details worth taking:
    loot there is no give to watch, so the council's choice has to write
    `receivedBy` itself. What does the history show while Jiskob still physically
    holds Kobee's trinket? Blocks stage 3b.
+
+---
+
+## A bug found while planning this
+
+**`dp.de` is never set.** It is read in four places — the export's player
+sentinel and class field (`Loot.lua:2877-2879`), the export's own `de` column
+(`:2886`) and the history row (`:2930`) — and no code anywhere writes it.
+
+The reader was written for Blizzard's native Disenchant roll, which does not
+happen under master loot: the master looter takes the item and hands it to an
+enchanter like any other give. So today a disenchanted item is recorded as
+belonging to whoever shattered it, the loot history shows it as theirs, and the
+website counts it against them in the fair-loot metric.
+
+This is worth fixing whether or not the council is built. The council's
+`Disenchant` button would be the first thing to ever set the flag.
 
 ---
 
