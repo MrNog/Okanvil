@@ -228,19 +228,24 @@ a time they answer differently than asked together.
   the same as anywhere else in the game.
 - The **slot** is next to the name, because "Trinket" or "2H Axe" answers half
   the question before the tooltip is even read.
-- An item this raider is **on the priority list for** is highlighted — a gold
-  edge on the row and a small `on your list` beside the slot:
+- **Rows are tinted from the raider's own gear**, the way RCLootCouncil does
+  it (`lootFrame.lua:117-151`). Nothing here comes from the guild's priority
+  list — this is the raider's information about themselves:
 
 ```
-│  ⬛ [Deathbringer's Will]          Trinket        ★ on your list  │
+│  ⬛ [Deathbringer's Will]   Trinket                              │  green
+│  ⬛ [Bryntroll, the Bone Arbiter]  2H Axe   You already have this│  red
 ```
 
-  It says *you are on the list*, never *where*. A raider who knows they are
-  fourth answers differently than one who just knows the item is meant for
-  them, and the position is the council's to weigh, not theirs to argue from.
+  **Red** when they are already wearing it — the one case where answering at
+  all is a mistake, and the tint stops it before the click.
 
-  This is also the item they are most likely to miss scrolling past at speed,
-  which is the practical reason for it.
+  **Green** for a BiS item, if a BiS list exists to check against. RCLoot reads
+  one from the `RaidAssistBisList` addon; Okanvil would need its own, which is
+  a feature of its own and not part of this plan.
+
+  Red first: it needs no list, it works for everyone tonight, and it prevents
+  a real mistake rather than flagging a nice-to-have.
 - **`Pass all`** for the raider who wants nothing off this boss: one click
   instead of five.
 
@@ -251,23 +256,15 @@ Rules:
   usually two or three rows, not the whole kill.
 - If every item was filtered out, no frame opens at all.
 
-##### The raider's client does not have the priority list today
+##### The priority list never reaches a raider
 
-`syncAllowed()` (`LootPrio.lua:916`) only sends the list to officers, and
-`canSeePrio` (`Util.lua:240`) gates reading it the same way. So `on your list`
-needs one of:
+`syncAllowed()` (`LootPrio.lua:916`) sends the ladder to officers only, and
+`canSeePrio` (`Util.lua:240`) gates reading it the same way. The council changes
+nothing about that: no position, no flag, not even *that* they are on it.
 
-1. **The leader tells them, per item.** The council round already carries the
-   item; it can carry one extra flag per raider — *"you are on this one"* —
-   worked out on the leader's client, where the list already is. Nothing new is
-   shared, the raider learns one bit about one item, and the ladder never
-   leaves the officers.
-2. **Send the whole list to everyone**, with the UI hiding positions from
-   non-officers. Simpler to build, but the data is on their disk and a
-   `/run` away from being read.
-
-**Option 1.** It is the only one where "they cannot see the order" is true
-rather than merely displayed.
+Knowing you are queued for an item changes how you answer, and the order is the
+council's to weigh. Everything the raider's frame shows comes from their own
+gear.
 
 #### What a raider sees the rest of the time
 
@@ -477,7 +474,7 @@ to have the facts on screen while they do.
 | Council opens | popup with the item and the buttons | board opens with every item of the kill |
 | During | nothing after answering | live count, rows filling in |
 | Sees others' answers | no | yes, all of them |
-| Sees the prio | that they are on it, not where | full ladder |
+| Sees the prio | nothing at all | full ladder |
 | Sees loot history | no | recent wins per candidate |
 | Can award | no | yes |
 | Nav entry | none | `Loot > Council`, or the marks bar |
@@ -538,15 +535,16 @@ on the night someone forgot to install it.
 
 ### C. How much the raider is told — settled
 
-**They are told they are on the list, and nothing more.** A gold edge and
-`on your list` on the row; no position, no ladder, no other names.
+**Nothing about the priority list.** Not their position, not that they are on
+it at all. The ladder stays with the officers, where it already lives.
 
-Rejected: telling them their position (a raider who knows they are fourth
-argues from it, and the order is the council's to weigh), and showing the board
-read-only afterwards (everyone then sees who beat them).
+What their frame highlights comes from their own gear instead: red for an item
+they are already wearing, green for a BiS item if a BiS list exists. That is
+information about them, not about the guild's decision.
 
-Also rejected: telling them nothing at all. The highlight costs nothing, and
-the item a raider most needs to not miss is the one they are queued for.
+Rejected: their position (a raider who knows they are fourth argues from it),
+a flag saying they are on the list (same problem, one bit at a time), and
+showing the board read-only afterwards (everyone then sees who beat them).
 
 ---
 
@@ -591,10 +589,9 @@ class restrictions. No ilvl, no stats, no spec. Two details worth taking:
    (`Util.lua:170`), so a pug or a trusted non-officer cannot be on the council.
    Is that acceptable, or is a council roster needed?
 3. **Timeout** — how long does a raider get to answer before it auto-passes?
-4. ~~**Does the raider see the prio?**~~ **Answered:** they see *that* they are
-   on the list for an item, never *where*. The round carries one flag per
-   raider, worked out on the leader's client — the ladder itself never leaves
-   the officers. See "on your list" in stage 2.
+4. ~~**Does the raider see the prio?**~~ **Answered: no, nothing.** Not the
+   position, not even that they are on the list. Their frame highlights from
+   their own gear instead — red for already wearing it. See stage 2.
 
 ---
 
