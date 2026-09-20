@@ -192,6 +192,19 @@ a time they answer differently than asked together.
   the same as anywhere else in the game.
 - The **slot** is next to the name, because "Trinket" or "2H Axe" answers half
   the question before the tooltip is even read.
+- An item this raider is **on the priority list for** is highlighted — a gold
+  edge on the row and a small `on your list` beside the slot:
+
+```
+│  ⬛ [Deathbringer's Will]          Trinket        ★ on your list  │
+```
+
+  It says *you are on the list*, never *where*. A raider who knows they are
+  fourth answers differently than one who just knows the item is meant for
+  them, and the position is the council's to weigh, not theirs to argue from.
+
+  This is also the item they are most likely to miss scrolling past at speed,
+  which is the practical reason for it.
 - **`Pass all`** for the raider who wants nothing off this boss: one click
   instead of five.
 
@@ -202,21 +215,28 @@ Rules:
   usually two or three rows, not the whole kill.
 - If every item was filtered out, no frame opens at all.
 
+##### The raider's client does not have the priority list today
+
+`syncAllowed()` (`LootPrio.lua:916`) only sends the list to officers, and
+`canSeePrio` (`Util.lua:240`) gates reading it the same way. So `on your list`
+needs one of:
+
+1. **The leader tells them, per item.** The council round already carries the
+   item; it can carry one extra flag per raider — *"you are on this one"* —
+   worked out on the leader's client, where the list already is. Nothing new is
+   shared, the raider learns one bit about one item, and the ladder never
+   leaves the officers.
+2. **Send the whole list to everyone**, with the UI hiding positions from
+   non-officers. Simpler to build, but the data is on their disk and a
+   `/run` away from being read.
+
+**Option 1.** It is the only one where "they cannot see the order" is true
+rather than merely displayed.
+
 #### What a raider sees the rest of the time
 
-Nothing. No nav row, no window, no board. The popup is the whole feature on
+Nothing. No nav row, no window, no board. The frame is the whole feature on
 their client — it appears, they answer, it is gone.
-
-The one exception is the **fight window analogue**: if RATS wants raiders to see
-where they sit, the popup can carry their own prio line:
-
-```
-│     Deathbringer Saurfang · Trinket               │
-│     You are 3rd on the list for this              │
-```
-
-That is open question 4. It explains the decision before an argument starts, or
-it starts one earlier — RATS decides which.
 
 ### Stage 3 — the council board
 
@@ -338,7 +358,7 @@ to have the facts on screen while they do.
 | Council opens | popup with the item and the buttons | board opens with every item of the kill |
 | During | nothing after answering | live count, rows filling in |
 | Sees others' answers | no | yes, all of them |
-| Sees the prio | own position only, if enabled | full ladder |
+| Sees the prio | that they are on it, not where | full ladder |
 | Sees loot history | no | recent wins per candidate |
 | Can award | no | yes |
 | Nav entry | none | `Loot > Council`, or the marks bar |
@@ -397,18 +417,17 @@ A middle option: popup for people with the addon, `/roll` still parsed for
 everyone else, both feeding the same board. More code, but nobody is locked out
 on the night someone forgot to install it.
 
-### C. How much the raider is told
+### C. How much the raider is told — settled
 
-**As drawn: their own prio position, and nothing else.**
+**They are told they are on the list, and nothing more.** A gold edge and
+`on your list` on the row; no position, no ladder, no other names.
 
-*The alternative A:* tell them nothing. The council decides, the result is
-announced. Least friction on the night.
+Rejected: telling them their position (a raider who knows they are fourth
+argues from it, and the order is the council's to weigh), and showing the board
+read-only afterwards (everyone then sees who beat them).
 
-*The alternative B:* show them the full board, read-only, after the decision.
-Most transparent, and the loudest — everyone can now see they were second.
-
-RATS already publishes the ladder on the website, so hiding it in the addon
-buys nothing; that argues for at least the "you are 3rd" line.
+Also rejected: telling them nothing at all. The highlight costs nothing, and
+the item a raider most needs to not miss is the one they are queued for.
 
 ---
 
@@ -453,9 +472,10 @@ class restrictions. No ilvl, no stats, no spec. Two details worth taking:
    (`Util.lua:170`), so a pug or a trusted non-officer cannot be on the council.
    Is that acceptable, or is a council roster needed?
 3. **Timeout** — how long does a raider get to answer before it auto-passes?
-4. **Does the raider see the prio?** Showing it explains the decision. Hiding it
-   avoids an argument before one is needed. `canSeePrio` (`Util.lua:240`)
-   currently blocks non-officers entirely.
+4. ~~**Does the raider see the prio?**~~ **Answered:** they see *that* they are
+   on the list for an item, never *where*. The round carries one flag per
+   raider, worked out on the leader's client — the ladder itself never leaves
+   the officers. See "on your list" in stage 2.
 
 ---
 
