@@ -542,10 +542,18 @@ have to be one click away on the same item.
 So with council on, the ML row becomes:
 
 ```
-  ┌──────────────┐ ┌────────┐ ┌──────┐ ┌──────┐
-  │ Ask this one │ │  Pick  │ │ Roll │ │ Stop │
-  └──────────────┘ └────────┘ └──────┘ └──────┘
+  Council
+  ┌──────────────┐ ┌──────────────┐
+  │ Ask this one │ │     Pick     │
+  └──────────────┘ └──────────────┘
+  ┌──────────────┐ ┌──────────────┐
+  │     Roll     │ │     Stop     │
+  └──────────────┘ └──────────────┘
 ```
+
+Two rows of two, not four across: the mini roll is 270px
+(`LootRoll.lua:34`) and four buttons there would be 62px each — enough for
+`MS` and `OS`, not for `Ask this one`.
 
 - **Ask this one** — opens a council round on the selected item.
 - **Pick** — ticks several and asks about them in one round.
@@ -648,7 +656,8 @@ able to act on it differently, is worse than one window with one more column.
 │      Kobee                       │
 ├──────────────────────────────────┤
 │  Council                         │
-│  [Ask this one] [Pick] [Stop]    │
+│  [Ask this one]  [Pick]          │
+│  [Roll]          [Stop]          │
 └──────────────────────────────────┘
 ```
 
