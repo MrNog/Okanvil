@@ -150,48 +150,51 @@ call each item by hand should not have five popups fire on every kill.
 
 #### The popup
 
-Small, and gone in one click — a raider is mid-fight or looting, not filling in
-a form.
+Everything the boss dropped that this character can use, in one frame, one row
+per item. A raider choosing between two trinkets has to see both — asked one at
+a time they answer differently than asked together.
 
 ```
-┌──────────────────────────────────────────────────┐
-│  Loot council                              0:18  │
-│                                                  │
-│  ⬛ [Deathbringer's Will]                        │
-│     Deathbringer Saurfang · Trinket              │
-│                                                  │
-│  ┌──────┐ ┌────────────┐ ┌───────┐ ┌─────┐ ┌────┐│
-│  │ BIS  │ │ Big upgrade│ │ Minor │ │ OS  │ │Pass││
-│  └──────┘ └────────────┘ └───────┘ └─────┘ └────┘│
-└──────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  Loot council · Deathbringer Saurfang                    0:42  │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  ⬛ [Deathbringer's Will]          Trinket                     │
+│      ┌─────┐ ┌────────┐ ┌───────┐ ┌─────┐ ┌──────┐             │
+│      │ BIS │ │ Upgrade│ │ Minor │ │ OS  │ │ Pass │             │
+│      └─────┘ └────────┘ └───────┘ └─────┘ └──────┘             │
+│                                                                │
+│  ⬛ [Bryntroll, the Bone Arbiter]  2H Axe                      │
+│      ┌─────┐ ┌────────┐ ┌───────┐ ┌─────┐ ┌──────┐             │
+│      │ BIS │ │ Upgrade│ │ Minor │ │ OS  │ │ Pass │             │
+│      └─────┘ └────────┘ └───────┘ └─────┘ └──────┘             │
+│                                                                │
+│  ⬛ [Vanquisher's Mark]            Token · Gloves      ✓ BIS   │
+│                                                                │
+├────────────────────────────────────────────────────────────────┤
+│  Unanswered items pass when the timer runs out.     [Pass all] │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-- The **timer** counts down to the auto-pass. It is the only pressure: a raider
-  who is dead, afk or loading does not stall the council.
-- The **item** is a real link — hovering shows the tooltip, shift-click links it
-  to chat, like anywhere else in the game.
-- Under the name: the boss it came from and the slot, because "Trinket" answers
-  half the question on its own.
-
-After answering, the popup collapses to a line that stays a few seconds:
-
-```
-┌──────────────────────────────────────────────────┐
-│  Sent: Big upgrade  ·  [Deathbringer's Will]     │
-└──────────────────────────────────────────────────┘
-```
-
-That line exists because a popup that just vanishes leaves the raider unsure
-whether the answer went. It also carries an **undo** while the round is still
-open — misclicking Pass on your BIS is the one mistake worth being able to take
-back.
+- The **timer** is the only pressure. It runs for the whole frame, not per
+  item, and anything still unanswered passes when it hits zero — a raider who
+  is dead, afk or loading does not stall the council.
+- An **answered row collapses** to its answer (`✓ BIS`), so what is left to do
+  is what is still showing buttons. Clicking the answer re-opens the row to
+  change it, while the round is open.
+- **Items are links** — hover for the tooltip, shift-click to put one in chat,
+  the same as anywhere else in the game.
+- The **slot** is next to the name, because "Trinket" or "2H Axe" answers half
+  the question before the tooltip is even read.
+- **`Pass all`** for the raider who wants nothing off this boss: one click
+  instead of five.
 
 Rules:
 - **Never steals keyboard focus.** A captured EditBox eats WASD; this has
   killed someone before.
-- Auto-passes on timeout rather than waiting forever.
-- One popup at a time; several items open together queue up, and the header
-  says `2 of 3` so the raider knows more is coming.
+- Only items this character can equip appear (stage 1b), so the frame is
+  usually two or three rows, not the whole kill.
+- If every item was filtered out, no frame opens at all.
 
 #### What a raider sees the rest of the time
 
@@ -250,7 +253,7 @@ ladder — the order the website already decided — not by who clicked first.
 | Column | Source | Notes |
 |---|---|---|
 | Player | the response, class-coloured | `L.ClassColorName` |
-| Wants | stage 2 | `—` = no answer yet |
+| Wants | stage 2, **coloured by response** | `—` = no answer yet |
 | Prio | `P.Names(rec.p)` — index of this name | `—` = not on the list |
 | Spec / gear | `Inspect.M.Info(name)` | stale is marked, not hidden |
 | Recent | loot history, this run + this lockout | the age is what matters |
@@ -345,6 +348,39 @@ Most transparent, and the loudest — everyone can now see they were second.
 
 RATS already publishes the ladder on the website, so hiding it in the addon
 buys nothing; that argues for at least the "you are 3rd" line.
+
+---
+
+## What RCLootCouncil does, for reference
+
+Read out of the installed copy, since RATS already uses it and the raiders'
+muscle memory is worth matching where it costs nothing.
+
+**Five buttons by default**: BiS, Big Upgrade, Small Upgrade, Off Spec, Pass
+(`core.lua:176-181`). BiS ships with it — guilds do not add it. Up to ten
+buttons, set by the master looter.
+
+**Each response has a colour** (`core.lua:85-88`): BiS red, Big Upgrade orange,
+Small Upgrade yellow, Off Spec blue, Pass grey. The colour is **not** on the
+raider's buttons — those are plain — it is the text colour on the council's
+board (`votingFrame.lua:751-755`) and in the loot history.
+
+Worth copying: a BiS row in red against a Pass in grey is read at a glance in a
+list of ten candidates, which is exactly what the board is for.
+
+**The master looter's settings win.** Every client reads the ML's broadcast
+config rather than its own (`core.lua:1611-1627`), so a raider who renamed their
+buttons cannot answer something the officer sees differently.
+
+**Filtering is done on the raider's client**, not by the ML — the whole loot
+table goes to everyone and each client autopasses what it cannot use
+(`core.lua:1050-1060`). It checks armour/weapon subtype against class, and token
+class restrictions. No ilvl, no stats, no spec. Two details worth taking:
+
+- **Cloaks are never filtered** (`autopassOverride`, `core.lua:1046`) — every
+  class wears one.
+- A filtered item is dropped from the **list**, not the window
+  (`lootFrame.lua:22-24`); the frame still opens for whatever survived.
 
 ---
 
