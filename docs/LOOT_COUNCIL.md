@@ -559,9 +559,24 @@ says what happens next: the raid is asked, and answers come back.
 — the council decides who gets it, and someone rolling "off-spec" is a line in
 the response list, not a separate roll.
 
-It reuses the existing `free` mode, which already announces
-`Roll [item] -- FREE /roll (1-100)` (`Loot.lua:1711`) and collects the same
-way. Only the label changes; `L.StartRoll(link, "free")` is unchanged.
+The announce is just the item:
+
+```
+Roll [Deathbringer's Will]
+```
+
+No `FREE`, no `/roll (1-100)`. The existing `free` message spells the range out
+(`Loot.lua:1711`) because a guild rolling MS against OS needs to say which is
+which; under council there is only one kind of roll and everyone knows how to
+type it.
+
+It reuses `L.StartRoll(link, "free")` unchanged and collects the same way.
+
+The message needs its **own template**, not the `free` one — a guild using both
+would otherwise have the council's Roll and the plain Free roll share a line,
+and editing one would change the other. `L.RollMsg`/`SetRollMsg` are keyed by
+mode (`Loot.lua:1714-1721`), so a `council` key alongside `ms`/`os`/`free` is
+the whole change, plus a fourth box on the Loot settings page.
 
 The four-button row (`LootRoll.lua:654-657`) is what a guild without council
 uses, and that guild sees the mini roll exactly as it is today.
