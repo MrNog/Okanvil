@@ -112,8 +112,14 @@ filter 2 handles it.
 time the filter is wrong about a legendary fragment or a server-custom item,
 the person it excluded must still be able to put their hand up.
 
-The leader's board shows who was **asked** as well as who answered, so a
-raider missing because of a filter is visible rather than silently absent.
+**A filtered client still replies.** It answers "not eligible" instead of
+showing a popup, and that reply is what lets the board count `4 of 5` rather
+than `4 of the whole raid`. Without it, silence would mean both "cannot use
+this" and "has not answered yet", and the count that tells the council whether
+it can decide would be worthless.
+
+It also makes a filter mistake visible: the board can say who was skipped and
+why, instead of the person simply not being there.
 
 ### Stage 2 — the raider side
 
@@ -225,7 +231,7 @@ sharing it with a list of items that is mostly not being looked at.
 ```
                                                                       ┌────┐
 ┌────────────────────────────────────────────────────────────────┐    │ ▣  │ ← yellow: open
-│ ⚖ [Bryntroll, the Bone Arbiter]   2H Axe          8/25   0:12  │    ├────┤
+│ ⚖ [Bryntroll, the Bone Arbiter]   2H Axe           4/5   0:12  │    ├────┤
 │    prio  Kobee > Grokara >> Yahmom > Setanegra >> Foug ...      │    │ ▣  │ ← green: awarded
 ├────────────────────────────────────────────────────────────────┤    ├────┤
 │  PLAYER         WANTS          PRIO   SPEC / GEAR    RECENT     │    │ ▣  │ ← white: waiting
@@ -256,6 +262,27 @@ does not run off the bottom of the screen.
 This is worth copying wholesale. It also gives the officer the one thing a list
 of items inside the window could not: **a glance tells you how much is left**,
 without reading anything.
+
+**The count is per item, not per raid.** `4/5` means four of the five people
+whose clients were asked about *this* item have answered — one is still out. A
+raid-wide `8/25` would be meaningless: most of those 25 were never asked,
+because a 2H axe never reached the healers.
+
+This is the number that says whether the council can decide yet. With `4/5` on
+screen, waiting for the fifth is a choice; with `8/25` nobody can tell whether
+anyone is still thinking.
+
+The denominator comes from the eligibility filter (stage 1b): the leader knows
+how many clients were asked because each one answers — including the ones that
+filtered the item out, which reply "not eligible" rather than staying silent.
+Silence has to mean *not answered yet*, or the count cannot be trusted.
+
+**Someone without the addon never replies at all**, so they would sit in the
+denominator forever and the count would never complete. The board has to know
+who is running Okanvil before it can count — the `Who has them?` audit in the
+notes module already does exactly this (`NotesSync.lua`), and the council needs
+the same roster. Anyone without the addon is listed separately: *"3 raiders
+have no addon"*, decided the old way.
 
 **Reading the board.** One row per raider who could answer, sorted by the prio
 ladder — the order the website already decided — not by who clicked first.
