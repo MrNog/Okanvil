@@ -708,6 +708,9 @@ an item vanishing when it is awarded takes away the answer to "wait, who got
 the axe?". Ticking it again is possible and asks a second time; that is a
 mistake the leader can make, and the owner's name under it is the warning.
 
+`Clear decision` on the row menu undoes an award in the record — the give
+itself already happened and cannot be taken back, but the wrong name can.
+
 **Two copies of the same item.** They are already two rows — `storeDrop` keeps
 duplicates as separate drops (`Loot.lua:980`, `allowDup`) — so each is ticked,
 asked and awarded on its own. Two Bryntrolls go out as two items in one round,
@@ -727,6 +730,27 @@ Pressing `Disenchant` marks the drop and it stays on the list showing
 `-> Disenchant`, like any other decided item. `Skip` leaves it undecided, so it
 comes back ticked next time — which is right: an item nobody wanted at 21:00
 may find an owner at 23:00 when the raid has changed.
+
+**Most shards are obvious before anyone is asked**, though, and a council round
+on an item the leader already knows is scrap wastes twenty-five clicks. So the
+loot list takes a **right-click on the row**, opening a small menu:
+
+```
+        ┌──────────────────┐
+        │  Disenchant      │
+        │  Skip            │
+        │  ─────────────   │
+        │  Clear decision  │
+        └──────────────────┘
+```
+
+A menu rather than right-click *being* disenchant, because a mis-click would
+otherwise mark an item as scrap with nothing to catch it — and `Clear decision`
+is there for exactly that, putting a row back to undecided whatever was done
+to it.
+
+That is the common path for a shard. Going through the council is for the item
+that *might* have had a taker and turned out not to.
 
 #### Two problems this creates
 
