@@ -526,10 +526,32 @@ says what happens next: the raid is asked, and answers come back.
 The council row appears only after the ML has said yes to the council question,
 so a guild that never uses it sees the mini roll exactly as it is today.
 
-**An item is one or the other.** Starting a roll on something with an open
+**There is a third way, and it must keep working.** The master looter often
+decides an item entirely on voice — *"Kobee and Grokara, roll for it"* — and
+hands it over from the loot window. No round, no managed roll, nothing pressed
+in the addon at all.
+
+Okanvil already handles this: `/roll` lines are read from chat and
+`L.AttributeByRoll` (`Loot.lua:2285`) records the winner on its own. The
+council must not get in the way of it — an item with no open round and no
+managed roll behaves exactly as it does today, and the two rolls that went past
+in chat still land on the right drop.
+
+So the three paths are:
+
+| How the item is decided | What the addon does |
+|---|---|
+| Council round | asks the raid, board, award |
+| Managed roll (MS/OS/Free) | announces, collects, award |
+| **Called on voice** | watches chat, attributes the winner |
+
+**An item takes one path at a time.** Starting a roll on something with an open
 council round closes the round first and says so; asking the council about
 something being rolled on does the same in reverse. Two ways of deciding one
 item at once is how a raid ends up with two winners.
+
+The voice path needs no such guard — it is passive, and it is the fallback
+whenever the other two are not used.
 
 #### Picking happens in the mini roll
 
@@ -568,7 +590,9 @@ able to act on it differently, is worse than one window with one more column.
 Everything undecided ticks itself. Untick what should not go, press **Pick**,
 and one round carries all of them — which is the single frame stage 2 asks for.
 
-- An item already **awarded** shows who has it, unticked.
+- An item already **awarded** shows who has it, unticked — including one the
+  addon attributed from chat rolls after a voice call, which is the common
+  case and needs no council round at all.
 - One already **asked about** is marked `asked`, unticked — re-asking is a
   deliberate tick. See problem 1.
 - The boss tabs the mini roll already has are the scope control: a tab is one
