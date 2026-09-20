@@ -17,7 +17,8 @@ That is the part worth building, and most of the pieces already exist.
 |---|---|---|
 | Addon comms, chunked transfers | `Core/Comms.lua` | yes, with caveats below |
 | Loot capture, drop records, rolls | `Modules/Loot.lua` | yes |
-| Master-loot give + award confirmation | `Loot.lua:2454-2548` | yes |
+| **Announce → collect rolls → award**, whole loop | `Loot.lua:1874`, `2454` | **done; do not disturb** |
+| Attributing a voice-called roll from chat | `Loot.lua:2285` | done |
 | Priority ladder from the website | `Modules/LootPrio.lua` | yes |
 | `P.Names(prio, limit)` → ordered array | `LootPrio.lua:228` | this seeds the council order |
 | Spec / role / gearscore of a raider | `Modules/Inspect.lua` | partly — see gaps |
@@ -505,26 +506,32 @@ The two are **not** modes of the night. A master looter running council will
 still say *"this one just roll"* for a piece nobody is arguing about, and both
 have to be one click away on the same item.
 
-So the council does not replace the existing ML row
-(`LootRoll.lua:654-657`) — it is added beside it:
+So with council on, the ML row becomes:
 
 ```
-  Start roll (announces)
-  ┌────┐ ┌────┐ ┌──────┐ ┌──────┐
-  │ MS │ │ OS │ │ Free │ │ Stop │        ← unchanged
-  └────┘ └────┘ └──────┘ └──────┘
-
-  Council
-  ┌──────────────┐ ┌────────┐
-  │ Ask this one │ │  Pick  │              ← only when council is on
-  └──────────────┘ └────────┘
+  ┌──────────────┐ ┌────────┐ ┌──────┐ ┌──────┐
+  │ Ask this one │ │  Pick  │ │ Roll │ │ Stop │
+  └──────────────┘ └────────┘ └──────┘ └──────┘
 ```
+
+- **Ask this one** — opens a council round on the selected item.
+- **Pick** — ticks several and asks about them in one round.
+- **Roll** — announces a plain roll on this item, no spec split.
+- **Stop** — closes whatever is open on it.
 
 `Ask` rather than `Send`, because it is the same verb as `Comms.Ask` and it
 says what happens next: the raid is asked, and answers come back.
 
-The council row appears only after the ML has said yes to the council question,
-so a guild that never uses it sees the mini roll exactly as it is today.
+**One Roll button, not MS / OS / Free.** Under council the split means nothing
+— the council decides who gets it, and someone rolling "off-spec" is a line in
+the response list, not a separate roll.
+
+It reuses the existing `free` mode, which already announces
+`Roll [item] -- FREE /roll (1-100)` (`Loot.lua:1711`) and collects the same
+way. Only the label changes; `L.StartRoll(link, "free")` is unchanged.
+
+The four-button row (`LootRoll.lua:654-657`) is what a guild without council
+uses, and that guild sees the mini roll exactly as it is today.
 
 **There is a third way, and it must keep working.** The master looter often
 decides an item entirely on voice — *"Kobee and Grokara, roll for it"* — and
@@ -542,8 +549,18 @@ So the three paths are:
 | How the item is decided | What the addon does |
 |---|---|
 | Council round | asks the raid, board, award |
-| Managed roll (MS/OS/Free) | announces, collects, award |
+| Managed roll (one button under council) | announces, collects, award |
 | **Called on voice** | watches chat, attributes the winner |
+
+**The managed roll already works end to end** and the council changes none of
+it. `L.StartRoll` posts the item link to the announce channel
+(`Loot.lua:1886-1887`), the `/roll` lines land on that drop and show as roll
+rows under it, and clicking the winning row calls `L.AwardWinner` — which does
+the master-loot give from the corpse and watches it land
+(`Loot.lua:2454-2548`).
+
+That loop is the thing the council is being built alongside, not on top of.
+Nothing in stages 1-4 may change how it behaves.
 
 **An item takes one path at a time.** Starting a roll on something with an open
 council round closes the round first and says so; asking the council about
