@@ -57,6 +57,21 @@ five columns does not fit in it. This needs its own frame.
 
 ## What to build, in order
 
+| | | Ships alone? |
+|---|---|---|
+| **1** | A generic ask/collect helper on comms | yes |
+| **1b** | Who gets asked — the eligibility filter | with 2 |
+| **2** | The raider's frame | with 1b |
+| **2b** | Surviving a reload | **before any raid sees it** |
+| **2c** | Test mode | **before stage 3** |
+| **3** | The council board | yes |
+| **4** | Recording the decision | yes |
+
+2b and 2c are not polish at the end. A council that loses a raider to a reload
+is the failure RATS already lives with in RCLootCouncil, and a feature that can
+only be tested during ICC is one whose bugs are found by twenty-four other
+people.
+
 ### Stage 1 — a generic ask/collect helper
 
 Not council-specific. Generalise the `VERQ`/`VERR` shape into something any
@@ -154,6 +169,27 @@ Three ways a round begins, in the order they matter:
 **Automatic is the default but must be switchable off.** A guild that wants to
 call each item by hand should not have five popups fire on every kill.
 
+#### Asking the master looter first
+
+When the raid forms — or when the loot method becomes master loot, or when the
+ML changes — the new master looter is asked once:
+
+```
+┌──────────────────────────────────────────────────┐
+│  You are the master looter.                      │
+│  Run loot council for this raid?                 │
+│                                                  │
+│          [ Yes, run council ]     [ No ]         │
+└──────────────────────────────────────────────────┘
+```
+
+Answered once per raid, not per boss. `No` means the council never opens and
+the mini roll works as it does today.
+
+It is a question rather than a setting because whether tonight is a council
+night is a decision about tonight, not a preference. A stored setting is the
+one that silently does the wrong thing three weeks later.
+
 #### The popup
 
 Everything the boss dropped that this character can use, in one frame, one row
@@ -237,6 +273,89 @@ rather than merely displayed.
 
 Nothing. No nav row, no window, no board. The frame is the whole feature on
 their client — it appears, they answer, it is gone.
+
+### Stage 2b — surviving a reload
+
+This is where RCLootCouncil visibly fails in RATS raids, in two ways that have
+both been seen more than once:
+
+- the council breaks and the loot method has to be flipped off master loot and
+  back on to get it working again;
+- a raider never gets the prompt at all, and nobody notices until the item is
+  being handed out.
+
+Both are the same root cause: **round state lives in memory on several clients
+at once, and a reload wipes one of them.** A raider who `/reload`s between the
+broadcast and their answer is simply gone; the leader's board waits forever on
+someone whose client has forgotten the round exists.
+
+Four rules, and none of them is optional.
+
+**1. The leader's rounds are saved to disk, not held in memory.**
+An open round survives `/reload`, a disconnect, and a crash. On load, any round
+that is still open is restored and the board reopens on it. Everything in the
+addon that has ever been lost — the note being typed, the farm run that was
+never banked — was lost because it only existed in a Lua table.
+
+**2. A raider who reloads asks for what they missed.**
+On `PLAYER_ENTERING_WORLD`, if there is a group and a known master looter, the
+client asks *"is a round open?"* and is sent whatever it needs. This is the
+same shape as the notes module's zone-in request (`NotesSync.lua`), and it is
+what fixes "the prompt never appeared" without anyone having to notice.
+
+**3. The leader re-broadcasts, rather than waiting.**
+An open round is re-sent every ~15 seconds to clients that have not answered.
+An addon message can be dropped with no error and no retry (`C.Send` is
+fire-and-forget, `Comms.lua:88`), so one lost packet must not cost the round.
+Answers carry the round id, so a re-broadcast to someone who already answered
+changes nothing.
+
+**4. The master looter can change mid-raid.**
+The ML flipping is normal — it is also RATS's current workaround when RCLoot
+breaks. An open round belongs to the round id, not to whoever happens to be ML
+at that second. When the ML changes, the new one is offered the open rounds;
+declining closes them cleanly rather than leaving twenty-five clients waiting
+on someone who is no longer looting.
+
+**The escape hatch.** `/okcouncil status` prints what this client thinks is
+open, and `/okcouncil resend` re-broadcasts from the leader. When something
+does go wrong at 22:30 on a Tuesday, the answer has to be one command, not
+"everyone reload".
+
+### Stage 2c — test mode
+
+`/okcouncil test 3` opens a real round on three items without a boss, without
+master loot, and without a raid.
+
+RCLootCouncil does this and the trick is worth copying exactly
+(`core.lua:804-834`): it **uses the gear you are wearing** as the test items.
+No fixture list to maintain, no item that turns out not to be cached, and the
+armour type is right for your class — which is what stage 1b's filter is being
+tested against. A hardcoded fallback list covers a naked character.
+
+What test mode must do:
+
+- Run the **real path**: the same broadcast, the same round ids, the same
+  raider frame, the same board. A test that takes a shortcut past the wire
+  tests the half that was never broken.
+- Work **solo**, so the whole thing can be exercised before asking anyone else
+  to log in. The leader sees the board; their own client answers as the one
+  raider.
+- Work **in a party of two**, which is the real test — that is where the wire,
+  the reload recovery and the per-item count are actually proven.
+- **Never touch real loot.** No master-loot give, no history entry, no export.
+  A test award prints what it would have done.
+- Say so, loudly and constantly. The board header reads `TEST` in the accent
+  colour, and every chat line it prints is prefixed. The worst outcome here is
+  a real raid running in test mode and the loot never being given out.
+- End on `/okcouncil test off`, and on its own at the next real boss.
+
+This is stage 2c because it has to exist **before** stage 3, not after. Every
+bug found today was found by you, in a screenshot, after a raid — the wire is
+where this addon fails silently, and a council round that half-arrives during
+ICC is worse than no council at all.
+
+---
 
 ### Stage 3 — the council board
 
