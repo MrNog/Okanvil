@@ -224,6 +224,7 @@ grow), because this is a table.
 │  ▸ [Deathbringer's Will]   Saurfang · Trinket              3 want it        │
 │  ▸ [Shadowfrost Shard]     Saurfang · Fragment             reserved         │
 │  ▾ [Bryntroll, the Bone Arbiter]  Saurfang · 2H Axe        2 want it        │
+│     prio  Kobee > Grokara >> Yahmom > Setanegra >> Foug > Radnah            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  PLAYER         WANTS          PRIO      SPEC / GEAR      RECENT            │
 │ ───────────────────────────────────────────────────────────────────────────│
@@ -247,6 +248,21 @@ ladder — the order the website already decided — not by who clicked first.
 - `Foug` is the row this whole feature exists for: he wants it off-spec, he is
   fifth on the list, and he took the Vanquisher token yesterday. Nobody had to
   remember that.
+
+**The full ladder sits under the item**, the same string the website produced,
+class-coloured through `P.Line` (`LootPrio.lua:370`). The PRIO column gives each
+candidate's position; the ladder gives the shape of the whole decision — who is
+in the same band as whom (`>`), and where it steps down (`>>`). A council
+weighing a #2 against a #3 needs to know whether those two are level or a tier
+apart, and a number on its own does not say.
+
+It also shows the people who have **not** answered and are not in the raid at
+all, which is the difference between "nobody ahead of Kobee wants it" and
+"nobody ahead of Kobee is here tonight".
+
+A real ladder runs to a dozen names and will not fit on one line. It truncates
+at the window's width with a `...`, and the full string is in the tooltip —
+truncation is right here because the names that matter are at the front.
 
 **Columns, and where each comes from:**
 
