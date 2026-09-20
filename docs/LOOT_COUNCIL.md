@@ -650,10 +650,12 @@ able to act on it differently, is worse than one window with one more column.
 │      Saurfang · Trinket          │
 │ ☑ ⬛ [Bryntroll, the Bone Arb…]  │
 │      Saurfang · 2H Axe           │
+│ ☑ ⬛ [Bryntroll, the Bone Arb…]  │
+│      Saurfang · 2H Axe           │
 │ ☐ ⬛ [Shadowfrost Shard]         │
 │      Saurfang · asked            │
-│ ☑ ⬛ [Sanctified Legplates]      │
-│      Festergut · Legs            │
+│ ☐ ⬛ [Sanctified Legplates]      │
+│      Festergut · Disenchant      │
 │ ☐ ⬛ [Cryptmaker]                │
 │      Festergut · Kobee           │
 ├──────────────────────────────────┤
@@ -676,8 +678,12 @@ nothing was called at the time, and now the whole lot has to go out at once.
 It is also the only way to ask about items from two different bosses in one
 round, and the raider gets them in a single frame either way.
 
-Everything undecided ticks itself. Untick what should not go, press **Pick**,
-and one round carries all of them — which is the single frame stage 2 asks for.
+**What ticks itself:** anything undecided that has *not* been asked about yet.
+Untick what should not go, press **Pick**, and one round carries all of them —
+which is the single frame stage 2 asks for.
+
+Anything already asked stays unticked even though it is still undecided, so a
+sweep never re-asks by accident. Re-asking is always a deliberate tick.
 
 - An item already **awarded** shows who has it, unticked — including one the
   addon attributed from chat rolls after a voice call, which is the common
@@ -693,6 +699,34 @@ and one round carries all of them — which is the single frame stage 2 asks for
 
 The **board stays its own window** — one item's candidates, with the item icons
 hanging off its edge. The 270px mini roll could never hold a candidate table.
+
+#### What stays on the list, and what leaves it
+
+**An item already given.** It stays, showing the owner, unticked. It never
+leaves the list — the loot list is the record of the night, not a to-do, and
+an item vanishing when it is awarded takes away the answer to "wait, who got
+the axe?". Ticking it again is possible and asks a second time; that is a
+mistake the leader can make, and the owner's name under it is the warning.
+
+**Two copies of the same item.** They are already two rows — `storeDrop` keeps
+duplicates as separate drops (`Loot.lua:980`, `allowDup`) — so each is ticked,
+asked and awarded on its own. Two Bryntrolls go out as two items in one round,
+and the raider answers twice because they are two decisions.
+
+*Open:* whether asking about both at once should instead be one question with
+`2 available` on it, and the board awarding two winners from one list. Cleaner
+to answer, more to build; `dp.winners` (`Loot.lua:1855`) already exists for
+multi-copy roll-offs and would be the way in.
+
+**An item nobody wants.** Everyone answered Pass, or nobody answered at all.
+The board shows an empty candidate list and the only sensible actions are
+`Disenchant` and `Skip` — which is exactly what those buttons are for, and the
+board saying `nobody wants this` is a real answer rather than a failure.
+
+Pressing `Disenchant` marks the drop and it stays on the list showing
+`-> Disenchant`, like any other decided item. `Skip` leaves it undecided, so it
+comes back ticked next time — which is right: an item nobody wanted at 21:00
+may find an owner at 23:00 when the raid has changed.
 
 #### Two problems this creates
 
@@ -858,6 +892,11 @@ class restrictions. No ilvl, no stats, no spec. Two details worth taking:
    loot there is no give to watch, so the council's choice has to write
    `receivedBy` itself. What does the history show while Jiskob still physically
    holds Kobee's trinket? Blocks stage 3b.
+7. **Two copies of one item.** They are two drops and the plan treats them as
+   two questions, so a raider answers twice about the same axe. One question
+   marked `2 available`, awarding two winners from one list, is cleaner to
+   answer — `dp.winners` (`Loot.lua:1855`) exists for exactly this in roll-offs.
+   More to build, and it only matters on a token boss.
 
 ---
 
