@@ -644,22 +644,37 @@ able to act on it differently, is worse than one window with one more column.
 
 ```
 ┌──────────────────────────────────┐
-│  Saurfang            ◂ 2 of 4 ▸  │
+│  All bosses          ◂ all ▸     │
 ├──────────────────────────────────┤
 │ ☑ ⬛ [Deathbringer's Will]       │
-│      Trinket                     │
+│      Saurfang · Trinket          │
 │ ☑ ⬛ [Bryntroll, the Bone Arb…]  │
-│      2H Axe                      │
+│      Saurfang · 2H Axe           │
 │ ☐ ⬛ [Shadowfrost Shard]         │
-│      asked                       │
+│      Saurfang · asked            │
+│ ☑ ⬛ [Sanctified Legplates]      │
+│      Festergut · Legs            │
 │ ☐ ⬛ [Cryptmaker]                │
-│      Kobee                       │
+│      Festergut · Kobee           │
 ├──────────────────────────────────┤
 │  Council                         │
 │  [Ask this one]  [Pick]          │
 │  [Roll]          [Stop]          │
 └──────────────────────────────────┘
 ```
+
+#### An "All bosses" page
+
+The boss pager (`LootRoll.lua:450-456`) walks `bossIdx` from 1 to `bossCount`,
+one boss at a time. The council needs one more position: **0 = all bosses**,
+reached by pressing `◂` from the first boss.
+
+That page lists every undecided drop of the run with its boss under the name,
+which is the end-of-night case — auto loot emptied three corpses into bags,
+nothing was called at the time, and now the whole lot has to go out at once.
+
+It is also the only way to ask about items from two different bosses in one
+round, and the raider gets them in a single frame either way.
 
 Everything undecided ticks itself. Untick what should not go, press **Pick**,
 and one round carries all of them — which is the single frame stage 2 asks for.
@@ -669,15 +684,15 @@ and one round carries all of them — which is the single frame stage 2 asks for
   case and needs no council round at all.
 - One already **asked about** is marked `asked`, unticked — re-asking is a
   deliberate tick. See problem 1.
-- The boss tabs the mini roll already has are the scope control: a tab is one
-  boss, and an `All` tab is the whole run. No extra dropdown.
-- **My bags** is the one thing the mini roll cannot show, because those items
-  never came off a corpse it watched. It is a tab, next to the bosses.
+- The **boss pager is the scope control** — a page is one boss, and the `all
+  bosses` page is the whole run. No extra dropdown, no second list.
+- **My bags** is the one page the loot list cannot build from what it captured,
+  because those items never came off a corpse it watched. One more position on
+  the pager, past the last boss.
 - Dropping an item link on the window adds it, for anything never captured.
 
-Either way the **board is its own window** — one item's candidates, with the
-item icons hanging off its edge. The 270px mini roll could never hold a
-candidate table, whatever happens to the picking.
+The **board stays its own window** — one item's candidates, with the item icons
+hanging off its edge. The 270px mini roll could never hold a candidate table.
 
 #### Two problems this creates
 
