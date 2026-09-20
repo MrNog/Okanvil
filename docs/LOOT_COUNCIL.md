@@ -104,21 +104,13 @@ the tooltip, which the drop record already captures as `dp.tip`
 **3. Weapon proficiency.** From `GetItemInfo`'s type/subtype — a priest cannot
 use an axe whatever its stats say.
 
-What is explicitly **not** filtered:
-
-- **Stats.** A spellpower plate item is for a holy paladin and a ret paladin
-  will still ask; that is a conversation, not a rule. Filtering on stats is
-  where this stops being helpful and starts being wrong.
-- **Off-spec.** A resto shaman may want a dps weapon for their elemental set.
-  The response list already has an Off-spec answer for exactly this.
-- **Tokens and fragments.** A Vanquisher's Mark is for three classes; the
-  tooltip says so and filter 2 handles it.
+A token like Vanquisher's Mark names its three classes in the tooltip, so
+filter 2 handles it.
 
 **An escape hatch is required.** Any raider can open the round manually —
-a `/okcouncil` or a button on the minimap toast — and answer for an item their
-client filtered out. The filter is a convenience, never a lock: the first time
-it is wrong about a legendary fragment or a server-custom item, the person it
-excluded must still be able to put their hand up.
+`/okcouncil` — and answer for an item their client filtered out. The first
+time the filter is wrong about a legendary fragment or a server-custom item,
+the person it excluded must still be able to put their hand up.
 
 The leader's board shows who was **asked** as well as who answered, so a
 raider missing because of a filter is visible rather than silently absent.
@@ -310,20 +302,10 @@ part of the whole feature and it would break on someone else's release.
 **Voting, quorum, blind votes.** RATS decides by voice. Building a voting system
 nobody uses is how RCLoot ended up bigger than what it is used for.
 
-**Filtering on stats, spec or item level.**
-
-Stage 1b filters hard: plate never reaches a cloth wearer, an axe never reaches
-a priest. That is the same line RCLootCouncil draws, and for the same reason —
-a popup for an item you cannot equip is screen clutter during a fight.
-
-It stops at *cannot equip*. Spellpower plate still reaches every paladin,
-because the ret may want it for their holy set; a dps weapon still reaches the
-resto shaman building an elemental offspec. The response list already has an
-Off-spec answer for exactly that, and a filter that guesses at intent removes
-the person who had a reason nobody asked about.
-
-The rule: **the client hides what the character could never wear. Everything
-softer than that is the council's call.**
+**Guessing at intent.** The filter hides what a character cannot equip and
+stops there — a paladin still gets asked about spellpower plate, because the
+ret may want it for their holy set, and the response list has an Off-spec
+answer for exactly that.
 
 ---
 
