@@ -502,33 +502,86 @@ button row is not "Start roll MS / OS / Free / Stop" any more
 ```
   Council
   ┌──────────────┐ ┌──────────────┐ ┌────────────┐
-  │ Send to all  │ │ Council all  │ │    Stop    │
+  │ Ask this one │ │  Pick items  │ │    Stop    │
   └──────────────┘ └──────────────┘ └────────────┘
 ```
 
-- **Send to all** — open a round on the item currently selected.
-- **Council all** — open one round carrying every undecided item of this boss,
-  from the boss tab the leader is looking at.
-- **Stop** — close the open rounds.
+- **Ask this one** — opens a round on the selected item, immediately.
+- **Pick items** — opens the picker below, for a handful at a time.
+- **Stop** — closes the open rounds.
 
-There is also a **Council all bosses** for the end of the night, sweeping
-everything still undecided across the whole run — the case where auto loot
-emptied three bosses into bags and nothing was called at the time.
+`Ask` rather than `Send`, because it is the same verb as `Comms.Ask` and it
+says what happens next: the raid is asked, and answers come back.
+
+#### Picking: in the mini roll, or its own window?
+
+**Not settled.** Both are defensible and the cost falls in different places.
+
+**In the mini roll.** It already *is* this list — every drop of the boss,
+per-boss tabs, icons, links. A picker window would be the same list twice, and
+three windows open on a pull is one too many.
+
+**Its own window**, the way RCLootCouncil does it (`sessionFrame.lua:114-143`).
+`LootRoll.lua` is 1400 lines and already juggles an accordion, roll rows, a
+trade timer, the ML button row and a roll progress bar. A council mode inside
+it is another state interacting with all of those — and the mini roll works
+today, every raid night. A separate window that breaks breaks only itself.
+
+**The trade:** one fewer window, or one less thing that can break the tool the
+raid already depends on. Worth deciding before building; a checkbox column is
+cheap to add and expensive to unpick once the modes are entangled.
+
+The mock below assumes the mini roll. If it becomes its own window, the rows
+and the rules are the same — only the frame around them changes.
+
+```
+┌──────────────────────────────────┐
+│  Saurfang            ◂ 2 of 4 ▸  │
+├──────────────────────────────────┤
+│ ☑ ⬛ [Deathbringer's Will]       │
+│      Trinket                     │
+│ ☑ ⬛ [Bryntroll, the Bone Arb…]  │
+│      2H Axe                      │
+│ ☐ ⬛ [Shadowfrost Shard]         │
+│      asked                       │
+│ ☐ ⬛ [Cryptmaker]                │
+│      Kobee                       │
+├──────────────────────────────────┤
+│  Council                         │
+│  [Ask this one] [Pick] [Stop]    │
+└──────────────────────────────────┘
+```
+
+Everything undecided ticks itself. Untick what should not go, press **Pick**,
+and one round carries all of them — which is the single frame stage 2 asks for.
+
+- An item already **awarded** shows who has it, unticked.
+- One already **asked about** is marked `asked`, unticked — re-asking is a
+  deliberate tick. See problem 1.
+- The boss tabs the mini roll already has are the scope control: a tab is one
+  boss, and an `All` tab is the whole run. No extra dropdown.
+- **My bags** is the one thing the mini roll cannot show, because those items
+  never came off a corpse it watched. It is a tab, next to the bosses.
+- Dropping an item link on the window adds it, for anything never captured.
+
+Either way the **board is its own window** — one item's candidates, with the
+item icons hanging off its edge. The 270px mini roll could never hold a
+candidate table, whatever happens to the picking.
 
 #### Two problems this creates
 
-**1. An item that went to council and was not awarded comes back.**
-`Council all` sends everything undecided. An item the council looked at,
-argued over and left unresolved is still undecided, so it goes out again — and
-the raiders answer a second time on something they already answered.
+**1. An item that went to council and was not awarded.**
+It is still undecided, so a sweep picks it up again and the raid answers a
+second time on something they already answered.
 
-The drop needs to remember it has been to council: a round id on the record,
-and `Council all` skipping anything that already carries one. Re-opening a
-round then has to be deliberate — a `Re-open` on that item, not a side effect
-of the sweep.
+The picker handles the common case: a drop remembers the round it was in, and
+anything carrying one is listed `asked` and **unticked**. Re-asking is then a
+deliberate tick, not a side effect.
 
-*Not designed yet.* Worth settling before stage 3b is built, because the
-alternative is a raid answering twice and losing faith in the prompt.
+What is still open is what the *raider* sees on a re-ask. Their previous answer
+is known — does the frame come back pre-filled with it, or blank? Pre-filled is
+kinder and risks them not noticing they were asked again; blank is honest and
+costs the answer of anyone who has walked away.
 
 **2. With auto loot, the give has to be recorded by hand.**
 Under master loot with the window open, `L.AwardWinner` does the give and the
@@ -584,6 +637,15 @@ decided. Sits next to the mini roll rather than replacing it.
 *The alternative:* a tab inside the Loot page. Fewer windows, but it means
 opening the hub mid-raid and the board competing with the rest of that page for
 width. The mini roll exists as a floating window for exactly this reason.
+
+### A2. Where the ML picks items — open
+
+Checkboxes in the mini roll (two windows, one more mode in a 1400-line file
+that works today), or a picker window of its own (three windows, no risk to the
+tool the raid depends on every night).
+
+See stage 3b. This one decides how much of `LootRoll.lua` the council touches,
+so it is worth settling before any of it is written.
 
 ### B. What the raider popup costs them
 
@@ -657,10 +719,10 @@ class restrictions. No ilvl, no stats, no spec. Two details worth taking:
 4. ~~**Does the raider see the prio?**~~ **Answered: no, nothing.** Not the
    position, not even that they are on the list. Their frame highlights from
    their own gear instead — red for already wearing it. See stage 2.
-5. **Re-sending an item that went to council and was not awarded.** `Council
-   all` sweeps everything undecided, so it picks that item up again and the raid
-   answers twice. A round id on the drop, and a deliberate `Re-open`? Blocks
-   stage 3b.
+5. **Re-asking about an item.** The picker marks it `asked` and unticks it, so
+   sending twice is deliberate — but what does the raider see the second time?
+   Pre-filled with their last answer (kinder, easy to miss) or blank (honest,
+   loses anyone who walked away)?
 6. **Recording a winner when the item is already in someone's bags.** With auto
    loot there is no give to watch, so the council's choice has to write
    `receivedBy` itself. What does the history show while Jiskob still physically
