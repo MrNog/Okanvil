@@ -65,6 +65,7 @@ five columns does not fit in it. This needs its own frame.
 | **2b** | Surviving a reload | **before any raid sees it** |
 | **2c** | Test mode | **before stage 3** |
 | **3** | The council board | yes |
+| **3b** | Council from the bags, with auto loot on | second phase |
 | **4** | Recording the decision | yes |
 
 2b and 2c are not polish at the end. A council that loses a raider to a reload
@@ -482,6 +483,70 @@ to have the facts on screen while they do.
 The asymmetry is the point. A raider answers one question about one item. An
 officer needs every fact about every candidate at once.
 
+### Stage 3b — choosing what goes to council (second phase)
+
+Everything above assumes the loot window is open and the leader is deciding
+item by item. Real RATS raids do not always work that way — with **auto loot**
+on, the corpse empties itself by rule: BoP to the master looter, BoE to
+whoever is collecting them, fragments and shards to someone else again.
+
+The items are then in bags, the loot window is shut, and the council still has
+to happen.
+
+#### The mini roll changes shape when council is on
+
+Once the ML has answered *yes* to the council question, the mini roll's ML
+button row is not "Start roll MS / OS / Free / Stop" any more
+(`LootRoll.lua:654-657`). It becomes the council's:
+
+```
+  Council
+  ┌──────────────┐ ┌──────────────┐ ┌────────────┐
+  │ Send to all  │ │ Council all  │ │    Stop    │
+  └──────────────┘ └──────────────┘ └────────────┘
+```
+
+- **Send to all** — open a round on the item currently selected.
+- **Council all** — open one round carrying every undecided item of this boss,
+  from the boss tab the leader is looking at.
+- **Stop** — close the open rounds.
+
+There is also a **Council all bosses** for the end of the night, sweeping
+everything still undecided across the whole run — the case where auto loot
+emptied three bosses into bags and nothing was called at the time.
+
+#### Two problems this creates
+
+**1. An item that went to council and was not awarded comes back.**
+`Council all` sends everything undecided. An item the council looked at,
+argued over and left unresolved is still undecided, so it goes out again — and
+the raiders answer a second time on something they already answered.
+
+The drop needs to remember it has been to council: a round id on the record,
+and `Council all` skipping anything that already carries one. Re-opening a
+round then has to be deliberate — a `Re-open` on that item, not a side effect
+of the sweep.
+
+*Not designed yet.* Worth settling before stage 3b is built, because the
+alternative is a raid answering twice and losing faith in the prompt.
+
+**2. With auto loot, the give has to be recorded by hand.**
+Under master loot with the window open, `L.AwardWinner` does the give and the
+addon watches it land (`Loot.lua:2454-2548`). With auto loot the item is
+already in someone's bags, so there is nothing to give — the leader trades it
+later, and the addon cannot see a trade.
+
+So the council decision has to *be* the record: choosing a winner writes
+`receivedBy` directly, rather than waiting for a hand-over it will never
+observe. That is a change to what an award means, and it is the same gap that
+made the loot history read "Jiskob" against every item of a night.
+
+*Also not designed yet.* The pieces exist — `heldBy` already distinguishes
+carrying from owning — but the flow from "council picked Kobee" to "the history
+says Kobee has it, and Jiskob still physically holds it" needs writing down.
+
+---
+
 ### Stage 4 — record the decision
 
 `L.AwardWinner(id, winner, topRoll, spec)` has no notion of a council award
@@ -592,6 +657,14 @@ class restrictions. No ilvl, no stats, no spec. Two details worth taking:
 4. ~~**Does the raider see the prio?**~~ **Answered: no, nothing.** Not the
    position, not even that they are on the list. Their frame highlights from
    their own gear instead — red for already wearing it. See stage 2.
+5. **Re-sending an item that went to council and was not awarded.** `Council
+   all` sweeps everything undecided, so it picks that item up again and the raid
+   answers twice. A round id on the drop, and a deliberate `Re-open`? Blocks
+   stage 3b.
+6. **Recording a winner when the item is already in someone's bags.** With auto
+   loot there is no give to watch, so the council's choice has to write
+   `receivedBy` itself. What does the history show while Jiskob still physically
+   holds Kobee's trinket? Blocks stage 3b.
 
 ---
 
