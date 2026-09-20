@@ -217,26 +217,45 @@ it starts one earlier — RATS decides which.
 A new window, officer-only. Wider than the mini roll (which is 270px and cannot
 grow), because this is a table.
 
+**The items are icons down the outside edge**, not rows inside the window —
+the trick RCLootCouncil uses (`votingFrame.lua:671-710`). The whole window is
+then one item's candidates, and the table gets the full width instead of
+sharing it with a list of items that is mostly not being looked at.
+
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ ⚖ Loot council                     8 answered / 25      0:12    [Close all] │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ▸ [Deathbringer's Will]   Saurfang · Trinket              3 want it        │
-│  ▸ [Shadowfrost Shard]     Saurfang · Fragment             reserved         │
-│  ▾ [Bryntroll, the Bone Arbiter]  Saurfang · 2H Axe        2 want it        │
-│     prio  Kobee > Grokara >> Yahmom > Setanegra >> Foug > Radnah            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  PLAYER         WANTS          PRIO      SPEC / GEAR      RECENT            │
-│ ───────────────────────────────────────────────────────────────────────────│
-│  Kobee          BIS            #1        Combat  5.8k     —                 │
-│  Grokara        Big upgrade    #2        Combat  5.6k     —                 │
-│  Foug           Off-spec       #5        Unholy  5.9k     Vanquisher (1d)   │
-│  Tchilly        Pass           —         Fire    5.7k     —                 │
-│  Yahmom         —              #3        Frost   5.5k     —                 │
-│ ───────────────────────────────────────────────────────────────────────────│
-│  [Give to Kobee]                                 [Disenchant]   [Skip]      │
-└─────────────────────────────────────────────────────────────────────────────┘
+                                                                      ┌────┐
+┌────────────────────────────────────────────────────────────────┐    │ ▣  │ ← yellow: open
+│ ⚖ [Bryntroll, the Bone Arbiter]   2H Axe          8/25   0:12  │    ├────┤
+│    prio  Kobee > Grokara >> Yahmom > Setanegra >> Foug ...      │    │ ▣  │ ← green: awarded
+├────────────────────────────────────────────────────────────────┤    ├────┤
+│  PLAYER         WANTS          PRIO   SPEC / GEAR    RECENT     │    │ ▣  │ ← white: waiting
+│ ───────────────────────────────────────────────────────────────│    ├────┤
+│  Kobee          BIS            #1     Combat  5.8k   —          │    │ ▣  │
+│  Grokara        Big upgrade    #2     Combat  5.6k   —          │    └────┘
+│  Foug           Off-spec       #5     Unholy  5.9k   Vanq (1d)  │
+│  Tchilly        Pass           —      Fire    5.7k   —          │
+│  Yahmom         —              #3     Frost   5.5k   —          │
+│ ───────────────────────────────────────────────────────────────│
+│  [Give to Kobee]                        [Disenchant]    [Skip]  │
+└────────────────────────────────────────────────────────────────┘
 ```
+
+Each icon is the item's own texture, 40px, with a coloured border saying where
+it stands:
+
+| Border | Meaning |
+|---|---|
+| Yellow | the item on screen right now |
+| Green | already awarded |
+| White | still waiting on a decision |
+
+Hovering an icon shows its tooltip; clicking switches the whole board to it.
+They stack downward and start a second column after ten, so a full ICC kill
+does not run off the bottom of the screen.
+
+This is worth copying wholesale. It also gives the officer the one thing a list
+of items inside the window could not: **a glance tells you how much is left**,
+without reading anything.
 
 **Reading the board.** One row per raider who could answer, sorted by the prio
 ladder — the order the website already decided — not by who clicked first.
@@ -249,8 +268,8 @@ ladder — the order the website already decided — not by who clicked first.
   fifth on the list, and he took the Vanquisher token yesterday. Nobody had to
   remember that.
 
-**The full ladder sits under the item**, the same string the website produced,
-class-coloured through `P.Line` (`LootPrio.lua:370`). The PRIO column gives each
+**The full ladder sits in the header**, under the item's name — the same string
+the website produced, class-coloured through `P.Line` (`LootPrio.lua:370`). The PRIO column gives each
 candidate's position; the ladder gives the shape of the whole decision — who is
 in the same band as whom (`>`), and where it steps down (`>>`). A council
 weighing a #2 against a #3 needs to know whether those two are level or a tier
