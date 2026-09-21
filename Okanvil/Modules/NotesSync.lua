@@ -144,6 +144,30 @@ local SEP = "\1"
 -- `withPack` survives for the one case that still needs it: a receiver whose
 -- pack is older than yours, where a shipped note you never touched would
 -- otherwise read as missing on their side.
+-- The role slots travel WITH the notes, as one more record.
+--
+-- Without them a raider received "{Holy1}" where a name belongs and had to type
+-- the roster in by hand, spelled exactly as the officer spelled it -- so one
+-- "Solanarage" for "Solanarrage" left that person's lines naming nobody, which
+-- looks identical to a note that failed to load.
+--
+-- The name is a slot the note format cannot produce: it starts with a character
+-- no boss name contains, so an older client's decode skips the record instead of
+-- storing a note called "slots".
+local SLOTREC = "\2slots"
+
+local function encodeSlots(d)
+	local parts = {}
+	for slot, who in pairs(d.slots or {}) do
+		if type(slot) == "string" and type(who) == "string" and who ~= "" then
+			parts[#parts + 1] = slot .. "=" .. who
+		end
+	end
+	if #parts == 0 then return nil end
+	table.sort(parts)      -- stable payload: same roster encodes the same way
+	return table.concat(parts, ",")
+end
+
 local function encode(withPack)
 	local d = db()
 	if not d then return "" end
@@ -155,6 +179,13 @@ local function encode(withPack)
 			out[#out + 1] = SEP .. name .. SEP .. stamp .. SEP .. text
 			seen[name] = true
 		end
+	end
+
+	-- Stamped like a note so the same "newer wins" rule covers the roster, and a
+	-- resend of an unchanged roster changes nothing on the far side.
+	local slots = encodeSlots(d)
+	if slots then
+		out[#out + 1] = SEP .. SLOTREC .. SEP .. (d.slotStamp or 0) .. SEP .. slots
 	end
 
 	if withPack and Okanvil.NotesPack then
@@ -238,7 +269,29 @@ local function merge(list, who)
 	d.notes = d.notes or {}
 	local n, ask = 0, {}
 	for _, rec in ipairs(list) do
-		if rec.text ~= "" then
+		if rec.name == SLOTREC then
+			-- The roster, not a note. Wholesale, not per slot: it describes one
+			-- raid, and merging half of somebody's roster into half of yours
+			-- names people who are not standing here.
+			--
+			-- Never asked about, unlike a note: a slot holds a name somebody
+			-- typed once, not work, and the officer sending it is the one who
+			-- decides who is on cooldowns tonight.
+			if rec.stamp >= (d.slotStamp or 0) then
+				local got = {}
+				for slot, whoName in rec.text:gmatch("([^,=]+)=([^,]+)") do
+					got[slot] = whoName
+				end
+				if next(got) then
+					d.slots = got
+					d.slotStamp = rec.stamp
+					if N.PaintLines then pcall(N.PaintLines) end
+					if Okanvil.NotesWindow and Okanvil.NotesWindow.Refresh then
+						pcall(Okanvil.NotesWindow.Refresh)
+					end
+				end
+			end
+		elseif rec.text ~= "" then
 			local mine = d.stamps[rec.name] or 0
 			local haveText = (d.notes[rec.name] or "") ~= ""
 			if not haveText then
@@ -333,11 +386,57 @@ function N.SendNow()
 		return
 	end
 
+	-- Name the slots whose player is not in this group, before the roster goes
+	-- out to everyone.
+	--
+	-- A slot is matched by NAME, so one wrong letter -- "Solanarage" for
+	-- "Solanarrage" -- assigns the line to nobody, and it reads on screen exactly
+	-- like a line correctly assigned to someone else. Sending it copies that
+	-- mistake to the whole raid.
+	--
+	-- Said, not enforced: an alt logging in late, or a name typed ahead of the
+	-- invite, are both ordinary, and a Send that refuses before a pull is worse
+	-- than a Send that warns.
+	local d = db()
+	if d and d.slots and next(d.slots) then
+		local inGroup = {}
+		local nRaid = GetNumRaidMembers() or 0
+		if nRaid > 0 then
+			for i = 1, nRaid do
+				local rn = GetRaidRosterInfo(i)
+				if rn then inGroup[rn:lower()] = true end
+			end
+		else
+			inGroup[(UnitName("player") or ""):lower()] = true
+			for i = 1, (GetNumPartyMembers() or 0) do
+				local pn = UnitName("party" .. i)
+				if pn then inGroup[pn:lower()] = true end
+			end
+		end
+		local strays = {}
+		for slot, whoName in pairs(d.slots) do
+			if type(whoName) == "string" and whoName ~= ""
+				and not inGroup[whoName:lower()] then
+				strays[#strays + 1] = slot .. "=" .. whoName
+			end
+		end
+		if #strays > 0 then
+			table.sort(strays)
+			Okanvil:Print(("|cffe0b860Heads up:|r %s not in the group -- check the spelling.")
+				:format(table.concat(strays, ", ")))
+		end
+	end
+
 	-- Count what is going out, so the confirmation is a fact rather than a
 	-- reassurance: "12 notes" tells you the pack went; "1 note" tells you
 	-- something is wrong before the raid finds out.
+	-- The roster rides along as a record but is not a note, so it must not be
+	-- counted as one: "13 notes" for a pack of 12 is the kind of small lie that
+	-- makes the number useless for spotting a real short send.
 	local n = 0
-	for _ in raw:gmatch("\1[^\1]+\1%d+\1") do n = n + 1 end
+	for recName in raw:gmatch("\1([^\1]+)\1%d+\1") do
+		if recName ~= SLOTREC then n = n + 1 end
+	end
 
 	local chunks = Comms.SendBig("NOTES", raw, chan)
 	if not chunks then

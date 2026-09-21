@@ -29,19 +29,41 @@ local F           -- the built UI
 -- The Plagueworks holds BOTH Rotface and Festergut, which is why the community
 -- notes ship them combined -- a subzone cannot tell them apart.
 -- ------------------------------------------------------------
+-- Both the room a boss is IN and the older names are listed. Subzone strings
+-- vary between cores -- a private server may report "The Spire" where retail
+-- says "Light's Hammer" -- and an entry that matches nothing simply never
+-- fires, so carrying both costs nothing and fixes the room that did not switch.
 local ZONE_NOTE = {
+	-- Lower Spire
+	["Light's Hammer"]               = "Lord Marrowgar",
 	["The Spire"]                    = "Lord Marrowgar",
+	["The Oratory of the Damned"]    = "Lady Deathwhisper",
 	["Oratory of the Damned"]        = "Lady Deathwhisper",
 	["The Colossal Forge"]           = "Gunship Battle",
 	["Rampart of Skulls"]            = "Gunship Battle",
+	["The Skybreaker"]               = "Gunship Battle",
+	["Orgrim's Hammer"]              = "Gunship Battle",
+	["The Deathbringer's Rise"]      = "Deathbringer Saurfang",
 	["Deathbringer's Rise"]          = "Deathbringer Saurfang",
+
+	-- Plagueworks: one subzone for both side rooms, which is why the shipped
+	-- pack combines them into a single note.
 	["The Plagueworks"]              = "Rotface & Festergut",
+	["The Laboratory of the Alchemist"] = "Professor Putricide",
 	["Putricide's Laboratory of Alchemical Horrors and Fun"] = "Professor Putricide",
+
+	-- Crimson Hall: the Blood Council and Lana'thel share the hall on some
+	-- cores, so the inner sanctum is listed separately where it is reported.
 	["The Crimson Hall"]             = "Blood Council",
 	["The Sanctum of Blood"]         = "Queen Lana'thel",
+	["Crimson Hall Inner Sanctum"]   = "Queen Lana'thel",
+
+	-- Frostwing Halls
 	["The Frostwing Halls"]          = "Valithria Dreamwalker",
+	["Sindragosa's Lair"]            = "Sindragosa",
 	["The Frost Queen's Lair"]       = "Sindragosa",
 	["The Frozen Throne"]            = "The Lich King",
+
 	["The Ruby Sanctum"]             = "Halion",
 }
 
@@ -64,6 +86,8 @@ local defaults = {
 	-- installs this. An unset slot renders as "{Holy1}" in the note, which says
 	-- "nobody assigned" far better than someone else's guild's paladin would.
 	slots = {},
+	slotStamp = 0,     -- when the slots last changed, for the sync
+	viewSize = nil,    -- 10/25 tab; nil = follow the raid you are in
 }
 
 -- ------------------------------------------------------------
@@ -72,6 +96,98 @@ local defaults = {
 -- A note you have never written falls back to the shipped ICC pack, so the tab
 -- is useful before you have typed anything. Writing one makes it yours and the
 -- pack is never consulted for it again.
+-- ------------------------------------------------------------
+-- Raid size
+--
+-- A 10 and a 25 are different fights with the same boss names: fewer cooldowns,
+-- a different order, sometimes a mechanic that only exists in one of them. One
+-- note cannot serve both, and picking the wrong one is not obvious while you
+-- read it -- the names are all real people either way.
+--
+-- Stored as a SUFFIX on the note name ("Sindragosa (10)"), not as a second
+-- table, so everything that already works on a note by name -- the editor, the
+-- sync, Clear, Delete -- keeps working with nothing changed.
+--
+-- The bare name stays the 25: it is what the notes already in your database are,
+-- and re-keying them to say so would break the zone lookup for no gain.
+-- ------------------------------------------------------------
+local SIZE_SUFFIX = " (10)"
+
+-- The KEY a note is stored under, for a boss and a size. The 25 keeps the bare
+-- name, so the notes written before there were two sizes are already the 25s.
+function N.KeyFor(boss, size)
+	if not boss or boss == "" then return boss end
+	return (size == 10) and (boss .. SIZE_SUFFIX) or boss
+end
+
+-- The boss, with any size marker taken back off. What the list shows.
+function N.BossOf(key)
+	if not key then return key end
+	local bare = key:match("^(.-)" .. SIZE_SUFFIX:gsub("[%(%)]", "%%%0") .. "$")
+	return bare or key
+end
+
+function N.SizeOf(key)
+	return (key and N.BossOf(key) ~= key) and 10 or 25
+end
+
+-- 10 or 25, from the group we are actually in.
+--
+-- GetRaidDifficulty is the honest answer where it exists: a 25 that has not
+-- filled up yet still IS a 25, and counting heads would call it a 10 right up
+-- until the last invite. Falling back to the head count is for a group that has
+-- no difficulty yet, where anything above ten cannot be a ten.
+function N.RaidSize()
+	local n = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+	if n == 0 then return nil end          -- not in a raid: no opinion
+	if GetRaidDifficulty then
+		local d = GetRaidDifficulty()
+		-- 1 = 10 normal, 2 = 25 normal, 3 = 10 heroic, 4 = 25 heroic
+		if d == 1 or d == 3 then return 10 end
+		if d == 2 or d == 4 then return 25 end
+	end
+	return (n > 10) and 25 or 10
+end
+
+-- Which size the PAGE is showing. Follows the raid you are in, until you press
+-- a tab yourself -- reading the 10 plan while sat in town is a normal thing to
+-- want, and a page that fights you about it is worse than one that guesses.
+function N.ViewSize()
+	if db and db.viewSize then return db.viewSize end
+	return N.RaidSize() or 25
+end
+
+function N.SetViewSize(size)
+	if not db then return end
+	db.viewSize = (size == 10) and 10 or 25
+	-- Follow the tab: the note that was live should stay live, at the new size.
+	local boss = N.BossOf(db.selected)
+	if boss then
+		local want = N.KeyFor(boss, db.viewSize)
+		if (db.notes and db.notes[want]) or want == db.selected then
+			db.selected = want
+		else
+			db.selected = want    -- empty on purpose: the note you have yet to write
+		end
+	end
+	N.Broadcast()
+	if N.Refresh then N.Refresh() end
+end
+
+-- The note name for this boss at the size we are raiding.
+--
+-- Only ever returns the 10-man name when a 10-man note actually exists: a guild
+-- that keeps one note per boss should not have the tab go blank the moment they
+-- run a 10.
+function N.SizedName(name)
+	if not name or name == "" then return name end
+	if N.RaidSize() ~= 10 then return name end
+	local ten = N.KeyFor(name, 10)
+	local t = db and db.notes and db.notes[ten]
+	if t and t ~= "" then return ten end
+	return name
+end
+
 function N.Get(name)
 	if not name then return nil end
 	-- db is nil until ADDON_LOADED. A WeakAura's init runs on its own schedule
@@ -156,7 +272,29 @@ end
 -- know about OkanvilNotesDB, the shipped pack, or how zones pick a note.
 -- ------------------------------------------------------------
 function N.Current()
-	return N.Get(db and db.selected) or ""
+	local text = N.Get(db and db.selected) or ""
+
+	-- Fill the role slots before handing the note over.
+	--
+	-- {Holy1} is a slot, not a name, and it stays literal in the stored text.
+	-- Every other reader goes through NotesParse.Render, which fills the slots
+	-- on the way to the screen -- so the note said "Okanor" everywhere a person
+	-- could see it, and "{Holy1}" here. An aura then asked "is this line about
+	-- me?", compared its owner's name against "{Holy1}", and quietly answered no
+	-- for every line in the note.
+	--
+	-- FillSlots and not Render: Render also turns {spell:1234} into a texture
+	-- for a FontString, and the aura needs that tag intact to pick its icon.
+	--
+	-- The colour codes come off because the aura matches a name against the raw
+	-- line and colours it itself; leaving them in makes that match depend on
+	-- where the codes happen to sit.
+	local P = Okanvil.NotesParse
+	if text ~= "" and P and P.FillSlots then
+		text = P.FillSlots(text):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+	end
+
+	return text
 end
 
 function N.CurrentName()
@@ -250,23 +388,29 @@ function N.Broadcast()
 	if N.AnnounceSelected then N.AnnounceSelected() end
 end
 
--- Every note we know about: the twelve encounters in pull order, then anything
--- you added under a name of your own.
+-- Every note we know about, for the size the page is showing: the twelve
+-- encounters in pull order, then anything you added under a name of your own.
+--
+-- Returns KEYS -- "Sindragosa" on the 25 tab, "Sindragosa (10)" on the 10 --
+-- while the list draws N.BossOf() of each, so both tabs read the same and the
+-- size lives in the tab rather than in twelve note names.
 function N.List()
+	local size = N.ViewSize()
 	local seen, out = {}, {}
 	for _, n in ipairs(NOTE_ORDER) do
-		out[#out + 1] = n
-		seen[n] = true
+		local key = N.KeyFor(n, size)
+		out[#out + 1] = key
+		seen[key] = true
 	end
-	-- Anything else we hold: notes you added yourself, AND notes the pack ships
-	-- that are not in the pull order above. The pack was skipped here, so a note
-	-- added to Notes-Data.lua under a new name existed but could never be picked.
+	-- Anything else we hold: notes you added yourself under a name of your own.
+	-- Only this size's -- the other tab's copies are not missing, they are one
+	-- click away, and listing both is how you end up with two "Sindragosa" rows.
 	local extra = {}
 	for n in pairs((db and db.notes) or {}) do
-		if not seen[n] then extra[#extra + 1] = n; seen[n] = true end
-	end
-	for n in pairs(Okanvil.NotesPack or {}) do
-		if not seen[n] then extra[#extra + 1] = n; seen[n] = true end
+		if not seen[n] and N.SizeOf(n) == size then
+			extra[#extra + 1] = n
+			seen[n] = true
+		end
 	end
 	table.sort(extra)
 	for _, n in ipairs(extra) do out[#out + 1] = n end
@@ -292,10 +436,12 @@ local ONE_ROOM_RAIDS = {
 -- The note for the room you are standing in, or nil outside a boss room.
 function N.NoteForHere()
 	local sub = GetSubZoneText()
-	if sub and sub ~= "" and ZONE_NOTE[sub] then return ZONE_NOTE[sub] end
+	-- Sized on the way out, so walking into a room on a 10 picks the 10-man note
+	-- and the same step on a 25 picks the 25. One lookup, one place.
+	if sub and sub ~= "" and ZONE_NOTE[sub] then return N.SizedName(ZONE_NOTE[sub]) end
 	-- Halion's own zone reads through GetZoneText, not a subzone
 	local zone = GetZoneText()
-	if zone and ZONE_NOTE[zone] then return ZONE_NOTE[zone] end
+	if zone and ZONE_NOTE[zone] then return N.SizedName(ZONE_NOTE[zone]) end
 	return nil
 end
 
@@ -671,8 +817,26 @@ function N.BuildPage(p)
 	-- it. Adding and deleting a note was only possible by editing Notes-Data.lua,
 	-- so a note you made for a test -- or for a boss the pack does not ship --
 	-- could be created but never removed.
+	-- 10 / 25 above the list.
+	--
+	-- The size lives HERE and not in the note names: both tabs list the same
+	-- twelve bosses, so "Sindragosa" reads the same on either, and picking a tab
+	-- is picking which plan those names point at. Naming the notes instead --
+	-- "Sindragosa 10", "Sindragosa 25" -- doubles a list you have to read under
+	-- time pressure and puts the two plans for one boss in different places.
+	local TAB_H = 22
+	F.sizeTabs = {}
+	for i, size in ipairs({ 25, 10 }) do
+		local b = W.Button(p, tostring(size) .. " man", "secondary")
+		b:SetSize(LIST_W / 2 - 3, TAB_H)
+		b:SetPoint("TOPLEFT", 6 + (i - 1) * (LIST_W / 2 + 3), -40)
+		b._size = size
+		b:SetScript("OnClick", function() N.SetViewSize(size) end)
+		F.sizeTabs[#F.sizeTabs + 1] = b
+	end
+
 	local lcard = W.Frame(p, "dark")
-	lcard:SetPoint("TOPLEFT", 6, -40)
+	lcard:SetPoint("TOPLEFT", 6, -40 - TAB_H - 6)
 	lcard:SetPoint("BOTTOMLEFT", 6, 40)
 	lcard:SetWidth(LIST_W)
 
@@ -851,47 +1015,16 @@ function N.BuildWindowPage(p)
 	sHint:SetPoint("TOPLEFT", X, y)
 	y = y - 42
 
-	-- ---- role slots ----
-	-- The shipped pack writes {Holy1} {Prot} and so on instead of names, so a
-	-- roster change is ONE edit here rather than eleven notes. Empty slots stay
-	-- visible as {Holy1} in the note, which is the honest way to show that
-	-- nobody is assigned yet.
-	local slHead = W.Text(p, "ROLE SLOTS", "head", "accent")
-	slHead:SetPoint("TOPLEFT", X, y)
-	y = y - 24
-
-	local slHint = W.Text(p,
-		"Names for the slots the shipped notes use. Change a paladin here and "
-		.. "every boss follows.", "note", "dim")
-	slHint:SetPoint("TOPLEFT", X, y)
-	slHint:SetPoint("RIGHT", p, "RIGHT", -X, 0)
-	slHint:SetJustifyH("LEFT")
-	y = y - 26
-
-	db.slots = db.slots or {}
-	local SLOTS = { "Holy1", "Holy2", "Prot", "Ret" }
-	for i, slot in ipairs(SLOTS) do
-		local col = ((i - 1) % 2)
-		local row = math.floor((i - 1) / 2)
-		local bx  = X + col * 250
-		local by  = y - row * 30
-		local lb = W.Text(p, slot, "label", "dim")
-		lb:SetPoint("TOPLEFT", bx, by - 4)
-		lb:SetWidth(48); lb:SetJustifyH("LEFT")
-		local eb = W.EditBox(p, function(t)
-			db.slots[slot] = (t ~= "" and t) or nil
-			-- Repaint both readers: the page list and the floating fight window
-			-- render from the same text, and neither refreshes on its own.
-			if N.PaintLines then pcall(N.PaintLines) end
-			if Okanvil.NotesWindow and Okanvil.NotesWindow.Refresh then
-				pcall(Okanvil.NotesWindow.Refresh)
-			end
-		end)
-		eb:SetSize(180, 22)
-		eb:SetPoint("TOPLEFT", bx + 50, by)
-		eb.edit:SetText(db.slots[slot] or "")
-	end
-	y = y - 30 * math.ceil(#SLOTS / 2) - 14
+	-- No role slots.
+	--
+	-- There was a page of boxes here -- Holy1, Prot, Ret -- that filled {Holy1}
+	-- style tags in the notes. It worked for paladin cooldowns and nothing else:
+	-- the list of roles lived in this file, so wanting a Lust, a PI or a tank
+	-- cooldown meant editing the addon and shipping a release. Mid-raid, that is
+	-- not a thing anybody can do.
+	--
+	-- A note is text. Write the player's name in it, like MRT, and any cooldown
+	-- works the moment you type it -- no list to extend, nothing to keep in step.
 
 	-- ---- sharing ----
 	local shHead = W.Text(p, "SHARING", "head", "accent")
@@ -982,7 +1115,17 @@ function N.Refresh()
 	-- where you are
 	local here = N.NoteForHere()
 	if here then
-		F.here:SetText("|cff8a8d93In|r |cffe0b860" .. here .. "|r")
+		-- The ROOM, then the note it picked. NoteForHere returns the note's name
+		-- -- which is the boss -- so printing "In <that>" read as if the subzone
+		-- were called "Deathbringer Saurfang", and looked like a bad match when
+		-- the match was right.
+		local room = GetSubZoneText()
+		if not room or room == "" then room = GetZoneText() or "" end
+		if room ~= "" and room ~= here then
+			F.here:SetText(("|cff6f7176%s|r  |cff8a8d93->|r |cffe0b860%s|r"):format(room, here))
+		else
+			F.here:SetText("|cffe0b860" .. here .. "|r")
+		end
 	elseif N.IsOneRoomRaid() then
 		-- One arena for every boss: nothing to switch on. Say so, or the page
 		-- looks like it failed to notice where you are.
@@ -994,6 +1137,14 @@ function N.Refresh()
 		F.here:SetText(z ~= "" and ("|cff6f7176" .. z .. "|r") or "")
 	end
 
+	-- which size tab is live
+	if F.sizeTabs then
+		local vs = N.ViewSize()
+		for _, b in ipairs(F.sizeTabs) do
+			b:SetKind(b._size == vs and "primary" or "secondary")
+		end
+	end
+
 	-- the list
 	for _, r in ipairs(F.rows) do r:Hide() end
 	local list = N.List()
@@ -1003,7 +1154,9 @@ function N.Refresh()
 		local text = N.Get(name)
 		local has = text and text ~= ""
 		local own = N.IsOwn(name)
-		r.name:SetText((has and "|cffdcddde" or "|cff6f7176") .. name .. "|r")
+		-- The boss, never the key: the size is the tab you are on, and repeating
+		-- it on every row is noise you have to read past twelve times.
+		r.name:SetText((has and "|cffdcddde" or "|cff6f7176") .. N.BossOf(name) .. "|r")
 		-- A mark only where there is something to say: you edited this one. The
 		-- shipped notes are the normal case and need no badge -- a dot on almost
 		-- every row says nothing.
@@ -1019,7 +1172,11 @@ function N.Refresh()
 	-- the note
 	local sel = db.selected
 	local canEdit = N.CanEdit()
-	F.title:SetText(sel or "|cff6f7176Pick a note|r")
+	-- Boss on the left, size dim on the right: the title is the one place worth
+	-- saying which plan this is, because the editor below it changes with it.
+	F.title:SetText(sel
+		and (N.BossOf(sel) .. ("  |cff6f7176%d man|r"):format(N.SizeOf(sel)))
+		or "|cff6f7176Pick a note|r")
 
 	-- Every control that CHANGES a note is hidden for a raider, rather than shown
 	-- and refused on click. They read the plan and get it from the leader; an Edit
@@ -1106,6 +1263,7 @@ function N.PaintLines()
 	local now = GetTime()
 
 	for _, r in ipairs(F.lineRows) do r:Hide() end
+
 	for i, e in ipairs(F.entries) do
 		local r = lineRow(i)
 		r:Show()

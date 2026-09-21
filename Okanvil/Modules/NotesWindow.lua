@@ -378,20 +378,18 @@ function WIN.Toggle(state)
 	c.shown = state and true or false
 	if state then
 		applyPoint(); applyLook()
-		-- Switching the window ON does not force it onto the screen. With "follow
-		-- the room" set (the default) the note belongs to a boss's room, so
-		-- pressing the button in Dalaran used to paint an ICC note over the world
-		-- and leave it there. ApplyVisibility is the one place that decides, and
-		-- it will bring the window up by itself the moment you walk into the room.
-		WIN.ApplyVisibility()
-		if win:IsShown() then
-			WIN.Refresh()
-		elseif c.onlyInRoom ~= false then
-			Okanvil:Print("|cffe0b860Notes:|r fight window is |cff7cfc8aon|r -- "
-				.. "it appears when you are in the boss's room. "
-				.. "|cff8a8d93(Follow the room is on.)|r")
-		end
+		-- PRESSING THE BUTTON OPENS THE WINDOW. Full stop.
+		--
+		-- This briefly asked ApplyVisibility to decide instead, so that turning it
+		-- on in Dalaran would not paint an ICC note over the world -- but that
+		-- made the button do nothing at all outside a boss room, which reads as
+		-- broken. "Follow the room" is what closes it when you walk out; opening
+		-- it by hand is a deliberate act and is allowed anywhere.
+		win._manual = true      -- opened by hand: the room must not close it
+		win:Show()
+		WIN.Refresh()
 	else
+		win._manual = nil
 		win:Hide()
 	end
 end
@@ -433,10 +431,13 @@ function WIN.ApplyVisibility()
 	-- seen, so a window that was already up in the wrong place (opened by hand,
 	-- or left over from a reload in another zone) stayed up for ever.
 	local inRoom = N.InNoteRoom()
-	if inRoom and not win:IsShown() then
-		win:Show()
-		WIN.Refresh()
-	elseif not inRoom and win:IsShown() then
+	if inRoom then
+		win._manual = nil                 -- back in a room: the room drives again
+		if not win:IsShown() then win:Show(); WIN.Refresh() end
+	elseif win:IsShown() and not win._manual then
+		-- Only close a window the ROOM opened. One you opened by hand stays --
+		-- closing it would undo the button press you just made, which is how it
+		-- came to look like the button did nothing.
 		win:Hide()
 	end
 end
