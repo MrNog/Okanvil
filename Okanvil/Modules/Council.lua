@@ -270,7 +270,18 @@ local function sendReply()
 	if current.na and #current.na > 0 then
 		body = body .. (body ~= "" and SEP_ANS or "") .. table.concat(current.na, SEP_ANS)
 	end
-	C.Reply(current.asker, TOPIC, current.round, body)
+	-- BROADCAST, not a whisper to the asker. A council is more than one person:
+	-- every officer in the raid needs the answers to argue about them, and
+	-- whispering only the master looter meant the board existed on exactly one
+	-- client.
+	--
+	-- Sent to the group, where every Okanvil sees it; the ones that are not
+	-- running a round simply have no such round and drop it. Solo (no group) the
+	-- send no-ops, so the local delivery below is the only path -- which is what
+	-- makes test mode work.
+	if not C.Send("ANS", TOPIC, current.round, body) then
+		C.Reply(current.asker, TOPIC, current.round, body)
+	end
 	-- Persist after every click, not just at the end: a raider who answers two
 	-- items and then disconnects has still told the council about those two.
 	saveRound()
@@ -2106,81 +2117,83 @@ function C_.TestOff()
 end
 
 -- ============================================================
--- "IS TONIGHT A COUNCIL NIGHT?"  Asked ONCE per raid instance, when you become
--- the master looter -- the moment the decision is actually live.
+-- "IS TONIGHT A COUNCIL NIGHT?"
 --
--- Keyed to the raid's own instance id, not to a timer and not to logging in: a
--- reload, a death or a zone out must not ask again (that is what made RCLoot's
--- prompt feel like nagging), but a NEW raid ID is genuinely a new night and
--- deserves the question.
+-- Copied wholesale from the Combat Logs module's "Log this instance?" prompt
+-- (Logs.lua askToLog), because that one works and every clever thing I tried
+-- here did not: one event, one module-scope variable, its own frame, and the
+-- variable cleared when you leave the instance so the next raid asks again.
+--
+-- What was here before: a key stored in SavedVariables (a test in the morning
+-- used up the evening's question), a ten-second poll, and Okanvil:Confirm --
+-- which reuses ONE dialog, so the Logs prompt firing at the same moment on
+-- zone-in silently replaced this one. It had been asking all along; you just
+-- never saw it.
 -- ============================================================
-local function raidKey()
-	if not (GetNumRaidMembers and GetNumRaidMembers() > 0) then return nil end
-	local inInst, itype = IsInInstance and IsInInstance()
-	if not inInst or itype ~= "raid" then return nil end
-	-- ZONE + DAY. 3.3.5a's GetInstanceInfo does not return an instance id (that is
-	-- a later API), so the lockout cannot be identified directly. Zone plus the
-	-- calendar day is close enough for the question being asked: the same raid on
-	-- the same evening asks once, and next week's run asks again.
-	local zone = (GetRealZoneText and GetRealZoneText()) or "?"
-	local day  = date and date("%Y-%m-%d") or "?"
-	return zone .. "|" .. day
-end
+local askedCouncilZone      -- last raid zone we prompted for; nil = ask again
 
-local function maybeAskCouncilNight()
-	if not enabled() then return end
-	if db().askOnML == false then return end        -- the switch on the page
-	if C_.testMode then return end
-	-- Already on -- but SAY so. Council night persists for six hours, so the
-	-- common reason this prompt "did not appear" is that it was still switched on
-	-- from earlier and there was nothing to ask. Silence made that look broken.
-	local key = raidKey()
-	if not key then return end
-	local L = Okanvil.Loot
-	if not (L and L.IsMasterLooter and L.IsMasterLooter()) then return end
+local askNightF
+local function askCouncilNight()
+	if not askNightF then
+		local f = CreateFrame("Frame", nil, UIParent)
+		f:SetSize(300, 110)
+		-- Under the Logs prompt (it sits at -120) so both fit when a raid
+		-- zone-in fires the two of them together.
+		f:SetPoint("TOP", 0, -210)
+		f:SetFrameStrata("FULLSCREEN_DIALOG")
+		f:SetToplevel(true)
+		Okanvil:Skin(f)
 
-	local d = db()
-	-- Already on -- but SAY so. Council night persists for six hours, so the
-	-- commonest reason this prompt "did not appear" is that it was still switched
-	-- on from earlier and there was nothing to ask. Silence made that look broken.
-	if C_.active then
-		if d.askedRaid ~= (key .. "|on") then
-			d.askedRaid = key .. "|on"
-			Okanvil:Print("|cffe0b860Loot council:|r council night is already |cff7cfc8aON|r "
-				.. "-- |cffffd200/okcouncil night off|r to turn it off.")
-		end
-		return
+		f.txt = W.Text(f, "", "body")
+		f.txt:SetPoint("TOPLEFT", 12, -12)
+		f.txt:SetPoint("TOPRIGHT", -12, -12)
+		f.txt:SetJustifyH("CENTER")
+
+		local yes = W.Button(f, "Council night", "primary")
+		yes:SetSize(132, 24); yes:SetPoint("BOTTOMLEFT", 12, 12)
+		yes:SetScript("OnClick", function() f:Hide(); C_.SetActive(true) end)
+
+		local no = W.Button(f, "No")
+		no:SetSize(132, 24); no:SetPoint("BOTTOMRIGHT", -12, 12)
+		no:SetScript("OnClick", function() f:Hide(); C_.SetActive(false) end)
+		askNightF = f
 	end
-
-	-- Keyed to the raid AND to being the master looter. Becoming the ML is the
-	-- moment the decision is live, so a raid you were already standing in must
-	-- still ask when the loot method changes to you -- the key used to be the
-	-- zone alone, so zoning in first and taking master loot after was silently
-	-- treated as "already asked".
-	local askKey = key .. "|ml"
-	if d.askedRaid == askKey then return end
-	d.askedRaid = askKey
-
-	Okanvil:Confirm(
-		"You are the master looter.\nUse |cffe0b860loot council|r tonight?\n\n"
-		.. "|cff8a8d93This turns the Council buttons on. Rolls keep working exactly as\n"
-		.. "they do now -- each item goes one way or the other.|r",
-		"Yes, council night",
-		function() C_.SetActive(true) end,
-		function() C_.SetActive(false) end)
+	askNightF.txt:SetText("Use |cffe0b860loot council|r tonight?\n"
+		.. "|cff8a8d93Rolls keep working either way.|r")
+	if PlaySound then PlaySound("igMainMenuOpen") end
+	askNightF:Show()
 end
 
 do
-	local a = CreateFrame("Frame")
-	a:RegisterEvent("PLAYER_ENTERING_WORLD")
-	a:RegisterEvent("RAID_ROSTER_UPDATE")
-	a:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
-	a:SetScript("OnEvent", function()
-		-- Deferred: the loot method and the instance id are both unreliable for a
-		-- second or two after a zone in.
+	local ev = CreateFrame("Frame")
+	ev:RegisterEvent("PLAYER_ENTERING_WORLD")
+	ev:RegisterEvent("RAID_ROSTER_UPDATE")
+	ev:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
+	ev:SetScript("OnEvent", function()
+		-- Deferred: the loot method and the instance type are both unreliable
+		-- for a second or two after a zone in.
 		C.After(3, function()
-			local ok, err = pcall(maybeAskCouncilNight)
-			if not ok and Okanvil.Err then Okanvil:Err("Council.AskNight", err) end
+			local inInstance, itype = IsInInstance and IsInInstance()
+			if not inInstance or itype ~= "raid" then
+				askedCouncilZone = nil          -- left the raid: ask again next time
+				return
+			end
+			if not enabled() then return end
+			if C_.testMode or C_.active then return end
+			if db().askOnML == false then return end
+
+			-- Whoever is running the loot: the master looter, or the raid leader
+			-- before master loot has been set.
+			local L = Okanvil.Loot
+			local mine = (L and L.IsMasterLooter and L.IsMasterLooter())
+				or (IsRaidLeader and IsRaidLeader())
+			if not mine then return end
+
+			local zone = (GetRealZoneText and GetRealZoneText()) or ""
+			if zone == "" then zone = (GetZoneText and GetZoneText()) or "?" end
+			if zone == askedCouncilZone then return end
+			askedCouncilZone = zone
+			askCouncilNight()
 		end)
 	end)
 end

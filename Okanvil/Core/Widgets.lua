@@ -1037,6 +1037,14 @@ end
 -- One shared, reused frame. Calling it again just re-labels and re-shows.
 -- ------------------------------------------------------------
 local confirmDlg
+-- Exposed so a caller can ask "is a question already on screen?" before adding
+-- its own. There is ONE frame, so two modules asking at the same moment -- which
+-- is exactly what a zone-in does -- means the second silently replaces the
+-- first, and the player only ever sees one of them.
+function Okanvil:ConfirmBusy()
+	return confirmDlg and confirmDlg:IsShown() and true or false
+end
+
 function Okanvil:Confirm(text, acceptLabel, onAccept, onCancel)
 	local f = confirmDlg
 	if not f then
