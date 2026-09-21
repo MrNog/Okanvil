@@ -68,12 +68,35 @@ local ZONE_NOTE = {
 }
 
 -- The order the list shows them in: the order you meet them, not alphabetical.
-local NOTE_ORDER = {
-	"Lord Marrowgar", "Lady Deathwhisper", "Gunship Battle",
-	"Deathbringer Saurfang", "Rotface & Festergut", "Professor Putricide",
-	"Blood Council", "Queen Lana'thel", "Valithria Dreamwalker",
-	"Sindragosa", "The Lich King", "Halion",
+-- The raids, in pull order within each.
+--
+-- One flat list of every boss in the game is a list you scroll rather than read:
+-- ICC alone is twelve, and a Trial note sat under them where nobody looked. A
+-- tab per raid keeps each list to what one night actually needs.
+local RAIDS = {
+	{ key = "icc", label = "ICC", zone = "Icecrown Citadel", bosses = {
+		"Lord Marrowgar", "Lady Deathwhisper", "Gunship Battle",
+		"Deathbringer Saurfang", "Rotface & Festergut", "Professor Putricide",
+		"Blood Council", "Queen Lana'thel", "Valithria Dreamwalker",
+		"Sindragosa", "The Lich King",
+	} },
+	{ key = "toc", label = "ToC", zone = "Trial of the Crusader", bosses = {
+		"Northrend Beasts", "Lord Jaraxxus", "Faction Champions",
+		"Val'kyr Twins", "Anub'arak",
+	} },
+	{ key = "rs", label = "RS", zone = "The Ruby Sanctum", bosses = {
+		"Halion",
+	} },
 }
+
+-- Flat, still: the zone lookup and anything else that asks "is this a boss we
+-- know?" wants one list, not three.
+local NOTE_ORDER = {}
+for _, raid in ipairs(RAIDS) do
+	for _, boss in ipairs(raid.bosses) do
+		NOTE_ORDER[#NOTE_ORDER + 1] = boss
+	end
+end
 
 local defaults = {
 	notes = {},        -- [name] = text
@@ -88,6 +111,7 @@ local defaults = {
 	slots = {},
 	slotStamp = 0,     -- when the slots last changed, for the sync
 	viewSize = nil,    -- 10/25 tab; nil = follow the raid you are in
+	viewRaid = nil,    -- ICC/ToC/RS tab; nil = follow the zone you are in
 }
 
 -- ------------------------------------------------------------
@@ -394,20 +418,56 @@ end
 -- Returns KEYS -- "Sindragosa" on the 25 tab, "Sindragosa (10)" on the 10 --
 -- while the list draws N.BossOf() of each, so both tabs read the same and the
 -- size lives in the tab rather than in twelve note names.
+-- Which raid tab the page is on. Follows the zone until you press a tab.
+function N.ViewRaid()
+	if db and db.viewRaid then return db.viewRaid end
+	local zone = GetZoneText()
+	for _, raid in ipairs(RAIDS) do
+		if zone == raid.zone then return raid.key end
+	end
+	return RAIDS[1].key
+end
+
+function N.SetViewRaid(key)
+	if not db then return end
+	db.viewRaid = key
+	-- Land on something: the boss you were reading is in another raid now.
+	local list = N.List()
+	if list[1] then db.selected = list[1] end
+	N.Broadcast()
+	if N.Refresh then N.Refresh() end
+end
+
+function N.Raids() return RAIDS end
+
 function N.List()
 	local size = N.ViewSize()
+	local raidKey = N.ViewRaid()
+	local bosses
+	for _, raid in ipairs(RAIDS) do
+		if raid.key == raidKey then bosses = raid.bosses break end
+	end
+	bosses = bosses or NOTE_ORDER
+
 	local seen, out = {}, {}
-	for _, n in ipairs(NOTE_ORDER) do
+	for _, n in ipairs(bosses) do
 		local key = N.KeyFor(n, size)
 		out[#out + 1] = key
 		seen[key] = true
 	end
-	-- Anything else we hold: notes you added yourself under a name of your own.
-	-- Only this size's -- the other tab's copies are not missing, they are one
-	-- click away, and listing both is how you end up with two "Sindragosa" rows.
+	-- Notes of your own, under a name no raid lists. They belong to no tab, so
+	-- they go on the LAST one -- dropping them entirely would make a note you
+	-- wrote unreachable, which is worse than it sitting one tab further along.
+	local isLastTab = (raidKey == RAIDS[#RAIDS].key)
+	local known = {}
+	for _, raid in ipairs(RAIDS) do
+		for _, boss in ipairs(raid.bosses) do known[boss] = true end
+	end
+
 	local extra = {}
 	for n in pairs((db and db.notes) or {}) do
-		if not seen[n] and N.SizeOf(n) == size then
+		if not seen[n] and N.SizeOf(n) == size
+			and isLastTab and not known[N.BossOf(n)] then
 			extra[#extra + 1] = n
 			seen[n] = true
 		end
@@ -442,6 +502,9 @@ function N.NoteForHere()
 	-- Halion's own zone reads through GetZoneText, not a subzone
 	local zone = GetZoneText()
 	if zone and ZONE_NOTE[zone] then return N.SizedName(ZONE_NOTE[zone]) end
+	-- No subzone to ask: let the target answer instead.
+	local byTarget = N.NoteForTarget()
+	if byTarget then return N.SizedName(byTarget) end
 	return nil
 end
 
@@ -450,6 +513,39 @@ end
 function N.IsOneRoomRaid()
 	local zone = GetZoneText()
 	return (zone and ONE_ROOM_RAIDS[zone]) == true
+end
+
+-- ------------------------------------------------------------
+-- One-room raids: the TARGET names the boss.
+--
+-- Trial of the Crusader is a single arena for five encounters, so walking in
+-- cannot pick a note the way it does in Icecrown -- and picking by hand before
+-- every pull is the thing nobody remembers to do at the moment it matters. What
+-- IS unambiguous is what the raid is looking at: target Jaraxxus and there is
+-- exactly one note that can mean.
+--
+-- OkanvilBossGroups already maps every NPC to its encounter for the loot module;
+-- the names differ from the note names in two places, hence the aliases.
+-- ------------------------------------------------------------
+local BOSS_NOTE_ALIAS = {
+	["Twin Val'kyr"] = "Val'kyr Twins",
+	["Anub'Arak"]    = "Anub'arak",
+}
+
+function N.NoteForTarget()
+	if not N.IsOneRoomRaid() then return nil end
+	local groups = _G.OkanvilBossGroups
+	if not groups then return nil end
+	-- Your target first, then the target of whoever you are following: a healer
+	-- watching the tank is looking at the boss just as surely as the tank is.
+	for _, unit in ipairs({ "target", "targettarget", "focus" }) do
+		if UnitExists(unit) and not UnitIsPlayer(unit) then
+			local name = UnitName(unit)
+			local enc = name and groups[name]
+			if enc then return BOSS_NOTE_ALIAS[enc] or enc end
+		end
+	end
+	return nil
 end
 
 -- ------------------------------------------------------------
@@ -464,9 +560,25 @@ local pendingZone = false
 
 local function applyZone()
 	if not (db and db.autoZone) then return end
-	if InCombatLockdown and InCombatLockdown() then pendingZone = true; return end
+
 	local want = N.NoteForHere()
 	if not want or want == db.selected then return end
+
+	-- Never swap the plan mid-pull -- EXCEPT when the note is wrong for the boss
+	-- being fought.
+	--
+	-- In Icecrown a room change during combat is you running somewhere, and the
+	-- note must hold. In a one-room raid the target is what names the boss, and
+	-- you only ever target it once the pull is under way: holding off until
+	-- combat drops would mean the note arrives after the fight it was for. So a
+	-- target-driven answer is allowed to land in combat, and only that.
+	if InCombatLockdown and InCombatLockdown() then
+		if not N.NoteForTarget() then
+			pendingZone = true
+			return
+		end
+	end
+
 	db.selected = want
 	pendingZone = false
 	N.Broadcast()
@@ -478,6 +590,9 @@ watcher:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 watcher:RegisterEvent("ZONE_CHANGED_INDOORS")
 watcher:RegisterEvent("PLAYER_ENTERING_WORLD")
 watcher:RegisterEvent("PLAYER_REGEN_ENABLED")
+-- In a one-room raid the target is the only thing that names the boss, and it
+-- changes without any zone event firing.
+watcher:RegisterEvent("PLAYER_TARGET_CHANGED")
 
 watcher:SetScript("OnEvent", function(_, event)
 	if not db then return end
@@ -488,6 +603,12 @@ watcher:SetScript("OnEvent", function(_, event)
 		-- left combat: apply whatever room change we held back
 		if pendingZone then applyZone() end
 		return
+	end
+	if event == "PLAYER_TARGET_CHANGED" then
+		-- This fires on every click of every mob. Only a one-room raid reads the
+		-- target at all, so everywhere else it is answered and dropped here
+		-- rather than walking the zone tables hundreds of times a fight.
+		if not N.IsOneRoomRaid() then return end
 	end
 	applyZone()
 end)
@@ -515,9 +636,24 @@ local HELP_ROWS = {
 	{ "",     "The last number is which occurrence -- 1 is the first." },
 	false,
 	"WHO -- who the line is for",
-	{ "Okanor",  "Just the name. The aura colours raid members by class," },
-	{ "",        "so you never write colour codes yourself." },
-	{ "",        "A line shows for whoever it names: spelling matters." },
+	{ "Okanor",  "Just the name. A line shows for whoever it names," },
+	{ "",        "so spelling matters." },
+	{ "",        "The aura colours names by class during a fight; the" },
+	{ "",        "codes below are for colouring one HERE, in the note." },
+	false,
+	"CLASS COLOURS -- |cffRRGGBB name|r",
+	{ "|cffc41f3b", "Death Knight" },
+	{ "|cffff7d0a", "Druid" },
+	{ "|cffabd473", "Hunter" },
+	{ "|cff69ccf0", "Mage" },
+	{ "|cfff58cba", "Paladin" },
+	{ "|cffffffff", "Priest" },
+	{ "|cfffff569", "Rogue" },
+	{ "|cff0070de", "Shaman" },
+	{ "|cff9482c9", "Warlock" },
+	{ "|cffc79c6e", "Warrior" },
+	{ "", "Always close with |r, or the colour bleeds into the" },
+	{ "", "rest of the line." },
 	false,
 	"EXTRAS",
 	{ "{spell:64205}",  "that spell's icon, inline" },
@@ -532,18 +668,68 @@ local HELP_EXAMPLE = "{time:0:58}Bone Storm 1 - Okanor {spell:64205}"
 -- Built once, on first ask. Nobody opens this every session, so paying for the
 -- frames up front would be frames nobody looks at.
 local helpPanel
+-- Park the help beside the addon window rather than over it.
+--
+-- It is a reference you read WHILE typing a line, so it has to sit where the
+-- note still shows. Centred, it covered the thing it was explaining and had to
+-- be dragged away before it was any use.
+--
+-- Anchored, not parented: the panel stays its own window (closable, draggable
+-- if you want it somewhere else), it just starts in the useful place.
+local function parkHelp(f)
+	local shell = _G.Okanvil_Window
+	f:ClearAllPoints()
+	if shell and shell:IsShown() then
+		f:SetPoint("TOPLEFT", shell, "TOPRIGHT", 8, 0)
+	else
+		f:SetPoint("CENTER")
+	end
+end
+
 local function showHelp()
 	if helpPanel then
+		parkHelp(helpPanel)
 		helpPanel:Show()
 		helpPanel:Raise()
 		return
 	end
 
 	local f = Okanvil:Popup("Writing a note line")
-	f:SetWidth(430)
-	helpPanel = f
+	-- ESC closes it, like the main window.
+	--
+	-- UISpecialFrames is a list of GLOBAL NAMES, and Popup builds anonymous
+	-- frames, so the panel has to be given one before Blizzard can find it. A
+	-- help panel left open behind the addon window -- with no way to dismiss it
+	-- except its own X -- is exactly what ESC is for.
+	if not _G.Okanvil_NotesHelp then
+		_G.Okanvil_NotesHelp = f
+		tinsert(UISpecialFrames, "Okanvil_NotesHelp")
 
-	local CODE_X, MEAN_X = 14, 176
+		-- Closing the addon closes this with it.
+		--
+		-- The panel is parented to UIParent, not to the window it explains --
+		-- it has to be, to sit beside it rather than inside it -- so hiding the
+		-- window leaves it floating over the game with nothing it belongs to.
+		-- Hooking the window's own OnHide covers every way it closes: the X,
+		-- the collapse to the puck, Escape, a DBM pull.
+		local shell = _G.Okanvil_Window
+		if shell and not shell._okNotesHelpHooked then
+			shell._okNotesHelpHooked = true
+			shell:HookScript("OnHide", function()
+				if helpPanel then helpPanel:Hide() end
+			end)
+		end
+	end
+	-- Wider than it was: the rows are a size up now, and at 430 every second
+	-- explanation wrapped onto a line of its own.
+	local PANEL_W = 500
+	f:SetWidth(PANEL_W)
+	helpPanel = f
+	parkHelp(f)
+
+	-- The code column has to fit "{time:0:22,SAA:74792:1}" at 14px without
+	-- running into the meaning beside it.
+	local CODE_X, MEAN_X = 14, 210
 	local y = -34
 
 	for _, row in ipairs(HELP_ROWS) do
@@ -555,17 +741,27 @@ local function showHelp()
 			y = y - 20
 		else
 			local code, meaning = row[1], row[2]
+			-- A colour code cannot be PRINTED as itself: "|cfff58cba" is an
+			-- instruction, so a FontString eats it and leaves the column blank --
+			-- which is the one column you came here to copy. Doubling the pipe
+			-- escapes it, and the swatch moves to the right-hand column so you
+			-- get both: the letters to type, and the colour they produce.
+			local hex = code:match("^|cff(%x%x%x%x%x%x)$")
 			if code ~= "" then
-				local c = W.Text(f, code, "note")
+				local c = W.Text(f, hex and ("|" .. code) or code, "note")
 				c:SetPoint("TOPLEFT", CODE_X, y)
 				-- Monospace so the braces line up down the column; this is the
 				-- half you copy, and it should read as code.
-				c:SetFont("Fonts\\ARIALN.TTF", 12)
+				c:SetFont("Fonts\\ARIALN.TTF", 14)
 			end
-			local m = W.Text(f, meaning, "note", "dim")
+			local m = W.Text(f, hex and ("|cff" .. hex .. meaning .. "|r") or meaning,
+				"note", hex and nil or "dim")
 			m:SetPoint("TOPLEFT", MEAN_X, y)
-			m:SetWidth(430 - MEAN_X - 14)
+			m:SetWidth(PANEL_W - MEAN_X - 14)
 			m:SetJustifyH("LEFT")
+			-- One size up from the page's note text. This panel is read at arm's
+			-- length while typing into the box beside it, not skimmed in passing.
+			m:SetFont(Okanvil:Font(), 14)
 			-- Step by the height the text ACTUALLY took. A fixed 17 assumed one
 			-- line, so every explanation that wrapped to two stole a row from
 			-- whatever came after -- and the last example fell off the bottom of a
@@ -825,18 +1021,34 @@ function N.BuildPage(p)
 	-- "Sindragosa 10", "Sindragosa 25" -- doubles a list you have to read under
 	-- time pressure and puts the two plans for one boss in different places.
 	local TAB_H = 22
+
+	-- Raid on the first row, size on the second. Two questions, asked in the
+	-- order you answer them: which instance tonight, then which lockout.
+	local raids = N.Raids()
+	local rw = (LIST_W - (#raids - 1) * 3) / #raids
+	F.raidTabs = {}
+	for i, raid in ipairs(raids) do
+		local b = W.Button(p, raid.label, "secondary")
+		b:SetSize(rw, TAB_H)
+		b:SetPoint("TOPLEFT", 6 + (i - 1) * (rw + 3), -40)
+		b._raid = raid.key
+		b:Tooltip(raid.zone)
+		b:SetScript("OnClick", function() N.SetViewRaid(raid.key) end)
+		F.raidTabs[#F.raidTabs + 1] = b
+	end
+
 	F.sizeTabs = {}
 	for i, size in ipairs({ 25, 10 }) do
 		local b = W.Button(p, tostring(size) .. " man", "secondary")
 		b:SetSize(LIST_W / 2 - 3, TAB_H)
-		b:SetPoint("TOPLEFT", 6 + (i - 1) * (LIST_W / 2 + 3), -40)
+		b:SetPoint("TOPLEFT", 6 + (i - 1) * (LIST_W / 2 + 3), -40 - TAB_H - 3)
 		b._size = size
 		b:SetScript("OnClick", function() N.SetViewSize(size) end)
 		F.sizeTabs[#F.sizeTabs + 1] = b
 	end
 
 	local lcard = W.Frame(p, "dark")
-	lcard:SetPoint("TOPLEFT", 6, -40 - TAB_H - 6)
+	lcard:SetPoint("TOPLEFT", 6, -40 - (TAB_H + 3) * 2 - 3)
 	lcard:SetPoint("BOTTOMLEFT", 6, 40)
 	lcard:SetWidth(LIST_W)
 
@@ -906,7 +1118,7 @@ function N.BuildPage(p)
 	F.help = W.Button(p, "?")
 	F.help:SetSize(22, 20)
 	F.help:SetPoint("RIGHT", F.mode, "LEFT", -5, 0)
-	F.help:Tooltip("How to write a note line.")
+	F.help:Tooltip("How to write a note line, and the class colours.\nOpens beside this window.")
 	F.help:SetScript("OnClick", showHelp)
 	F.mode:SetScript("OnClick", function()
 		N.Commit()
@@ -954,7 +1166,7 @@ function N.BuildPage(p)
 	F.count = W.Text(p, "", "note", "dim")
 	F.count:SetPoint("BOTTOMLEFT", RX, 12)
 
-	F.hint = W.Text(p, "MRT note format. {Holy1} {Prot} and friends fill from Fight window > Role slots.", "note", "dim")
+	F.hint = W.Text(p, "MRT note format. Write player names; press ? for the syntax and class colours.", "note", "dim")
 	F.hint:SetPoint("BOTTOMRIGHT", -10, 12)
 
 	N.Refresh()
@@ -1138,6 +1350,12 @@ function N.Refresh()
 	end
 
 	-- which size tab is live
+	if F.raidTabs then
+		local vr = N.ViewRaid()
+		for _, b in ipairs(F.raidTabs) do
+			b:SetKind(b._raid == vr and "primary" or "secondary")
+		end
+	end
 	if F.sizeTabs then
 		local vs = N.ViewSize()
 		for _, b in ipairs(F.sizeTabs) do
