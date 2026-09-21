@@ -19,3 +19,8 @@ agent/
 *.logic-bak
 *.bak
 *.orig
+
+# SavedVariables copied out of the WoW client before a wipe/restore test. They
+# are one player's own data (guild roster, loot history, notes) and megabytes of
+# it -- useful locally, never part of the addon.
+_svbackup-*/

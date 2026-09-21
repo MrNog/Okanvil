@@ -51,12 +51,19 @@ local function strip_loot_lingo(msg)
 end
 
 -- collapse a paste of an achievement/item hyperlink down to its [Name] text,
--- and remember the raw had a link (for wantsAchiev). Returns cleaned, hadAchiev.
+-- and remember the raw had a link (for wantsAchiev). Returns cleaned, hadAchiev,
+-- achievId.
+--
+-- The ID matters, not just the fact of a link: ToGC has two very different proofs
+-- ("Call of the Grand Crusade" = you cleared it; "A Tribute to Insanity" = you
+-- cleared it with all 50 attempts left). Replying with the wrong one answers a
+-- question the leader did not ask, so we keep the id and mirror it back.
 local function simplify_links(msg)
 	local hadAchiev = msg:find("achievement:") ~= nil
+	local achievId = tonumber(msg:match("|Hachievement:(%d+)"))
 	-- |cff...|Hachievement:...|h[Name]|h|r  ->  [Name]
 	msg = msg:gsub("|c%x-|H.-|h(%[.-%])|h|r", "%1")
-	return msg, hadAchiev
+	return msg, hadAchiev, achievId
 end
 
 -- ------------------------------------------------------------
@@ -80,7 +87,47 @@ local recruit_words = {
 	"reclut", "hispanohablante", "hermandad", "buscamos",
 	-- portuguese
 	"recrutan", "recrutando", "guilda",
+
+	-- A guild can advertise without ever saying "recruit": "looking for ICC HC-ready
+	-- players to fill our roster(3 raids). RT mon+wed+sun". The vocabulary below is
+	-- what a guild uses about ITSELF and a pug leader never does -- a leader forming
+	-- a group now wants bodies for THIS run, not a standing roster on fixed nights.
+	"%f[%w]roster%f[%W]",
+	"fill%s+our%s+%w+", "fill%s+the%s+%w+",
+	-- A weekday PAIR joined by + or / ("mon+wed+sun", "wed/sun") is a standing
+	-- schedule. A leader forming a group now never posts one. Built below rather
+	-- than written out: Lua patterns have no alternation, so every day-pair would
+	-- otherwise be its own literal line.
+	-- "looking for <anything> players/raiders" -- recruiting PEOPLE, not filling slots
+	"looking%s+for%s+[^%.]-%f[%w]players%f[%W]",
+	"looking%s+for%s+[^%.]-%f[%w]raiders%f[%W]",
+	-- "(3 raids)" / "3 raids per week" -- a weekly schedule only a guild quotes
+	"%d%s*raids?%s*%)", "%d%s*raids?%s*per%s*week", "%d%s*raids?%s*a%s*week",
 }
+-- Weekday schedules, appended to the list above. "RT mon" (raid times) labels the
+-- nights a guild raids, and THREE days joined by + or / ("mon+wed+sun") is that same
+-- standing commitment without the label -- neither is a call to fill a group tonight.
+--
+-- Deliberately NOT a two-day pair: a pug genuinely can span a weekend
+-- ("LFM ulduar sat/sun both nights need tank"), and rejecting that would hide a real
+-- listing. Three days is a weekly rota; two can still be one run.
+do
+	local DAYS = { "mon", "tue", "wed", "thu", "fri", "sat", "sun" }
+	local JOIN = "%s*[%+/]%s*"
+	for _, a in ipairs(DAYS) do
+		recruit_words[#recruit_words + 1] = "%f[%w]rt%f[%W]%s*[:=]?%s*" .. a
+		for _, b in ipairs(DAYS) do
+			if a ~= b then
+				for _, c in ipairs(DAYS) do
+					if c ~= a and c ~= b then
+						recruit_words[#recruit_words + 1] = a .. JOIN .. b .. JOIN .. c
+					end
+				end
+			end
+		end
+	end
+end
+
 -- "LFW" = Looking For Work: a booster/carry seller advertising themselves for
 -- hire, not a raid leader forming a group. Discard on sight (like WTS spam).
 local trade_words = { "wts ", "wtb ", "selling ", "buying ",
@@ -100,6 +147,38 @@ local stream_sites = {
 local stream_words = {
 	"%f[%w]pov%f[%W]", "%f[%w]vod%f[%W]", "%f[%w]stream%a*%f[%W]",
 	"live%s+now", "watch%s+me", "%f[%w]subscribe%f[%W]",
+}
+
+-- 5-man content. This module lists RAIDS, and several dungeons share an
+-- abbreviation with one: "ToC 5" is Trial of the CHAMPION (5-man), while "ToC"
+-- alone is Trial of the Crusader (raid). Without this, "LFM ... TOC 5 TRINKET
+-- FARM" matched the bare-"toc" raid pattern and was listed as a ToC10.
+--
+-- Matched BEFORE the raid lexer runs, so an explicit 5-man marker always wins over
+-- a loose raid abbreviation.
+-- ONLY unambiguous markers. Bare dungeon abbreviations were tried and removed:
+-- "ok", "up", "an", "gd", "pos", "vh" and "5m" are ordinary words in a raid call
+-- ("ok gear required", "up for 2 hours", "an off tank", "5m gold reserve") and
+-- each one silently threw away a real listing. A full dungeon NAME, or an
+-- abbreviation glued to a 5, cannot be read any other way.
+local dungeon_words = {
+	-- an explicit party size: "toc 5", "5 man", "5-man", "5 ppl"
+	"%f[%w]toc%s*5%f[%W]", "%f[%w]tok%s*5%f[%W]",
+	"%f[%w]5%s*man%f[%W]", "%f[%w]5%-man%f[%W]",
+	"%f[%w]5%s*ppl%f[%W]", "%f[%w]5%s*people%f[%W]",
+	-- full 5-man names -- never ambiguous
+	"trial of the champion",
+	"halls of reflection", "halls of stone", "halls of lightning",
+	"forge of souls", "pit of saron", "violet hold",
+	"utgarde keep", "utgarde pinnacle",
+	"azjol%-?nerub", "ahn'?kahet", "old kingdom",
+	"drak'?tharon", "gundrak", "culling of stratholme",
+	"the oculus", "the nexus",
+	-- ICC 5-man abbreviations, but only as a SET ("fos/pos/hor") or with a
+	-- difficulty attached -- the bare forms collide with ordinary words.
+	"%f[%w]fos%s*/%s*pos", "%f[%w]pos%s*/%s*hor", "%f[%w]hor%s*/%s*fos",
+	"%f[%w]fos%s*%+%s*pos", "%f[%w]pos%s*%+%s*hor",
+	"%f[%w]hor%s*hc%f[%W]", "%f[%w]pos%s*hc%f[%W]", "%f[%w]fos%s*hc%f[%W]",
 }
 
 local function matches_any(msg, list)
@@ -294,7 +373,9 @@ local role_words = {
 	           "%f[%w]sp%f[%W]", "%f[%w]spd%f[%W]",                 -- sp/spd = shadow priest
 	           "%f[%w]ele%f[%W]", "%f[%w]elem%a*",                 -- ele / elemental
 	           "%f[%w]mage%a*", "%f[%w]lock%a*", "%f[%w]warlock%a*", "%f[%w]hunt%a*",
-	           "%f[%w]rogue%a*", "%f[%w]fury%a*",
+	           "%f[%w]rogue%a*", "%f[%w]rog%f[%W]", "%f[%w]rogu%f[%W]",   -- rog / rogu = rogue
+	           "%f[%w]crogue%a*", "%f[%w]crog%f[%W]",                    -- crogue/crog = COMBAT rogue
+	           "%f[%w]fury%a*",
 	           "%f[%w]ret%f[%W]", "%f[%w]retri%a*", "%f[%w]retro?%a*" },  -- ret / retri / retro(typo)
 }
 
@@ -381,7 +462,10 @@ local class_specs = {
 	{ role="dps", class="MAGE",   label="Mage",          pats={ "%f[%w]mage%a*" } },
 	{ role="dps", class="WARLOCK",label="Warlock",       pats={ "%f[%w]lock%a*", "%f[%w]warlock%a*" } },
 	{ role="dps", class="HUNTER", label="Hunter",        pats={ "%f[%w]hunters?%f[%W]", "%f[%w]hunt%f[%W]" } },
-	{ role="dps", class="ROGUE",  label="Rogue",         pats={ "%f[%w]rogue%a*" } },
+	-- Combat rogue BEFORE the plain rogue: "crogue" contains "rogue", so whichever
+	-- is listed first wins the label, and the more specific one has to.
+	{ role="dps", class="ROGUE",  label="Combat Rogue",  pats={ "%f[%w]crogue%a*", "%f[%w]crog%f[%W]", "combat%s?rog%a*" } },
+	{ role="dps", class="ROGUE",  label="Rogue",         pats={ "%f[%w]rogue%a*", "%f[%w]rog%f[%W]", "%f[%w]rogu%f[%W]" } },
 	{ role="dps", class="PALADIN",label="Ret Paladin",   pats={ "%f[%w]ret%f[%W]", "%f[%w]retri%a*" } },
 	{ role="dps", class="WARRIOR",label="Fury Warrior",  pats={ "%f[%w]fury%a*" } },
 	{ role="dps", class="DRUID",  label="Feral Cat",     pats={ "%f[%w]kitty%f[%W]", "%f[%w]feral%a*" } },
@@ -393,13 +477,23 @@ local class_specs = {
 }
 
 local function lex_classes(raw)
-	local out, seen = {}, {}
+	local out, seen, seenSpot = {}, {}, {}
 	for _, cs in ipairs(class_specs) do
 		if not seen[cs.label] then
 			for _, p in ipairs(cs.pats) do
-				if raw:find(p) then
-					seen[cs.label] = true
-					out[#out + 1] = { role = cs.role, label = cs.label, class = cs.class }
+				local at, fin = raw:find(p)
+				if at then
+					-- One WORD names one spec. "crogue" ENDS where "rogue" ends, so
+					-- without this the same word produced both "Combat Rogue" and
+					-- "Rogue". Keyed on the END of the match, not the start: the
+					-- prefixed form begins a letter earlier but finishes in the same
+					-- place. The more specific entry is listed first and claims it.
+					local spot = cs.class .. ":" .. tostring(fin)
+					if not seenSpot[spot] then
+						seenSpot[spot] = true
+						seen[cs.label] = true
+						out[#out + 1] = { role = cs.role, label = cs.label, class = cs.class }
+					end
 					break
 				end
 			end
@@ -760,6 +854,11 @@ function RF.parse(message)
 	-- 1. early reject
 	if matches_any(raw, recruit_words) or matches_any(raw, trade_words) then return end
 
+	-- 5-man content, rejected BEFORE the raid lexer: several dungeons share an
+	-- abbreviation with a raid ("ToC 5" vs "ToC"), and the loose raid patterns
+	-- would otherwise claim them.
+	if matches_any(raw, dungeon_words) then return end
+
 	-- Someone advertising their POV/stream, even when the line names a raid.
 	-- A streaming site is enough by itself (bare "twitch.tv/name" is the usual
 	-- paste); other lingo needs a link beside it, since "pov check" and "stream
@@ -772,7 +871,7 @@ function RF.parse(message)
 	-- The token match itself is case-insensitive.
 	local reserved = RF.lex_reserved(message)
 
-	local msg, hadAchiev = simplify_links(raw)
+	local msg, hadAchiev, achievId = simplify_links(raw)
 	-- neutralize loot-priority lingo (SR>MS>OS etc.) so "OS" isn't misread as a
 	-- second raid (Obsidian Sanctum) and the line falsely rejected as multi-raid.
 	msg = strip_loot_lingo(msg)
@@ -818,6 +917,8 @@ function RF.parse(message)
 		gs       = gs,               -- "5.8" or nil (unknown)
 		reserved = reserved,          -- nil (unknown) / false (none) / {cats,link}
 		wantsAchiev = hadAchiev,
+		achievId = achievId,          -- the exact achievement asked for, so a reply
+		                              -- can mirror it instead of guessing
 	}
 end
 

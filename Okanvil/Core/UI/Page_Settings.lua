@@ -17,7 +17,7 @@ function Okanvil:BuildSettings()
 	local fill = newFillPanel()
 	local host = fill.child
 	local db = self.db
-	local X = 12
+	local X = Okanvil.UI.PAD_X
 
 	-- TABS. Everything used to be stacked on one landing page -- appearance, media,
 	-- branding, dev, version check, and then the raid overlays crammed into an
@@ -28,29 +28,46 @@ function Okanvil:BuildSettings()
 		icon = Okanvil.ICONS.settings,
 		drawerWidth = 0,
 		footerHeight = 0,
+		-- One pill per area, and every module's settings are HERE. They used to be
+		-- split: a module with a page kept its own settings tab, a module without
+		-- one had them here, so configuring loot meant two places and neither was
+		-- obviously the right one to look in first.
+		pills = true,
 		tabs = {
-			{ key = "general", label = "General",    height = 500,
+			-- Two columns, so this is shorter than it looks: 380 left a third of
+			-- the pill empty below About.
+			{ key = "general", label = "General",    height = 300,
 			  build = function(pg) Okanvil:Settings_General(pg) end },
-			{ key = "raid",    label = "Raid Tools", height = 470,
+			-- loot capture, announce templates and the priority list
+			-- taller for an officer: the priority-list blocks below the announce
+			-- templates are only built for someone who can open that list
+			{ key = "loot",    label = "Loot",
+			  height = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) and 470 or 320,
+			  build = function(pg) Okanvil:Loot_BuildSettings(pg) end },
+			-- Two columns: the ready-check popup and the marks bar side by side.
+			{ key = "raid",    label = "Raid",       height = 300,
 			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
-			{ key = "adv",     label = "Advanced",   height = 460,
-			  build = function(pg) Okanvil:Settings_Advanced(pg) end },
+			-- No Invite or Modules pill: both are nav entries now. A module with no
+			-- menu row and its options in Settings is one nobody finds, and Modules
+			-- is not configuration -- it is what the addon has.
+			-- No Advanced pill either. It held a dev toggle (which is /okanvil tab)
+			-- and one button, now under ABOUT in General.
 		},
 	})
 	fill.dash = dash
-	local main = dash.main   -- the badge below anchors to it
 
 	-- app credit -- a small badge in the bottom-right corner (anvil + wordmark),
-	-- nicer than a bare line of text.
-	local badge = W.Frame(main, "panel")
-	badge:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", -12, 12)
+	-- nicer than a bare line of text. Anchored to the PAGE, not dash.main: in pill
+	-- mode the body it used to hang off is hidden, which took the badge with it.
+	local badge = W.Frame(host, "panel")
+	badge:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -12, 12)
 	badge:SetHeight(48)
 	local bIcon = badge:CreateTexture(nil, "ARTWORK")
 	bIcon:SetSize(30, 30); bIcon:SetPoint("LEFT", 12, 0)
 	bIcon:SetTexture("Interface\\Icons\\Trade_BlackSmithing"); bIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local bName = W.Text(badge, "Okanvil", 14, "accent"); bName:SetPoint("LEFT", bIcon, "RIGHT", 10, 8); bName:Color(1, 0.82, 0)
-	local bVer = W.Text(badge, "v" .. (self.version or "1.0"), 10, "dim"); bVer:SetPoint("LEFT", bName, "RIGHT", 5, 0)
-	local bBy = W.Text(badge, "forged by |cffe0b860Okanor|r", 10, "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
+	local bName = W.Text(badge, "Okanvil", "head", "accent"); bName:SetPoint("LEFT", bIcon, "RIGHT", 10, 8); bName:Color(1, 0.82, 0)
+	local bVer = W.Text(badge, "v" .. (self.version or "1.0"), "note", "dim"); bVer:SetPoint("LEFT", bName, "RIGHT", 5, 0)
+	local bBy = W.Text(badge, "forged by |cffe0b860Okanor|r", "note", "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
 	-- size the badge to fit its contents (icon + the wider of the two text rows)
 	local wName = (bName:GetStringWidth() or 60) + (bVer:GetStringWidth() or 20) + 5
 	local wBy = bBy:GetStringWidth() or 80
@@ -70,74 +87,132 @@ function Okanvil:Settings_General(p)
 	local db = self.db
 	local X = 4
 
-	-- NOTE: W.Slider anchors at its BAR; its own label sits ~5px ABOVE that anchor,
-	-- so each slider needs ~46px of vertical room.
-	-- APPEARANCE
-	local a = W.Text(p, "APPEARANCE", 10, "dim"); a:SetPoint("TOPLEFT", X, -8)
-	W.Slider(p, "Window scale", 0.6, 1.4, 0.05, function() return db.scale end,
-		function(v) db.scale = v; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", X, -46)
-	W.Slider(p, "Background opacity", 0.3, 1.0, 0.05, function() return db.bgAlpha end,
-		function(v) db.bgAlpha = v; Okanvil:ReskinAll(v); Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -92)
-	W.Slider(p, "Font size", 8, 20, 1, function() return db.fontSize end,
-		function(v) db.fontSize = v; Okanvil:ApplyFonts() end):SetPoint("TOPLEFT", X, -138)
-	local showChk = W.Check(p, "Show rat art on pages",
+	-- Spacing carries the grouping: a section header gets GAP above it, the controls
+	-- under it get ROW. Everything used to sit the same distance apart, so nothing
+	-- looked like it belonged to anything.
+	-- NOTE: W.Slider anchors at its BAR, with its label ~5px ABOVE that anchor, so a
+	-- slider needs more room above it than a checkbox does.
+	-- Two columns. Every control here is narrow -- a slider, a checkbox, a
+	-- dropdown -- so a single column left the right half of the page empty and
+	-- pushed About below the fold.
+	--
+	-- A section header spans both columns and resets them to the same line, so a
+	-- group never straddles a heading.
+	local COL_W = 250
+	local C1, C2 = X, X + COL_W + 30
+	local y1, y2 = -8, -8
+
+	-- A section spans both columns and resets them to the same line, so a group
+	-- never straddles a heading.
+	local function head(text)
+		local top = math.min(y1, y2) - 14
+		y1 = (W.Section(p, text, C1, top))
+		y2 = y1
+	end
+	local function hint(text, col)
+		if col == 2 then
+			y2 = W.Hint(p, text, C2 + 2, y2, COL_W - 10)
+		else
+			y1 = W.Hint(p, text, C1 + 2, y1, COL_W - 10)
+		end
+	end
+
+	head("APPEARANCE")
+
+	local SLIDER_TOP = W.SLIDER_TOP
+
+	-- LEFT: size. Scale is the ONE size control -- it scales text, icons, spacing
+	-- and padding together, which is what "make it bigger" actually means.
+	y1 = y1 - SLIDER_TOP
+	W.Slider(p, "Window scale", 0.6, 1.8, 0.05, function() return db.scale end,
+		function(v) db.scale = v; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", C1, y1)
+	y1 = y1 - 22
+	hint("text, icons and spacing together", 1)
+
+	-- RIGHT: the art, its toggle and its opacity as one block. The slider does
+	-- nothing while the toggle is off, so they have to be read together.
+	local showChk = W.Check(p, "Background art",
 		function() return (db.ratArt or "on") ~= "off" end,
 		function(v) db.ratArt = v and "on" or "off"; Okanvil:RefreshRatArt() end)
-	showChk:SetPoint("TOPLEFT", X, -170)
+	showChk:SetPoint("TOPLEFT", C2, y2)
+	y2 = y2 - 24 - SLIDER_TOP
+	W.Slider(p, "Art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
+		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", C2, y2)
+	y2 = y2 - 22
+
+	head("BEHAVIOUR")
 	local pullChk = W.Check(p, "Close all windows on a DBM pull",
 		function() return db.closeOnPull ~= false end,
 		function(v) db.closeOnPull = v end)
-	pullChk:SetPoint("TOPLEFT", X + 200, -170)
-	-- rat watermark intensity -- its OWN slider, independent of panel opacity.
-	W.Slider(p, "Rat art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
-		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", X, -212)
+	pullChk:SetPoint("TOPLEFT", C1, y1); y1 = y1 - 26
 
-	-- MEDIA
-	local m = W.Text(p, "MEDIA", 10, "dim"); m:SetPoint("TOPLEFT", X, -252)
-	local fl = W.Text(p, "Font", 11, "dim"); fl:SetPoint("TOPLEFT", X, -274)
+	-- Background opacity and Bar texture used to be here. Both are set once and
+	-- never touched again -- and the addon has almost no status bars for a texture
+	-- to apply to. db.bgAlpha and db.statusbar still drive the panels and
+	-- Okanvil:Texture(); they are just no longer worth a row each.
+	head("FONT")
 	W.DropDown(p, function() return (LSM and LSM:List("font")) or { db.font } end,
 		function() return db.font end, function(v) db.font = v; Okanvil:ApplyFonts() end, "font")
-		:Size(200, 22):Point("TOPLEFT", X + 90, -272)
-	local tl = W.Text(p, "Bar texture", 11, "dim"); tl:SetPoint("TOPLEFT", X, -304)
-	W.DropDown(p, function() return (LSM and LSM:List("statusbar")) or { db.statusbar } end,
-		function() return db.statusbar end, function(v) db.statusbar = v end, "statusbar")
-		:Size(200, 22):Point("TOPLEFT", X + 90, -302)
+		:Size(220, 22):Point("TOPLEFT", C1, y1)
+	y1 = y1 - 30
 
-	-- BRANDING (product name is FIXED -- guilds only set their own skin)
-	local b = W.Text(p, "BRANDING", 10, "dim"); b:SetPoint("TOPLEFT", X, -344)
-	local nl = W.Text(p, "Guild skin (shown after Okanvil)", 11, "dim"); nl:SetPoint("TOPLEFT", X, -366)
-	local nameBox = W.EditBox(p, function(txt)
-		db.brand = txt or ""
-		if Okanvil.headerPaintBrand then Okanvil.headerPaintBrand() end
-		Okanvil.panels["__home"] = nil
-	end)
-	nameBox:SetSize(320, 22); nameBox:SetPoint("TOPLEFT", X, -384)
-	nameBox.edit:SetText((db.brand ~= "Okanvil" and db.brand) or "")
-	local nh = W.Text(p, "e.g. RATS Guild Hub -- leave empty for just \"Okanvil\".", 10, "dim")
-	nh:SetPoint("TOPLEFT", X, -410)
-	local ul = W.Text(p, "Web hub URL", 11, "dim"); ul:SetPoint("TOPLEFT", X, -434)
-	local urlBox = W.EditBox(p, function(txt)
-		db.hubURL = txt
-		if Okanvil.footerPaintHub then Okanvil.footerPaintHub() end   -- live-update footer link
-	end)
-	urlBox:SetSize(320, 22); urlBox:SetPoint("TOPLEFT", X, -452)
-	urlBox.edit:SetText(db.hubURL or "")
-
+	-- Guild skin and Web hub URL used to sit here too. Both are set on the day a
+	-- guild installs Okanvil and then never again, so they live on /okanvil brand
+	-- and /okanvil hub instead of taking a third of this page.
+	head("ABOUT")
+	local vbtn = W.Button(p, "Version check", "secondary")
+	vbtn:SetSize(140, 24); vbtn:SetPoint("TOPLEFT", C1, y1)
+	vbtn:SetScript("OnClick", function() Okanvil:ShowVersionChecker() end)
+	local vh = W.Text(p, "|cff6f7176who in your group or guild runs which Okanvil|r", "note", "dim")
+	vh:SetPoint("LEFT", vbtn, "RIGHT", 10, 0)
 end
 
 function Okanvil:Settings_RaidTools(p)
 	local db = self.db
 	local X = 4
 
-	-- RAID TOOLS -- the two in-raid overlays. Neither owns a nav page: a handful of
-	-- switches never justified a Dashboard with an empty footer, and both features
-	-- ARE their on-screen overlay. Right-hand column; this space was empty.
+	-- Two in-raid overlays, each its own group with real space above it. They used
+	-- to run down the page with the same gap between two checkboxes as between two
+	-- tools, so twelve controls read as one undifferentiated list.
+	--
+	-- Labels are short because the group header carries the rest: under
+	-- "READY-CHECK POPUP", a checkbox only has to say "Show on a ready check".
 	--
 	-- The setters below must store a REAL boolean, never nil: W.Check toggles by
 	-- inverting what getFn reads, so deleting the key leaves the tick stuck on.
-	local RX = X
-	local rt = W.Text(p, "RAID CHECK -- the ready-check popup", 10, "dim")
-	rt:SetPoint("TOPLEFT", RX, -8)
+	-- Two columns, one per tool. The ready-check popup and the marks bar are
+	-- independent things you configure once each; stacked they ran off the bottom
+	-- of the pill while the right half of the page stayed empty.
+	-- Wide enough that the explanatory lines fit on ONE line: at 300 every hint
+	-- wrapped, which is what made the left column feel cramped.
+	local COL_W = 380
+	local C1, C2 = X, X + COL_W + 30
+	local col, y1, y2 = 1, -8, -8
+
+	local SLIDER_TOP = W.SLIDER_TOP
+
+	local function cx() return (col == 1) and C1 or C2 end
+	local function cy() return (col == 1) and y1 or y2 end
+	local function setY(v)
+		if col == 1 then y1 = v else y2 = v end
+	end
+	local function step(n) setY(cy() - n) end
+
+	local function head(text)
+		-- The left column's rule stops where the right column starts; the right
+		-- one runs to the page edge.
+		local reach = (col == 1) and (C2 - C1 - 100) or nil
+		setY((W.Section(p, text, cx(), cy(), reach)))
+	end
+	local function chk(label, getFn, setFn, tip)
+		local c = W.Check(p, label, getFn, setFn)
+		c:SetPoint("TOPLEFT", cx(), cy()); step(28)
+		if tip then c:Tooltip(tip) end
+		return c
+	end
+	local function hint(text)
+		setY(W.Hint(p, text, cx() + 21, cy(), COL_W - 30, 8))
+	end
 
 	local RC = Okanvil.RaidCheck
 	if RC then
@@ -146,110 +221,86 @@ function Okanvil:Settings_RaidTools(p)
 			return db.raidcheck
 		end
 
-		local rcOn = W.Check(p, "Raid check popup on a ready check",
+		head("READY-CHECK POPUP")
+		chk("Show on a ready check",
 			function() return rcdb().onReadyCheck ~= false end,
 			function(v) rcdb().onReadyCheck = v and true or false end)
-		rcOn:SetPoint("TOPLEFT", RX + 2, -30)
-
-		local rcHint = W.Text(p, "Who is missing a flask, food or a buff. Leader/assist only.", 10, "dim")
-		rcHint:SetPoint("TOPLEFT", RX + 20, -50); rcHint:SetWidth(270); rcHint:SetJustifyH("LEFT")
-
-		local rcNum = W.Check(p, "Show minutes left on each icon",
+		hint("who is missing a flask, food or a buff -- leader/assist only")
+		chk("Close once everyone is ready",
+			function() return rcdb().closeWhenClear ~= false end,
+			function(v) rcdb().closeWhenClear = v and true or false end,
+			"Everyone answered READY and nobody is missing a flask or food -> the "
+			.. "popup has nothing left to show, so it closes itself.\n\n"
+			.. "Someone answering NOT ready keeps it open -- that is the case you "
+			.. "want to be looking at.")
+		chk("Minutes left on each icon",
 			function() return rcdb().hideNumbers ~= true end,
 			function(v)
 				rcdb().hideNumbers = not v
 				if RC.RenderToast then RC:RenderToast() end
 			end)
-		rcNum:SetPoint("TOPLEFT", RX + 2, -74)
-
-		local rcGrey = W.Check(p, "Grey out missing buffs",
+		chk("Grey out missing buffs",
 			function() return rcdb().hideMissing ~= true end,
 			function(v)
 				rcdb().hideMissing = not v
 				if RC.RenderToast then RC:RenderToast() end
 			end)
-		rcGrey:SetPoint("TOPLEFT", RX + 2, -100)
+		hint("off: only buffs people actually have are drawn")
 
-		local rcGreyHint = W.Text(p, "Off: only buffs people actually have are drawn.", 10, "dim")
-		rcGreyHint:SetPoint("TOPLEFT", RX + 20, -120); rcGreyHint:SetWidth(300); rcGreyHint:SetJustifyH("LEFT")
-
-		local rcSortL = W.Text(p, "Sort by", 11, "dim")
-		rcSortL:SetPoint("TOPLEFT", RX + 2, -146)
+		step(6)
+		local rcSortL = W.Text(p, "Sort by", "label", "dim")
+		rcSortL:SetPoint("TOPLEFT", cx(), cy() + 4)
 		W.DropDown(p,
 			function() return RC.SORTS or { "group", "class", "name" } end,
 			function() return rcdb().sort or "group" end,
 			function(v) rcdb().sort = v; if RC.RenderToast then RC:RenderToast() end end)
-			:Size(130, 22):Point("TOPLEFT", RX + 60, -144)
+			:Size(130, 22):Point("TOPLEFT", cx() + 60, cy() + 6)
+		step(30 + SLIDER_TOP)
 
-		-- W.Slider anchors at its BAR and prints its label ABOVE -- hence the gap.
-		W.Slider(p, "Popup size", 70, 160, 5,
+		W.Slider(p, "Size", 70, 160, 5,
 			function() return rcdb().scale or 100 end,
 			function(v)
 				rcdb().scale = v
 				if RC.SetToastScale then RC:SetToastScale(v) end
-			end):SetPoint("TOPLEFT", RX + 2, -200)
-
-		local rcTest = W.Button(p, "Show it now")
-		rcTest:SetSize(110, 22); rcTest:SetPoint("TOPLEFT", RX + 2, -228)
+			end):SetPoint("TOPLEFT", cx(), cy())
+		local rcTest = W.Button(p, "Preview")
+		rcTest:SetSize(90, 22); rcTest:SetPoint("TOPLEFT", cx() + 210, cy() - 4)
 		rcTest:SetScript("OnClick", function() if RC.ShowToast then RC:ShowToast(true) end end)
+		step(26)
 	end
 
-	-- RAID UTILS -- the floating marks bar (8 raid icons + clear + ready check + a
-	-- DBM pull). Same deal: an overlay, not a page.
 	local MB = Okanvil.MarksBar
 	if MB then
-		local ut = W.Text(p, "RAID UTILS -- the floating marks bar", 10, "dim")
-		ut:SetPoint("TOPLEFT", RX, -262)
 		local mbdb = function()
 			db.marksbar = db.marksbar or {}
 			return db.marksbar
 		end
 
-		local mbOn = W.Check(p, "Raid utils bar (marks, ready check, pull)",
+		-- Second column: a separate tool, not a continuation of the one above.
+		col = 2
+		head("MARKS BAR")
+		chk("Show the marks bar",
 			function() return mbdb().enabled and true or false end,
 			function(v) if MB.Toggle then MB:Toggle(v and true or false) end end)
-		mbOn:SetPoint("TOPLEFT", RX + 2, -284)
+		hint("marks, ready check and pull -- only while you are leader or assist")
 
-		local mbHint = W.Text(p, "Only visible while you are raid leader or assist.", 10, "dim")
-		mbHint:SetPoint("TOPLEFT", RX + 20, -304); mbHint:SetWidth(320); mbHint:SetJustifyH("LEFT")
-
-		W.Slider(p, "Bar size", 70, 160, 5,
+		step(SLIDER_TOP)
+		W.Slider(p, "Size", 70, 160, 5,
 			function() return mbdb().scale or 100 end,
 			function(v)
 				mbdb().scale = v
 				if MB.Refresh then MB:Refresh() end
-			end):SetPoint("TOPLEFT", RX + 2, -352)
-
+			end):SetPoint("TOPLEFT", cx(), cy())
+		step(24 + SLIDER_TOP)
 		W.Slider(p, "Pull timer (seconds)", 3, 30, 1,
 			function() return mbdb().pullTime or 10 end,
-			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", RX + 2, -398)
+			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", cx(), cy())
+		step(24)
 	end
 
-end
-
-function Okanvil:Settings_Advanced(p)
-	local db = self.db
-	local X = 4
-
-	-- DEV MODE -- routes debug output to a dedicated "Okanvil" chat tab (next to
-	-- General / Combat Log) instead of spamming the default chat. Off by default,
-	-- so raiders never see it; the tab is only created when this is switched on.
-	local dv = W.Text(p, "DEV", 10, "dim"); dv:SetPoint("TOPLEFT", X, -8)
-	local devChk = W.Check(p, "Dev mode -- debug output to its own \"Okanvil\" chat tab",
-		function() return db.devMode and true or false end,
-		function(v) Okanvil:SetDevMode(v) end)
-	devChk:SetPoint("TOPLEFT", X + 2, -28)
-
-	-- VERSION CHECK -- opens the RCLootCouncil-style checker popup. A stale client
-	-- is what makes "phantom" bugs (e.g. an old build showing the ML layout to a
-	-- plain raider), so this is the first thing to check on a bug report.
-	local vc = W.Text(p, "VERSION CHECK", 10, "dim"); vc:SetPoint("TOPLEFT", X, -62)
-	local vhint = W.Text(p, "Ask your group or the guild which Okanvil they run.", 10, "dim")
-	vhint:SetPoint("TOPLEFT", X, -82)
-
-	local vbtn = W.Button(p, "Open version checker", "primary")
-	vbtn:SetSize(170, 24); vbtn:SetPoint("TOPLEFT", X, -104)
-	vbtn:SetScript("OnClick", function() Okanvil:ShowVersionChecker() end)
+	-- No COMBAT LOG block. Logging starts by itself at the first pull and the REC
+	-- timer on screen says when it is running, so the only switch here was one that
+	-- asked a question you always answered the same way -- it is off for good now.
 end
 
 -- ---- Version checker popup (RCLootCouncil-style) -------------------------
@@ -260,16 +311,18 @@ function Okanvil:ShowVersionChecker()
 	local f = verDlg
 	if not f then
 		f = Okanvil:Popup("Okanvil version check")
-		f:SetSize(320, 380)
+		-- Wider and taller: this is a list you read across a raid, and at 320px
+		-- the names sat in a narrow column with most of the window empty.
+		f:SetSize(420, 460)
 
 		-- scope buttons, RCLoot-style: Group | Guild
 		local bGroup = W.Button(f, "Group", "primary")
-		bGroup:SetSize(90, 22); bGroup:SetPoint("TOPLEFT", 10, -32)
+		bGroup:SetSize(110, 26); bGroup:SetPoint("TOPLEFT", 12, -34)
 		local bGuild = W.Button(f, "Guild")
-		bGuild:SetSize(90, 22); bGuild:SetPoint("LEFT", bGroup, "RIGHT", 8, 0)
+		bGuild:SetSize(110, 26); bGuild:SetPoint("LEFT", bGroup, "RIGHT", 8, 0)
 
-		local status = W.Text(f, "", 10, "dim")
-		status:SetPoint("LEFT", bGuild, "RIGHT", 10, 0)
+		local status = W.Text(f, "", "body", "dim")
+		status:SetPoint("LEFT", bGuild, "RIGHT", 12, 0)
 		f.status = status
 
 		-- results list inside a clipped scroll (long guild rosters must not spill)
@@ -291,7 +344,9 @@ function Okanvil:ShowVersionChecker()
 		end)
 		f.scroll, f.child = scroll, child
 
-		local out = W.Text(child, "", 11)
+		-- Body size, not "label": this is the content of the window, read at a
+		-- glance while a raid waits, not a field caption.
+		local out = W.Text(child, "", "body")
 		out:SetPoint("TOPLEFT", 0, 0)
 		out:SetJustifyH("LEFT")
 		if out.SetJustifyV then out:SetJustifyV("TOP") end
@@ -366,3 +421,109 @@ function Okanvil:ShowVersionChecker()
 end
 
 -- ---- Loot capture settings (used as a tab INSIDE the Loot module) ----
+
+-- ------------------------------------------------------------
+-- Invite -- auto-invite master switch, the two channels, and the keywords.
+--
+-- This was a whole nav page. What it actually held was these three settings
+-- plus a mass-invite-by-rank block that went unused, because inviting is faster
+-- from the per-row buttons on Home.
+-- ------------------------------------------------------------
+-- Invite as its own nav entry under GUILD. It was a module with no menu row and
+-- its options inside Settings, which meant the only way to find it was to
+-- already know it existed.
+function Okanvil:BuildInvite()
+	local fill = newFillPanel()
+	local host = fill.child
+
+	-- The master switch lives in the header, where every other page puts its one
+	-- real action. It used to be the first thing in the body, under a label, so
+	-- the single most important state on the page -- is auto-invite running? --
+	-- read as just another setting in the list.
+	local I = Okanvil.Invite
+	local dash
+	dash = W.Dashboard(host, {
+		title = "Invite",
+		icon = Okanvil.ICONS.invite,
+		drawerWidth = 0,
+		footerHeight = 0,
+		primaryText = function()
+			if not I then return "Auto-Invite: OFF" end
+			return I.KeywordEnabled() and "Auto-Invite: ON" or "Auto-Invite: OFF"
+		end,
+		primaryKind = function()
+			return (I and I.KeywordEnabled()) and "primary" or "secondary"
+		end,
+		onPrimary = function()
+			if not I then return end
+			I.SetKeywordEnabled(not I.KeywordEnabled())
+			if dash then dash:Refresh() end
+		end,
+	})
+	self:Settings_Invite(dash.main)
+	return fill
+end
+
+function Okanvil:Settings_Invite(p)
+	local I = Okanvil.Invite
+	local X = 14
+	if not I then
+		local t = W.Text(p, "Invite engine not loaded.", "label", "dim")
+		t:SetPoint("TOPLEFT", X, -12)
+		return
+	end
+
+	-- The ON/OFF switch and its "AUTO-INVITE" label are gone from here: the switch
+	-- is the header CTA now, which is where every other page keeps its one real
+	-- action, and a label for a control that is no longer below it was noise.
+	local warn = W.Text(p, "|cff8a8d93Can't run with Recruit (shared keyword) -- enabling one disables the other.|r", "note", "dim")
+	warn:SetPoint("TOPLEFT", X, -10); warn:SetWidth(420); warn:SetJustifyH("LEFT")
+
+	local wChk = W.Check(p, "On whisper", function() return I.db().whisperInvite end,
+		function(v) I.db().whisperInvite = v end)
+	wChk:SetPoint("TOPLEFT", X, -32)
+	local gChk = W.Check(p, "On guild chat", function() return I.db().guildInvite end,
+		function(v) I.db().guildInvite = v end)
+	gChk:SetPoint("LEFT", wChk, "LEFT", 165, 0)
+
+	local kwLbl = W.Text(p, "KEYWORDS", "note", "dim"); kwLbl:SetPoint("TOPLEFT", X, -66)
+
+	-- Live preview. Matching is WHOLE WORD, which is right ("reinvite" must not
+	-- trigger) but not obvious: "inv" alone does NOT match "invite", so the most
+	-- natural thing a person types was being ignored. Showing what does and does
+	-- not match means never having to guess again.
+	local preview = W.Text(p, "", "note", "dim")
+	preview:SetPoint("TOPLEFT", X, -120); preview:SetWidth(430); preview:SetJustifyH("LEFT")
+
+	local SAMPLES = { "inv", "invite", "+", "inv pls", "invite me", "reinvite" }
+	local function refreshPreview(text)
+		local kws = {}
+		for w in (text or ""):lower():gmatch("[^%s,;]+") do kws[#kws + 1] = w end
+		local yes, no = {}, {}
+		for _, sample in ipairs(SAMPLES) do
+			local hit = false
+			for _, kw in ipairs(kws) do
+				if kw ~= "" and sample:find("%f[%w]" .. kw:gsub("(%W)", "%%%1") .. "%f[%W]") then
+					hit = true; break
+				end
+			end
+			if hit then yes[#yes + 1] = '"' .. sample .. '"' else no[#no + 1] = '"' .. sample .. '"' end
+		end
+		preview:SetText("|cff7cfc8amatches|r " .. (table.concat(yes, ", ") ~= "" and table.concat(yes, ", ") or "nothing")
+			.. (#no > 0 and ("\n|cffff5555ignores|r " .. table.concat(no, ", ")) or ""))
+	end
+
+	local kwBox = W.EditBox(p, function(t) I.db().keyword = t or ""; refreshPreview(t) end)
+	kwBox:Size(300, 22); kwBox:SetPoint("TOPLEFT", X, -86)
+	kwBox.edit:SetText(I.db().keyword or "inv, invite, +")
+	kwBox.edit:SetScript("OnTextChanged", function(s) refreshPreview(s:GetText()) end)
+
+	local kwHint = W.Text(p, "comma-separated -- any of them triggers an invite", "note", "dim")
+	kwHint:SetPoint("LEFT", kwBox, "RIGHT", 10, 0)
+
+	refreshPreview(kwBox.edit:GetText())
+
+	-- The login toast and its switch are gone: it double-counted one person into
+	-- (+1)(+2)(+4) as the roster refreshed, and arrived late regardless. Home's
+	-- guild list answers "who is on" without guessing.
+end

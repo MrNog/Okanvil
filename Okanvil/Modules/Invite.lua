@@ -39,6 +39,16 @@ local function db()
 		end
 	end
 	iv.autoLoginList = iv.autoLoginList or ""  -- which saved list is armed for on-login invite ("" = off)
+
+	-- Saved lists were removed from the Invite page, and with them the only switch
+	-- that could DISARM this. An armed list left over from that UI would keep
+	-- auto-inviting on every login with nothing on screen explaining why, so it is
+	-- stood down once here. The list data itself is left alone.
+	if iv.autoLoginList ~= "" and not iv._autoLoginRetired then
+		iv.autoLoginList = ""
+		iv._autoLoginRetired = true
+	end
+
 	return iv
 end
 
@@ -614,33 +624,56 @@ end)
 
 -- On-login auto-invite: watch GUILD roster online flips (more reliable than the
 -- friend line for guildies). Poll the roster diff on GUILD_ROSTER_UPDATE.
+--
+-- There is no login toast. One popped "<name> is online" with an Invite button
+-- and it did not survive contact: GUILD_ROSTER_UPDATE fires repeatedly, so a
+-- name seen flipping offline->online on more than one read was queued more than
+-- once and the panel counted (+1), (+2), (+4) for a single person. The roster
+-- also arrives when the server sends it rather than when anyone logs in, so the
+-- prompt was late even when the count was right. Home's guild list answers the
+-- same question on demand.
+-- ------------------------------------------------------------
 local wasOnline = {}
 local gev = CreateFrame("Frame")
 gev:RegisterEvent("GUILD_ROSTER_UPDATE")
 gev:SetScript("OnEvent", function()
 	if not module_on() then return end
 	local iv = Okanvil.db and Okanvil.db.invite
-	if not iv or iv.autoLoginList == "" then return end
+	if not iv then return end
+
+	-- Who is online right now. Read for the auto-login list below, which does its
+	-- own offline->online test against the snapshot taken afterwards.
+	local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
+	local online = {}
+	for i = 1, total do
+		local name, _, _, _, _, _, _, _, isOn = GetGuildRosterInfo(i)
+		if name then
+			-- false, not nil, for someone offline: the auto-login test below reads
+			-- `prevOnline[n] == false` to mean "seen offline", and nil would make a
+			-- name that was never seen look the same as one that just logged in.
+			online[(name:gsub("%-.*$", ""))] = isOn and true or false
+		end
+	end
+	-- Snapshot the PREVIOUS state before overwriting it: the auto-login block
+	-- below does its own offline->online test, and updating wasOnline here first
+	-- would make that test always false.
+	local prevOnline = {}
+	for n, v in pairs(wasOnline) do prevOnline[n] = v end
+	for n, v in pairs(online) do wasOnline[n] = v end
+
+	if iv.autoLoginList == "" then return end
 	-- SAFETY: only auto-invite when it's legitimate (solo, or lead/assist of a
 	-- pure-guild group). Never when in someone else's group or a pug raid.
 	if not canAutoInvite() then return end
 	local l = iv.lists[iv.autoLoginList]
 	local members = l and l.members
 	if not members or #members == 0 then return end
-	-- build a quick name->online map
-	local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
-	local online = {}
-	for i = 1, total do
-		local name, _, _, _, _, _, _, _, isOn = GetGuildRosterInfo(i)
-		if name then online[(name:gsub("%-.*$", ""))] = isOn and true or false end
-	end
 	for _, m in ipairs(members) do
 		local n = m.name
 		local now = online[n]
-		if now and wasOnline[n] == false then   -- just flipped offline->online
+		if now and prevOnline[n] == false then   -- just flipped offline->online
 			if inviteOne(n) then Print("Auto-invited " .. n .. " (came online).") end
 		end
-		if now ~= nil then wasOnline[n] = now end
 	end
 end)
 
@@ -649,6 +682,10 @@ end)
 local rev = CreateFrame("Frame")
 rev:RegisterEvent("RAID_ROSTER_UPDATE")
 rev:SetScript("OnEvent", function()
+	-- The other two event frames in this file gate; this one did not, so a
+	-- disabled Invite still MOVED people between raid groups -- a visible action
+	-- taken on other players by a module the user switched off.
+	if not module_on() then return end
 	local iv = Okanvil.db and Okanvil.db.invite
 	if not iv or not iv.autoAssign or not activeComp then return end
 	if (GetNumRaidMembers and GetNumRaidMembers() or 0) == 0 then return end

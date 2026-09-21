@@ -1,10 +1,12 @@
 -- ============================================================
 -- Recruit  (WotLK 3.3.5a)
--- Generic guild-recruitment advertiser: auto-advertise + auto-reply
--- (AFK mode) + auto-invite, keyword + known-contact filters.
+-- Generic guild-recruitment advertiser: auto-advertise, keyword auto-invite and
+-- a list of keyword auto-replies ("?discord" -> the link) that fire independently
+-- of the invite, each with its own on/off.
 -- Guild name is configurable (default "Guild"); use {guild} in any
 -- message and it is replaced with the guild name at send time.
--- Dashboard UI: Text / Settings / Filters tabs + a contacts drawer.
+-- Two pills: Message (what you post, who gets invited, what gets answered) and
+-- Whispers (who wrote, what happened, click into the Messages window).
 -- A native Okanvil module (no standalone window / minimap).
 -- ============================================================
 
@@ -19,10 +21,25 @@ local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 local defaults = {
 	guildName = "Guild", -- used by the {guild} token and the join toast
 	message = "",
-	reply = "",
-	afkReply = "",
-	afkMode = false,
-	keywords = "",
+	-- The ADVERTISE text is empty (it is the guild's own words), but these two
+	-- lists are not guild-specific at all -- every recruiter wants the same
+	-- trigger words and the same scam filter, and leaving them blank meant
+	-- auto-invite silently did nothing until you guessed what to type.
+	keywords = "inv, invite, join, guild, raid, recruit, lf guild",
+	-- Whispers that must NEVER trigger an invite or a reply: gold sellers,
+	-- boosting services and anything carrying a link.
+	blacklist = "gold, sell, selling, buy, boost, carry, gdkp, swipe, powerlevel, http, www, .com",
+	-- Auto-replies: a list of { keywords, text, enabled }. Independent of the
+	-- invite -- answering "what's the discord?" must not also invite the asker.
+	replies = {},
+	-- Only answer while advertising is ON. Off a recruiting session (running a
+	-- pug, raiding) the module stays quiet.
+	repliesNeedActive = true,
+	-- Never answer someone already in your party/raid: the pug next to you asking
+	-- for Discord gets a human answer, not a canned one.
+	repliesSkipGroup = true,
+	-- Per-name whisper conversations for the Messages window.
+	contacts = {},
 	replyCooldown = 600,
 	inviteCooldown = 300,
 	active = false,
@@ -36,7 +53,6 @@ local defaults = {
 	channelIntervals = { Global = 0, LookingForGroup = 0, General = 0 },
 	customChannel = "",
 	customInterval = 0,
-	blacklist = "", -- block words (gold sellers / ads); user fills it in
 	log = {},
 	session = {}, -- per-name recruiting tally (uncapped); cleared from the Summary tab
 }
@@ -110,6 +126,97 @@ local function resolveClass(name)
 		end
 	end
 	return nil
+end
+
+-- Is this whisper one of OUR auto-replies coming back to us? Every rule's text is
+-- checked, not just the one that would fire now -- a rule turned off a second ago
+-- can still have its answer in flight.
+local function isOwnReply(msg)
+	if not msg or msg == "" then return false end
+	for _, r in ipairs(db.replies or {}) do
+		if r.text and r.text ~= "" and brand(r.text) == msg then return true end
+	end
+	return false
+end
+
+-- In my party or raid right now. Separate from the filterGroup setting: that one
+-- silences the module entirely for group members, this one only gates the canned
+-- replies, and both can be on.
+local function isInMyGroup(name)
+	if not name then return false end
+	local raidN = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+	if raidN > 0 then
+		for i = 1, raidN do
+			if UnitName("raid" .. i) == name then return true end
+		end
+		return false
+	end
+	local partyN = (GetNumPartyMembers and GetNumPartyMembers()) or 0
+	for i = 1, partyN do
+		if UnitName("party" .. i) == name then return true end
+	end
+	return false
+end
+
+-- ------------------------------------------------------------
+-- Conversations -- what the Messages window reads.
+-- One entry per person, holding their lines and ours interleaved, so the window
+-- shows a conversation rather than a list of their whispers with our answers
+-- missing. Capped per person: a recruiting session runs for hours.
+-- ------------------------------------------------------------
+local MAX_LOG_LINES = 30
+
+local function contactOf(name, classFile)
+	db.contacts = db.contacts or {}
+	local c = db.contacts[name]
+	if not c then
+		c = { name = name, log = {}, unread = 0 }
+		db.contacts[name] = c
+	end
+	if classFile then c.class = classFile end
+	return c
+end
+
+function Rec_LogIncoming(name, msg, classFile)
+	if not (name and msg and msg ~= "") then return end
+	local c = contactOf(name, classFile)
+	c.log[#c.log + 1] = { them = true, msg = msg, t = time() }
+	while #c.log > MAX_LOG_LINES do table.remove(c.log, 1) end
+	c.unread = (c.unread or 0) + 1
+	c.t = time()
+end
+
+function Rec_LogOutgoing(name, msg)
+	if not (name and msg and msg ~= "") then return end
+	local c = db.contacts and db.contacts[name]
+	if not c then return end
+	c.log[#c.log + 1] = { them = false, msg = msg, t = time() }
+	while #c.log > MAX_LOG_LINES do table.remove(c.log, 1) end
+	c.t = time()
+end
+
+-- Send a whisper AND record it, so a reply typed in the window can never land in
+-- chat without showing up in the conversation that sent it.
+function Rec_Whisper(name, msg)
+	if not (name and msg and msg ~= "") then return end
+	SendChatMessage(msg, "WHISPER", nil, name)
+	Rec_LogOutgoing(name, msg)
+end
+
+-- Conversations, newest first -- the window orders by who spoke last.
+function Rec_ContactList()
+	local out = {}
+	for _, c in pairs((db and db.contacts) or {}) do out[#out + 1] = c end
+	table.sort(out, function(x, y) return (x.t or 0) > (y.t or 0) end)
+	return out
+end
+
+function Rec_UnreadCount()
+	local n = 0
+	for _, c in pairs((db and db.contacts) or {}) do
+		if (c.unread or 0) > 0 then n = n + 1 end
+	end
+	return n
 end
 
 -- skip people we already know / are playing with (toggle each in Filters tab)
@@ -211,9 +318,7 @@ local function setInviteState(name, state)
 			break
 		end
 	end
-	if RecruitFrame and RecruitFrame.logPanel and RecruitFrame.logPanel:IsShown() then
-		Rec_RefreshLog()
-	end
+	if Rec_RefreshWhispers then Rec_RefreshWhispers() end
 end
 
 -- resolve a configured channel name to the numeric id THIS player has for it.
@@ -267,6 +372,13 @@ core:SetScript("OnUpdate", function(self, e)
 	if not db or not db.active then
 		return
 	end
+	-- The OnEvent handler on this same frame gates; this one did not, so a
+	-- disabled Recruit kept advertising to every channel it was set up for.
+	-- Same omission as PuG's spam loop: a module with two script handlers gets
+	-- the gate on one of them.
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then
+		return
+	end
 	if not db.message or db.message == "" then
 		return -- nothing to advertise until the user writes a message
 	end
@@ -314,6 +426,28 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 		end
 		db = RecruitDB
 		db.active = false
+		-- The single auto-reply (and the AFK one) became the first entries in the
+		-- rules list. Carry whatever text was configured across rather than
+		-- silently dropping it, then clear the old keys so this runs once.
+		db.replies = db.replies or {}
+		db.contacts = db.contacts or {}
+		if db.reply and db.reply ~= "" then
+			table.insert(db.replies, { text = db.reply, enabled = true })
+		end
+		if db.afkReply and db.afkReply ~= "" then
+			table.insert(db.replies, { text = db.afkReply, enabled = false })
+		end
+		db.reply, db.afkReply, db.afkMode = nil, nil, nil
+
+		-- Drop a rule's own keyword list when it is just a copy of the invite
+		-- keywords, which is what this migration used to put there. Leaving it
+		-- would freeze that rule on the old words: editing the list on Setup
+		-- would move the invites and leave the reply behind.
+		for _, r in ipairs(db.replies) do
+			if r.keywords and (r.keywords == "" or r.keywords == db.keywords) then
+				r.keywords = nil
+			end
+		end
 		if GuildRoster then
 			GuildRoster()
 		end
@@ -349,16 +483,25 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 
 	if event == "CHAT_MSG_WHISPER" then
-		if not db.active then
-			return -- only act / log while advertising is ON
-		end
+		-- ONLY while advertising.
+		--
+		-- This used to log every whisper whatever the switch said, on the grounds
+		-- that turning the spam off should not stop the replies. What it actually
+		-- did was fill the Whispers list with people answering a PUG advert --
+		-- "rsham 5k1", "mm hunter? 5.3 gs" -- who never wanted a guild and were
+		-- never going to be invited to one.
+		--
+		-- The reply rules keep their own "only while advertising" guard, so this
+		-- takes nothing away from them that they were not already refusing.
 		local msg, sender = arg1, arg2
 		if not sender then
 			return
 		end
+		if not db.active then
+			return
+		end
 		local clean = stripRealm(sender)
-		local brandedReply, brandedAfk = brand(db.reply), brand(db.afkReply)
-		if msg == brandedReply or msg == brandedAfk then
+		if isOwnReply(msg) then
 			return -- ignore our own auto-reply echoing back
 		end
 		if isKnownContact(clean) then
@@ -370,7 +513,9 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 			now = GetTime(),
 			lastInvite = recentInvites[clean],
 			lastReply = repliedTo[clean],
-			isEcho = (msg == brandedReply or msg == brandedAfk),
+			isEcho = false,
+			active = db.active,
+			inGroup = isInMyGroup(clean),
 		}
 		local decision = RecruitLogic.decide(db, msg, ctx)
 		local sentReply, didInvite = nil, false
@@ -386,6 +531,11 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 			SendChatMessage(sentReply, "WHISPER", nil, sender)
 		end
 
+		-- Feed the Messages window: their line, then ours if we answered.
+		local classFile = resolveClass(clean)
+		Rec_LogIncoming(clean, msg, classFile)
+		if sentReply then Rec_LogOutgoing(clean, sentReply) end
+
 		db.session[clean] = db.session[clean] or {}
 		if didInvite then
 			db.session[clean].invited = true
@@ -394,14 +544,13 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 			db.session[clean].replied = true
 		end
 
-		local classFile = resolveClass(clean)
-		table.insert(db.log, 1, { who = clean, msg = msg or "", inv = didInvite, state = (didInvite and "sent" or nil), reply = sentReply, class = classFile, t = date("%H:%M"), ts = time() })
+		local wasBlocked = db.blacklist and db.blacklist ~= ""
+			and RecruitLogic.matchList(msg, db.blacklist) or nil
+		table.insert(db.log, 1, { who = clean, msg = msg or "", inv = didInvite, state = (didInvite and "sent" or nil), reply = sentReply, blocked = wasBlocked, class = classFile, t = date("%H:%M"), ts = time() })
 		while #db.log > 50 do
 			table.remove(db.log)
 		end
-		if RecruitFrame and RecruitFrame.logPanel and RecruitFrame.logPanel:IsShown() then
-			Rec_RefreshLog()
-		end
+		if Rec_RefreshWhispers then Rec_RefreshWhispers() end
 	end
 
 	if event == "CHAT_MSG_SYSTEM" and db then
@@ -453,6 +602,70 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 	end
 end)
 
+-- ------------------------------------------------------------
+-- SHARE THE ADVERTISE LINE with the other officers.
+--
+-- Four officers recruiting with four slightly different messages is how a guild
+-- ends up advertising two different raid nights. Same shape as the notes sync:
+-- officer-gated on BOTH ends, because it overwrites what the receiver has.
+--
+--   RECMSG | <text>     guild channel, officers only
+--
+-- Trust is by ROLE, checked on receipt -- the prefix proves nothing, so the
+-- receiver re-asks "is this sender actually an officer?" before taking it.
+-- ------------------------------------------------------------
+local function recruitSyncAllowed(who)
+	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return false end
+	local U = Okanvil.U
+	return U and U.isOfficer and U.isOfficer(who or UnitName("player"))
+end
+
+function Rec_ShareMessage()
+	local C = Okanvil.Comms
+	if not C then return end
+	if not recruitSyncAllowed() then
+		Okanvil:Print("|cffff5555Recruit:|r officers only.")
+		return
+	end
+	local msg = db.message or ""
+	if msg == "" then
+		Okanvil:Print("|cffff5555Recruit:|r nothing to share -- write the advertise line first.")
+		return
+	end
+	if not (IsInGuild and IsInGuild()) then
+		Okanvil:Print("|cffff5555Recruit:|r you are not in a guild.")
+		return
+	end
+	-- One message: an advertise line is ~200 bytes and C.Send caps at 240. A
+	-- longer one is refused rather than arriving truncated, which would leave
+	-- every other officer spamming half a sentence.
+	local ok = C.SendGuild and C.SendGuild("RECMSG", msg)
+	if ok then
+		Okanvil:Print("|cff7cfc8aRecruit:|r message sent to the other officers.")
+	else
+		Okanvil:Print("|cffff5555Recruit:|r could not send -- the message may be too long.")
+	end
+end
+
+if Okanvil.Comms then
+	Okanvil.Comms.On("RECMSG", function(sender, text)
+		if not text or text == "" then return end
+		if sender == (UnitName and UnitName("player")) then return end   -- our own echo
+		-- The SENDER must be an officer, checked here rather than trusted from the
+		-- wire: anyone can put a prefix on an addon message.
+		if not recruitSyncAllowed(sender) then return end
+		if not recruitSyncAllowed() then return end        -- and so must we
+		if db.message == text then return end
+		db.message = text
+		Okanvil:Print(("|cffe0b860Recruit:|r advertise message updated by |cffffd200%s|r."):format(
+			tostring(sender)))
+		-- Repaint the box if the page is open, so the new text is visible rather
+		-- than only taking effect on the next spam.
+		local rf = RecruitFrame
+		if rf and rf.msg and rf.msg.SetText then pcall(rf.msg.SetText, rf.msg, text) end
+	end)
+end
+
 function Rec_ToggleActive(state)
 	if state == nil then
 		state = not db.active
@@ -467,6 +680,20 @@ function Rec_ToggleActive(state)
 			Okanvil.Invite.SetKeywordEnabled(false)
 			Print("Invite keyword-invite turned OFF (can't share the invite keyword).")
 		end
+		-- Post ONCE right away, then start the interval. Waiting a full cycle before
+		-- the first line makes the button look dead -- 60s of silence after pressing
+		-- START reads as "it did nothing" -- and the leader who just turned it on
+		-- wants the message out now.
+		local msg = brand(db.message)
+		if msg and msg ~= "" then
+			for name, iv in pairs(db.channelIntervals) do
+				if iv and iv > 0 then SendToChannel(name, msg) end
+			end
+			if db.customChannel ~= "" and (db.customInterval or 0) > 0 then
+				SendToChannel(db.customChannel, msg)
+			end
+		end
+		-- then stagger the repeats so the channels never fire on the same tick
 		local i = 0
 		for name, iv in pairs(db.channelIntervals) do
 			if iv and iv > 0 then
@@ -515,12 +742,6 @@ local W = Okanvil.W
 -- not inside a W.Dashboard. Extra args are ignored -- Okanvil:Skin owns the look.
 local function flatBackdrop(frame) Okanvil:Skin(frame, "input") end
 
-local function makeLabel(parent, text, x, y)
-	local fs = W.Text(parent, text, nil, "dim")
-	fs:SetPoint("TOPLEFT", x, y)
-	return fs
-end
-
 -- single-line edit box; returns the EditBox (with .bd = the bordered frame) so
 -- existing call-sites (SetText/GetText/hooks) keep working.
 local function makeBox(parent, name, x, y, w, h)
@@ -555,13 +776,6 @@ local function makeCheck(parent, key, label, x, y, onChange)
 	return c
 end
 
--- shared gold RATS-Hub button (honours ._active for tab highlighting)
-local function makeFlatButton(parent, text, w, h, kind)
-	local b = W.Button(parent, text, kind)
-	b:SetSize(w, h)
-	return b
-end
-
 local function numHook(box, key, lo, hi)
 	box:SetScript("OnEditFocusLost", function(s)
 		local v = tonumber(s:GetText())
@@ -581,6 +795,10 @@ local function strHook(box, key)
 		if s.bd then
 			s.bd:SetBackdropBorderColor(0.4, 0.4, 0.45, 1)
 		end
+		-- The Message tab prints the invite keywords, because the replies answer
+		-- them. Edit them here and that line has to follow, or the two tabs
+		-- disagree until the window is reopened.
+		if key == "keywords" and Rec_ApplyMessage then Rec_ApplyMessage() end
 	end)
 end
 
@@ -703,281 +921,509 @@ function Rec_BuildUI(parent)
 	-- pads inside each fill frame.
 	local X = 4
 
-	local afkTag = function() return db.afkMode and "  |cff88aaff(AFK reply active)|r" or "" end
 	local dash = W.Dashboard(f, {
 		title = "Recruit",
 		icon = "Interface\\Icons\\Ability_Warrior_BattleShout",
-		drawerWidth = 190,
-		drawerLabel = "contacts",
-		footerHeight = 0, -- no footer strip; contacts live in the right drawer now
+		pills = true,
+		drawerWidth = 0,
+		footerHeight = 0,
 		primaryText = function() return db.active and "STOP advertising" or "START advertising" end,
 		onPrimary = function() Rec_ToggleActive() end,
+		-- Share the advertise line with the other officers, so the guild spams ONE
+		-- message instead of four slightly different ones -- the same reason notes
+		-- and the priority ladder sync. Officer-gated both ways: it overwrites what
+		-- the receiver has.
+		secondaryText = function() return "Share message" end,
+		secondaryWidth = 120,
+		secondaryShown = function()
+			return Okanvil.U and Okanvil.U.isOfficer and Okanvil.U.isOfficer(UnitName("player"))
+		end,
+		onSecondary = function() Rec_ShareMessage() end,
+		-- State, then the night's tally, on one line in the header. The counts used
+		-- to sit at the bottom of Setup, which is the one place you are not looking
+		-- while a campaign runs -- and they are the whole answer to "is this
+		-- working?", so they belong where the ON/OFF is.
 		statusText = function()
-			if db.active then return "|cff7cfc8aAdvertising ON|r" .. afkTag() end
-			return "|cffff5555Advertising OFF|r" .. afkTag()
+			local invited, replied, blocked = 0, 0, 0
+			for _, v in pairs(db.session or {}) do
+				if v.invited or v.state == "sent" or v.state == "joined" then invited = invited + 1 end
+				if v.replied then replied = replied + 1 end
+			end
+			for _, e in ipairs(db.log or {}) do
+				if e.blocked then blocked = blocked + 1 end
+			end
+			local state = db.active and "|cff7cfc8aAdvertising ON|r" or "|cffff5555Advertising OFF|r"
+			-- Nothing happened yet: the row of zeroes says less than no row at all.
+			if invited + replied + blocked == 0 then return state end
+			return ("%s   |cff8a8d93|r |cff7cfc8a%d|r|cff8a8d93 inv|r  |cffe0b860%d|r|cff8a8d93 rep|r  |cffff5555%d|r|cff8a8d93 blk|r")
+				:format(state, invited, replied, blocked)
 		end,
 		tabs = {
-			{ key = "text",     label = "Text",     height = 360, build = function(p) Rec_BuildText(p) end },
-			{ key = "settings", label = "Settings", height = 420, build = function(p) Rec_BuildSettings(p) end },
-			{ key = "filters",  label = "Filters",  height = 320, build = function(p) Rec_BuildFilters(p) end },
+			{ key = "message",  label = "Message",  height = 340, build = function(p) Rec_BuildMessage(p) end },
+			{ key = "setup",    label = "Setup",    height = 640, build = function(p) Rec_BuildSetup(p) end },
 		},
 	})
 	f.dash = dash
 	f.toggleBtn = dash.cta
 
-	-- fill the shell zones: main = live log + a compact stat bar across its top;
-	-- drawer = the vertical Contacts list (name + inv/+f) -- the thing you act on.
-	Rec_BuildLog(dash.main)        -- live whisper log + stats bar (landing view)
-	Rec_BuildContacts(dash.drawer) -- contacts invite list (right)
-
 	Rec_RefreshUI()
 	return
 end
 
--- Config-tab page builders (each fills a fill-frame the Dashboard hands them).
-function Rec_BuildText(tp)
-	local f = RecruitFrame
-	local X = 4
+-- ------------------------------------------------------------
+-- Layout helpers -- a running y cursor instead of the absolute coordinates the
+-- old three tabs used, so inserting a control doesn't mean re-typing every
+-- offset below it.
+-- ------------------------------------------------------------
+local X = 4
 
-	-- ---------- TEXT panel ----------
-	makeLabel(tp, "Guild name (used by {guild} + toast):", X, -6)
-	f.guildName = makeBox(tp, "guildName", X, -26, 260, 22)
-	strHook(f.guildName, "guildName")
-
-	makeLabel(tp, "Advertise message:  (tip: write {guild} for the name)", X, -56)
-	f.msg = makeScrollBox(tp, "msg", X, -74, 12, 74)
-	makeLabel(tp, "Auto-reply (on whisper):", X, -156)
-	f.reply = makeScrollBox(tp, "reply", X, -174, 12, 74)
-	makeLabel(tp, "AFK reply (used when AFK mode is on):", X, -256)
-	f.afkReply = makeScrollBox(tp, "afkReply", X, -274, 12, 70)
-	strHook(f.msg, "message")
-	strHook(f.reply, "reply")
-	strHook(f.afkReply, "afkReply")
-	Rec_ApplyText()
+local function secHead(p, text, y)
+	local fs = W.Text(p, text, "head", "accent")
+	fs:SetPoint("TOPLEFT", X, y)
+	local line = p:CreateTexture(nil, "ARTWORK")
+	line:SetTexture(FLAT)
+	line:SetHeight(1)
+	line:SetPoint("LEFT", fs, "RIGHT", 8, 0)
+	line:SetPoint("RIGHT", p, "RIGHT", -12, 0)
+	local c = Okanvil.Colors.border
+	line:SetVertexColor(c[1], c[2], c[3], 1)
+	return y - 24
 end
 
-function Rec_BuildSettings(stp)
+local function fieldLabel(p, text, y)
+	local fs = W.Text(p, text, "label", "dim")
+	fs:SetPoint("TOPLEFT", X, y)
+	return y - 18
+end
+
+-- ---------- PILL 1: Message ----------
+-- ONLY what you touch while recruiting: the ad, and the answers. Everything you
+-- set once and forget lives on Setup -- a page you have to scroll past is a page
+-- you stop reading.
+function Rec_BuildMessage(p)
 	local f = RecruitFrame
-	local X = 4
+	local y = -8
 
-	-- ---------- SETTINGS panel ----------
-	makeLabel(stp, "Keywords -- whisper triggers invite (typos ok):", X, -10)
-	f.keywords = makeScrollBox(stp, "keywords", X, -30, 12, 56)
-	strHook(f.keywords, "keywords")
+	-- ---- what you post ----
+	y = secHead(p, "ADVERTISE", y)
+	f.msg = makeScrollBox(p, "msg", X, y, 12, 52)
+	strHook(f.msg, "message")
+	y = y - 62
 
-	makeLabel(stp, "Channel spam intervals (sec, 0 = off -- stagger them):", X, -98)
+	-- ---- auto-replies ----
+	y = secHead(p, "AUTO-REPLIES", y)
+	-- Which words these answer is set once, on Setup. Saying so here is what
+	-- replaced the per-rule keyword box: the rule editor no longer shows a list,
+	-- so without this line there is nothing to tell you where it went.
+	f.replyKw = W.Text(p, "", "note", "dim")
+	f.replyKw:SetPoint("TOPLEFT", X, y)
+	f.replyKw:SetPoint("RIGHT", p, "RIGHT", -12, 0)
+	f.replyKw:SetJustifyH("LEFT")
+	y = y - 20
+
+	f.cNeedActive = makeCheck(p, "repliesNeedActive", "Only reply while Advertising is ON", X, y)
+	y = y - 26
+	f.cSkipGroup = makeCheck(p, "repliesSkipGroup", "Never reply to someone in my group or raid", X, y)
+	y = y - 28
+
+	f.ruleHost = CreateFrame("Frame", nil, p)
+	f.ruleHost:SetPoint("TOPLEFT", X, y)
+	f.ruleHost:SetPoint("RIGHT", p, "RIGHT", -12, 0)
+	f.ruleHost:SetHeight(1)
+	f.ruleRows = {}
+	f.ruleAddY = y
+
+	f.addRule = W.Button(p, "+ Add reply", "primary")
+	f.addRule:SetSize(96, 22)
+	f.addRule:SetScript("OnClick", function()
+		db.replies = db.replies or {}
+		table.insert(db.replies, { text = "", enabled = true })
+		f.editing = #db.replies
+		Rec_RenderRules()
+	end)
+
+	-- A standing warning, not a one-off print: both modules watch the same
+	-- whispers, and the person reading this page is the one who can fix it.
+	-- Positioned by Rec_RenderRules, below the rules.
+	f.clash = W.Text(p, "", "note")
+	f.clash:SetJustifyH("LEFT")
+
+	f.msgPage = p
+	Rec_RenderRules()
+	Rec_ApplyMessage()
+end
+
+-- ---------- PILL 2: Setup ----------
+-- Set once, then forgotten: the guild name, where and how often the ad goes out,
+-- what counts as an invite keyword, who to skip, and the toast.
+function Rec_BuildSetup(p)
+	local f = RecruitFrame
+	local COL2 = X + 224
+	local y = -8
+
+	-- ---- guild ----
+	y = secHead(p, "GUILD", y)
+	y = fieldLabel(p, "Guild name -- fills {guild} in any message", y)
+	f.guildName = makeBox(p, "guildName", X, y, 260, 22)
+	strHook(f.guildName, "guildName")
+	y = y - 34
+
+	-- ---- channels ----
+	y = secHead(p, "WHERE AND HOW OFTEN", y)
 	f.chInputs = {}
 	local function chHook(box, name)
 		box:SetScript("OnEditFocusLost", function(s)
 			local v = math.max(0, math.min(3600, math.floor(tonumber(s:GetText()) or 0)))
 			db.channelIntervals[name] = v
 			s:SetText(v)
-			if s.bd then
-				s.bd:SetBackdropBorderColor(0.4, 0.4, 0.45, 1)
-			end
+			if s.bd then s.bd:SetBackdropBorderColor(0.4, 0.4, 0.45, 1) end
 		end)
 	end
 	local CH_LABELS = { Global = "Global", LookingForGroup = "LFG", General = "General" }
-	local COL2 = X + 224
-	local cols = { { lx = X, bx = X + 70 }, { lx = COL2, bx = COL2 + 70 } }
-	local rowY = -124
+	local cols = { { lx = X, bx = X + 76 }, { lx = COL2, bx = COL2 + 76 } }
+	local rowY = y
 	for i, name in ipairs(CH_LIST) do
 		local col = cols[((i - 1) % 2) + 1]
-		makeLabel(stp, CH_LABELS[name], col.lx, rowY)
-		local box = makeBox(stp, "iv_" .. name, col.bx, rowY + 2, 48, 22)
+		local lb = W.Text(p, CH_LABELS[name], "label", "dim")
+		lb:SetPoint("TOPLEFT", col.lx, rowY - 4)
+		local box = makeBox(p, "iv_" .. name, col.bx, rowY, 52, 22)
 		chHook(box, name)
 		f.chInputs[name] = box
-		if i % 2 == 0 then
-			rowY = rowY - 30
-		end
+		if i % 2 == 0 then rowY = rowY - 28 end
 	end
+	y = rowY - 32
 
-	makeLabel(stp, "Custom channel + interval:", X, -214)
-	f.custom = makeBox(stp, "custom", X, -234, 286, 22)
+	-- The custom row lines up with the three above it: name where a channel
+	-- label sits, interval in the same column as theirs. It used to put its
+	-- seconds box at COL2+76 while its name box ran to X+286, so the two sat
+	-- nowhere near each other and the number read as unlabelled.
+	local cl = W.Text(p, "Custom", "label", "dim")
+	cl:SetPoint("TOPLEFT", X, y - 4)
+	f.custom = makeBox(p, "custom", X + 76, y, 150, 22)
 	strHook(f.custom, "customChannel")
-	f.customIv = makeBox(stp, "iv_custom", COL2 + 70, -234, 48, 22)
-	numHook(f.customIv, "customInterval", 0, 3600)
-
-	makeLabel(stp, "Reply CD (s):", X, -272)
-	f.replyCd = makeBox(stp, "replyCd", X + 88, -272, 48, 22)
-	makeLabel(stp, "Invite CD (s):", COL2, -272)
-	f.inviteCd = makeBox(stp, "inviteCd", COL2 + 88, -272, 48, 22)
-	numHook(f.replyCd, "replyCooldown", 0, 3600)
-	numHook(f.inviteCd, "inviteCooldown", 0, 3600)
-
-	local cdNote = stp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	cdNote:SetPoint("TOPLEFT", X, -300)
-	cdNote:SetWidth(440)
-	cdNote:SetJustifyH("LEFT")
-	cdNote:SetText("Give each channel a different interval to stagger spam (not all at once). Cooldown = silence per person after replying/inviting. 0 = off.")
-
-	f.cInvite = makeCheck(stp, "autoInvite", "Auto-invite (+ welcome)", X, -334)
-	f.cAfk = makeCheck(stp, "afkMode", "AFK mode", COL2, -334, function() Rec_RefreshUI() end)
-	f.cToast = makeCheck(stp, "toastOnJoin", "Toast on guild join", X, -362)
-	f.cToastActive = makeCheck(stp, "toastOnlyActive", "only while advertising ON", COL2, -362)
-	f.cToastMove = makeCheck(stp, "toastMove", "Move toast (drag it, untick to lock)", X, -390,
-		function(v) Rec_SetToastMove(v) end)
-	Rec_ApplySettings()
-end
-
-function Rec_BuildFilters(fp)
-	local f = RecruitFrame
-	local X = 4
-
-	-- ---------- FILTERS panel ----------
-	makeLabel(fp, "Don't auto-reply / invite if the whisperer is:", X, -8)
-	f.fGuild = makeCheck(fp, "filterGuild", "In my guild", X, -36)
-	f.fGroup = makeCheck(fp, "filterGroup", "In my party / raid", X, -66)
-	f.fFriends = makeCheck(fp, "filterFriends", "On my friends list", X, -96)
-	local note = fp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	note:SetPoint("TOPLEFT", X, -136)
-	note:SetWidth(430)
-	note:SetJustifyH("LEFT")
-	note:SetText("Turn a filter OFF to test on yourself/guildies. The addon only ever replies/invites on a keyword whisper anyway.")
-
-	makeLabel(fp, "Block words -- ignore whisper if it has any (gold sellers / ads):", X, -176)
-	f.blacklist = makeScrollBox(fp, "blacklist", X, -196, 12, 70)
-	strHook(f.blacklist, "blacklist")
-	local bnote = fp:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	bnote:SetPoint("TOPLEFT", X, -272)
-	bnote:SetWidth(440)
-	bnote:SetJustifyH("LEFT")
-	bnote:SetText("Comma-separated. Beats keywords -- e.g. 'inv pls i pay 10 gold' is ignored because of 'gold'. Typos caught too.")
-	Rec_ApplyFilters()
-end
-
--- ---------- MAIN: live whisper log (landing view) ----------
-function Rec_BuildLog(main)
-	local f = RecruitFrame
-
-	local logsLbl = W.Text(main, "Live log", nil, "dim")
-	logsLbl:SetPoint("TOPLEFT", 8, -7)
-	local clr = W.Button(main, "Clear", "secondary")
-	clr:SetSize(56, 18); clr:SetPoint("TOPRIGHT", -8, -4)
-	clr:SetScript("OnClick", function() wipe(db.log); Rec_RefreshLog() end)
-
-	-- Opaque dark well behind the log so the faded rat art mounted on the shell
-	-- panel doesn't bleed into the whisper text area (it stays visible elsewhere).
-	local well = W.Frame(main, "dark")
-	well:SetPoint("TOPLEFT", 8, -26)
-	well:SetPoint("BOTTOMRIGHT", -8, 8)
-
-	local s = CreateFrame("ScrollingMessageFrame", nil, well)
-	s:SetPoint("TOPLEFT", 4, -4)
-	s:SetPoint("BOTTOMRIGHT", -4, 4)
-	s:SetFontObject(GameFontHighlightSmall)
-	s:SetJustifyH("LEFT")
-	s:SetMaxLines(120)
-	s:SetFading(false)
-	s:EnableMouseWheel(true)
-	s:SetScript("OnMouseWheel", function(self, delta)
-		if delta > 0 then self:ScrollUp() else self:ScrollDown() end
-	end)
-	f.logBox = s
-	f.logPanel = main -- Rec_RefreshLog checks :IsShown() to know it's live
-	Rec_RefreshLog()
-end
-
--- ---------- DRAWER: session summary cards + the Contacts invite list ----------
--- Top: a 3-column grid of stat cards (this session). Below: the invite list
--- (who to re-invite), vertical + scrollable. Both live in the right drawer.
-function Rec_BuildContacts(drawer)
-	local f = RecruitFrame
-
-	-- ----- session summary: 3 columns x 2 rows of small stat cards -----
-	local sHead = W.Text(drawer, "This session", nil, "accent")
-	sHead:SetPoint("TOPLEFT", 8, -8)
-	local sclr = W.Button(drawer, "clear", "secondary")
-	sclr:SetSize(44, 16); sclr:SetPoint("TOPRIGHT", -8, -6)
-	sclr:SetScript("OnClick", function() wipe(db.session); Rec_RefreshSummary() end)
-
-	local CARD_W, CARD_H, GAPX, GAPY = 56, 30, 4, 4
-	local grid = { { "reached", "Reached", "dcddde" }, { "joined", "Joined", "7cfc8a" }, { "declined", "Declined", "ff5555" },
-	               { "inguild", "In-guild", "ff8888" }, { "offline", "Offline", "aaaaaa" }, { "waiting", "Waiting", "ffcc00" } }
-	f.statCards = {}
-	for i, g in ipairs(grid) do
-		local col = (i - 1) % 3
-		local rowi = math.floor((i - 1) / 3)
-		local card = W.Frame(drawer, "input")
-		card:SetSize(CARD_W, CARD_H)
-		card:SetPoint("TOPLEFT", 8 + col * (CARD_W + GAPX), -26 - rowi * (CARD_H + GAPY))
-		-- keep the stat cards OPAQUE (over the page rat), so the numbers read
-		-- clearly instead of the rat bleeding through the card. Fixed alpha,
-		-- independent of the background-opacity slider (so unregister it from the
-		-- reskin table, else ReskinAll would drop it back to the slider alpha).
-		if Okanvil._skinned then Okanvil._skinned[card] = nil end
-		if card.SetBackdropColor then
-			local d = Okanvil.Colors.panelD
-			card:SetBackdropColor(d[1], d[2], d[3], 1)
-		end
-		local num = card:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-		num:SetPoint("TOP", 0, -2); num:SetText("0")
-		num:SetTextColor(1, 1, 1)
-		local cap = W.Text(card, g[2], 9, "dim")
-		cap:SetPoint("BOTTOM", 0, 2)
-		cap:SetText("|cff" .. g[3] .. g[2] .. "|r")
-		f.statCards[g[1]] = num
+	-- The tooltip goes on the WRAPPER (box.bd), not on the EditBox makeBox hands
+	-- back: Tooltip is a W widget method, and calling it on the raw EditBox threw
+	-- mid-build. Everything below this line -- keywords, blacklist, cooldowns,
+	-- filters, the toast options -- was never created, so the page looked like it
+	-- had lost its settings when they were sitting safe in the saved variables.
+	if f.custom.bd and f.custom.bd.Tooltip then
+		f.custom.bd:Tooltip("A channel you joined yourself -- type its NAME, not its number.")
 	end
-	-- list starts below the 2 card rows (26 + 2*(30+4) = 94) + a small gap
-	local listTop = -(26 + 2 * (CARD_H + GAPY) + 8)
 
-	local lbl = W.Text(drawer, "Contacts", nil, "accent")
-	lbl:SetPoint("TOPLEFT", 8, listTop + 2)
+	local ivl = W.Text(p, "every", "label", "dim")
+	ivl:SetPoint("TOPLEFT", X + 234, y - 4)
+	f.customIv = makeBox(p, "iv_custom", X + 272, y, 52, 22)
+	numHook(f.customIv, "customInterval", 0, 3600)
+	y = y - 26
 
-	-- flat scroll (no Blizzard template): plain ScrollFrame + our own slider
-	local csf = CreateFrame("ScrollFrame", "Rec_contactSF", drawer)
-	csf:SetPoint("TOPLEFT", 6, listTop - 18); csf:SetPoint("BOTTOMRIGHT", -10, 6)
-	local cchild = CreateFrame("Frame", nil, csf)
-	cchild:SetSize(10, 1)
-	csf:SetScrollChild(cchild)
-	local csb = CreateFrame("Slider", nil, drawer)
-	csb:SetPoint("TOPRIGHT", -3, listTop - 18); csb:SetPoint("BOTTOMRIGHT", -3, 6); csb:SetWidth(4)
-	csb:SetOrientation("VERTICAL"); csb:SetValueStep(1)
-	local cth = csb:CreateTexture(nil, "OVERLAY"); cth:SetTexture(FLAT); cth:SetSize(4, 30)
-	if Okanvil and Okanvil.Colors then local a = Okanvil.Colors.accent; cth:SetVertexColor(a[1], a[2], a[3], 1)
-	else cth:SetVertexColor(0.75, 0.58, 0.23, 1) end
-	csb:SetThumbTexture(cth)
-	csb:SetScript("OnValueChanged", function(_, v) csf:SetVerticalScroll(v) end)
-	csf:EnableMouseWheel(true)
-	csf:SetScript("OnMouseWheel", function(_, d) csb:SetValue(csb:GetValue() - d * 24) end)
-	f.contactChild = cchild
-	f.contactSF = csf
-	f.contactSB = csb
-	f.contactRows = {}
+	local ivNote = W.Text(p, "Seconds between posts in each channel. 0 = never post there.",
+		"note", "dim")
+	ivNote:SetPoint("TOPLEFT", X, y)
+	y = y - 30
 
-	drawer:SetScript("OnUpdate", function(self, el)
-		self._t = (self._t or 0) + el
-		if self._t > 1 then self._t = 0; Rec_RenderContacts(); Rec_RefreshSummary() end
-	end)
-	Rec_RenderContacts()
-	Rec_RefreshSummary()
+	-- ---- invite ----
+	y = secHead(p, "WHO GETS AN INVITE", y)
+	f.cInvite = makeCheck(p, "autoInvite", "Auto-invite people who whisper a keyword", X, y)
+	y = y - 30
+	y = fieldLabel(p, "Whispers that trigger a guild invite", y)
+	f.keywords = makeScrollBox(p, "keywords", X, y, 12, 44)
+	strHook(f.keywords, "keywords")
+	y = y - 54
+
+	y = fieldLabel(p, "Never invite or reply if the whisper contains", y)
+	f.blacklist = makeScrollBox(p, "blacklist", X, y, 12, 44)
+	strHook(f.blacklist, "blacklist")
+	y = y - 54
+
+	local cdl = W.Text(p, "Invite cooldown (s)", "label", "dim"); cdl:SetPoint("TOPLEFT", X, y - 4)
+	f.inviteCd = makeBox(p, "inviteCd", X + 130, y, 52, 22)
+	numHook(f.inviteCd, "inviteCooldown", 0, 3600)
+	local rcl = W.Text(p, "Reply cooldown (s)", "label", "dim"); rcl:SetPoint("TOPLEFT", COL2, y - 4)
+	f.replyCd = makeBox(p, "replyCd", COL2 + 130, y, 52, 22)
+	numHook(f.replyCd, "replyCooldown", 0, 3600)
+	y = y - 40
+
+	-- ---- who to skip ----
+	y = secHead(p, "DON'T BOTHER", y)
+	f.fGuild = makeCheck(p, "filterGuild", "Skip guild members", X, y); y = y - 26
+	f.fGroup = makeCheck(p, "filterGroup", "Skip people in my party or raid", X, y); y = y - 26
+	f.fFriends = makeCheck(p, "filterFriends", "Skip my friends list", X, y); y = y - 34
+
+	-- ---- toast ----
+	y = secHead(p, "TOAST", y)
+	f.cToast = makeCheck(p, "toastOnJoin", "Pop a toast when someone joins the guild", X, y); y = y - 26
+	f.cToastActive = makeCheck(p, "toastOnlyActive", "...only while advertising is ON", X + 18, y); y = y - 26
+	f.cToastMove = makeCheck(p, "toastMove", "Move it (drag it, untick to lock)", X, y,
+		function(v) Rec_SetToastMove(v) end)
+	y = y - 40
+
+	-- ---- history ----
+	-- The counts live in the header now, beside the ON/OFF. What is left here is
+	-- the button that empties them, which is a thing you do rarely and on purpose.
+	y = secHead(p, "HISTORY", y)
+	local clr = W.Button(p, "Clear")
+	clr:SetSize(60, 22); clr:SetPoint("TOPLEFT", X, y - 4)
+	clr:SetScript("OnClick", function() Rec_ClearWhispers() end)
+	clr:Tooltip("Forget today's whispers, invite counts and the contact list.")
+	y = y - 38
+
+	p:SetHeight(math.abs(y) + 20)
+	f.setupPage = p
+	Rec_ApplySetup()
 end
 
--- Config pages are built LAZILY (only when the user opens that overlay tab), so
--- each has its own apply-fn that pushes db values into its widgets. They're
--- guarded (widgets may not exist yet). Rec_RefreshUI just fans out to all of them
--- plus repaints the dashboard header.
-function Rec_ApplyText()
+-- The reply rules, and the tail of the page that has to sit below them. Rules
+-- are added and removed at runtime, so everything after them is repositioned
+-- here rather than at build time.
+function Rec_RenderRules()
 	local f = RecruitFrame
-	if not f or not f.msg then return end
-	f.guildName:SetText(db.guildName or "")
+	if not (f and f.ruleHost) then return end
+	local p = f.msgPage
+	local ROW_H, GAP = 40, 4
+
+	for _, r in ipairs(f.ruleRows) do r:Hide() end
+
+	local list = db.replies or {}
+	local y = 0
+	for i, rule in ipairs(list) do
+		local row = f.ruleRows[i]
+		if not row then
+			row = W.Frame(f.ruleHost, "input")
+
+			-- No "edit" button: clicking the row opens it. One less control per row,
+			-- and the whole row is a bigger target than a 38px button.
+			row.tog = W.Button(row, "ON")
+			row.tog:SetSize(36, 18); row.tog:SetPoint("TOPRIGHT", -5, -5)
+
+			-- The ANSWER reads first, on its own line with the full width. What tells
+			-- two rules apart is what they say, not the keyword list -- which is often
+			-- the same on several rules and truncates to an identical stub.
+			row.txt = W.Text(row, "", "body")
+			row.txt:SetPoint("TOPLEFT", 8, -6)
+			row.txt:SetPoint("RIGHT", row.tog, "LEFT", -8, 0)
+			row.txt:SetJustifyH("LEFT")
+			if row.txt.SetWordWrap then row.txt:SetWordWrap(false) end
+
+			row.kw = W.Text(row, "", "note", "accent")
+			row.kw:SetPoint("TOPLEFT", 8, -23)
+			row.kw:SetPoint("RIGHT", row.tog, "LEFT", -8, 0)
+			row.kw:SetJustifyH("LEFT")
+			if row.kw.SetWordWrap then row.kw:SetWordWrap(false) end
+
+			local hl = row:CreateTexture(nil, "HIGHLIGHT")
+			hl:SetAllPoints(); hl:SetTexture(FLAT)
+			hl:SetVertexColor(1, 1, 1, 0.05)
+			row:EnableMouse(true)
+			f.ruleRows[i] = row
+		end
+		row:SetHeight(ROW_H)
+		row:ClearAllPoints()
+		row:SetPoint("TOPLEFT", f.ruleHost, "TOPLEFT", 0, y)
+		row:SetPoint("RIGHT", f.ruleHost, "RIGHT", 0, 0)
+		row:Show()
+
+		local on = rule.enabled ~= false
+		-- The open row reads as the head of the editor below it, not as another
+		-- list item that happens to sit above one.
+		local bc = (f.editing == i) and Okanvil.Colors.accent or Okanvil.Colors.border
+		row:SetBackdropBorderColor(bc[1], bc[2], bc[3], 1)
+		-- While this rule is open its full text sits in the editor right below, so
+		-- the row drops the truncated copy and just labels what is open.
+		if f.editing == i then
+			row.txt:SetText("|cffe0b860Editing this reply|r")
+		else
+			row.txt:SetText(rule.text ~= "" and rule.text or "|cff6f7176(nothing to send yet)|r")
+		end
+
+		-- Every rule answers the same words, so only the FIRST enabled one can ever
+		-- fire -- first match wins. That is worth saying on the row: without it,
+		-- a second reply you switched on simply never goes out and nothing
+		-- explains why.
+		local shadowed = false
+		if on then
+			for j = 1, i - 1 do
+				if list[j].enabled ~= false and (list[j].text or "") ~= "" then
+					shadowed = true
+					break
+				end
+			end
+		end
+		local kwText = ""
+		if f.editing == i then
+			kwText = ""
+		elseif (rule.text or "") == "" then
+			kwText = "|cff6f7176nothing to send -- never fires|r"
+		elseif shadowed then
+			kwText = "|cffff5555never fires|r |cff8a8d93-- the reply above it answers first|r"
+		end
+		row.kw:SetText(kwText)
+		row.tog.text:SetText(on and "|cff7cfc8aON|r" or "|cff8a8d93OFF|r")
+		row:SetAlpha(on and 1 or 0.55)
+		row.tog:SetScript("OnClick", function()
+			rule.enabled = not on
+			Rec_RenderRules()
+		end)
+		row:SetScript("OnMouseUp", function()
+			f.editing = (f.editing == i) and nil or i
+			Rec_RenderRules()
+		end)
+
+		-- The open editor is flush against its own row (no gap) and indented, so the
+		-- two read as one object instead of two stacked boxes.
+		y = y - ROW_H - ((f.editing == i) and 0 or GAP)
+
+		-- The open editor pushes the rows below it down rather than floating over
+		-- them: an inline editor, the same as the Loot and Logs detail views.
+		if f.editing == i then
+			local ed = f.ruleEditor
+			if not ed then
+				ed = W.Frame(f.ruleHost, "dark")
+				-- One field: the text. There used to be a keyword box here as well,
+				-- holding a copy of the invite keywords from Setup -- the same list
+				-- in two editable places, which is a promise to keep them in step by
+				-- hand. Every reply now answers the words on the Setup page.
+				ed.txLbl = W.Text(ed, "reply", "label", "dim")
+				ed.txLbl:SetPoint("TOPLEFT", 8, -13)
+				ed.txBox = W.MultiEdit(ed)
+				ed.txBox:SetHeight(40)
+				ed.txBox:SetPoint("TOPLEFT", 60, -9)
+				ed.txBox:SetPoint("RIGHT", ed, "RIGHT", -8, 0)
+
+				ed.done = W.Button(ed, "Done", "primary")
+				ed.done:SetSize(58, 20)
+				ed.done:SetPoint("TOPLEFT", 60, -55)
+
+				ed.del = W.Button(ed, "Delete", "danger")
+				ed.del:SetSize(58, 20)
+				ed.del:SetPoint("LEFT", ed.done, "RIGHT", 5, 0)
+				f.ruleEditor = ed
+			end
+			ed:ClearAllPoints()
+			ed:SetPoint("TOPLEFT", f.ruleHost, "TOPLEFT", 14, y)
+			ed:SetPoint("RIGHT", f.ruleHost, "RIGHT", 0, 0)
+			ed:SetHeight(82)
+			ed:Show()
+
+			ed.txBox.edit:SetText(rule.text or "")
+			-- Commit on focus loss, not on every keystroke: OnTextChanged would
+			-- re-render the list under the cursor while it is being typed in.
+			ed.txBox.edit:SetScript("OnEditFocusLost", function(s)
+				rule.text = (s:GetText() or ""):gsub("\n", " ")
+				Rec_RenderRules()
+			end)
+			ed.done:SetScript("OnClick", function()
+				rule.text = (ed.txBox.edit:GetText() or ""):gsub("\n", " ")
+				f.editing = nil
+				Rec_RenderRules()
+			end)
+			ed.del:SetScript("OnClick", function()
+				table.remove(db.replies, i)
+				f.editing = nil
+				Rec_RenderRules()
+			end)
+			y = y - (82 + GAP)
+		end
+	end
+	if f.ruleEditor and not f.editing then f.ruleEditor:Hide() end
+
+	local used = math.abs(y)
+	f.ruleHost:SetHeight(math.max(1, used))
+
+	-- everything below the rules, pushed down by however tall they came out
+	local ry = f.ruleAddY - used - 4
+	f.addRule:ClearAllPoints(); f.addRule:SetPoint("TOPLEFT", X, ry)
+	ry = ry - 34
+
+	f.clash:ClearAllPoints()
+	f.clash:SetPoint("TOPLEFT", X, ry)
+	f.clash:SetPoint("RIGHT", p, "RIGHT", -12, 0)
+
+	-- The page grew or shrank by however tall the rules came out, so it has to be
+	-- resized and the Dashboard's scrollbar range recomputed -- its own relayout
+	-- only fires on a size change it can see, and adding a rule is not one.
+	p:SetHeight(math.abs(ry) + 44)
+	local sf = p:GetParent()
+	if sf and sf._relayout then sf._relayout() end
+end
+
+-- Forget the night's whispers, the invite counts and the contact list.
+--
+-- Lives here rather than on a page of its own: the Whispers tab that used to
+-- hold it was a second inbox for messages the chat frame already had, which is
+-- the same reason the PuG message window went.
+function Rec_ClearWhispers()
+	local n = 0
+	for _ in pairs(db.log or {}) do n = n + 1 end
+	if n == 0 then
+		Print("Nothing to clear.")
+		return
+	end
+	-- Not undoable, so it asks.
+	Okanvil:Confirm(
+		("Clear %d whisper%s?\n\nThe list and today's counts go with it."):format(
+			n, n == 1 and "" or "s"),
+		"Clear",
+		function()
+			db.contacts = db.contacts or {}
+			wipe(db.log); wipe(db.session); wipe(db.contacts)
+			if Rec_RefreshUI then Rec_RefreshUI() end
+			Print("Whispers cleared.")
+		end)
+end
+
+-- The whisper handler and the invite paths call this every time something lands.
+-- There is no whisper LIST any more, but the header carries the running tally,
+-- so this repaints that -- otherwise the counts only moved when you reopened the
+-- page, and a campaign looked dead while it was working.
+function Rec_RefreshWhispers()
+	local f = RecruitFrame
+	if f and f.dash then f.dash:Refresh() end
+end
+
+
+-- Pills are built LAZILY (only when the user opens one), so the apply-fn pushes
+-- db values into widgets that may not exist yet -- hence the guard.
+function Rec_ApplyMessage()
+	local f = RecruitFrame
+	if not (f and f.msg) then return end
 	f.msg:SetText(db.message or "")
-	f.reply:SetText(db.reply or "")
-	f.afkReply:SetText(db.afkReply or "")
+	f.cNeedActive:SetChecked(db.repliesNeedActive)
+	f.cSkipGroup:SetChecked(db.repliesSkipGroup)
+
+	if f.replyKw then
+		local kw = db.keywords or ""
+		f.replyKw:SetText(kw ~= ""
+			and ("|cff8a8d93Sent to whoever whispers|r |cffdcddde" .. kw
+				.. "|cff8a8d93 -- edit that list on Setup.|r")
+			or "|cffff5555No keywords set|r |cff8a8d93-- nobody is answered. Set them on Setup.|r")
+	end
+
+	-- Both modules watch the same whispers and Recruit stands Invite down when it
+	-- starts. Say so here rather than only in a chat line the user has scrolled past.
+	local clash = Okanvil.Invite and Okanvil.Invite.KeywordEnabled
+		and Okanvil.Invite.KeywordEnabled()
+	f.clash:SetText(clash
+		and "|cffe0c383The Invite module's keyword-invite is also on. Both watch the same whispers -- starting Recruit turns it off.|r"
+		or "")
+	f.clash:SetHeight(clash and 26 or 0)
 end
 
-function Rec_ApplySettings()
+function Rec_ApplySetup()
 	local f = RecruitFrame
-	if not f or not f.keywords then return end
+	if not (f and f.guildName) then return end
+	f.guildName:SetText(db.guildName or "")
 	f.keywords:SetText(db.keywords or "")
+	f.blacklist:SetText(db.blacklist or "")
 	f.custom:SetText(db.customChannel or "")
 	f.customIv:SetText(db.customInterval or 0)
 	f.replyCd:SetText(db.replyCooldown or 600)
 	f.inviteCd:SetText(db.inviteCooldown or 300)
 	f.cInvite:SetChecked(db.autoInvite)
-	f.cAfk:SetChecked(db.afkMode)
 	f.cToast:SetChecked(db.toastOnJoin)
 	f.cToastActive:SetChecked(db.toastOnlyActive)
+	f.fGuild:SetChecked(db.filterGuild)
+	f.fGroup:SetChecked(db.filterGroup)
+	f.fFriends:SetChecked(db.filterFriends)
 	if f.chInputs then
 		for name, box in pairs(f.chInputs) do
 			box:SetText(db.channelIntervals[name] or 0)
@@ -985,77 +1431,12 @@ function Rec_ApplySettings()
 	end
 end
 
-function Rec_ApplyFilters()
-	local f = RecruitFrame
-	if not f or not f.fGuild then return end
-	f.fGuild:SetChecked(db.filterGuild)
-	f.fGroup:SetChecked(db.filterGroup)
-	f.fFriends:SetChecked(db.filterFriends)
-	f.blacklist:SetText(db.blacklist or "")
-end
-
 function Rec_RefreshUI()
 	local f = RecruitFrame
 	if not f then return end
-	if f.dash then f.dash:Refresh() end
-	Rec_ApplyText()
-	Rec_ApplySettings()
-	Rec_ApplyFilters()
-end
-
-local SKULL = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_8:12:12|t"
-
-local function stateTag(state)
-	if state == "sent" then
-		return "|cffffcc00[sent]|r "
-	elseif state == "joined" then
-		return "|cff00ff00[joined]|r "
-	elseif state == "declined" then
-		return "|cffff5555[declined]|r "
-	elseif state == "failed" then
-		return SKULL .. "|cffff5555[failed]|r "
-	elseif state == "offline" then
-		return "|cffaaaaaa[offline]|r "
-	end
-	return ""
-end
-
-local function stateMark(state)
-	if state == "sent" then
-		return " |cffffcc00+|r"
-	elseif state == "joined" then
-		return " |cff00ff00OK|r"
-	elseif state == "declined" then
-		return " |cffff5555X|r"
-	elseif state == "failed" then
-		return " " .. SKULL
-	elseif state == "offline" then
-		return " |cffaaaaaaoff|r"
-	end
-	return ""
-end
-
-local function fmtCD(remain)
-	remain = math.floor(remain)
-	if remain >= 60 then
-		return string.format("%dm%02ds", math.floor(remain / 60), remain % 60)
-	end
-	return remain .. "s"
-end
-
-function Rec_InviteContact(name)
-	recentInvites[name] = GetTime()
-	GuildInvite(name)
-	db.session[name] = db.session[name] or {}
-	db.session[name].invited = true
-	for i = 1, #db.log do
-		if db.log[i].who == name then
-			db.log[i].state = "sent"
-			break
-		end
-	end
-	Print("Guild-invited |cff00ff00" .. name .. "|r.")
-	Rec_RenderContacts()
+	if f.dash then f.dash:Refresh() end     -- also repaints the header tally
+	Rec_ApplyMessage()
+	Rec_ApplySetup()
 end
 
 function Rec_AddWatchFriend(name)
@@ -1068,145 +1449,13 @@ function Rec_AddWatchFriend(name)
 	db.session[name] = db.session[name] or {}
 	db.session[name].watch = true
 	Print("Added |cff00ff00" .. name .. "|r to friends -- you'll get a toast when they come online.")
-	Rec_RenderContacts()
+	Rec_RefreshWhispers()
 end
 
--- Contacts render as a HORIZONTAL row of chips inside the footer strip. Each chip
--- is name+state; invitable ones get a tiny inline [inv] button, offline ones [+f].
-function Rec_RenderContacts()
-	local f = RecruitFrame
-	if not f or not f.contactChild then
-		return
-	end
-	for _, row in ipairs(f.contactRows) do
-		row:Hide()
-	end
-	local seen, list = {}, {}
-	for i = 1, #db.log do
-		local e = db.log[i]
-		if not seen[e.who] then
-			seen[e.who] = true
-			list[#list + 1] = e
-		end
-	end
-	local n = #list
-	local now = GetTime()
-	local ROWH = 20
-	local width = (f.contactSF and f.contactSF:GetWidth() or 176)
-	for k = 1, n do
-		local e = list[k] -- most-recent first (log[1] is newest)
-		local who = e.who
-		local row = f.contactRows[k]
-		if not row then
-			row = CreateFrame("Frame", nil, f.contactChild)
-			row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-			row.label:SetPoint("LEFT", 2, 0)
-			row.label:SetJustifyH("LEFT")
-			row.label:SetWordWrap(false)
-			row.btn = W.Button(row, "inv", "secondary")
-			row.btn:SetSize(32, 16); row.btn:SetPoint("RIGHT", -2, 0)
-			row.fbtn = W.Button(row, "+f", "secondary")
-			row.fbtn:SetSize(24, 16); row.fbtn:SetPoint("RIGHT", row.btn, "LEFT", -3, 0)
-			f.contactRows[k] = row
-		end
-		row:SetHeight(ROWH); row:SetWidth(width)
-		row:ClearAllPoints(); row:SetPoint("TOPLEFT", 0, -(k - 1) * ROWH)
-		row:Show()
-		row.label:SetText(nameColor(e.who, e.class) .. e.who .. "|r" .. stateMark(e.state))
 
-		local showInv = not (e.state == "joined" or isInMyGuild(e.who))
-		local showF = (e.state == "offline") and not (db.session[e.who] and db.session[e.who].watch)
-		if showF then
-			row.fbtn:Show(); row.fbtn:SetScript("OnClick", function() Rec_AddWatchFriend(who) end)
-		else
-			row.fbtn:Hide()
-		end
-		if showInv then
-			local last = recentInvites[e.who]
-			local remain = last and ((db.inviteCooldown or 300) - (now - last)) or 0
-			row.btn.text:SetText(remain > 0 and fmtCD(remain) or "inv")
-			row.btn:Show(); row.btn:SetScript("OnClick", function() Rec_InviteContact(who) end)
-		else
-			row.btn:Hide()
-		end
-
-		-- pin the name's RIGHT edge just left of whatever buttons are showing, so
-		-- long names truncate cleanly instead of running under the inv/+f buttons.
-		local rightPad = 4                       -- no buttons -> almost full width
-		if showInv then rightPad = rightPad + 36 end
-		if showF then rightPad = rightPad + 28 end
-		row.label:SetPoint("RIGHT", row, "RIGHT", -rightPad, 0)
-	end
-	local h = math.max(1, n * ROWH)
-	f.contactChild:SetHeight(h); f.contactChild:SetWidth(width)
-	if f.contactSF and f.contactSB then
-		local maxs = math.max(0, h - f.contactSF:GetHeight())
-		f.contactSB:SetMinMaxValues(0, maxs); f.contactSB:SetShown(maxs > 4)
-	end
-	f._lastContactCount = n
-end
-
-function Rec_RefreshLog()
-	local f = RecruitFrame
-	if not f or not f.logBox then
-		return
-	end
-	f.logBox:Clear()
-	if #db.log == 0 then
-		f.logBox:AddMessage("|cff888888No whispers yet.|r")
-		Rec_RenderContacts()
-		return
-	end
-	for i = #db.log, 1, -1 do
-		local e = db.log[i]
-		f.logBox:AddMessage(
-			"|cff888888" .. e.t .. "|r " .. stateTag(e.state) .. nameColor(e.who, e.class) .. e.who .. "|r|cffdddddd: " .. (e.msg or "") .. "|r"
-		)
-		if e.reply and e.reply ~= "" then
-			f.logBox:AddMessage("    |cff66bbff>> " .. e.reply .. "|r")
-		end
-	end
-	Rec_RenderContacts()
-end
-
-function Rec_RefreshSummary()
-	local f = RecruitFrame
-	if not f or not f.statCards then
-		return
-	end
-	local contacts, joined, declined, failed, offline, sent, noState, replied = 0, 0, 0, 0, 0, 0, 0, 0
-	for _, v in pairs(db.session) do
-		contacts = contacts + 1
-		if v.state == "joined" then
-			joined = joined + 1
-		elseif v.state == "declined" then
-			declined = declined + 1
-		elseif v.state == "failed" then
-			failed = failed + 1
-		elseif v.state == "offline" then
-			offline = offline + 1
-		elseif v.invited then
-			sent = sent + 1
-		else
-			noState = noState + 1
-		end
-		if v.replied then
-			replied = replied + 1
-		end
-	end
-	-- fill the 3-column stat cards in the drawer
-	local c = f.statCards
-	local function set(key, val) if c[key] then c[key]:SetText(tostring(val)) end end
-	set("reached", contacts)
-	set("joined", joined)
-	set("declined", declined)
-	set("inguild", failed)   -- "already in a guild"
-	set("offline", offline)
-	set("waiting", sent)
-end
 
 -- ============================================================
 -- Slash
 -- ============================================================
 -- No slash command: open Okanvil from the minimap button and pick Recruit.
--- On/off, AFK, clear-log and the toast preview are all controls inside the module UI.
+-- On/off, clear-log and the toast preview are all controls inside the module UI.

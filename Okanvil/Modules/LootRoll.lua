@@ -14,14 +14,13 @@ local L = Okanvil.Loot
 local RM = {}
 Okanvil.RollMgr = RM
 
--- Two layouts, toggled by the [-]/[+] button in the header and remembered in the DB.
---   full    -- roomy rows/text, the default.
---   compact -- tighter rows, smaller font, fewer visible rows, a narrower window. Same
---              sections, no features removed -- it just takes about a quarter of the area.
+-- ONE layout, deliberately small. There used to be a second, wider one a chevron
+-- away in the title bar -- but this window's job is to sit beside the loot frame
+-- without covering what you are rolling on, which is the small one, every time.
 --
 -- An item row is TWO lines: the item name on top, the winner and trade timer below.
 -- One line meant the name, the winner and the timer all fought for the same width, so
--- everything was truncated and the compact layout was unreadable. Two lines give each
+-- everything was truncated and the rows were unreadable. Two lines give each
 -- its own space and let the icon grow.
 --
 -- The rolls are NOT a separate panel: expanding an item inserts its rolls as extra rows
@@ -29,22 +28,16 @@ Okanvil.RollMgr = RM
 -- and the rolls sit directly under the item they belong to.
 --   LIST_ROWS -- visible rows of the mixed list (items + any expanded rolls).
 --   MAX_ROLLS -- rolls shown inline before the roll block itself starts scrolling.
-local SIZES = {
-	full    = { ROW_H = 32, FONT_SZ = 12, SUB_SZ = 10, ROLL_H = 18, LIST_ROWS = 12, WIN_W = 330 },
-	compact = { ROW_H = 26, FONT_SZ = 11, SUB_SZ =  9, ROLL_H = 15, LIST_ROWS = 10, WIN_W = 270 },
-}
+-- One size. There used to be a "full" layout twice this wide, switched by a
+-- chevron in the title bar -- but the compact one is what the window is FOR: a
+-- small thing beside the loot frame that never covers what you are looting.
+local SIZE = { ROW_H = 26, FONT_SZ = 11, SUB_SZ = 9, ROLL_H = 15, LIST_ROWS = 10, WIN_W = 270 }
 local MAX_ROLLS = 5   -- inline rolls visible at once; the rest scroll within the block
 
--- Live geometry, re-pointed at one of the SIZES tables by applySize(). Seeded from
--- `full` at LOAD time: Okanvil.db does not exist yet here (Core.lua only assigns it
--- on VARIABLES_LOADED, after every file has run), so calling db() at this scope
--- would index a nil table. applySize() is called from showWin()/the toggle instead,
--- both of which run long after the DB is up.
-local ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W do
-	local s = SIZES.full
-	ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W =
-		s.ROW_H, s.FONT_SZ, s.SUB_SZ, s.ROLL_H, s.LIST_ROWS, s.WIN_W
-end
+-- Live geometry, unpacked from SIZE. These are locals rather than SIZE lookups
+-- because the layout code reads them on every row of every rebuild.
+local ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W =
+	SIZE.ROW_H, SIZE.FONT_SZ, SIZE.SUB_SZ, SIZE.ROLL_H, SIZE.LIST_ROWS, SIZE.WIN_W
 
 -- HORIZONTAL GEOMETRY -- one source of truth, so the item name, the roll name and the
 -- tree glyph cannot drift apart (they are three different frames that must line up).
@@ -64,32 +57,22 @@ local function textX() return PAD + iconSize() + ICO_GAP end
 local function db()
 	local d = Okanvil.db.rollmgr
 	if not d then
-		d = { point = "RIGHT", x = -30, y = 60, autoShow = true, compact = true }
+		d = { point = "RIGHT", x = -30, y = 60, autoShow = true }
 		Okanvil.db.rollmgr = d
 	end
-	-- The compact layout became the default AFTER these profiles were written, so a
-	-- profile from before it has compact=false baked in and would keep opening large.
-	-- Move it over once; the toggle still owns the setting from then on.
-	if not d.compactDefaulted then
-		d.compactDefaulted = true
-		d.compact = true
-	end
+	-- `compact` and `compactDefaulted` may still be sitting in an older saved
+	-- profile. Nothing reads them any more -- there is one layout now -- and they
+	-- are left alone rather than deleted, so downgrading keeps its setting.
 	return d
 end
 
 -- pull the geometry for the currently-selected mode into the locals above
-local function applySize()
-	local s = SIZES[db().compact and "compact" or "full"]
-	ROW_H, FONT_SZ, SUB_SZ, ROLL_H, LIST_ROWS, WIN_W =
-		s.ROW_H, s.FONT_SZ, s.SUB_SZ, s.ROLL_H, s.LIST_ROWS, s.WIN_W
-end
-
 -- Pixels from the window top to the body frame: the 26px header + the status line.
 -- ONE source of truth -- the body anchor and the final SetHeight both use it, so a
 -- mode switch can never leave them disagreeing (which clipped the bottom buttons).
 -- no status line (ML / Raider): the tabs already say which mode you're in, so the
 -- body starts straight under the title bar.
-local function BODY_TOP() return db().compact and 28 or 34 end
+local function BODY_TOP() return 28 end
 
 -- Icon resolver: delegates to the shared Core warmer (Okanvil:ItemIcon), which
 -- returns the icon now or nil + auto-queues a server query so a later tick fills
@@ -118,6 +101,20 @@ end
 -- raiders who can't actually give loot -- and disagreed with the Loot page's
 -- "not the Master Looter" banner. Delegate to L.IsMasterLooter so they always agree.
 local function amML()
+	-- COUNCIL TEST MODE counts as being the master looter, but ONLY SOLO. Solo
+	-- there is no raid and no master loot, so isML() is false and every ML
+	-- control is hidden -- including the Council row, which is the whole point of
+	-- the test.
+	--
+	-- In a real group the real answer is the only safe one: a test left switched
+	-- on handed ML controls to someone who was not the master looter, in the
+	-- middle of an actual raid.
+	local CC = Okanvil.Council
+	if CC and CC.testMode then
+		local inGroup = (GetNumRaidMembers and GetNumRaidMembers() > 0)
+			or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+		if not inGroup then return true end
+	end
 	if L and L.IsMasterLooter then return L.IsMasterLooter() end
 	return false
 end
@@ -271,7 +268,15 @@ local function buildWindow()
 	f:SetSize(WIN_W, 200)   -- height set dynamically in Refresh
 	local d = db()
 	f:SetPoint(d.point or "RIGHT", UIParent, d.point or "RIGHT", d.x or -30, d.y or 60)
-	f:SetFrameStrata("HIGH"); f:SetToplevel(true)
+	-- DIALOG, not HIGH. The main hub window is HIGH too, and two frames sharing a
+	-- strata have no defined order between them -- so the mini roll and the hub
+	-- interleaved, drawing the hub's rows through the roll list. This window
+	-- floats OVER the hub by design, so it belongs one strata up.
+	f:SetFrameStrata("DIALOG"); f:SetToplevel(true)
+	-- Level, not just strata: the council's frames share DIALOG, and two frames
+	-- on the same level have no defined order either. Lowest of the three -- the
+	-- council windows are opened ON TOP of this one and must stay readable.
+	f:SetFrameLevel(10)
 	Okanvil:Skin(f, "panel")
 	local br, bg, bb = f:GetBackdropColor()
 	if br then f:SetBackdropColor(br, bg, bb, 0.97) end
@@ -291,22 +296,10 @@ local function buildWindow()
 	ico:SetSize(16, 16); ico:SetPoint("LEFT", 8, 0)
 	ico:SetTexture("Interface\\Icons\\Trade_BlackSmithing")   -- anvil, like the shell
 	ico:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local title = W.Text(hdr, "", 13, "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0); title:Color(1, 0.82, 0)
+	local title = W.Text(hdr, "", "body", "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0); title:Color(1, 0.82, 0)
 	f.title = title
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
-
-	-- Size toggle. The glyphs are chevrons, not "-" and "+": those two sit high and
-	-- narrow in the font, so in a 20px button they read as badly centred no matter how
-	-- the label is anchored. A chevron fills the box and says which way it will go.
-	local size = W.Button(hdr, ""); size:SetSize(22, 20); size:SetPoint("RIGHT", close, "LEFT", -2, 0)
-	f.sizeBtn = size
-	size:SetScript("OnClick", function()
-		local d = db()
-		d.compact = not d.compact
-		applySize()
-		RM.ApplyMode()
-	end)
 
 	-- everything below the title is rebuilt when the ML state changes, so pack the
 	-- mode-specific widgets into a container we can wipe. Give it a FULL size
@@ -401,20 +394,14 @@ local function buildWindow()
 	return f
 end
 
--- Re-apply the current size mode to the frame chrome, then rebuild the body.
--- Called by the [-]/[+] toggle and on every show (the DB may have changed).
+-- Re-apply the window chrome, then rebuild the body. Called on every show.
 function RM.ApplyMode()
 	if not win then return end
-	local compact = db().compact
 	win:SetWidth(WIN_W)
 	if win.title then
-		win.title:SetText(compact and "Okanvil - Roll" or "Okanvil - Mini Roll Manager")
+		win.title:SetText("Okanvil - Roll")
 	end
-	if win.sizeBtn then
-		-- compact -> chevron DOWN (click to grow); full -> chevron UP (click to shrink)
-		win.sizeBtn.text:SetText(compact and "v" or "^")
-	end
-	-- body is built once, so re-anchor it for the new mode
+	-- body is built once, so re-anchor it
 	if win.body then
 		win.body:ClearAllPoints()
 		win.body:SetPoint("TOPLEFT", 0, -BODY_TOP()); win.body:SetPoint("BOTTOMRIGHT", 0, 0)
@@ -461,8 +448,7 @@ function RM.Rebuild()
 	end
 
 	local ml = isML()
-	local compact = db().compact and true or false
-	local ac = Okanvil.Colors and Okanvil.Colors.accent or { 0.75, 0.58, 0.23 }
+		local ac = Okanvil.Colors and Okanvil.Colors.accent or { 0.75, 0.58, 0.23 }
 
 	-- UNIFIED layout: raider and ML share the same look (boss pager, the list, "Your
 	-- roll"). The ML additionally gets the management controls (Start roll MS/OS/Free/
@@ -472,7 +458,7 @@ function RM.Rebuild()
 	-- the gap right of the ">" and the list is inset the same amount on both edges.
 	-- The body already starts BODY_TOP() below the window top (clear of the title bar),
 	-- so the first row starts at -M, not at some extra hand-tuned offset on top of it.
-	local M = compact and 8 or 10
+	local M = 8
 	local INNER = WIN_W - M * 2
 	local y = -M
 
@@ -480,8 +466,8 @@ function RM.Rebuild()
 	-- The label is anchored BETWEEN the two buttons (not to the body with a hardcoded
 	-- -28 inset, which assumed the full-size 24px button and overflowed the name in
 	-- compact). Create `nxt` first so the label can anchor to it.
-	local pgH = compact and 18 or 22
-	local pgW = compact and 20 or 24
+	local pgH = 18
+	local pgW = 20
 	local prev = keep(W.Button(body, "<")); prev:SetSize(pgW, pgH); prev:SetPoint("TOPLEFT", M, y)
 	prev:SetScript("OnClick", function()
 		f.bossIdx = math.max(1, (f.bossIdx or 1) - 1); selected = nil; f.userCleared = false; f.itemScroll = 0; f.rollScroll = 0; RM.Refresh()
@@ -671,13 +657,47 @@ function RM.Rebuild()
 		f.itemRows[i] = r
 		return r
 	end
-	y = y - (LIST_H + 6) - (compact and 6 or 10)
+	y = y - (LIST_H + 6) - 6
+
+	-- ML-only: COUNCIL row, above the rolls ----------------------------------
+	--
+	-- Only when the council is switched on for this session (Loot Council page ->
+	-- "Council night"). The two are NOT modes of the night: a master looter
+	-- running a council still says "this one just roll" for a piece nobody is
+	-- arguing about, so both rows act on the SAME selected item and each item goes
+	-- one way or the other. With the council off, this row does not exist and the
+	-- mini roll is exactly what it has always been.
+	local CC = Okanvil.Council
+	if ml and CC and CC.active and CC.Enabled and CC.Enabled() then
+		local ccH = 22
+		local cc = keep(W.Text(body, "Loot council", 10, "dim")); cc:SetPoint("TOPLEFT", M, y); y = y - 13
+		local gap2, bw2 = 6, (INNER - 6) / 2
+		local askB = keep(W.Button(body, "Ask this one", "primary"))
+		askB:SetSize(bw2, ccH); askB:SetPoint("TOPLEFT", M, y)
+		askB:SetScript("OnClick", function()
+			if not (selected and selected.item) then Okanvil:Print("Pick an item first."); return end
+			-- Starting a council round on something being rolled on closes the roll
+			-- first: two ways of deciding one item at once is how a raid ends up
+			-- with two winners.
+			if L.StopRoll then L.StopRoll() end
+			CC.Ask({ selected.item }, selected.boss or "")
+		end)
+		local pickB = keep(W.Button(body, "Pick several"))
+		pickB:SetSize(bw2, ccH); pickB:SetPoint("TOPLEFT", M + bw2 + gap2, y)
+		pickB:SetScript("OnClick", function()
+			if CC.OpenPicker then CC.OpenPicker() end
+		end)
+		y = y - (ccH + 8)
+	end
 
 	-- ML-only: Start Roll row (4 equal buttons) ------------------------------
 	if ml then
-		local srH = compact and 22 or 26
-		local sr = keep(W.Text(body, "Start roll (announces)", compact and 10 or 11, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - (compact and 13 or 16)
-		local gap, bw = 6, (INNER - 3 * 6) / 4
+		local srH = 22
+		local sr = keep(W.Text(body, "Start roll (announces)", 10, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - 13
+		-- TWO buttons, not four. Free was a third kind of roll nobody called, and
+		-- Stop is still on /okroll stop -- four buttons at 62px each was a row you
+		-- had to read rather than aim at.
+		local gap, bw = 6, (INNER - 6) / 2
 		local function srBtn(label, kind, idx, fn)
 			local b = keep(W.Button(body, label, kind)); b:SetSize(bw, srH)
 			b:SetPoint("TOPLEFT", M + (idx - 1) * (bw + gap), y)
@@ -689,10 +709,13 @@ function RM.Rebuild()
 		end
 		srBtn("MS", "primary", 1, function() startSel("ms") end)
 		srBtn("OS", nil, 2, function() startSel("os") end)
-		srBtn("Free", nil, 3, function() startSel("free") end)
-		srBtn("Stop", "danger", 4, function() L.StopRoll() end)
 		y = y - (srH + 6)
 	end
+
+	-- NO "Send prio" button. The ladder is on the Loot Council page and under the
+	-- item on the council board -- the two places an officer is already looking
+	-- when they need it. Posting it to officer chat from here was a third copy,
+	-- and the button spent most of its life reading "(not on the list)".
 
 	-- (No separate rolls panel: the rolls render inside the list above, under whichever
 	--  item is expanded.)
@@ -703,8 +726,32 @@ function RM.Rebuild()
 	-- without aiming at the name. Hiding the run's loot lives on the Loot page: it is
 	-- end-of-raid tidying, not something you reach for mid-boss.
 	if ml then
-		local awH = compact and 22 or 26
+		local awH = 22
 		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER, awH); award:SetPoint("TOPLEFT", M, y)
+
+		-- Say WHICH award this will be before it is clicked. GiveMasterLoot only works
+		-- from an OPEN loot window; once the corpse is closed the item is in the ML's
+		-- bags and the award can only be recorded, with the hand-over done by trade.
+		-- Both are fine -- but finding out afterwards is what made this feel broken.
+		award.SyncLabel = function()
+			local open = (GetNumLootItems and (GetNumLootItems() or 0) > 0)
+			if award.text then
+				-- No embedded colour: a "primary" button paints its label DARK on
+				-- gold, so a |cff8a8d93 grey landed grey-on-gold and could not be
+				-- read. The distinction is carried by the word itself, and the
+				-- tooltip explains it -- the same rule as the council's Give button.
+				award.text:SetText(open and "Award top roll" or "Award top roll (record)")
+			end
+			award:Tooltip(open
+				and "Hands the item straight to the winner through master loot."
+				or  "The loot window is closed, so the item is already in your bags.\n"
+				 .. "This records the winner and tells the raid -- you trade it over.\n\n"
+				 .. "Keep the corpse's loot window OPEN during the roll to hand it\n"
+				 .. "over automatically instead.")
+		end
+		award.SyncLabel()
+		RM._awardBtn = award
+
 		award:SetScript("OnClick", function()
 			if not selected then Okanvil:Print("|cffff5555Open an item in the list first.|r"); return end
 			-- Award the top roll of the OPEN item, from the rolls actually captured on
@@ -717,14 +764,38 @@ function RM.Rebuild()
 			if not top then Okanvil:Print("|cffff5555No rolls captured for this item yet.|r"); return end
 			L.AwardWinner(selected.id, top.player, top.roll, top.spec)
 		end)
+		y = y - (awH + 6)
+
+		-- START FRESH. The list keeps the whole run, which is right during a raid
+		-- and wrong the moment the next one starts -- last week's boss pages were
+		-- still sitting there. This HIDES the drops (they stay in the history and
+		-- the export); it does not delete the session.
+		local clr = keep(W.Button(body, "Clear list (new raid)"))
+		clr:SetSize(INNER, awH); clr:SetPoint("TOPLEFT", M, y)
+		clr:Tooltip("Hides every item currently listed, so the window is empty for a\n"
+			.. "new raid. The loot history and the export keep them.")
+		clr:SetScript("OnClick", function()
+			Okanvil:Confirm("Clear the mini roll list?\n"
+				.. "|cff8a8d93The loot history keeps everything -- this only empties the window.|r",
+				"Clear list",
+				function()
+					if L.ClearActiveDrops and L.ClearActiveDrops() then
+						Okanvil:Print("Mini roll: list cleared.")
+					else
+						Okanvil:Print("Mini roll: nothing to clear.")
+					end
+					local ok, err = pcall(RM.Rebuild)
+					if not ok and Okanvil.Err then Okanvil:Err("RollMgr clear", err) end
+				end)
+		end)
 		y = y - (awH + 10)
 	end
 
 	-- Your roll ---------------------------------------------------------------
 	if wantsChatRollButtons() then
-		local yrl = keep(W.Text(body, "Your roll", compact and 10 or 11, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - (compact and 15 or 18)
+		local yrl = keep(W.Text(body, "Your roll", 10, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - 15
 		local hw = (INNER - 8) / 2
-		local bh = compact and 22 or 28
+		local bh = 22
 		local myms = keep(W.Button(body, "Roll MS (100)", "primary")); myms:SetSize(hw, bh); myms:SetPoint("TOPLEFT", M, y)
 		myms:SetScript("OnClick", function() L.SelfRoll("ms") end)
 		local myos = keep(W.Button(body, "Roll OS (99)")); myos:SetSize(hw, bh); myos:SetPoint("LEFT", myms, "RIGHT", 8, 0)
@@ -913,7 +984,7 @@ function RM.Refresh()
 			-- tail, so "Argent Confessor Paletress (2/3)" lost the "/3)" -- you could no
 			-- longer see how many bosses there were. Cut the name, keep "(2/3)" whole.
 			local bn = g.boss or "?"
-			local maxB = db().compact and 20 or 28
+			local maxB = 20
 			if #bn > maxB then bn = bn:sub(1, maxB - 1) .. ".." end
 			f.bossHd:SetText(bn .. "  |cff8a8d93(" .. f.bossIdx .. "/" .. f.bossCount .. ")|r")
 		end
@@ -1045,7 +1116,10 @@ function RM.Refresh()
 				if L.PendingAward then pendId, pendWho = L.PendingAward() end
 				local wn = L.RollWinner and L.RollWinner(d)
 				local mlName = L.MasterLooterName and L.MasterLooterName()
-				local heldByML = mlName and d.receivedBy == mlName
+				-- heldBy is set when the ML picks an item up to hand out later; the
+				-- receivedBy test stays for rows captured before that field existed.
+				local heldByML = (d.heldBy ~= nil and d.heldBy ~= "")
+					or (mlName ~= nil and d.receivedBy == mlName)
 
 				-- "passed" only ever means NOBODY has it, so a known owner outranks it:
 				-- an item everyone passed on can still be handed out by the master
@@ -1216,7 +1290,6 @@ local function showWin()
 	end
 	win:Show()                       -- always show (idempotent)
 	win:Raise()                      -- bring to front in case something covers it
-	applySize()                      -- DB may have changed since the last show
 	local ok, err = pcall(RM.ApplyMode)  -- never let a rebuild error leave it half-open
 	if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
 	if OkanvilLootDebug and L and L.Dbg then
@@ -1304,6 +1377,21 @@ end
 -- a loot window just opened with items in front of us -> always pop (forced).
 function RM.OnLootWindow() popOrRefresh(true) end
 
+-- The loot window opened or closed, so "Award top roll" may have just changed
+-- between handing the item over and only recording it. Cheap: relabels one button.
+function RM.SyncAward()
+	if RM._awardBtn and RM._awardBtn.SyncLabel then
+		local ok, err = pcall(RM._awardBtn.SyncLabel)
+		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SyncAward", err) end
+	end
+end
+
+-- Is the mini roll on screen?  The council's test mode watches this: a test
+-- lasts as long as its windows, and this is one of the three.
+function RM.IsOpen()
+	return (win and win:IsShown()) and true or false
+end
+
 -- Just hide (never toggle open). Used by Okanvil:CloseAll() on a DBM pull.
 function RM.Hide()
 	if win and win:IsShown() then win:Hide() end
@@ -1370,25 +1458,61 @@ local function mlChanged()
 	end
 end
 
+-- This file has no plugin key of its own: the roll manager is part of the Loot
+-- module, so it answers to the same switch. Without this it announced master
+-- looter changes in chat and kept its callbacks live with Loot switched off --
+-- a module that has no nav row is easy to forget when the gate goes in.
+local function lootOn()
+	return not (Okanvil.ModuleActive and not Okanvil:ModuleActive("__loot"))
+end
+
 ev:SetScript("OnEvent", function(_, event)
-	if event ~= "PLAYER_LOGIN" then mlChanged(); return end
+	-- PLAYER_LOGIN still runs with the module off: it only WIRES the callbacks,
+	-- and each of them checks the gate when it fires. Skipping it would leave
+	-- the roll manager permanently dead for anyone who enabled Loot later in
+	-- the session.
+	if event ~= "PLAYER_LOGIN" then
+		if lootOn() then mlChanged() end
+		return
+	end
 	if not Okanvil.Loot then return end
 	L = Okanvil.Loot
 	lastML = isML()
 	lastMethod = isMLMethod()
-	-- chain onto Loot's callbacks without clobbering them
+	-- chain onto Loot's callbacks without clobbering them. Each checks the gate
+	-- as it fires, so the chain can be wired once at login and still stay quiet
+	-- while the module is off.
 	local prevLoot = L.onLoot
-	L.onLoot = function() if prevLoot then prevLoot() end; onLoot() end
-	L.onRoll = function() RM.OnRollOpen() end
+	L.onLoot = function() if prevLoot then prevLoot() end; if lootOn() then onLoot() end end
+	L.onRoll = function() if lootOn() then RM.OnRollOpen() end end
 	-- a roll just STARTED on an item id -> page to it and select it (no tab hunting)
-	L.onRollStart = function(id) local ok, err = pcall(RM.SelectItemById, id)
-		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SelectItemById", err) end end
+	L.onRollStart = function(id)
+		if not lootOn() then return end
+		local ok, err = pcall(RM.SelectItemById, id)
+		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SelectItemById", err) end
+	end
 	-- fired the instant a loot window opens with items (RaidRoll / RCLootCouncil
 	-- model) -- pop the mini roll even if the item is filtered from recording, and
 	-- regardless of the InLiveRun timing race (we KNOW a corpse is open).
 	local prevWin = L.onLootWindow
-	L.onLootWindow = function() if prevWin then prevWin() end; RM.OnLootWindow() end
+	L.onLootWindow = function()
+		if prevWin then prevWin() end
+		if lootOn() then RM.OnLootWindow() end
+	end
 end)
 
 SLASH_OKROLL1 = "/okroll"
-SlashCmdList["OKROLL"] = function() RM.Toggle() end
+SlashCmdList["OKROLL"] = function(msg)
+	if not lootOn() then
+		Okanvil:Print("|cff8a8d93The Loot module is switched off.|r")
+		return
+	end
+	-- /okroll stop -- ends the open roll. The Stop button is gone from the window
+	-- (four buttons in a 270px row were unreadable), so this is how a roll called
+	-- by mistake is closed.
+	if (msg or ""):match("^%s*(%a*)"):lower() == "stop" then
+		if L and L.StopRoll then L.StopRoll() end
+		return
+	end
+	RM.Toggle()
+end

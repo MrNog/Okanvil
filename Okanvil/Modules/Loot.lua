@@ -75,6 +75,16 @@ local DENY_NAME_EXACT = {
 	["crystallized fire"] = true, ["crystallized shadow"] = true,
 	["jormungar scale"] = true, ["arctic fur"] = true,
 }
+-- CONTAINERS: the weekly-quest bags. Everyone who did the quest gets one, so a sack
+-- says nothing about who won what, and counting it skews the fair-loot metric. Denied
+-- by exact name because a sack is epic-quality and would otherwise clear any threshold.
+local DENY_CONTAINER_NAME = {
+	["sack of frosty treasures"] = true,
+	["satchel of freshly-picked herbs"] = true,
+	["bag of fishing treasures"] = true,
+	["chilled serving of tuskarr stew"] = true,
+}
+for name in pairs(DENY_CONTAINER_NAME) do DENY_NAME_EXACT[name] = true end
 -- deny por NOME (substring): GEMS, cut or uncut, RARE or epic. This is why Okanvil showed
 -- Autumn's Glow / Twilight Opal / Monarch Topaz when RaidRoll didn't: those are RARE (blue,
 -- rarity 3) gems, and RaidRoll only records epic+ (rarity>3) so it drops them for free --
@@ -95,11 +105,19 @@ local DENY_GEM_NAME = {
 	"twilight opal", "forest emerald", "bloodstone", "sun crystal",
 	"chalcedony", "shadow crystal", "huge citrine", "dark jade",
 }
--- allow por NOME (robusto): patterns/plans/recipes + orbs + fragmentos.
+-- allow por NOME, SEMPRE: orbs + fragmentos de lendária. These are rolled on no matter
+-- what colour the client reports, so they bypass the rarity threshold outright.
 local ACCEPT_NAME = {
-	"pattern:", "plans:", "recipe:", "schematic:", "formula:", "design:",
 	"crusader orb", "runed orb", "primordial saronite",
 	"fragment of val'anyr", "shadowfrost shard",
+}
+-- allow por NOME, MAS ainda sujeito à raridade: crafting recipes. A raid pattern is real
+-- loot people roll on, but the prefix alone cannot tell "Pattern: Lightweave Leggings"
+-- (epic, rolled on) from "Recipe: Haunted Herring" (green cooking junk off a holiday mob).
+-- These skip the GEM deny (so "Design: Royal Twilight Opal" survives) but still have to
+-- clear the "Log items of quality" threshold like any other drop.
+local ACCEPT_NAME_IF_QUALITY = {
+	"pattern:", "plans:", "recipe:", "schematic:", "formula:", "design:",
 }
 local function nameHasAny(name, list)
 	if not name or name == "" then return false end
@@ -116,10 +134,15 @@ local function acceptItem(id, rarity, name)
 	if id ~= 0 and DENY_IDS[id] then return false end
 	if name and name ~= "" and DENY_NAME_EXACT[name:lower()] then return false end
 	if id ~= 0 and ACCEPT_IDS[id] then return true end
-	-- Recipe drops ("Design: Royal Twilight Opal", "Pattern: ...") are REAL loot and must
-	-- survive -- check ACCEPT_NAME before the gem-name deny, which would otherwise eat them
-	-- on the "twilight opal" substring.
+	-- Orbs and legendary fragments: always loot, whatever the colour.
 	if nameHasAny(name, ACCEPT_NAME) then return true end
+	-- Recipe drops ("Design: Royal Twilight Opal", "Pattern: ...") must survive the gem-name
+	-- deny below, which would otherwise eat them on the "twilight opal" substring -- but they
+	-- still answer to the quality threshold, so green cooking recipes stay out.
+	if nameHasAny(name, ACCEPT_NAME_IF_QUALITY) then
+		local threshold = (Okanvil.db and Okanvil.db.lootThreshold) or 3
+		return (rarity or 0) >= threshold
+	end
 	-- Epic gems, cut or uncut (a JC cutting mid-raid, or an uncut gem that dropped). Denied
 	-- by NAME so we never chase per-cut ids. Safe: no gear shares a gem's name.
 	if nameHasAny(name, DENY_GEM_NAME) then return false end
@@ -173,11 +196,9 @@ local function shouldRecordHere()
 end
 
 -- NPC GUID? (nibble tipo & 0x7 == 3)
-local function guidIsNPC(guid)
-	if not guid then return false end
-	local b = tonumber(guid:sub(5, 5), 16)
-	return b and (b % 8) == 3
-end
+-- Shared with the farm tracker: the same :sub() on a numeric GUID that broke its
+-- kill counter would break every boss-vetting call here too.
+local guidIsNPC = Okanvil.U.guidIsNPC
 
 -- ------------------------------------------------------------
 -- TOOLTIP SCAN. One hidden GameTooltip, read once, reused for both the BoE tag and
@@ -262,9 +283,23 @@ local runKey
 -- with a WALL-CLOCK stamp (time(), not GetTime(): GetTime is uptime and resets to 0 on
 -- every login/reload, so it can't measure "how long ago" across the reload). On load we
 -- read it back ONLY if it belongs to the run we are in and is still within the label TTL.
+-- The PER-CHARACTER store, and nothing else. This used to be written
+-- `Okanvil.cdb or Okanvil.db`, which looks like a harmless guard and is not:
+-- Okanvil.cdb does not exist until ADDON_LOADED, so anything running before that
+-- silently wrote the whole loot history into the ACCOUNT db -- where every other
+-- character then read it. That is why one toon's loot showed up on another.
+--
+-- Returning an empty scratch table when cdb is missing keeps callers working
+-- without persisting anything: a drop captured that early is not worth
+-- corrupting the account file for.
+local earlyScratch = {}
+local function charDB()
+	return Okanvil.cdb or earlyScratch
+end
+
 local function saveBossCtx(name)
 	if not name or name == "" or name == "Trash" then return end
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	local key = runKey and (runKey())
 	if not key then return end   -- not in a resolvable run; nothing to pin it to
 	cdb.lootBossCtx = { key = key, boss = name, at = time() }
@@ -281,6 +316,13 @@ local inCombatCid = nil       -- creatureID do boss em combate (para casar o UNI
 -- looted within a short window of it belongs to that same fight and inherits its label
 -- instead of nuking the boss context. Outside the window it is genuine trash.
 local lastBossContactAt = 0
+-- Name of the last loot CONTAINER the cursor was over. A chest is not a unit: it has no
+-- GUID we can reach, it is never your target, and the loot window it opens is titled only
+-- "Loot". The single moment its name is exposed to the client is the mouseover tooltip --
+-- so we read it there and keep it for the LOOT_OPENED that follows a click.
+local lastContainerName = nil
+local lastContainerAt = 0
+local CONTAINER_HOVER_TTL = 20   -- seconds a hovered container name may still explain a loot window
 local TWIN_WINDOW = 30        -- seconds: an unvetted corpse this soon after a boss = same encounter
 -- How long a dead boss's name may keep labelling loot. `encounterBoss` is held past the
 -- kill on purpose (loot drops a moment later), but it was held FOREVER: a fight the
@@ -300,7 +342,7 @@ local BOSS_LABEL_TTL = 180    -- seconds a confirmed boss name stays authoritati
 -- lands on the right boss page instead of a new "Trash". (Assigns the forward-declared
 -- upvalue -- callers in onEnterWorld reach it through that local.)
 function restoreBossCtx()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	local ctx = cdb.lootBossCtx
 	if not ctx or not ctx.boss or ctx.boss == "" then return end
 	local key = runKey and (runKey())
@@ -348,8 +390,11 @@ end
 -- creatureID a partir do GUID (MRT cidFromGUID): valida o triplet F13 (NPC) / F15
 -- (vehicle) do 3.3.5a e extrai o id.
 local function cidFromGUID(guid)
-	if type(guid) ~= "string" or guid == "" then return nil end
-	local hex = guid:match("^0x(%x+)$") or guid:match("^(%x+)$")
+	if guid == nil or guid == "" then return nil end
+	-- Accept a numeric GUID too: some cores pass one, and rejecting it here left
+	-- every boss unvetted on those servers (same shape of bug as guidIsNPC had).
+	guid = tostring(guid)
+	local hex = guid:match("^0[xX](%x+)$") or guid:match("^(%x+)$")
 	if not hex then return nil end
 	if #hex < 16 then hex = string.rep("0", 16 - #hex) .. hex end
 	if hex:sub(1, 4) == "0000" then return nil end
@@ -382,8 +427,13 @@ local function isBossLike(unit)
 			and maxHp > 80000 then return true end
 		return maxHp > 200000        -- fallback por HP alto para dungeon
 	end
-	-- raid: mantem o criterio alto (evita apanhar adds elite como "boss")
-	return maxHp > 1000000
+	-- RAID: no HP guess at all. Bosses-Data.lua lists every WotLK raid boss by id and
+	-- is checked BEFORE this function, so the heuristic can only ever fire on something
+	-- NOT in that list -- i.e. trash. And ICC25 trash clears the old 1M bar easily
+	-- (Deathbound Ward ~1.6M), so it was promoted to a boss and its cid cached, which
+	-- filed six BoE trash drops under "Deathbound Ward" as if it were an encounter.
+	-- An unlisted raid NPC is trash; a genuinely missing boss belongs in Bosses-Data.
+	return false
 end
 
 -- varre um unit token: se for um NPC boss-like em raid/party, engaja.
@@ -502,13 +552,21 @@ local function db()
 	-- (the real loot is per-character; leaving it here gave TWO sources that
 	-- diverged -- the old alias). We do this once per game session.
 	Okanvil.db.loot.sessions = nil
+	-- The other keys the old `Okanvil.cdb or Okanvil.db` fallback could leak into
+	-- the ACCOUNT db when it ran before ADDON_LOADED. They belong to one
+	-- character; left here every toon read the same boss context and run token,
+	-- which is what made another character's loot appear in the list.
+	Okanvil.db.lootSessions = nil
+	Okanvil.db.lootBossCtx  = nil
+	Okanvil.db.lootRunToken = nil
+	Okanvil.db.trashMigrated = nil
 	return Okanvil.db.loot
 end
 
 -- sessions() returns the PER-CHARACTER list (cdb.lootSessions). This is the ONLY
 -- source of truth for loot history. All code/UI reads from here.
 local function sessions()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	cdb.lootSessions = cdb.lootSessions or {}
 	return cdb.lootSessions
 end
@@ -538,7 +596,7 @@ local function isRaidSession(s)
 end
 
 local function migrateTrashLabels()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	if not cdb or cdb.trashMigrated then return end
 	cdb.trashMigrated = true
 	local list = cdb.lootSessions
@@ -579,7 +637,7 @@ L.MigrateTrashLabels = migrateTrashLabels
 -- Persisted in cdb so it survives a /reload mid-run.
 -- ------------------------------------------------------------
 local function runToken(bump)
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	cdb.lootRunToken = cdb.lootRunToken or 0
 	if bump then cdb.lootRunToken = cdb.lootRunToken + 1 end
 	return cdb.lootRunToken
@@ -642,6 +700,12 @@ function runKey()
 	-- outside an instance: group by day+zone (rare; world loot)
 	return "day|" .. date("%Y-%m-%d") .. "|" .. name, name, diff, mapID
 end
+
+-- Shared: any module that needs to say "this run" should mean the SAME run loot
+-- does, or two features end up disagreeing about what one raid was. The key is
+-- the lockout, so a raid continued the next day is still the same run.
+--   returns key, zoneName, difficulty, mapID
+function L.RunKey() return runKey() end
 
 local function newSession(key, name, diff, mapID)
 	local list = sessions()
@@ -791,7 +855,12 @@ local DROP_MATCH_WINDOW = 300
 -- (The UI draws the same distinction as `heldByML` when it decides what to show.)
 local function unowned(dp)
 	if not dp then return false end
+	-- Sitting in the ML's bags waiting to be handed out: still open.
+	if dp.heldBy and dp.heldBy ~= "" and (not dp.receivedBy or dp.receivedBy == "") then
+		return true
+	end
 	if not dp.receivedBy or dp.receivedBy == "" then return true end
+	-- Rows captured before `heldBy` existed stored the ML in receivedBy.
 	local ml = L.MasterLooterName and L.MasterLooterName()
 	return ml ~= nil and dp.receivedBy == ml
 end
@@ -919,7 +988,12 @@ end
 -- Only ever CORRECTS a name to the item's true boss; it never invents one for an item we
 -- don't know (tokens, gems, BoEs, patterns keep the scanner's guess) and never touches a
 -- drop already sitting on the right page.
-local function itemBossFix(boss, id)
+-- BoE is the exception: a Bind-on-Equip piece sits in a boss's table but ALSO drops from
+-- trash anywhere in the instance, so its id does not identify an encounter. Correcting one
+-- invents a kill -- a trash BoE was relabelled "Rotface" on a night that stopped at
+-- Saurfang. BoEs keep whatever the scanner said (usually the honest "Trash").
+local function itemBossFix(boss, id, boe)
+	if boe then return boss end
 	local real = OkanvilItemBoss and id and OkanvilItemBoss[id]
 	if not real or real == boss then return boss end
 	return real
@@ -930,7 +1004,7 @@ local function storeDrop(boss, id, link, name, rarity, boe, rollID, rollDur, all
 	if not acceptItem(id, rarity, name) then return nil end
 	-- Correct BEFORE the dedup check below: dropExists() keys on (id, boss), so a wrong
 	-- boss here would look like a different drop and double-record the same item.
-	boss = itemBossFix(boss, id)
+	boss = itemBossFix(boss, id, boe)
 	-- No session yet (raid lockout still unknown) -> park the drop in pendingDrops.
 	-- resolveSession() moves them into the real session once the key is known, so
 	-- nothing is lost and nothing lands in the previous run's session.
@@ -1016,8 +1090,10 @@ if Okanvil.Comms then
 		if boss == "" or boss == "Trash" then
 			local s = currentSession and currentSession(false)
 			if s and s.drops then
+				local nowT = time()
 				for i = #s.drops, 1, -1 do
 					local prev = s.drops[i]
+					if prev.t and (nowT - prev.t) > BOSS_LABEL_TTL then break end
 					if prev.boss and prev.boss ~= "" and prev.boss ~= "Trash" then
 						boss = prev.boss
 						break
@@ -1071,6 +1147,46 @@ local function captureCorpse()
 	-- one scan per physical corpse
 	local lootGuid = UnitGUID and UnitGUID("target")
 	if lootGuid and scannedCorpses[lootGuid] then return end
+	-- CONTAINER GUARD: opening a bag from your own inventory (Sack of Frosty Treasures
+	-- and friends) fires the same LOOT_OPENED as a corpse, but there is no corpse behind
+	-- it -- the target is whatever happened to be selected, or nothing. Without this the
+	-- sack's contents were recorded as boss loot and, worse, the self-heal below stamped
+	-- them with the run's last real boss, so a purple out of a weekly bag was
+	-- indistinguishable from a genuine drop and inflated that player's loot priority.
+	-- A real corpse is an NPC unit that is dead; anything else is not boss loot.
+	-- A LOOT CONTAINER (chest/cache) is an object, not a corpse, so it fails the NPC test
+	-- below and used to return here -- its contents were then recorded by a later path
+	-- under whatever boss was last remembered. When the object is one we know, it NAMES
+	-- its encounter outright: the chest IS the reward for that fight, which makes it more
+	-- reliable than the scanner, not less.
+	-- 3.3.5a has no GetLootSourceInfo, a chest is never your TARGET, and the loot window
+	-- is titled just "Loot" for a container -- so nothing at LOOT_OPENED time names it.
+	-- The only place the name appears is the mouseover tooltip you had to hover to open
+	-- it, which lastContainerName captures (see the tooltip hook below).
+	local containerBoss = nil
+	if OkanvilLootContainers and lastContainerName then
+		local now = (GetTime and GetTime()) or 0
+		if (now - lastContainerAt) <= CONTAINER_HOVER_TTL then
+			containerBoss = OkanvilLootContainers[lastContainerName]
+		end
+	end
+	if containerBoss then
+		-- A chest is not a unit, so there is no GUID for scannedCorpses to key on and the
+		-- re-open guard above cannot protect it. Key it by the container's own label
+		-- instead: one scan per container per run, which is exactly how often it can drop.
+		local ckey = "container:" .. containerBoss .. ":" .. tostring(runKey and runKey())
+		if scannedCorpses[ckey] then return end
+		scannedCorpses[ckey] = true
+		-- Authoritative: pin the label and re-anchor the freshness window so the drops
+		-- about to be read below resolve to THIS encounter and not the previous kill.
+		encounterBoss = containerBoss
+		lastCorpseBoss = containerBoss
+		lastBossContactAt = (GetTime and GetTime()) or 0
+		saveBossCtx(containerBoss)
+	end
+	local looting = containerBoss or (UnitExists and UnitExists("target") and guidIsNPC(lootGuid)
+		and UnitIsDead and UnitIsDead("target"))
+	if not looting then return end
 	fireScan()   -- atualiza o boss atual ANTES de rotular o loot (timing do scanner)
 	-- Only remember a corpse as the "boss" if tryEngage() vetted it as boss-like while
 	-- it was alive (bossCids). It used to accept ANY NPC corpse, so looting a trash mob
@@ -1109,18 +1225,27 @@ local function captureCorpse()
 			end
 		end
 	end
-	local boss = resolveBoss()
+	-- The container names its own encounter, so it outranks resolveBoss() entirely --
+	-- that would otherwise prefer whatever NPC happens to be targeted while you stand at
+	-- the chest, or fall through to the previous kill still inside the label TTL.
+	local boss = containerBoss or resolveBoss()
 	-- SELF-HEAL: the kill event can be missed (you were dead, looted from range, the
 	-- boss was never targeted/mouseovered) -- and then resolveBoss() answers "Trash" and
 	-- files a whole boss drop under Trash. This is the MASTER LOOTER'S own scan (the
 	-- authoritative one), which never had the fallback the comms/announce paths already
 	-- use. Inherit the run's most recent real boss: within one run, the last credited
 	-- boss is the encounter whose loot is being handed out (shared loot tables and all).
+	-- Bounded by time: the inheritance walked the whole run, so a label from an hour
+	-- earlier was still handed to a fresh drop. Loot follows its kill within minutes;
+	-- past that the previous boss is not "the encounter being handed out" and an honest
+	-- Trash is better than a confident wrong name.
 	if boss == "" or boss == "Trash" then
 		local s = currentSession and currentSession(false)
 		if s and s.drops then
+			local nowT = time()
 			for i = #s.drops, 1, -1 do
 				local prev = s.drops[i]
+				if prev.t and (nowT - prev.t) > BOSS_LABEL_TTL then break end
 				if prev.boss and prev.boss ~= "" and prev.boss ~= "Trash" then
 					boss = prev.boss
 					break
@@ -1128,18 +1253,16 @@ local function captureCorpse()
 			end
 		end
 	end
-	-- NO "Trash" PAGE IN A RAID. A raid instance has no lootable trash worth a page --
-	-- every drop belongs to a boss. If we STILL couldn't name one (the run's very first
-	-- kill was missed, so there was no prior boss to inherit), fall back to the corpse we
-	-- just looted, then the instance name -- anything but the literal "Trash", which for
-	-- a raid is always a mislabel (and would ship to the export as boss:"Trash").
+	-- Raid trash IS lootable: ICC trash drops BoE gear, which is why the loot tables carry
+	-- a Trash section. Naming the looted corpse here invented bosses -- a trash mob in the
+	-- Plagueworks labelled a BoE "Rotface" on a night that never went past Saurfang, and
+	-- that fake name was then inherited by every later drop. Only a VETTED boss corpse may
+	-- name the page; anything else stays honest Trash.
 	if (boss == "" or boss == "Trash")
-		and IsInInstance and select(2, IsInInstance()) == "raid" then
-		if tname and tname ~= "" then
-			boss = bossLabel(cidFromGUID(guid), tname)   -- the body we're looting
-		else
-			boss = (GetInstanceInfo and (GetInstanceInfo())) or boss
-		end
+		and IsInInstance and select(2, IsInInstance()) == "raid"
+		and tname and tname ~= "" then
+		local cid = cidFromGUID(guid)
+		if cid and bossCids[cid] then boss = bossLabel(cid, tname) end
 	end
 	local n = (GetNumLootItems and GetNumLootItems()) or 0
 	if n == 0 then return end
@@ -1327,7 +1450,26 @@ local function tagReceiver(player, link)
 		target = storeDrop(boss, id, link, name, rarity, isBoE(link))
 	end
 	if target then
-		target.receivedBy = player
+		-- Under MASTER LOOT, picking an item up is not winning it.
+		--
+		-- Every drop is given to somebody to hold before it is rolled for: usually
+		-- the master looter, but just as often whoever has bag space -- the point
+		-- is that the roll happens minutes later, in chat, and THAT is what
+		-- decides the owner. Recording the holder as the winner filled the mini
+		-- roll with one name on every row, which then had to be retyped.
+		--
+		-- So under master loot a "receives loot" line records who is HOLDING it.
+		-- A roll, an award, or a give replaces that with a real owner (those
+		-- paths write receivedBy directly and clear heldBy). Under any other loot
+		-- method the receiver IS the winner -- group loot and need-before-greed
+		-- hand the item straight to whoever won Blizzard's own roll.
+		local mlMethod = L.IsMasterLootMethod and L.IsMasterLootMethod()
+		if mlMethod and not target.receivedBy then
+			target.heldBy = player
+		else
+			target.receivedBy = player
+			target.heldBy = nil
+		end
 		-- An "everyone passed" roll can still be handed out by the master looter
 		-- afterwards, so a receiver retires the passed flag rather than coexisting
 		-- with it -- otherwise the row keeps reading "passed" over a real owner.
@@ -1477,6 +1619,7 @@ local function recordRollWon(player, link)
 	local dp = findOpenDrop(s, id, true)
 	if dp then
 		dp.receivedBy = player
+		dp.heldBy = nil                       -- a winner outranks whoever carried it
 		dp.passed = nil                       -- someone has it: it was not passed on
 		dp.rollID = nil; dp.rollStart = nil   -- para de mostrar "rolling"
 		-- Won via Disenchant: the item is about to be shattered into a shard. Remember
@@ -1640,10 +1783,14 @@ end
 -- The "X won [item]" announce their addon sends is ignored (we don't use their winner).
 local externalRollDrop = nil
 local externalRollAt = 0
-local EXTERNAL_ROLL_WINDOW = 60   -- seconds a "Roll for:" stays the active target
+-- Last roll actually captured for externalRollDrop. The window slides off THIS, so a
+-- slow roll-off (ties, re-rolls, "top 5" calls where the ML waits for stragglers)
+-- keeps its target alive as long as people are still rolling.
+local externalRollLastAt = 0
+local EXTERNAL_ROLL_WINDOW = 60   -- seconds of SILENCE before the target goes cold
 -- resolve the drop for an announced item link, mark it the external-roll target, and
 -- tell the UI to select it. findOpenDrop (defined above) prefers an un-awarded copy.
-function L.NoteExternalRoll(link)
+function L.NoteExternalRoll(link, winners)
 	if not link then return end
 	local id = itemIDFromLink(link)
 	if not id or id == 0 then return end
@@ -1724,8 +1871,24 @@ function L.NoteExternalRoll(link)
 		if L.onLoot then L.onLoot() end
 	end
 
+	-- "top 5": five copies go out on one roll-off, so the top 5 rolls each win one.
+	-- Only ever RAISE it -- a re-post of the same call without the qualifier ("[Trophy]"
+	-- pasted again to nudge stragglers) must not silently drop it back to one winner.
+	if winners and winners > 1 and winners > (dp.winners or 1) then dp.winners = winners end
+
 	externalRollDrop = dp
 	externalRollAt = (GetTime and GetTime()) or 0
+	externalRollLastAt = 0   -- new call: the window restarts from this announce
+
+	-- A NEW call retires the previous hand-roll target. handRollDrop lives for 5 minutes
+	-- with nothing tying it to what the raid is actually rolling, so leaving it armed let
+	-- an item called earlier keep swallowing rolls meant for this one -- and because the
+	-- capture is silent, the rolls simply never appeared under the item on screen.
+	if handRollDrop ~= dp then
+		handRollDrop = nil
+		handRollAt = 0
+	end
+
 	if L.onRollStart then L.onRollStart(id) end   -- roll manager pages to + selects it
 	if L.onLootWindow then L.onLootWindow() end   -- and force it open: a roll is starting
 end
@@ -1762,6 +1925,7 @@ function L.StopRoll()
 	if chan then SendChatMessage(L.RollMsg("stop"), chan) end
 	activeRoll = nil
 	externalRollDrop = nil       -- someone else's "Roll for: [item]" call
+	externalRollLastAt = 0       -- and its sliding capture window
 	handRollDrop = nil           -- an item the ML opened for a hand roll-off
 	if L.onRoll then L.onRoll() end
 end
@@ -1793,7 +1957,13 @@ local function captureRoll(msg)
 	-- clicked around during a raid.
 	if not activeRoll then
 		local dp = externalRollDrop
-		local externalLive = dp and (GetTime() - externalRollAt) <= EXTERNAL_ROLL_WINDOW
+		-- The window runs from the LAST activity, not from the announce. A roll-off
+		-- routinely outlives a fixed window from the call: people alt-tab, tie and
+		-- re-roll, and the ML waits. Measuring from the announce let the target go
+		-- cold mid-roll-off, and because the capture is silent the remaining rolls
+		-- landed nowhere -- the item just sat there reading "no rolls yet".
+		local since = externalRollLastAt > externalRollAt and externalRollLastAt or externalRollAt
+		local externalLive = dp and (GetTime() - since) <= EXTERNAL_ROLL_WINDOW
 		if not externalLive then
 			dp = L.HandRollDrop()     -- an item the ML explicitly opened for rolls
 		end
@@ -1802,6 +1972,7 @@ local function captureRoll(msg)
 		for _, e in ipairs(dp.rolls) do if e.player == key then return end end   -- first roll counts
 		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
 		dp.lastRollAt = GetTime()   -- keeps the roll-off "open" while people are rolling
+		if dp == externalRollDrop then externalRollLastAt = dp.lastRollAt end
 		L.AttributeByRoll(dp)
 		if L.onLoot then L.onLoot() end
 		if L.onRoll then L.onRoll() end
@@ -1850,13 +2021,44 @@ local function canOpenRoll(who, event)
 	return false
 end
 
+-- Words that only ever qualify HOW MANY are up or how many winners to take. They may
+-- trail a roll call without making it chatter -- "[Trophy of the Crusade] top 5" is a
+-- roll call, and rejecting it sent the whole raid's rolls to a stale target.
+local ROLL_QUALIFIERS = {
+	"top", "best", "first", "x", "each", "copies", "copy", "pcs", "pieces", "for",
+}
+
+-- HOW MANY WINNERS did the call ask for? "roll first 5" / "top 5" / "best 3" / "x2" /
+-- "2x" / "5 copies" all mean several copies go out on ONE roll-off, so the top N rolls
+-- each win one. Returns nil when the call names no count (an ordinary single winner).
+--
+-- The number must sit next to a counting word. A bare trailing number is NOT a count:
+-- raid calls carry stray digits all the time (item levels, "ICC 25", a roll addon's
+-- "(39)" counter), and reading those as a winner count handed items to half the raid.
+local COUNT_WORDS = { "top", "first", "best" }
+local function winnerCount(lower)
+	-- strip the link: its itemString is nothing but digits and would match everything
+	local rest = lower:gsub("|c%x+|hitem:.-|h.-|h|r", " "):gsub("|hitem:[^|]+|h%[.-%]|h", " ")
+	for _, w in ipairs(COUNT_WORDS) do
+		local n = rest:match("%f[%w]" .. w .. "%f[%W]%s*(%d+)")
+		if n then return tonumber(n) end
+	end
+	local n = rest:match("%f[%w]x%s*(%d+)%f[%W]") or rest:match("%f[%w](%d+)%s*x%f[%W]")
+	if n then return tonumber(n) end
+	n = rest:match("(%d+)%s*%f[%w]cop") or rest:match("(%d+)%s*%f[%w]p[ci]")
+	return n and tonumber(n) or nil
+end
+
 local function onRollAnnounce(msg, sender, event)
 	if type(msg) ~= "string" then return end
 	local lower = msg:lower()
 	-- Winner / result lines carry an item link too -> never treat them as a new roll,
 	-- or a "won" line would steal the selection back to the item that just finished.
-	if lower:find("won") or lower:find("congrat") or lower:find("wins") then return end
-	if lower:find("passed") or lower:find("disenchant") then return end
+	-- WHOLE WORDS (%f is Lua's frontier pattern). As bare substrings these hide inside
+	-- ordinary words -- "won" sits in "wound"/"wonder", "wins" in "winsome" -- so a
+	-- legitimate call carrying one was thrown away and the raid's rolls went nowhere.
+	if lower:find("%f[%w]won%f[%W]") or lower:find("congrat") or lower:find("%f[%w]wins%f[%W]") then return end
+	if lower:find("%f[%w]passed%f[%W]") or lower:find("disenchant") then return end
 
 	local link = msg:match("|c%x+|Hitem:.-|h.-|h|r") or msg:match("|Hitem:[^|]+|h%[.-%]|h")
 	if not link then return end
@@ -1876,7 +2078,7 @@ local function onRollAnnounce(msg, sender, event)
 	-- any raid warning look like a roll call.
 	if lower:find("roll") or lower:find("%f[%w]ms%f[%W]") or lower:find("%f[%w]os%f[%W]")
 		or lower:find("%f[%w]offspec%f[%W]") or lower:find("%f[%w]mainspec%f[%W]") then
-		L.NoteExternalRoll(link)
+		L.NoteExternalRoll(link, winnerCount(lower))
 		return
 	end
 
@@ -1887,8 +2089,17 @@ local function onRollAnnounce(msg, sender, event)
 	-- their own counter ("(39) [Boots of the Harsh Winter]"), and requiring a bare
 	-- link would reject every one of those and send the rolls to the wrong item.
 	local rest = msg:gsub("|c%x+|Hitem:.-|h.-|h|r", ""):gsub("|Hitem:[^|]+|h%[.-%]|h", "")
+
+	-- QUALIFIERS. A call routinely carries a short word after the link saying how many
+	-- copies are up or how many winners to take: "[Trophy] top 5", "[Trophy] best 2",
+	-- "[Trophy] x2", "[Trophy] 2x". Those are part of the call, not chatter, so drop
+	-- them before deciding whether anything meaningful is left.
+	for _, w in ipairs(ROLL_QUALIFIERS) do
+		rest = rest:gsub("%f[%w]" .. w .. "%f[%W]", " ")
+	end
+
 	rest = rest:gsub("[%s%p%d]", "")
-	if rest == "" then L.NoteExternalRoll(link) end
+	if rest == "" then L.NoteExternalRoll(link, winnerCount(lower)) end
 end
 
 -- ------------------------------------------------------------
@@ -2031,6 +2242,34 @@ function L.RollWinner(dp)
 	return best
 end
 
+-- Rolls ranked best-first, same order RollWinner picks by: MS outranks OS outright,
+-- then the higher number. Returns a NEW array -- dp.rolls keeps its arrival order,
+-- which is what the roll list on screen shows.
+function L.RollsRanked(dp)
+	if not (dp and dp.rolls) then return {} end
+	local out = {}
+	for _, e in ipairs(dp.rolls) do out[#out + 1] = e end
+	table.sort(out, function(a, b)
+		if a.kind ~= b.kind then return a.kind ~= "os" end   -- MS first
+		if (a.roll or 0) ~= (b.roll or 0) then return (a.roll or 0) > (b.roll or 0) end
+		return tostring(a.player) < tostring(b.player)        -- stable: never compares equal
+	end)
+	return out
+end
+
+-- The top N rolls, for a call that puts several copies up at once ("[Trophy of the
+-- Crusade] roll first 5" = five winners off one roll-off). n defaults to the count the
+-- call itself carried (dp.winners, set by the announce parser), else 1 -- so an
+-- ordinary single-winner roll behaves exactly as before.
+function L.RollWinners(dp, n)
+	n = n or (dp and dp.winners) or 1
+	if n < 1 then n = 1 end
+	local ranked = L.RollsRanked(dp)
+	local out = {}
+	for i = 1, math.min(n, #ranked) do out[i] = ranked[i] end
+	return out
+end
+
 -- Is a roll-off still OPEN on this drop? While it is, the top roll is only the leader --
 -- more people may yet roll higher, so nothing may be recorded as won.
 --
@@ -2076,7 +2315,22 @@ function L.AttributeByRoll(dp)
 	local best = L.RollWinner(dp)
 	if not (best and best.player and best.player ~= "") then return end
 	dp.receivedBy = best.player
+	dp.heldBy     = nil           -- a winner outranks whoever was carrying it
 	dp.rollWon    = true          -- attributed by roll, not by watching the handover
+
+	-- MULTI-WINNER call ("roll first 5"): several copies went out on one roll-off, so
+	-- the top N rolls each take one. receivedBy stays the TOP roll -- every existing
+	-- reader (the row, the export, the guild hub) understands one name -- and the full
+	-- ranked list goes alongside it for the ones that want all of them.
+	if (dp.winners or 1) > 1 then
+		local won = L.RollWinners(dp)
+		dp.wonBy = {}
+		for i, e in ipairs(won) do
+			if e.player and e.player ~= "" then
+				dp.wonBy[i] = { player = e.player, roll = e.roll or 0, kind = e.kind }
+			end
+		end
+	end
 end
 
 -- Write the winner onto the drop the UI is ACTUALLY showing.
@@ -2096,6 +2350,7 @@ local function markWinner(id, winner)
 			-- being awarded, so the winner must be allowed to overwrite the ML's name.
 			if s.drops[i].id == id and unowned(s.drops[i]) then
 				s.drops[i].receivedBy = winner
+				s.drops[i].heldBy = nil
 				s.drops[i].passed = nil
 				return true
 			end
@@ -2222,6 +2477,20 @@ local function commitAward(id, winner)
 	local res, slot = giveLootNow(id, winner)
 	L.Dbg("commitAward: giveLootNow -> " .. tostring(res) .. " slot=" .. tostring(slot))
 	local nm = (GetItemInfo(id)) or "item"
+
+	-- The roll that produced this winner, captured BEFORE activeRoll is cleared --
+	-- it is what the chat announcement and the history entry are built from.
+	local link, roll, kind
+	if activeRoll and activeRoll.id == id then link = activeRoll.link end
+	local s = activeBucket()
+	local dp = s and findAnyOpenDrop(s, id)
+	if dp then
+		link = link or dp.link
+		for _, e in ipairs(dp.rolls or {}) do
+			if e.player == winner then roll, kind = e.roll, e.kind; break end
+		end
+	end
+
 	if res == "ok" then
 		freezeManualRolls(id)
 		-- NOT recorded yet: wait for LOOT_SLOT_CLEARED / CHAT_MSG_LOOT / timeout.
@@ -2229,19 +2498,81 @@ local function commitAward(id, winner)
 			link = link, roll = roll, kind = kind }
 		awardTicker:Show()
 		Okanvil:Print("Giving " .. nm .. " to " .. winner .. "...")
+		activeRoll = nil
 	else
+		-- The give could not go through the master-loot API. That is NOT the same as
+		-- "nobody won": the roll happened, the raid saw it, and the officer still has
+		-- to hand the item over by trade. Dropping the winner here is what made the
+		-- name vanish and forced a scroll back through chat to find it -- so the
+		-- winner is RECORDED anyway and the item marked, exactly as RNTools does it
+		-- (its award never calls GiveMasterLoot at all -- it records and says "trade
+		-- me"). Only the automatic hand-over failed.
 		local why = ({
 			noapi = "master loot unavailable", notml = "loot method is not Master Loot",
-			closed = "loot window closed (item is in the bags)", noitem = "item is no longer in the window",
+			closed = "loot window closed (item is in your bags)", noitem = "item is no longer in the window",
 			nocand = winner .. " is not a valid candidate (out of range/offline)",
 		})[res] or "unknown reason"
-		-- give failed outright: do NOT mark (like RaidRoll, only real hand-overs count).
-		Okanvil:Print("|cffff5555Did NOT give " .. nm .. " to " .. winner
-			.. " -- " .. why .. ". Pass it by trade (not recorded).|r")
+
+		freezeManualRolls(id)
+		markWinner(id, winner)
+
+		Okanvil:Print("|cffffd200" .. (link or nm) .. " -> " .. winner
+			.. "|r |cff8a8d93(recorded)|r -- |cffff5555could not hand it over automatically: "
+			.. why .. ". Trade it to them.|r")
+
+		-- The one failure the officer can actually prevent next time. GiveMasterLoot
+		-- only works while the corpse's loot window is OPEN -- once it closes the item
+		-- is in your bags and the API has nothing to hand over. A roll takes ~30s, so
+		-- closing the window while it runs is the easy mistake, and nothing said so.
+		if res == "closed" or res == "noitem" then
+			Okanvil:Print("|cff8a8d93Tip: keep the boss's loot window OPEN while the roll runs "
+				.. "-- master loot can only hand an item over from an open corpse.|r")
+		end
+
+		-- Tell the raid who won regardless, so the winner is not left guessing and
+		-- nobody has to read back through chat.
+		local meName = UnitName("player") or "the ML"
+		if announceChannel then
+			local ch = announceChannel()
+			if ch then
+				local rollTag = (roll and roll > 0) and (" (" .. roll .. (kind == "os" and " OS" or "") .. ")") or ""
+				SendChatMessage((link or nm) .. " >> " .. winner .. rollTag
+					.. " -- trade " .. meName .. " for it", ch)
+			end
+		end
+
+		-- ...and WHISPER the winner. Raid chat during a pull scrolls past in
+		-- seconds, and this item needs an action FROM THEM -- they have to come and
+		-- trade. A line in the raid feed is an announcement; a whisper is a task.
+		-- Skipped when the winner is us (the client refuses a self-whisper and the
+		-- server answers with a visible "Player not found.").
+		local cdb = Okanvil.db and Okanvil.db.council
+		if winner ~= meName and (not cdb or cdb.whisperWinner ~= false) then
+			SendChatMessage(("You won %s -- trade %s for it."):format(link or nm, meName),
+				"WHISPER", nil, winner)
+		end
+		activeRoll = nil
 	end
-	activeRoll = nil
+
 	if L.onLoot then L.onLoot() end
 	if L.onRoll then L.onRoll() end
+end
+
+-- Mark a drop as decided by the COUNCIL rather than by a roll, with the response
+-- the winner gave ("bis", "os", ...). Called just before the award, so the fields
+-- are already on the drop whichever way the hand-over goes (master-loot give, or
+-- the trade fallback under auto loot).
+--
+-- Without this the history cannot tell a council award from a roll win, and the
+-- site export loses the one fact the council produced: WHY they got it.
+function L.NoteCouncilAward(id, winner, response)
+	if not (id and winner) then return end
+	local s = activeBucket()
+	local dp = s and findAnyOpenDrop(s, id)
+	if not dp then return end
+	dp.council = true
+	dp.councilResponse = response          -- nil when they never answered
+	dp.councilAt = time()
 end
 
 -- AWARD with CONFIRMATION -- SAME flow as RaidRoll RR_GiveLoot (where the idea came from):
@@ -2260,10 +2591,10 @@ function L.AwardWinner(id, winner, topRoll, spec)
 	local link
 	if activeRoll and activeRoll.id == id then link = activeRoll.link end
 	local itemStr = link or ("[" .. ((GetItemInfo(id)) or "item") .. "]")
-	local rollTag = (topRoll and topRoll > 0) and (" (rolou " .. topRoll .. (spec == "off" and " OS" or "") .. ")") or ""
+	local rollTag = (topRoll and topRoll > 0) and (" (rolled " .. topRoll .. (spec == "off" and " OS" or "") .. ")") or ""
 	Okanvil:Confirm(
-		"Tens a certeza?\nDar " .. itemStr .. " a |cffffd200" .. winner .. "|r" .. rollTag .. "?",
-		"Dar a " .. winner,                                  -- botao com o nome, como o RaidRoll
+		"Are you sure?\nGive " .. itemStr .. " to |cffffd200" .. winner .. "|r" .. rollTag .. "?",
+		"Give to " .. winner,                                -- button carries the name, like RaidRoll
 		function() commitAward(id, winner) end)
 end
 
@@ -2358,7 +2689,7 @@ end
 -- na guild, lembramos a classe para sempre.
 -- ------------------------------------------------------------
 local function classCache()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	cdb.classCache = cdb.classCache or {}
 	return cdb.classCache
 end
@@ -2526,7 +2857,7 @@ function L.ScanIDs(text)
 		if id and id > 0 and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
 	end
 	if #ids == 0 then
-		Okanvil:Print("Scan: nao encontrei nenhum item id no texto colado.")
+		Okanvil:Print("Scan: no item id found in the pasted text.")
 		return
 	end
 	local out = {}    -- id -> lines
@@ -2568,7 +2899,16 @@ end
 local function exportRunId(s)
 	local key = s.key
 	if key and key ~= "" then
-		return (key:lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", ""))
+		local id = (key:lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", ""))
+		-- A "lock|..." key ends in the lockout's EXPIRY date (time() + reset), which is
+		-- the NEXT reset -- up to a week AFTER the night that was raided. Shipping that
+		-- raw made a 09-09 raid export as "...-2026-09-16" and the hub filed it under a
+		-- date nobody raided. The id still has to be stable per lockout (so a second
+		-- night re-merges), so swap only the trailing date for the session's own day.
+		if s.day and s.day ~= "" and id:find("^lock%-") then
+			id = id:gsub("%d%d%d%d%-%d%d%-%d%d$", (s.day:gsub("[^%w]+", "-")))
+		end
+		return id
 	end
 	-- pre-key session (very old saved data): fall back to the legacy day-based id so
 	-- previously imported history keeps the same id and does not duplicate on re-import.
@@ -2642,6 +2982,13 @@ function L.RenderInline(s, rowFn, idx, y)
 			who = "  |cff8a8d93->|r |cff8a5ad9Disenchant|r"
 		elseif d.receivedBy and d.receivedBy ~= "" then
 			who = "  |cff5e6166->|r " .. L.ClassColorName(d.receivedBy)
+		elseif d.heldBy and d.heldBy ~= "" then
+			-- Under master loot somebody carries the drop until it is rolled for --
+			-- often not the master looter, just whoever had bag space. Naming them
+			-- as the receiver put one player's name against every item of the
+			-- night; this says what is actually true, and reads as unfinished
+			-- business rather than a settled award.
+			who = "  |cff5e6166with|r |cff8a8d93" .. d.heldBy .. "|r"
 		end
 		if d.rollValue then
 			who = who .. "  |cff7cfc8a[roll " .. tostring(d.rollValue)
@@ -2873,9 +3220,9 @@ local function runAutoGive()
 				if (d.action == "give" or d.action == "confirm") and not warnedThreshold then
 					local rarity = select(3, GetItemInfo(link)) or 4
 					if rarity < thr then
-						Okanvil:Print("|cffff5555Aviso:|r ha loot (ex.: " .. (iname or "orb")
-							.. ") ABAIXO do threshold do ML (" .. thr .. ") -- nao passa pelo master loot,"
-							.. " qualquer um pode pegar. Baixa o Loot Threshold para o apanhares.")
+						Okanvil:Print("|cffff5555Warning:|r there is loot (e.g. " .. (iname or "orb")
+							.. ") BELOW the ML threshold (" .. thr .. ") -- it does not go through master"
+							.. " loot, anyone can take it. Lower the Loot Threshold to catch it.")
 						warnedThreshold = true
 					end
 				end
@@ -2965,16 +3312,39 @@ local function onEnterWorld()
 	restoreBossCtx()   -- reload mid-dungeon: recover the boss page for the next drop
 end
 
+-- CONTAINER NAME VIA TOOLTIP. A chest/cache is a game object: no GUID we can read, never
+-- your target, and its loot window is titled only "Loot" -- so at LOOT_OPENED there is
+-- nothing left identifying it. But you must hover it to click it, and the tooltip shows
+-- its name. We watch the world tooltip and remember the name whenever it matches a known
+-- container, so the LOOT_OPENED a moment later can credit the right encounter.
+-- Hooked (not replaced) so other addons' tooltip work is untouched.
+if GameTooltip and GameTooltip.HookScript then
+	GameTooltip:HookScript("OnShow", function(self)
+		if not OkanvilLootContainers then return end
+		local fs = _G and _G["GameTooltipTextLeft1"]
+		local txt = fs and fs.GetText and fs:GetText()
+		if txt and txt ~= "" and OkanvilLootContainers[txt] then
+			lastContainerName = txt
+			lastContainerAt = (GetTime and GetTime()) or 0
+		end
+	end)
+end
+
 ev:SetScript("OnEvent", function(_, event, ...)
 	-- Loot module DISABLED = no loot capture, no boss scan, nothing.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive("__loot") then return end
-	if event == "LOOT_OPENED" then captureCorpse()
+	if event == "LOOT_OPENED" then
+		captureCorpse()
+		-- the award button can hand items over again while this window is open
+		if Okanvil.RollMgr and Okanvil.RollMgr.SyncAward then Okanvil.RollMgr.SyncAward() end
 	elseif event == "LOOT_SLOT_CLEARED" then
 		if pendingAward then L.Dbg("LOOT_SLOT_CLEARED slot=" .. tostring((...))) end
 		onLootSlotCleared(...)
 	elseif event == "LOOT_CLOSED" then
 		if pendingAward then L.Dbg("LOOT_CLOSED (award still pending)") end
 		onLootClosed()
+		-- window gone -> the award can only RECORD now; say so on the button
+		if Okanvil.RollMgr and Okanvil.RollMgr.SyncAward then Okanvil.RollMgr.SyncAward() end
 	elseif event == "START_LOOT_ROLL" then captureRollStart(...)
 	elseif event == "CHAT_MSG_LOOT" then onChatLoot(...)
 	elseif event == "CHAT_MSG_SYSTEM" then local a1 = ...; if a1 then captureRoll(a1) end
@@ -3010,7 +3380,7 @@ local DBG_MAX = 200
 -- o buffer vive no per-character DB (onde ja vive o loot) -> persiste entre
 -- /reload sem precisar de registar um global novo no .toc.
 local function dbgBuf()
-	local cdb = Okanvil.cdb or Okanvil.db
+	local cdb = charDB()
 	cdb.lootDbgLog = cdb.lootDbgLog or {}
 	return cdb.lootDbgLog
 end
@@ -3031,3 +3401,169 @@ end
 -- No /okdebug slash command. The one-off tooltip backfill it drove (L.BackfillTips /
 -- L.ScanIDs) is done; those functions stay in the code if ever needed again. Dev/log
 -- toggles live in Settings.
+
+-- ------------------------------------------------------------
+-- Inject a fake drop through the REAL pipeline, for another module's test mode
+-- (the council's). Same path /okloottest uses -- storeDrop, the session, the
+-- roll manager -- so the mini roll lists it exactly as it lists a real drop.
+--
+-- Returns the drop, or nil + a reason. Callers must respect `world`: outside an
+-- instance nothing records unless OkanvilLootWorldTest is set, which is what
+-- makes a solo test possible at all.
+-- Remove drops the council's test mode created, wherever they landed. Hiding
+-- via ClearActiveDrops was not enough: the test injects with world recording on
+-- (often in a city), and by the time it is switched off activeBucket() can be a
+-- different session entirely -- so the fake items came back the next time the
+-- mini roll opened. These are marked on creation and deleted by that mark.
+function L.PurgeTestDrops()
+	local n = 0
+	for _, s in ipairs(sessions() or {}) do
+		for i = #(s.drops or {}), 1, -1 do
+			-- `isTest` is the mark; the boss labels catch drops made before the
+			-- mark existed, which would otherwise sit in the list for ever with
+			-- nothing able to identify them.
+			local d = s.drops[i]
+			if d.isTest or d.boss == "Council test" or d.boss == "Loot test" then
+				table.remove(s.drops, i)
+				n = n + 1
+			end
+		end
+	end
+	-- The pending buffer too: a test run before any session existed parks there.
+	for i = #pendingDrops, 1, -1 do
+		local d = pendingDrops[i]
+		if d.isTest or d.boss == "Council test" or d.boss == "Loot test" then
+			table.remove(pendingDrops, i)
+			n = n + 1
+		end
+	end
+	if n > 0 and L.onLoot then L.onLoot() end
+	return n
+end
+
+function L.InjectTestDrop(id, bossLabel)
+	id = tonumber(id)
+	if not id then return nil, "bad id" end
+	local name, link = GetItemInfo(id)
+	if not name then return nil, "not cached" end
+	if not shouldRecordHere() then return nil, "not recording here" end
+	local _, _, rarity = GetItemInfo(id)
+	-- allowDup: two test rounds on the same item are two drops, not one.
+	local dp = storeDrop(bossLabel or "Loot test", id, link, name, rarity or 4, false, nil, nil, true)
+	if not dp then return nil, "filtered out (quality below the Log threshold)" end
+	-- MARKED as fake, so PurgeTestDrops can find it later whatever session it
+	-- ended up in, and so it can never be mistaken for a real drop in the export.
+	dp.isTest = true
+	return dp
+end
+
+-- Whether a test drop would be recorded right now, and the switch for it. The
+-- council's test mode turns this on so a solo test works outside an instance,
+-- and turns it back off when the test ends.
+function L.WorldTest(on)
+	if on == nil then return OkanvilLootWorldTest and true or false end
+	OkanvilLootWorldTest = on and true or nil
+	return OkanvilLootWorldTest and true or false
+end
+
+-- /okloottest -- put a fake drop through the REAL pipeline
+-- ------------------------------------------------------------
+-- Waiting for a raid to test a loot change is a slow feedback loop, and faking
+-- the UI proves nothing: what matters is that a drop travels the same path a real
+-- one does -- storeDrop, the session, the roll manager, the prio lookup. So this
+-- calls storeDrop() itself. The only thing it skips is the corpse.
+--
+--   /okloottest              -- drop a random item from the stored prio list
+--   /okloottest 50033        -- drop that item id
+--   /okloottest Trauma       -- drop that item by name
+--   /okloottest world        -- toggle recording outside instances (needed to test solo)
+--   /okloottest clear        -- wipe the session these fakes went into
+SLASH_OKLOOTTEST1 = "/okloottest"
+SlashCmdList["OKLOOTTEST"] = function(msg)
+	local raw = msg or ""
+	local arg = raw:gsub("^%s+", ""):gsub("%s+$", "")
+	local low = arg:lower()
+
+	if low == "world" then
+		OkanvilLootWorldTest = not OkanvilLootWorldTest or nil
+		Okanvil:Print("Loot test: recording outside instances is "
+			.. (OkanvilLootWorldTest and "|cff7cfc8aON|r" or "|cffff5555OFF|r")
+			.. ". Turn it off before real play.")
+		return
+	end
+
+	if low == "clear" then
+		local s = currentSession(false)
+		if s then
+			L.DeleteSession(s)
+			Okanvil:Print("Loot test: current session deleted.")
+		else
+			Okanvil:Print("Loot test: no open session to clear.")
+		end
+		return
+	end
+
+	-- Pick the item: an id, a name, or anything the prio list knows about.
+	local id = tonumber(arg)
+	local name, link
+	if id then
+		name, link = GetItemInfo(id)
+		if not name then
+			Okanvil:Print("Loot test: item " .. id .. " is not cached yet -- run it again in a moment.")
+			return
+		end
+	elseif arg ~= "" then
+		name, link = GetItemInfo(arg)
+		if not name then
+			Okanvil:Print("Loot test: no cached item called \"" .. arg .. "\".")
+			return
+		end
+		id = tonumber(link and link:match("item:(%d+)")) or 0
+	else
+		-- nothing given: take a random item off the prio list, so the drop is one
+		-- the council would actually have to rule on
+		local P = Okanvil.LootPrio
+		local pool = P and P.Sorted and P.Sorted() or {}
+		local withId = {}
+		for _, rec in ipairs(pool) do
+			if rec.id then withId[#withId + 1] = rec end
+		end
+		if #withId == 0 then
+			Okanvil:Print("Loot test: no prio list imported -- pass an item id instead.")
+			return
+		end
+		local pick = withId[math.random(#withId)]
+		id = pick.id
+		name, link = GetItemInfo(id)
+		if not name then
+			Okanvil:Print("Loot test: " .. (pick.n or id) .. " is not cached yet -- run it again in a moment.")
+			return
+		end
+	end
+
+	if not shouldRecordHere() then
+		Okanvil:Print("|cffff5555Loot test:|r not recording here. Use |cffffd200/okloottest world|r "
+			.. "to allow it outside an instance.")
+		return
+	end
+
+	local _, _, rarity = GetItemInfo(id)
+	-- allowDup = true: testing the same item twice in a row should give two drops,
+	-- not silently dedupe into one.
+	local dp = storeDrop("Loot test", id, link, name, rarity or 4, false, nil, nil, true)
+	if not dp then
+		Okanvil:Print("|cffff5555Loot test:|r the item was filtered out "
+			.. "(quality below the Log threshold on the Loot page?).")
+		return
+	end
+
+	Okanvil:Print("Loot test: " .. (link or name) .. " dropped.")
+	local P = Okanvil.LootPrio
+	local rec = P and P.For and P.For(name)
+	if rec then
+		Okanvil:Print("  prio: " .. (P.Plain and P.Plain(rec.p, true) or rec.p))
+	else
+		Okanvil:Print("  |cff8a8d93no prio entry for this item|r")
+	end
+	if Okanvil.RollMgr and Okanvil.RollMgr.Toggle then Okanvil.RollMgr.Toggle() end
+end

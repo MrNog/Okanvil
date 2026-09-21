@@ -13,20 +13,36 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
+-- Three pills, and the first one IS the page you land on -- the same switch the
+-- Home page uses for Online/Snapshots. What used to be here as well, and is not
+-- any more: Messages and the capture settings, which are configuration and now
+-- live in Settings > Loot, where every other module's settings are.
+--
+-- The Prio pill is officer material, so for everyone else it is not built at all
+-- rather than built and refused: a tab that only exists to say "not for you" is a
+-- worse page for the raider and tells them nothing they can act on.
+-- ONE page, no pills. Collectors is three fields armed at the start of a raid
+-- and the history is the list you read for the rest of it -- two clicks apart
+-- for no reason. The fields go on top, the list takes the rest of the window.
+--
+-- The Prio ladder moved to Loot Council: that is the council's decision about
+-- who SHOULD get an item, while this page records who DID.
 function Okanvil:BuildLoot()
 	local L = Okanvil.Loot
 	local fill = newFillPanel()
 	local host = fill.child
 	Okanvil._lootFill = fill   -- set BEFORE the tab builders run (they read it)
 
-	-- Dashboard shell (MRT/Recruit-style): header (icon + title + ML status + CTA),
-	-- tabs (History = landing / Collectors / Messages as overlays), a COLLECTED
-	-- drawer, no footer. History gets the whole main area so it scales as loot grows.
+	-- Dashboard shell: header (icon + title + ML status + CTA), three pills, no
+	-- drawer and no footer -- so a page gets the window's full width.
 	local dash = W.Dashboard(host, {
 		title = "Loot",
 		icon = Okanvil.ICONS.loot,
-		drawerWidth = 200,
-		drawerLabel = "collected",
+		-- No COLLECTED drawer. It was a per-person tally of what the speed-run had
+		-- handed out, in a column beside the page with a Show/Hide button on the
+		-- toolbar -- a column of numbers nobody opened, costing every page 200px of
+		-- width and the toolbar a button.
+		drawerWidth = 0,
 		footerHeight = 0,
 		primaryText = function() return "Mini Roll Manager" end,
 		onPrimary = function()
@@ -66,21 +82,30 @@ function Okanvil:BuildLoot()
 			end
 			return "|cffff5555not master loot|r"
 		end,
-		tabs = {
-			{ key = "collectors", label = "Collectors", height = 330, build = function(pg) Okanvil:Loot_BuildCollectors(pg) end },
-			{ key = "messages",   label = "Messages",   height = 260, build = function(pg) Okanvil:Loot_BuildMessages(pg) end },
-			{ key = "settings",   label = "Settings",   height = 160, build = function(pg) Okanvil:Loot_BuildSettings(pg) end },
-		},
+		-- pills: the tabs switch one shared body instead of covering a landing page,
+		-- so there is no "< Back" and the switch never leaves the screen
+		-- No tabs: the page is one body now (see below).
 	})
 	fill.dash = dash
 
-	Okanvil:Loot_BuildHistory(dash.main)     -- sessions accordion (landing)
-	Okanvil:Loot_BuildTally(dash.drawer)     -- COLLECTED tally (drawer)
+	-- ONE body: collectors on top, then the history list filling what is left.
+	-- The collectors block is a fixed height, so the history can anchor to its
+	-- bottom and still track the window.
+	local main = dash.main
+	local top = W.Frame(main, "page")
+	top:SetPoint("TOPLEFT", 0, 0)
+	top:SetPoint("TOPRIGHT", 0, 0)
+	top:SetHeight(128)
+	Okanvil:Loot_BuildCollectors(top)
 
-	-- refresh both when loot changes / the page shows / loot method changes
+	local hist = W.Frame(main, "page")
+	hist:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
+	hist:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", 0, 0)
+	Okanvil:Loot_BuildHistory(hist)
+
+	-- refresh when loot changes / the page shows / loot method changes
 	local function refreshAll()
 		dash:Refresh()
-		if fill._refreshTally then fill._refreshTally() end
 		if fill._rebuildHistory then fill._rebuildHistory() end
 	end
 	fill.refreshAll = refreshAll
@@ -98,174 +123,205 @@ function Okanvil:BuildLoot()
 	return fill
 end
 
--- ---- Collectors tab: Main/Frag/BoE targets + auto toggle + whisper toggle ----
+-- ---- Collectors: Main/Frag/BoE targets + the speed-run toggle ----
 --
--- Okanvil handles loot three ways; only the THIRD one lives on this tab:
+-- Okanvil handles loot three ways; only the THIRD one lives here:
 --   1. Need/Greed  -- the game's own roll. Okanvil just records what dropped.
 --   2. Master loot -- the normal flow: the Mini Roll Manager runs an MS/OS/Free
 --      roll-off, you press Award, confirm the popup, the item goes to the winner.
---   3. Speed-run   -- THIS TAB. Skips rolling at the pull: the boss is swept into
+--   3. Speed-run   -- THIS PAGE. Skips rolling at the pull: the boss is swept into
 --      one bag so the raid keeps moving, and loot is settled afterwards by roll or
 --      loot council. Every drop is still recorded and broadcast to the raid.
 --
--- The header below says this in-game, because arming the toggle silently ships
--- every BoP drop to one player and that must never be a surprise.
+-- Arming the toggle silently ships every BoP drop to one player, so the page has
+-- to say so -- but on the (?) beside the switch and in the greyed placeholder of
+-- an empty field, not in four paragraphs stacked above the controls.
 function Okanvil:Loot_BuildCollectors(p)
 	local L = Okanvil.Loot
 	local X = 8
 	if not (L and L.Collectors) then return end
 
-	-- One line: what this tab is, and that it is not the normal flow. Details on hover.
-	local intro = W.Text(p, "|cffe0b860Speed-run loot|r -- sweep the boss into one bag, settle it later. |cff8a8d93Off = normal roll + Award.|r", 10, "dim")
-	intro:SetPoint("TOPLEFT", X, -6); intro:SetPoint("RIGHT", -X, 0); intro:SetJustifyH("LEFT")
+	local TIP = "Sweeps each boss into one bag so the raid keeps moving, and the loot is "
+		.. "settled afterwards by roll or loot council.\n"
+		.. "Off: the normal flow -- roll, then Award.\n\n"
+		.. "|cffff8000BoP gear|r goes to Main loot.\n"
+		.. "|cffffd200Orbs, patterns and BoEs|r go to BoE (or Main, if BoE is empty).\n"
+		.. "|cffff5555Legendary fragments|r always ask first.\n\n"
+		.. "Leave a field empty and that loot stays on the corpse to be rolled\n"
+		.. "normally -- nothing is ever swept to anyone you did not name.\n"
+		.. "Every drop is recorded in the history and shown to the raid either way."
 
-	local warn = W.Text(p, "", 11); warn:SetPoint("TOPLEFT", X, -26); warn:SetPoint("RIGHT", -X, 0); warn:SetJustifyH("LEFT")
-	local function paintWarn()
-		if L.IsMasterLooter and L.IsMasterLooter() then
-			warn:SetText("|cff7cfc8aYou are the Master Looter -- these apply.|r")
-		else
-			local who = L.MasterLooterName and L.MasterLooterName()
-			warn:SetText("|cffff5555Auto-loot inactive (safe) -- the Master Looter is "
-				.. (who and who ~= "" and ("|r|cffffd200" .. who .. "|r") or "|cff8a8d93nobody (not master loot)|r") .. ".")
-		end
-	end
-	paintWarn()
-	local en = W.Check(p, "Speed-run auto master-loot (only when you're the Master Looter)",
+	local en = W.Check(p, "Speed-run auto master-loot",
 		function() return L.CollectorsEnabled() end,
 		function(v) L.SetCollectorsEnabled(v) end)
-	en:SetPoint("TOPLEFT", X + 2, -46)
-	en:Tooltip("Skips rolling at the pull: the boss is swept into one bag, settled later by "
-		.. "roll or loot council. Every drop is still recorded.\n"
-		.. "Only works while YOU are the Master Looter.")
+	en:SetPoint("TOPLEFT", X + 2, -10)
+	en:Tooltip(TIP)
 
-	-- Exactly what each row does. Kept next to the rows it describes.
-	local hint = W.Text(p, "|cffff8000BoP gear|r -> Main loot.   |cffffd200Orbs / patterns / BoE|r -> BoE (or Main, if BoE is empty).   |cffff5555Legendary fragments always ask first.|r\n"
-		.. "Leave a field |cffffd200EMPTY|r and that loot stays on the corpse to be rolled normally -- nothing is ever swept to anyone you did not name. "
-		.. "|cff7cfc8aEvery drop is still recorded in the history and shown to the raid.|r", 10, "dim")
-	hint:SetPoint("TOPLEFT", X, -70); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
+	-- The whole explanation now hangs off this one mark. The header already says
+	-- whether you are the Master Looter, so the state line that used to sit here
+	-- was saying it a second time.
+	local qual = W.Text(p, "|cff8a8d93-- only when you are ML|r  |cffe0b860(?)|r", "note", "dim")
+	-- anchored to the checkbox's LABEL, not the checkbox: W.Check's frame is the
+	-- 18px box alone and its text hangs outside it, so "RIGHT of en" lands on top
+	-- of that text instead of after it
+	qual:SetPoint("LEFT", en.text, "RIGHT", 10, 0)
+	local qhit = CreateFrame("Frame", nil, p)
+	qhit:SetPoint("TOPLEFT", qual, "TOPLEFT", -2, 2)
+	qhit:SetPoint("BOTTOMRIGHT", qual, "BOTTOMRIGHT", 2, -2)
+	qhit:EnableMouse(true)
+	qhit:SetScript("OnEnter", function(s)
+		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+		for line in (TIP .. "\n"):gmatch("(.-)\n") do
+			if line == "" then GameTooltip:AddLine(" ")
+			else GameTooltip:AddLine(line, 1, 1, 1, true) end
+		end
+		GameTooltip:Show()
+	end)
+	qhit:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 	local col = L.Collectors()
-	local function row(bucket, label, y)
-		local lb = W.Text(p, label, 11); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(112); lb:SetJustifyH("LEFT")
+	-- The three buttons sit at the RIGHT edge and the field stretches to meet them,
+	-- so the name has room and the row reads as one control instead of a short box
+	-- adrift in empty space.
+	local function row(bucket, label, y, emptyNote)
+		local lb = W.Text(p, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(112); lb:SetJustifyH("LEFT")
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
+
+		local cl = W.Button(p, "Clear", "danger"); cl:SetSize(48, 24)
+		cl:SetPoint("TOPRIGHT", p, "TOPRIGHT", -X, y)
+		local tg = W.Button(p, "Target"); tg:SetSize(56, 24); tg:SetPoint("RIGHT", cl, "LEFT", -6, 0)
+		local sf = W.Button(p, "Self"); sf:SetSize(48, 24); sf:SetPoint("RIGHT", tg, "LEFT", -4, 0)
+
 		local eb = W.EditBox(p, function(t) L.SetCollector(bucket, t) end)
-		eb:SetSize(150, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(col[bucket] or "")
+		eb:SetHeight(24)
+		eb:SetPoint("LEFT", lb, "RIGHT", 8, 0)
+		eb:SetPoint("RIGHT", sf, "LEFT", -6, 0)
+		eb.edit:SetText(col[bucket] or "")
+
+		-- An empty field says what an empty field DOES, inside the field itself --
+		-- greyed, and gone the moment there is a real name in it. That sentence used
+		-- to live in a paragraph above the rows, which is where nobody read it.
+		local ph = W.Text(p, "|cff6f7176" .. emptyNote .. "|r", "note", "dim")
+		ph:SetPoint("LEFT", eb, "LEFT", 8, 0)
+		local function paintPH()
+			local v = eb.edit:GetText() or ""
+			if v == "" and not eb.edit:HasFocus() then ph:Show() else ph:Hide() end
+		end
+
 		local function setName(n)
 			if not n or n == "" then return end
-			n = n:gsub("%-.*$", ""); eb.edit:SetText(n); L.SetCollector(bucket, n)
+			n = n:gsub("%-.*$", ""); eb.edit:SetText(n); L.SetCollector(bucket, n); paintPH()
 		end
-		local sf = W.Button(p, "Self"); sf:SetSize(48, 24); sf:SetPoint("LEFT", eb, "RIGHT", 6, 0)
+		eb.edit:HookScript("OnTextChanged", paintPH)
+		eb.edit:HookScript("OnEditFocusGained", paintPH)
+		eb.edit:HookScript("OnEditFocusLost", paintPH)
+
 		if sf.text then sf.text:SetText("|cff7cfc8aSelf|r") end
 		sf:SetScript("OnClick", function() setName(UnitName("player")) end)
-		local tg = W.Button(p, "Target"); tg:SetSize(56, 24); tg:SetPoint("LEFT", sf, "RIGHT", 4, 0)
 		tg:SetScript("OnClick", function()
 			local n = UnitName("target")
 			if n and UnitIsPlayer("target") then setName(n) else Okanvil:Print("Target a player first.") end
 		end)
-		local cl = W.Button(p, "Clear", "danger"); cl:SetSize(48, 24); cl:SetPoint("LEFT", tg, "RIGHT", 6, 0)
-		cl:SetScript("OnClick", function() eb.edit:SetText(""); L.SetCollector(bucket, "") end)
+		cl:SetScript("OnClick", function() eb.edit:SetText(""); L.SetCollector(bucket, ""); paintPH() end)
+		paintPH()
 	end
-	-- vertical stack: intro (-6) / warn (-26) / toggle (-46) / hint (-70, 2 lines)
-	row("main", "Main loot (BoP)", -116)
-	row("frag", "Fragments", -146)
-	row("boe", "BoE / orbs", -176)
-	local wc = W.Check(p, "Whisper winner on Award (\"you won, trade me\")",
-		function() return L.WhisperWinner() end, function(v) L.SetWhisperWinner(v) end)
-	wc:SetPoint("TOPLEFT", X + 2, -212)
+	row("main", "Main loot (BoP)", -44, "-- stays on the corpse --")
+	row("frag", "Fragments",       -76, "-- stays on the corpse --")
+	row("boe",  "BoE / orbs",      -108, "-- falls back to Main loot --")
+
+	-- The "whisper the winner" toggle used to sit here, with the message it sends
+	-- on a different page entirely -- so neither half said anything about the
+	-- other. Both are in Settings > Loot now, as one control.
 end
 
--- ---- Messages tab: editable MS/OS/Free/Whisper templates ([item] placeholder) --
-function Okanvil:Loot_BuildMessages(p)
+-- ---- Announce templates: MS/OS/Free/Whisper ([item] placeholder) ----
+-- Drawn as part of Settings > Loot (below), not a page of its own: four text
+-- boxes you fill in once were never worth a tab in front of the loot history.
+local function buildMessages(p, y0)
 	local L = Okanvil.Loot
 	local X = 8
-	if not (L and L.RollMsg) then return end
-	local hd = W.Text(p, "Announce templates -- |cffffd200[item]|r = the itemlink.", 11, "dim")
-	hd:SetPoint("TOPLEFT", X, -6); hd:SetPoint("RIGHT", -X, 0); hd:SetJustifyH("LEFT")
+	if not (L and L.RollMsg) then return y0 end
+	local hd = W.Text(p, "ANNOUNCE TEMPLATES", "note", "dim")
+	hd:SetPoint("TOPLEFT", X, y0)
+	local sub = W.Text(p, "|cffffd200[item]|r = the itemlink.", "note", "dim")
+	sub:SetPoint("TOPLEFT", X, y0 - 16)
+
 	local function row(label, y, getFn, setFn)
-		local lb = W.Text(p, label, 11); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(58); lb:SetJustifyH("LEFT")
+		local lb = W.Text(p, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(58); lb:SetJustifyH("LEFT")
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
 		local eb = W.EditBox(p, function(t) setFn(t) end)
 		eb:SetSize(360, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(getFn())
 	end
-	row("MS", -30, function() return L.RollMsg("ms") end, function(t) L.SetRollMsg("ms", t) end)
-	row("OS", -60, function() return L.RollMsg("os") end, function(t) L.SetRollMsg("os", t) end)
-	row("Free", -90, function() return L.RollMsg("free") end, function(t) L.SetRollMsg("free", t) end)
-	row("Whisper", -128, function() return L.WhisperMsg() end, function(t) L.SetWhisperMsg(t) end)
-	local wh = W.Text(p, "Whisper is sent on Award when the boss loot window is already closed.", 10, "dim")
-	wh:SetPoint("TOPLEFT", X, -156); wh:SetPoint("RIGHT", -X, 0); wh:SetJustifyH("LEFT")
-end
+	-- MS and OS only. The Free button is gone from the mini roll (four buttons in
+	-- a 270px row were unreadable), so a box to word a message nothing sends was
+	-- a setting for a feature that no longer exists. The "free" mode itself stays
+	-- as StartRoll's fallback, and its default wording with it.
+	row("MS",      y0 - 40, function() return L.RollMsg("ms") end,   function(t) L.SetRollMsg("ms", t) end)
+	row("OS",      y0 - 70, function() return L.RollMsg("os") end,   function(t) L.SetRollMsg("os", t) end)
+	-- ON AWARD: the switch and the message it sends, as one control. They used to
+	-- be on separate pages -- the toggle under Collectors, the text here -- so
+	-- neither half said anything about the other, and the box sat empty with the
+	-- switch on and nothing to explain why nothing was sent.
+	-- 30px higher than it used to be: the Free template above is gone, and the
+	-- gap it left read as a missing control.
+	local wy = y0 - 118
+	local wh = W.Text(p, "ON AWARD", "note", "dim"); wh:SetPoint("TOPLEFT", X, wy)
+	wy = wy - 24
 
--- ---- COLLECTED drawer: per-person tally of main/frag/boe given ----
-function Okanvil:Loot_BuildTally(drawer)
-	local L = Okanvil.Loot
-	local fill = Okanvil._lootFill
-	local hd = W.Text(drawer, "COLLECTED", 11, "accent"); hd:SetPoint("TOPLEFT", 10, -8); hd:Color(1, 0.82, 0)
-	local ICON = {
-		main = "Interface\\Icons\\INV_Misc_Coin_01",
-		frag = "Interface\\Icons\\INV_Misc_Gem_Diamond_07",
-		boe  = "Interface\\Icons\\INV_Misc_Orb_04",
-	}
-	local rows = {}
-	local function refresh()
-		for _, r in ipairs(rows) do r:Hide() end
-		if not (L and L.Collectors) then return end
-		local c = L.Collectors()
-		local list = {}
-		for _, bkt in ipairs({ "main", "frag", "boe" }) do
-			for name, n in pairs(c.counts[bkt] or {}) do
-				if n and n > 0 then list[#list + 1] = { name = name, n = n, icon = ICON[bkt] } end
-			end
-		end
-		table.sort(list, function(a, b) return a.n > b.n end)
-		local y = 28
-		if #list == 0 then
-			local r = rows[1]
-			if not r then r = CreateFrame("Frame", nil, drawer); r:SetSize(180, 18)
-				r.name = W.Text(r, "", 10, "dim"); r.name:SetPoint("LEFT", 10, 0); rows[1] = r end
-			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 8, -y)
-			if r.icon then r.icon:Hide() end; if r.cnt then r.cnt:SetText("") end
-			r.name:SetText("|cff888888Nothing collected yet.|r"); r:Show()
-			return
-		end
-		for i, e in ipairs(list) do
-			local r = rows[i]
-			if not r then
-				r = CreateFrame("Frame", nil, drawer); r:SetSize(184, 20)
-				r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(16, 16); r.icon:SetPoint("LEFT", 4, 0)
-				r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-				r.name = W.Text(r, "", 12); r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
-				r.cnt = W.Text(r, "", 12, "accent"); r.cnt:SetPoint("RIGHT", -6, 0); r.cnt:Color(1, 0.82, 0)
-				rows[i] = r
-			end
-			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 8, -y)
-			r.icon:Show(); r.icon:SetTexture(e.icon); r.name:SetText(e.name); r.cnt:SetText(e.n .. "x")
-			r:Show(); y = y + 22
+	local wc = W.Check(p, "Whisper the winner",
+		function() return L.WhisperWinner() end,
+		function(v) L.SetWhisperWinner(v); if p._paintWhisper then p._paintWhisper() end end)
+	wc:SetPoint("TOPLEFT", X, wy)
+	wy = wy - 26
+
+	-- Same width as the three announce templates above it, rather than stretched
+	-- to the panel's right edge. A box twice the length of anything anyone types
+	-- into it reads as asking for a paragraph.
+	local web = W.EditBox(p, function(t) L.SetWhisperMsg(t) end)
+	web:SetHeight(24)
+	web:SetPoint("TOPLEFT", X + 21, wy)
+	-- Ends where the announce boxes above it end (they start at X+66 and run 360),
+	-- so the right edges of every text field on this page line up.
+	web:SetWidth(405)
+	web.edit:SetText(L.WhisperMsg() or "")
+
+	-- The "nothing to send" warning sits BESIDE the box, not over it. Printed
+	-- inside the edit area it looked like text already typed in -- red characters
+	-- sharing the line with the cursor, which reads as a bad value rather than an
+	-- empty one.
+	local wph = W.Text(p, "", "note", "dim")
+	wph:SetPoint("LEFT", web, "RIGHT", 10, 0)
+	p._paintWhisper = function()
+		local on = L.WhisperWinner()
+		local txt = web.edit:GetText() or ""
+		web:SetAlpha(on and 1 or 0.4)
+		if on and txt == "" then
+			wph:SetText("|cffff5555nothing to send|r")
+		else
+			wph:SetText("")
 		end
 	end
-	if fill then fill._refreshTally = refresh end
-	refresh()
+	web.edit:HookScript("OnTextChanged", function() p._paintWhisper() end)
+	p._paintWhisper()
+
+	-- Room between the box and its note: at 22 they touched, and the hint read as
+	-- part of the field.
+	wy = wy - 32
+	local whh = W.Text(p, "|cff6f7176sent when the boss loot window has already closed|r", "note", "dim")
+	whh:SetPoint("TOPLEFT", X + 21, wy)
+
+	return wy - 30
 end
 
 -- ---- History (landing/main): sessions accordion with an internal-scroll detail
--- box, drawn into the Dashboard's main area. Full width now (tally is in the drawer).
+-- box. Full width: the page has no drawer beside it.
 function Okanvil:Loot_BuildHistory(main)
 	local L = Okanvil.Loot
 	local fill = Okanvil._lootFill
-	local X = 8
+	local X = Okanvil.UI.PAD_X
 
 	-- a scroll panel INSIDE main so the sessions list scrolls without resizing
-	local sf = CreateFrame("ScrollFrame", nil, main)
-	sf:SetPoint("TOPLEFT", X, -8); sf:SetPoint("BOTTOMRIGHT", -14, 8)
-	local p = CreateFrame("Frame", nil, sf); p:SetSize(10, 1); sf:SetScrollChild(p)
-	local sb = CreateFrame("Slider", nil, main)
-	sb:SetPoint("TOPRIGHT", -4, -8); sb:SetPoint("BOTTOMRIGHT", -4, 8); sb:SetWidth(4)
-	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
-	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetVertexColor(u3(C.accent)); th:SetSize(4, 40)
-	sb:SetThumbTexture(th)
-	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
-	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
-	sf:SetScript("OnSizeChanged", function() p:SetWidth(sf:GetWidth()) end)
+	local p, _, sf, sb = Okanvil.UI.DashScroll(main, X)
 
 	local rows, detailRows = {}, {}
 	local expanded = nil
@@ -308,7 +364,7 @@ function Okanvil:Loot_BuildHistory(main)
 		dbox:Hide()
 		local sessions = (L.Sessions and L.Sessions()) or {}
 		if #sessions == 0 then
-			p._empty = p._empty or W.Text(p, "", 12, "dim")
+			p._empty = p._empty or W.Text(p, "", "body", "dim")
 			p._empty:SetPoint("TOPLEFT", X, -4)
 			p._empty:SetText("|cff888888No loot logged yet. Kill a boss and open the corpse.|r")
 			p._empty:Show(); p:SetHeight(math.max(sf:GetHeight(), 40)); return
@@ -319,8 +375,8 @@ function Okanvil:Loot_BuildHistory(main)
 			local r = rows[i]
 			if not r then
 				r = W.Frame(p, "input")
-				r.title = W.Text(r, "", 13); r.title:SetPoint("TOPLEFT", 10, -6)
-				r.sub = W.Text(r, "", 10, "dim"); r.sub:SetPoint("BOTTOMLEFT", 10, 6)
+				r.title = W.Text(r, "", "body"); r.title:SetPoint("TOPLEFT", 10, -6)
+				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("BOTTOMLEFT", 10, 6)
 				r.del = W.Button(r, "X", "danger"); r.del:SetSize(24, 22); r.del:SetPoint("RIGHT", -8, 0)
 				r.export = W.Button(r, "Export"); r.export:SetSize(72, 22); r.export:SetPoint("RIGHT", r.del, "LEFT", -6, 0)
 				r.view = W.Button(r, "View"); r.view:SetSize(60, 22); r.view:SetPoint("RIGHT", r.export, "LEFT", -6, 0)
@@ -364,7 +420,20 @@ end
 
 function Okanvil:Loot_BuildSettings(p)
 	local db = self.db
-	local ll = W.Text(p, "Log items of quality", 11, "dim"); ll:SetPoint("TOPLEFT", 8, -8)
+	-- Section headings on this page are dim all-caps notes, the same as
+	-- ANNOUNCE TEMPLATES and ON AWARD below. Three of them were normal-case
+	-- "label" text, so half the page's headings looked like control labels.
+	-- Section headings on this page are dim all-caps notes, the same as
+	-- ANNOUNCE TEMPLATES and ON AWARD below. This block's headings were
+	-- normal-case "label" text, so half the page's headings looked like the
+	-- label of a control rather than the name of a group.
+	--
+	-- The quality dropdown and the two capture checkboxes sit side by side: both
+	-- are narrow, and stacked they used 90px of height for two short controls.
+	local ll = W.Text(p, "CAPTURE", "note", "dim"); ll:SetPoint("TOPLEFT", 8, -8)
+
+	local llx = W.Text(p, "Log items of quality", "label", "dim")
+	llx:SetPoint("TOPLEFT", 8, -32)
 	local RARITY = {
 		{ text = "|cff9d9d9dPoor+|r", value = 0 }, { text = "|cffffffffCommon+|r", value = 1 },
 		{ text = "|cff1eff00Uncommon+|r", value = 2 }, { text = "|cff0070ddRare+|r", value = 3 },
@@ -372,7 +441,7 @@ function Okanvil:Loot_BuildSettings(p)
 	}
 	local lootDD = W.DropDown(p, function() return RARITY end,
 		function() return db.lootThreshold or 3 end, function(v) db.lootThreshold = v end)
-	lootDD:Size(160, 22):Point("TOPLEFT", 8, -26)
+	lootDD:Size(160, 22):Point("TOPLEFT", 8, -50)
 	lootDD.refreshText = function(self)
 		local cur = db.lootThreshold or 3
 		for _, o in ipairs(RARITY) do
@@ -380,13 +449,53 @@ function Okanvil:Loot_BuildSettings(p)
 		end
 	end
 	lootDD:refreshText()
-	local rhint = W.Text(p, "Auto-capture in:", 11, "dim"); rhint:SetPoint("TOPLEFT", 8, -66)
+
+	local rhint = W.Text(p, "Auto-capture in", "label", "dim")
+	rhint:SetPoint("TOPLEFT", 220, -32)
 	local cDun = W.Check(p, "Dungeons",
 		function() return db.recordDungeon ~= false end, function(v) db.recordDungeon = v end)
-	cDun:SetPoint("TOPLEFT", 8, -86)
+	cDun:SetPoint("TOPLEFT", 220, -52)
 	local cRaid = W.Check(p, "Raids",
 		function() return db.recordRaid ~= false end, function(v) db.recordRaid = v end)
-	cRaid:SetPoint("TOPLEFT", 160, -86)
+	cRaid:SetPoint("TOPLEFT", 340, -52)
+
+	-- announce templates: everyone who awards loot needs these. It reports where
+	-- it ended, and the next block starts there -- a hard -330 below drifts the
+	-- moment anything above changes height, which is how the whisper box came to
+	-- sit on top of the priority toggle.
+	local y = buildMessages(p, -96)
+
+	-- Everything below is about the priority list, so it is only built for someone
+	-- who can see that list -- to anyone else these are controls for a thing they
+	-- cannot open.
+	if not (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) then return end
+
+	-- ---- Priority list ----------------------------------------------------
+	-- Lived as a button on the Prio tab's toolbar, which put a choice nobody
+	-- revisits after the first time in front of the list every single visit.
+	local ph = W.Text(p, "Priority list", "label", "dim"); ph:SetPoint("TOPLEFT", 8, y)
+	local cMulti = W.Check(p, "Send each name on its own line",
+		function() return Okanvil.LootPrio and Okanvil.LootPrio.MultiLine() end,
+		function() if Okanvil.LootPrio then Okanvil.LootPrio.ToggleMultiLine() end end)
+	cMulti:SetPoint("TOPLEFT", 8, y - 20)
+	cMulti:Tooltip("Off: the item and its ladder go out as one line.\n"
+		.. "On: the item first, then its top names one per line.")
+
+end
+
+-- ---- Prio tab: the officer page's ladder, pasted in and readable in-game ----
+--
+-- The website works the order out live from the roster, our logs and the loot
+-- history; a 3.3.5a client cannot reach it, so the page's export is pasted here
+-- and kept. This tab is both the paste box and the read-only copy of the list,
+-- so mid-raid you can check an item without alt-tabbing to the site.
+function Okanvil:Loot_BuildPrio(p)
+	if Okanvil.LootPrio and Okanvil.LootPrio.BuildTab then
+		Okanvil.LootPrio.BuildTab(p)
+	else
+		local t = W.Text(p, "Loot priority module not loaded.", "label", "dim")
+		t:SetPoint("TOPLEFT", 8, -8)
+	end
 end
 
 -- ------------------------------------------------------------

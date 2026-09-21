@@ -13,47 +13,54 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
+-- Modules is its own nav entry under TOOLS. It was a Settings pill, which read
+-- as configuration -- but this is not a setting, it is what the addon HAS, and
+-- somebody looking for a feature they remember will not think to open Settings.
 function Okanvil:BuildModules()
 	local fill = newFillPanel()
 	local host = fill.child
 
-	-- Dashboard shell: header only (no tabs/drawer/CTA); the module list scrolls.
 	local dash = W.Dashboard(host, {
 		title = "Modules",
-		icon = Okanvil.ICONS.modules,
+		icon = Okanvil.ICONS.modules or "Interface\\Icons\\INV_Misc_Gear_01",
 		drawerWidth = 0,
 		footerHeight = 0,
-		statusText = function()
-			local on, total = 0, 0
-			for _, m in ipairs(Okanvil.NATIVE) do total = total + 1; if Okanvil:IsModuleEnabled(m.key) then on = on + 1 end end
-			for name in pairs(Okanvil.entries) do total = total + 1; if Okanvil:IsModuleEnabled(name) then on = on + 1 end end
-			return "|cff8a8d93" .. on .. "/" .. total .. " on|r"
-		end,
 	})
-	fill.dash = dash
+	self:Settings_Modules(dash.main)
+	return fill
+end
 
-	local main = dash.main
-	local X = 14
-	local sf = CreateFrame("ScrollFrame", nil, main)
-	sf:SetPoint("TOPLEFT", X, -8); sf:SetPoint("BOTTOMRIGHT", -14, 8)
-	local p = CreateFrame("Frame", nil, sf); p:SetSize(10, 1); sf:SetScrollChild(p)
-	local sb = CreateFrame("Slider", nil, main)
-	sb:SetPoint("TOPRIGHT", -4, -8); sb:SetPoint("BOTTOMRIGHT", -4, 8); sb:SetWidth(4)
-	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
-	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetVertexColor(u3(C.accent)); th:SetSize(4, 40)
-	sb:SetThumbTexture(th)
-	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
+-- The list itself. Still callable on any panel, so the page above and anything
+-- else that wants it draw the same thing.
+function Okanvil:Settings_Modules(panel)
+	local X = 4
+
+	local hint = W.Text(panel, "Turn modules on/off for THIS character (off = hidden from the menu). Each module's settings stay shared across your toons.", "label", "dim")
+	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", panel, "RIGHT", -X, 0); hint:SetJustifyH("LEFT")
+
+	-- SCROLLED. Twelve modules is taller than the page, so the last few were cut
+	-- off with nothing to say they existed -- the list grows every time a module
+	-- is added, and the window does not.
+	local sf = CreateFrame("ScrollFrame", nil, panel)
+	sf:SetPoint("TOPLEFT", 0, -34)
+	sf:SetPoint("BOTTOMRIGHT", 0, 0)
+	Okanvil.Clip(sf)
+	local child = CreateFrame("Frame", nil, sf)
+	child:SetSize(1, 1)
+	sf:SetScrollChild(child)
 	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
-	sf:SetScript("OnSizeChanged", function() p:SetWidth(sf:GetWidth()) end)
-	local wrap = { relayout = function()
-		p:SetWidth(sf:GetWidth())
-		local maxs = math.max(0, p:GetHeight() - sf:GetHeight())
-		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
-	end }
+	sf:SetScript("OnMouseWheel", function(self, delta)
+		local cur = self:GetVerticalScroll()
+		local max = math.max(0, child:GetHeight() - self:GetHeight())
+		local nxt = cur - delta * 40
+		if nxt < 0 then nxt = 0 elseif nxt > max then nxt = max end
+		self:SetVerticalScroll(nxt)
+	end)
+	-- The child must track the scrollframe's width or the rows anchor to nothing.
+	sf:SetScript("OnSizeChanged", function(self, w) child:SetWidth(w or 1) end)
 
-	local hint = W.Text(p, "Turn modules on/off for THIS character (off = hidden from the menu). Each module's settings stay shared across your toons.", 11, "dim")
-	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", p, "RIGHT", -X, 0); hint:SetJustifyH("LEFT")
+	local p = child
+	local wrap = { relayout = function() end }
 
 	wrap.rows = {}
 	local function rebuild()
@@ -63,7 +70,11 @@ function Okanvil:BuildModules()
 		-- and the nav use.
 		local items = {}
 		for _, m in ipairs(Okanvil.NATIVE) do
-			items[#items + 1] = { key = m.key, title = m.title, icon = m.icon, desc = m.desc }
+			-- `core` modules have no switch: they are part of a page rather than a
+			-- feature you turn on, and listing them only offers a way to break it.
+			if not m.core then
+				items[#items + 1] = { key = m.key, title = m.title, icon = m.icon, desc = m.desc }
+			end
 		end
 		local names = {}
 		for name in pairs(Okanvil.entries) do names[#names + 1] = name end
@@ -76,7 +87,9 @@ function Okanvil:BuildModules()
 		end
 		if wrap.empty then wrap.empty:SetText("") end
 
-		local y = 44
+		-- Starts at 0: the hint is outside the scroll frame now, so the rows no
+		-- longer need to leave room for it.
+		local y = 0
 		for i, it in ipairs(items) do
 			local name = it.key
 			local r = wrap.rows[i]
@@ -85,8 +98,8 @@ function Okanvil:BuildModules()
 				r.icon = r:CreateTexture(nil, "ARTWORK")
 				r.icon:SetSize(24, 24); r.icon:SetPoint("LEFT", 8, 0)
 				r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-				r.title = W.Text(r, "", 13); r.title:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -1)
-				r.desc = W.Text(r, "", 10, "dim")
+				r.title = W.Text(r, "", "body"); r.title:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -1)
+				r.desc = W.Text(r, "", "note", "dim")
 				r.desc:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -15)
 				r.desc:SetPoint("RIGHT", r, "RIGHT", -110, 0); r.desc:SetJustifyH("LEFT")
 				r.toggle = W.Button(r, "")
@@ -111,19 +124,25 @@ function Okanvil:BuildModules()
 			r.toggle:SetScript("OnClick", function()
 				Okanvil:SetModuleEnabled(name, not Okanvil:IsModuleEnabled(name))
 				paintToggle()
-				dash:Refresh()
+				-- What actually has to change is the NAV: a module switched off loses
+				-- its row, one switched on gains it back. This called `dash:Refresh()`
+				-- on a global that was never defined here, so every toggle threw
+				-- "attempt to index global 'dash'".
+				Okanvil:RefreshNav()
+				-- Pages built before the toggle are stale: Home hides the snapshot
+				-- tab and the roster export when Guild is off, and it is cached, so
+				-- without this the switch appeared to do nothing at all.
+				if Okanvil.InvalidatePanel then Okanvil:InvalidatePanel("__home") end
 			end)
 			r:Show()
 			y = y + 50
 		end
-		p:SetHeight(math.max(y + 10, sf:GetHeight()))
-		wrap.relayout()
+		p:SetHeight(math.max(y + 10, 200))
 	end
 
 	wrap._rebuild = rebuild
-	local function refreshAll() dash:Refresh(); rebuild() end
-	fill:SetScript("OnShow", refreshAll)
-	return fill
+	panel:SetScript("OnShow", rebuild)
+	rebuild()
 end
 
 -- ------------------------------------------------------------

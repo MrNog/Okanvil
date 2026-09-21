@@ -14,7 +14,10 @@ Okanvil = Okanvil or {}
 local RF = Okanvil.RF                       -- parser (loaded before this file)
 
 local W = Okanvil.W
-local ICON = "Interface\\Icons\\INV_Misc_GroupLooking"
+-- Not INV_Misc_GroupLooking: PuG already uses that one, and two identical icons in
+-- the nav make those two rows impossible to tell apart at a glance. (The spyglass
+-- is taken too -- that is ID Finder.)
+local ICON = "Interface\\Icons\\Ability_Warrior_OffensiveStance"
 
 local db                                     -- OkanvilRaidFinderDB (account-wide)
 local defaults = {
@@ -26,6 +29,7 @@ local defaults = {
 	shortSpec = false,     -- short vs full spec name in the Join whisper
 	gsOverride = 0,        -- manual GS for the whisper (0 = use detected GearScore)
 	background = false,    -- keep scanning chat while the window is closed / on another tab
+	roleMine = nil,        -- "My role" filter picked (opt-in; survives a relog)
 }
 
 -- listings[sender] = { raid, instance, size, hc, weekly, roles, gs, reserved,
@@ -80,19 +84,33 @@ end
 -- 4 = 25 Heroic. So heroic == (diff == 3 or diff == 4).
 local function diff_is_heroic(d) return d == 3 or d == 4 end
 
+-- Does normal/heroic matter for THIS instance's lockout?
+--
+-- Two different WotLK shapes:
+--   * SEPARATE instances -- Trial of the Crusader and Trial of the GRAND Crusader
+--     report the same name and size but are distinct raids. You can be saved to
+--     one and free to run the other, so the difficulty must match.
+--   * SHARED lockout -- ICC, Ruby Sanctum and Ulduar pick hard modes per boss
+--     INSIDE a single raid ID. Clearing ICC10 heroic saves you to ICC10 full stop;
+--     there is no separate normal lockout to run. Comparing difficulty here marked
+--     an ICC10 HC save as "not saved" for an ICC10 normal listing, which is the
+--     opposite of the truth -- you cannot enter either.
+local SHARED_LOCKOUT = {
+	["icecrown citadel"]   = true,
+	["the ruby sanctum"]   = true,
+	["ruby sanctum"]       = true,
+	["ulduar"]             = true,
+}
+
 local function raid_lock_info(instance, size, heroic)
 	if not instance or not size then return false, nil end
 	heroic = heroic and true or false
+	local shared = SHARED_LOCKOUT[instance:lower()] or false
 	for i = 1, GetNumSavedInstances() do
 		-- pos 4 = difficulty, pos 9 = maxPlayers (size)
 		local name, _, reset, sdiff, locked, _, _, _, ssize = GetSavedInstanceInfo(i)
 		if name and locked and ssize == size and name:lower() == instance:lower()
-			-- Match the DIFFICULTY too: ToC10 (normal) and ToGC10 (heroic) share the
-			-- same name AND size but are SEPARATE lockouts -- you can be saved to one
-			-- and not the other. Without this, a ToGC save marked ToC "Saved" (and
-			-- vice versa). For raids whose hard modes are per-boss (ICC/Ulduar/RS) the
-			-- server only ever reports ONE lockout, so this still reads correctly.
-			and diff_is_heroic(sdiff) == heroic then
+			and (shared or diff_is_heroic(sdiff) == heroic) then
 			return true, reset
 		end
 	end
@@ -124,6 +142,7 @@ local function record(sender, message)
 		existing.gs        = info.gs
 		existing.reserved  = info.reserved
 		existing.wantsAchiev = info.wantsAchiev
+		existing.achievId  = info.achievId
 		existing.message   = message
 		existing._flash    = now             -- brief highlight; no reorder
 	else
@@ -166,8 +185,25 @@ local function passes_filter(info)
 	if filter.size and info.size ~= filter.size then return false end
 	if filter.weekly ~= nil and (info.weekly and true or false) ~= filter.weekly then return false end
 	if filter.role then
+		-- "mine" resolves to THIS character's role at match time, so a dual-spec swap
+		-- re-filters without touching the dropdown. A listing that named a SPECIFIC spec
+		-- of our class ("need rogue") counts too, even when the generic role text didn't.
+		local want = filter.role
+		if want == "mine" then
+			want = Okanvil.RaidFinder_MyRole and Okanvil.RaidFinder_MyRole() or nil
+			if not want then return true end   -- talents not loaded: don't hide anything
+		end
 		local has = false
-		for _, r in ipairs(info.roles) do if r == filter.role then has = true break end end
+		for _, r in ipairs(info.roles) do
+			-- a Feral druid tanks OR cats, so it matches both
+			if r == want or (want == "feral" and (r == "tank" or r == "dps")) then has = true break end
+		end
+		if not has and filter.role == "mine" then
+			local _, myClass = UnitClass and UnitClass("player")
+			for _, n in ipairs(info.classNeeds or {}) do
+				if n.class == myClass then has = true break end
+			end
+		end
 		if not has then return false end
 	end
 	if db.minGS and db.minGS > 0 then
@@ -527,17 +563,38 @@ for _, a in ipairs(Okanvil.RaidFinder_Achievements) do ach_by_raid[a.raid] = a.i
 
 -- Return a chat-ready achievement link for this raid IF the player has it
 -- completed on THIS server, else nil. Fail-safe: bad id -> nil, no error.
-local function my_achievement_link(raidId)
-	local id = ach_by_raid[raidId]
+-- A link for ONE achievement id, but only if this character actually earned it.
+-- Fail-safe: an id the server doesn't know, or one we haven't completed -> nil.
+local function link_for_id(id)
 	if not id then return nil end
-	local ok, _, _, completed = pcall(GetAchievementInfo, id)
+	local ok = pcall(GetAchievementInfo, id)
 	if not ok then return nil end
 	-- GetAchievementInfo returns (id, name, points, completed, ...)
 	local _, aname, _, done = GetAchievementInfo(id)
 	if not aname then return nil end          -- id doesn't exist on this server
-	if not done then return nil end            -- player hasn't earned it
-	local link = GetAchievementLink(id)
-	return link
+	if not done then return nil end           -- player hasn't earned it
+	return GetAchievementLink(id)
+end
+
+-- What to send as proof. Preference order:
+--   1. the achievement the LEADER linked, if we have it. ToGC asks two different
+--      questions -- "Call of the Grand Crusade" (you cleared it) vs "A Tribute to
+--      Insanity" (you cleared it with all 50 attempts left) -- and answering with
+--      the other one does not address what was asked.
+--   2. our per-raid default, for ads that link nothing.
+local function my_achievement_link(raidId, askedId)
+	-- What the leader ASKED for, if we have it.
+	local asked = link_for_id(askedId)
+	if asked then return asked end
+
+	-- They asked for something specific and we do NOT have it. Falling through to
+	-- the raid default here is what sent "Call of the Grand Crusade" to someone
+	-- asking for "A Tribute to Insanity" -- a different, much harder achievement.
+	-- That reads as either a misunderstanding or a bluff, and gets you declined.
+	-- Answer with nothing instead: no proof is honest, wrong proof is not.
+	if askedId then return nil end
+
+	return link_for_id(ach_by_raid[raidId])
 end
 
 -- Player's GS read live from a GearScore addon (nil if none installed).
@@ -579,10 +636,49 @@ local function my_spec()
 	return bestName
 end
 
+-- Which role does THIS character play? Derived from the talent tab with the most points,
+-- so it follows a dual-spec swap (the events that refresh it are registered below).
+-- A rogue never wants tank/heal listings; "DPS" is the right answer for one, and the
+-- ambiguous tabs (a paladin's Protection, a druid's Feral) are resolved per class.
+local TAB_ROLE = {
+	PALADIN     = { ["Holy"] = "healer", ["Protection"] = "tank",   ["Retribution"] = "dps" },
+	WARRIOR     = { ["Protection"] = "tank", ["Arms"] = "dps", ["Fury"] = "dps" },
+	DRUID       = { ["Restoration"] = "healer", ["Feral Combat"] = "tank", ["Balance"] = "dps" },
+	PRIEST      = { ["Discipline"] = "healer", ["Holy"] = "healer", ["Shadow"] = "dps" },
+	SHAMAN      = { ["Restoration"] = "healer", ["Elemental"] = "dps", ["Enhancement"] = "dps" },
+	DEATHKNIGHT = { ["Blood"] = "tank", ["Frost"] = "dps", ["Unholy"] = "dps" },
+	MAGE = {}, WARLOCK = {}, HUNTER = {}, ROGUE = {},   -- pure DPS: any tab is dps
+}
+
+-- englishClass, and the tab name with the most points (nil if talents aren't loaded yet).
+local function my_class_tab()
+	local _, class = UnitClass and UnitClass("player")
+	if not (class and GetTalentTabInfo) then return nil, nil end
+	local bestPts, bestName = -1, nil
+	for i = 1, (GetNumTalentTabs and GetNumTalentTabs()) or 3 do
+		local name, _, pts = GetTalentTabInfo(i)
+		if pts and pts > bestPts then bestPts, bestName = pts, name end
+	end
+	return class, bestName
+end
+
+-- "tank" / "healer" / "dps", or nil while talents are still loading.
+local function my_role()
+	local class, tab = my_class_tab()
+	if not class then return nil end
+	local map = TAB_ROLE[class]
+	if not map then return "dps" end
+	-- A Feral druid is bear OR cat and the tab cannot tell them apart. Rather than guess
+	-- wrong half the time, such a spec matches BOTH roles (see passes_filter).
+	if class == "DRUID" and tab == "Feral Combat" then return "feral" end
+	return (tab and map[tab]) or "dps"
+end
+
 -- expose for the Settings "Save Raid Gear" card
 Okanvil.RaidFinder_DetectedGS = detected_gs
 Okanvil.RaidFinder_MyGS = my_gs
 Okanvil.RaidFinder_MySpec = my_spec
+Okanvil.RaidFinder_MyRole = my_role
 
 -- "inv for <raid> - <gs>gs <spec> [achiev]" -- shared by Join (sends) and /w (fills box)
 local function build_whisper(info)
@@ -592,7 +688,7 @@ local function build_whisper(info)
 	if gs then tail[#tail + 1] = math.floor(gs) .. "gs" end
 	if spec then tail[#tail + 1] = spec end
 	if #tail > 0 then msg = msg .. " - " .. table.concat(tail, " ") end
-	local link = my_achievement_link(info.raid)
+	local link = my_achievement_link(info.raid, info.achievId)
 	if link then msg = msg .. " " .. link end
 	return msg
 end
@@ -600,15 +696,35 @@ Okanvil.RaidFinder_BuildWhisper = build_whisper
 
 -- Join: send the whisper immediately.
 function Okanvil.RaidFinder_Join(info)
-	if not info or not info.sender then return end
-	SendChatMessage(build_whisper(info), "WHISPER", nil, info.sender)
+	if not info or not info.sender then
+		-- Say so rather than doing nothing: a button that silently no-ops is
+		-- indistinguishable from a button that is broken.
+		Okanvil:Print("|cffff5555No listing attached to that row -- try rescanning.|r")
+		return
+	end
+	local msg = build_whisper(info)
+	SendChatMessage(msg, "WHISPER", nil, info.sender)
+	Okanvil:Print("whispered |cffe0b860" .. info.sender .. "|r: " .. msg)
 end
 
 -- /w: just open a blank whisper to the leader (you type your own message).
 -- (Join sends the full "inv for ..." message; /w is a plain tell.)
 function Okanvil.RaidFinder_Whisper(info)
-	if not info or not info.sender then return end
-	ChatFrame_SendTell(info.sender)
+	if not info or not info.sender then
+		Okanvil:Print("|cffff5555No listing attached to that row -- try rescanning.|r")
+		return
+	end
+	-- ChatFrame_SendTell is a Blizzard UI helper; if a UI replacement has removed
+	-- it, fall back to opening the edit box by hand rather than erroring.
+	if ChatFrame_SendTell then
+		ChatFrame_SendTell(info.sender)
+	elseif ChatEdit_ActivateChat and ChatFrame1EditBox then
+		ChatFrame1EditBox:SetAttribute("chatType", "WHISPER")
+		ChatFrame1EditBox:SetAttribute("tellTarget", info.sender)
+		ChatEdit_ActivateChat(ChatFrame1EditBox)
+	else
+		Okanvil:Print("|cffff5555Could not open a whisper window.|r")
+	end
 end
 
 -- Verify the achievement-ID table against THIS server. Pops a copyable
@@ -731,14 +847,14 @@ local function make_row(parent)
 	r.ress = CreateFrame("Button", nil, r)
 	r.ress:SetSize(RESS_W, 17); r.ress:SetPoint("LEFT", COL.ress, 0)
 	Okanvil:Skin(r.ress, "input")
-	r.ress.txt = W.Text(r.ress, "", 11); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
+	r.ress.txt = W.Text(r.ress, "", "label"); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
 	r.ress:SetScript("OnEnter", function(s)
 		show_tip(s, s._res)   -- pre-built multiline list (header + item links/pills)
 	end)
 	r.ress:SetScript("OnLeave", function() hide_tip() end)
 
 	-- Saved column (are YOU locked to this raid?) -- centered under its header
-	r.saved = W.Text(r, "", 11); r.saved:SetPoint("LEFT", COL.saved, 0)
+	r.saved = W.Text(r, "", "label"); r.saved:SetPoint("LEFT", COL.saved, 0)
 	r.saved:SetWidth(44); r.saved:SetJustifyH("CENTER")
 
 	-- Action: /w  +  Join
@@ -858,16 +974,16 @@ local function buildSettings(pg)
 
 	-- ---- Save Raid Gear: shows your spec + GS, lets you override the GS, and
 	-- previews the whisper /w and Join send (spec + GS auto-filled). ----
-	local hdr = W.Text(pg, "|cffe0b860Raid Gear|r  |cff8a8d93(auto-fills /w + Join with your spec + GS)|r", 12)
+	local hdr = W.Text(pg, "|cffe0b860Raid Gear|r  |cff8a8d93(auto-fills /w + Join with your spec + GS)|r", "body")
 	hdr:SetPoint("TOPLEFT", 12, y); y = y - 22
 
-	local specLine = W.Text(pg, "", 12)
+	local specLine = W.Text(pg, "", "body")
 	specLine:SetPoint("TOPLEFT", 12, y); y = y - 22
 
 	-- GS override row: label + edit box + note
-	local ovLabel = W.Text(pg, "Override GS (blank = use detected):", 11, "dim")
+	local ovLabel = W.Text(pg, "Override GS (blank = use detected):", "label", "dim")
 	ovLabel:SetPoint("TOPLEFT", 12, y)
-	local preview = W.Text(pg, "", 11, "dim")
+	local preview = W.Text(pg, "", "label", "dim")
 	local refreshGear   -- fwd decl (edit-box callback needs it)
 	local ov = W.EditBox(pg, function(text)
 		local n = tonumber((text or ""):gsub("[^%d.]", ""))
@@ -926,7 +1042,7 @@ local function buildSettings(pg)
 	local vb = W.Button(pg, "Verify Achievement IDs")
 	vb:SetPoint("TOPLEFT", 12, y); vb:SetSize(190, 24)
 	vb:SetScript("OnClick", function() Okanvil.RaidFinder_VerifyAchievements() end)
-	local vh = W.Text(pg, "Checks the achievement link IDs against this server (OK / DIFF / NIL).", 11, "dim")
+	local vh = W.Text(pg, "Checks the achievement link IDs against this server (OK / DIFF / NIL).", "label", "dim")
 	vh:SetPoint("LEFT", vb, "RIGHT", 10, 0)
 end
 
@@ -960,7 +1076,7 @@ local function buildUI(panel)
 	bar:SetPoint("TOPLEFT", 8, -8); bar:SetPoint("TOPRIGHT", -8, -8); bar:SetHeight(24)
 
 	local function label(x, t)
-		local fs = W.Text(bar, t, 11, "dim"); fs:SetPoint("LEFT", x, 0); return fs
+		local fs = W.Text(bar, t, "label", "dim"); fs:SetPoint("LEFT", x, 0); return fs
 	end
 	-- Raid Type
 	label(0, "Raid")
@@ -985,19 +1101,25 @@ local function buildUI(panel)
 	ui.ddSize:SetPoint("LEFT", ui.ddRaid, "RIGHT", 8, 0); ui.ddSize:SetWidth(60)
 
 	-- Role
+	-- "My role" is opt-in and sticky (db.roleMine): a rogue picks it once and stops seeing
+	-- the tank/healer LFMs he can never fill.
 	ui.ddRole = W.DropDown(bar,
-		function() return { "All", "Tank", "Heal", "DPS" } end,
+		function() return { "All", "My role", "Tank", "Heal", "DPS" } end,
 		function()
+			if filter.role == "mine" then return "My role" end
 			if filter.role == "tank" then return "Tank" end
 			if filter.role == "healer" then return "Heal" end
 			if filter.role == "dps" then return "DPS" end
 			return "All"
 		end,
 		function(v)
-			filter.role = (v == "Tank" and "tank") or (v == "Heal" and "healer") or (v == "DPS" and "dps") or nil
+			filter.role = (v == "My role" and "mine") or (v == "Tank" and "tank")
+				or (v == "Heal" and "healer") or (v == "DPS" and "dps") or nil
+			db.roleMine = (filter.role == "mine") or nil   -- remember the opt-in across sessions
 			Okanvil.RaidFinder_Render()
 		end)
-	ui.ddRole:SetPoint("LEFT", ui.ddSize, "RIGHT", 8, 0); ui.ddRole:SetWidth(70)
+	ui.ddRole:SetPoint("LEFT", ui.ddSize, "RIGHT", 8, 0); ui.ddRole:SetWidth(80)
+	if db.roleMine then filter.role = "mine" end
 
 	-- Weekly
 	ui.ddWeekly = W.DropDown(bar,
@@ -1023,7 +1145,7 @@ local function buildUI(panel)
 	end)
 
 	-- count line
-	ui.count = W.Text(main, "0 active listings", 12, "dim")
+	ui.count = W.Text(main, "0 active listings", "body", "dim")
 	ui.count:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -10)
 
 	-- opaque list well (dark panel) so the game world never shows through
@@ -1034,10 +1156,10 @@ local function buildUI(panel)
 	-- column header row (inside the well, opaque strip)
 	local hdr = W.Frame(well, "input")
 	hdr:SetPoint("TOPLEFT", 2, -2); hdr:SetPoint("TOPRIGHT", -2, 0); hdr:SetHeight(18)
-	local function colh(x, t) local fs = W.Text(hdr, t, 11, "accent"); fs:SetPoint("LEFT", x + 4, 0) end
+	local function colh(x, t) local fs = W.Text(hdr, t, "label", "accent"); fs:SetPoint("LEFT", x + 4, 0) end
 	-- centered header (over a fixed-width cell): x = cell left, w = cell width
 	local function colhC(x, w, t)
-		local fs = W.Text(hdr, t, 11, "accent"); fs:SetJustifyH("CENTER")
+		local fs = W.Text(hdr, t, "label", "accent"); fs:SetJustifyH("CENTER")
 		fs:SetPoint("LEFT", x, 0); fs:SetWidth(w)
 	end
 
@@ -1048,7 +1170,7 @@ local function buildUI(panel)
 	local function sortHeader(x, t, key)
 		local b = CreateFrame("Button", nil, hdr)
 		b:SetHeight(18); b:SetPoint("LEFT", x, 0)
-		local fs = W.Text(b, t, 11, "accent"); fs:SetPoint("LEFT", 4, 0)
+		local fs = W.Text(b, t, "label", "accent"); fs:SetPoint("LEFT", 4, 0)
 		b:SetWidth(fs:GetStringWidth() + 18)
 		b.label, b.key = t, key
 		b:SetScript("OnClick", function()
@@ -1115,6 +1237,8 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
 	if event == "PLAYER_TALENT_UPDATE" or event == "CHARACTER_POINTS_CHANGED"
 	   or event == "ACTIVE_TALENT_GROUP_CHANGED" then
 		if Okanvil.RaidFinder_RefreshGear then Okanvil.RaidFinder_RefreshGear() end
+		-- a dual-spec swap changes what "My role" means -> re-filter the list
+		if filter.role == "mine" and Okanvil.RaidFinder_Render then Okanvil.RaidFinder_Render() end
 		return
 	end
 	if event == "ADDON_LOADED" and arg1 == "Okanvil" then

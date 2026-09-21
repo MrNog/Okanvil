@@ -1,9 +1,9 @@
-## Interface: 30300
+﻿## Interface: 30300
 ## Title: Okanvil
 ## Notes: Raid & guild toolkit -- forged by Okanor. The void in your stack trace.
 ## Author: Okanor
 ## Version: 1.2.1
-## SavedVariables: Okanvil_DB, RecruitDB, OkanvilIDsDB, OkanvilRaidFinderDB, OkanvilBugDB
+## SavedVariables: Okanvil_DB, RecruitDB, OkanvilIDsDB, OkanvilRaidFinderDB, OkanvilBugDB, OkanvilPuGDB, OkanvilNotesDB
 ## SavedVariablesPerCharacter: OkanvilLogsDB, Okanvil_CharDB
 
 Libs\LibStub\LibStub.lua
@@ -17,15 +17,17 @@ Core\Lockouts.lua
 Core\Widgets.lua
 Core\UI\Shell.lua
 Core\UI\Page_Home.lua
-Core\UI\Page_Guild.lua
 Core\UI\Page_Loot.lua
-Core\UI\Page_Invite.lua
 Core\UI\Page_Settings.lua
 Core\UI\Page_Modules.lua
 
+Modules\Inspect.lua
 Modules\Guild.lua
 Modules\Bosses-Data.lua
 Modules\ItemBoss-Data.lua
+Modules\Proficiency-Data.lua
+Modules\Council.lua
+Modules\LootPrio.lua
 Modules\Loot.lua
 Modules\LootRoll.lua
 Modules\Invite.lua
@@ -39,3 +41,18 @@ Modules\MarksBar.lua
 Modules\RaidFinder-Parser.lua
 Modules\RaidFinder.lua
 Modules\RaidFinder-Mini.lua
+Modules\Raids-Data.lua
+Modules\RaidLoot-Data.lua
+Modules\PuG.lua
+Modules\PuG-UI.lua
+Modules\Notes-Data.lua
+Modules\Notes.lua
+Modules\NotesParse.lua
+Modules\NotesWindow.lua
+Modules\NotesSync.lua
+Modules\Farm.lua
+Modules\Farm-UI.lua
+
+# Council foundation test harness -- TEMPORARY, remove with the file once the
+# council module ships. Provides /okask and /okprof only.
+Modules\CouncilTest.lua

@@ -187,8 +187,12 @@ local defaults = {
 	bgAlpha = 0.95,
 	minimapAngle = 200,
 	modules = {},      -- name -> { enabled = bool }. Absent = enabled by default.
-	brand = "RATS Guild Hub", -- GUILD SKIN shown after the fixed "Okanvil" wordmark (editable per guild; "" = none)
-	hubURL = "https://mrnog.github.io/RATS/", -- the guild's web hub
+	-- GUILD SKIN and web hub: EMPTY by default. Okanvil is not one guild's addon,
+	-- and shipping RATS in the defaults meant a fresh install -- or a character
+	-- in no guild at all -- advertised a guild it had nothing to do with.
+	-- Both are set in Settings > Branding, or with /okanvil brand|hub.
+	brand = "",
+	hubURL = "",
 	lootThreshold = 3, -- min item rarity to log: 0 poor,1 common,2 uncommon,3 rare,4 epic
 	recordDungeon = true, -- capture attendance/loot in 5-man dungeons (party instances)
 	recordRaid = true,    -- capture attendance/loot in raids
@@ -216,10 +220,16 @@ end
 -- ------------------------------------------------------------
 -- Media (shared look -- plugins use these so everything matches)
 -- ------------------------------------------------------------
+-- The size here is only the fallback for a font string created without one --
+-- the type scale (Okanvil.W.F) is what every call site actually names. There is
+-- no font slider any more: the window's Scale does the zooming, text and icons
+-- and spacing together, and a second control that stretched only text inside
+-- boxes that stayed put was never the thing people wanted.
 function Okanvil:Font()
 	local db = self.db
 	local path = LSM and LSM:Fetch("font", db.font, true)
-	return path or STANDARD_TEXT_FONT, db.fontSize, db.fontFlag
+	local size = (Okanvil.W and Okanvil.W.F and Okanvil.W.F.body) or db.fontSize or 12
+	return path or STANDARD_TEXT_FONT, size, db.fontFlag
 end
 
 function Okanvil:Texture()
@@ -544,6 +554,11 @@ end
 -- opt-in inside each module later.
 -- ------------------------------------------------------------
 function Okanvil:IsModuleEnabled(name)
+	-- __guild used to be forced on here, which made it impossible to switch off
+	-- even though the Modules list had a row for it. It drives the roster JSON
+	-- export and the automatic attendance capture -- both of which only matter to
+	-- a guild running a web hub -- so a guild without one, or a character in no
+	-- guild at all, must be able to turn it off.
 	local m = self.cdb and self.cdb.modules and self.cdb.modules[name]
 	if m and m.enabled == false then
 		return false
@@ -567,9 +582,47 @@ function Okanvil:SetModuleEnabled(name, enabled)
 	cdb.modules[name] = cdb.modules[name] or {}
 	cdb.modules[name].enabled = enabled and true or false
 	if self.RefreshNav then self:RefreshNav() end
+	-- The marks bar carries shortcuts INTO modules, so it has to repaint too --
+	-- it only re-read its gates on login and roster events, which left a button
+	-- for a module you had just switched off, still working.
+	if self.MarksBar and self.MarksBar.Refresh then self.MarksBar:Refresh() end
 	-- if the active panel was just disabled, fall back to Home
 	if not enabled and self._current == name and self.ShowPanel then
 		self:ShowPanel("__home")
+	end
+end
+
+-- ------------------------------------------------------------
+-- DBM pull -> close every Okanvil window, so the UI is out of the way the moment
+-- the raid engages. Toggleable via db.closeOnPull (default on).
+--
+-- This RETRIES. DBM on 3.3.5a is a multi-file addon that builds its callback API
+-- across its own load steps, so at our PLAYER_LOGIN `DBM.RegisterCallback` is
+-- frequently still nil -- a one-shot check there attaches nothing and, with a
+-- "already hooked" flag guarding it, never tries again. That is why the pull
+-- close silently did nothing on a client where DBM loads after us.
+-- ------------------------------------------------------------
+local DBM_HOOK_TRIES, DBM_HOOK_EVERY = 20, 1.5
+
+function Okanvil:HookDBMPull(attempt)
+	if self._dbmPullHooked then return end
+	attempt = attempt or 1
+
+	if DBM and DBM.RegisterCallback then
+		local ok = pcall(function()
+			DBM:RegisterCallback("DBM_Pull", function()
+				if Okanvil.db and Okanvil.db.closeOnPull == false then return end
+				if Okanvil.CloseAll then Okanvil:CloseAll() end
+			end)
+		end)
+		if ok then self._dbmPullHooked = true; return end
+	end
+
+	-- Not ready yet (or the register threw): come back and try again.
+	if attempt < DBM_HOOK_TRIES and self.Comms and self.Comms.After then
+		self.Comms.After(DBM_HOOK_EVERY, function()
+			Okanvil:HookDBMPull(attempt + 1)
+		end)
 	end
 end
 
@@ -615,18 +668,27 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		if Okanvil.BuildMinimap then
 			Okanvil:BuildMinimap()
 		end
-		-- DBM pull -> close every Okanvil window (get the UI out of the way on engage).
-		-- DBM fires "DBM_Pull" the moment a boss is pulled. Guarded: only if DBM is
-		-- present with its callback API, and toggleable via db.closeOnPull (default on).
-		if DBM and DBM.RegisterCallback and not Okanvil._dbmPullHooked then
-			local ok = pcall(function()
-				DBM:RegisterCallback("DBM_Pull", function()
-					if Okanvil.db and Okanvil.db.closeOnPull == false then return end
-					if Okanvil.CloseAll then Okanvil:CloseAll() end
+		Okanvil:HookDBMPull()
+
+		-- WARM THE GUILD ROSTER.
+		--
+		-- GetNumGuildMembers() answers 0 until the client has actually fetched the
+		-- roster from the server, and nothing asked for it until you opened Home --
+		-- so the first open rendered an empty/short list and only filled in a beat
+		-- later, which reads as "the addon takes a while to show up".
+		--
+		-- Asking here means the answer is already cached by the time the window is
+		-- opened. Requested twice: the very first GuildRoster() right after login can
+		-- land before the server is ready to answer it.
+		if IsInGuild and IsInGuild() and GuildRoster then
+			GuildRoster()
+			if Okanvil.Comms and Okanvil.Comms.After then
+				Okanvil.Comms.After(2, function()
+					if IsInGuild() and GuildRoster then GuildRoster() end
 				end)
-			end)
-			if ok then Okanvil._dbmPullHooked = true end
+			end
 		end
+
 		Okanvil:Print("loaded -- |cff00ff00/okanvil|r. " .. Okanvil:CountPlugins() .. " plugin(s).")
 	end
 end)
@@ -636,7 +698,10 @@ end)
 -- ------------------------------------------------------------
 SLASH_Okanvil1 = "/okanvil"
 SlashCmdList["Okanvil"] = function(arg)
-	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+	-- keep the original case for anything that takes a VALUE (a URL, a guild's
+	-- own spelling of its name); only the command word is matched lowercased
+	local raw = (arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	arg = raw:lower()
 	if arg == "tab" then
 		-- opt in to the dedicated chat tab: from now on Print() lands there
 		local f = Okanvil:DevFrame(true)
@@ -647,9 +712,54 @@ SlashCmdList["Okanvil"] = function(arg)
 		end
 		return
 	end
+	-- Branding lives here rather than on the Settings page: a guild sets its skin
+	-- and hub link once, on the day it installs Okanvil, and then never again --
+	-- which is not worth a third of the page you open to change the window scale.
+	-- /okanvil generic -- strip every guild-specific setting in one go.
+	--
+	-- The defaults ship empty now, but SavedVariables is account-wide and already
+	-- written: a brand set months ago is still there on a brand-new character in
+	-- no guild. This is the "make this install not about my guild" button.
+	if arg:find("^generic") then
+		Okanvil.db.brand  = ""
+		Okanvil.db.hubURL = ""
+		if Okanvil.headerPaintBrand then Okanvil.headerPaintBrand() end
+		if Okanvil.footerPaintHub then Okanvil.footerPaintHub() end
+		Okanvil.panels["__home"] = nil
+		Okanvil:Print("Guild skin and web hub cleared. "
+			.. "|cff8a8d93Loot priority and notes are separate -- clear those on their own pages.|r")
+		return
+	end
+	local brand = arg:find("^brand") and raw:match("^%S+%s*(.*)$") or nil
+	if brand then
+		Okanvil.db.brand = (brand ~= "" and brand) or ""
+		if Okanvil.headerPaintBrand then Okanvil.headerPaintBrand() end
+		Okanvil.panels["__home"] = nil
+		Okanvil:Print(brand ~= "" and ("guild skin set to |cffe0b860" .. brand .. "|r")
+			or "guild skin cleared -- the title bar reads just \"Okanvil\".")
+		return
+	end
+	local hub = arg:find("^hub") and raw:match("^%S+%s*(.*)$") or nil
+	if hub then
+		Okanvil.db.hubURL = (hub ~= "" and hub) or ""
+		if Okanvil.footerPaintHub then Okanvil.footerPaintHub() end
+		Okanvil:Print(hub ~= "" and ("web hub set to |cffe0b860" .. hub .. "|r")
+			or "web hub cleared.")
+		return
+	end
+	if arg == "dev" then
+		local on = not (Okanvil.db.devMode and true or false)
+		Okanvil:SetDevMode(on)
+		Okanvil:Print(on and "dev mode |cff7cfc8aON|r -- debug goes to the |cffe0b860Okanvil|r chat tab."
+			or "dev mode |cff8a8d93OFF|r.")
+		return
+	end
 	if arg == "help" or arg == "?" then
 		Okanvil:Print("commands:")
 		Okanvil:Print("  |cffffd200/okanvil|r        open/close the window   |cff8a8d93(/okanvil tab = own chat tab)|r")
+		Okanvil:Print("  |cffffd200/okanvil brand <name>|r  your guild's skin  |cff8a8d93(empty = clear)|r")
+		Okanvil:Print("  |cffffd200/okanvil hub <url>|r     web hub link      |cff8a8d93(empty = clear)|r")
+		Okanvil:Print("  |cffffd200/okanvil dev|r          debug to the Okanvil chat tab")
 		Okanvil:Print("  |cffffd200/okroll|r         mini roll manager")
 		Okanvil:Print("  |cffffd200/okerr|r          error log  |cff8a8d93(clear)|r")
 		Okanvil:Print("  |cffffd200/okfocus|r    release a stuck keyboard focus")
@@ -667,11 +777,22 @@ SlashCmdList["OKFOCUS"] = function()
 	Okanvil:Print("released keyboard focus.")
 end
 
--- Dev mode has no slash command -- it's a toggle in Settings (Okanvil:SetDevMode,
--- default OFF). Debug output goes to the "Okanvil" chat tab when it's on.
+-- Dev mode is /okanvil dev (default OFF). It had a checkbox on a Settings page of
+-- its own, which is a screen for a switch only its author ever flips. Debug
+-- output goes to the "Okanvil" chat tab while it is on.
 
 -- /okerr        -- show the persisted error log (copyable; survives logout)
 -- /okerr clear  -- wipe it
+-- /okver -- who in the group or guild is running Okanvil, and which build.
+-- Not council-specific: a version mismatch is the first thing to rule out for
+-- ANY "it works for me but not for him" report, and the window was previously
+-- reachable only by opening the Settings page and scrolling to find it.
+SLASH_OKVER1 = "/okver"
+SlashCmdList["OKVER"] = function()
+	if Okanvil.ShowVersionChecker then Okanvil:ShowVersionChecker()
+	else Okanvil:Print("|cffff5555Version checker unavailable.|r") end
+end
+
 SLASH_OKERR1 = "/okerr"
 SlashCmdList["OKERR"] = function(arg)
 	arg = (arg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")

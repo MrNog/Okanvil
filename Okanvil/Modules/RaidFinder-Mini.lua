@@ -21,24 +21,34 @@ local ADDON = "Okanvil-RaidFinder"
 
 local S            -- Okanvil.RaidFinder_Shared (resolved on first open)
 local win          -- the floating window (built lazily)
-local ROW_H = 18   -- tight rows to match the reference image
-local MAX_ROWS = 16
-local WIN_W = 360
+-- Sized to be READ, not to be small. The rows were 18px with 10-11px text, which
+-- is smaller than anything else in the addon -- a list you skim mid-raid for a
+-- raid to join is the last place to save pixels.
+local ROW_H = 24
+-- VISIBLE_ROWS sizes the window; MAX_ROWS is how many listings the list will
+-- hold. They used to be the same number, which is why the list never scrolled:
+-- the window was always exactly tall enough for every row it would ever draw,
+-- so the scroll range came out as zero no matter how many raids were up.
+local VISIBLE_ROWS = 11
+local MAX_ROWS = 60
+local WIN_W = 460
 
 -- mini-window column x-offsets (inside the row). Kept compact.
 -- Rows are clipped to the scroll interior (WIN_W - 12px well pad - 12px scrollbar
 -- gutter ~= 336px), so the last column (Join, +32w) must end before that edge or it
 -- gets cut off. Join right edge = 278 + 32 = 310, leaving ~22px clearance.
 -- Raid slot = gs - raid - 4 = 60px, which still fits the widest label ("Naxx10 Wk").
+-- Column x-offsets inside a row, widened with the window so the longer raid names
+-- and sender names stop being cut off.
 local M = {
-	raid   = 6,
-	gs     = 70,
-	sender = 108,
-	ress   = 200,
-	wsp    = 250,
-	join   = 278,
+	raid   = 8,
+	gs     = 92,
+	sender = 140,
+	ress   = 262,
+	wsp    = 322,
+	join   = 360,
 }
-local RESS_W = 40
+local RESS_W = 48
 
 local function C() return Okanvil.Colors end
 
@@ -81,29 +91,29 @@ local function make_row(parent)
 	r:SetScript("OnLeave", function(s) s._hl:SetVertexColor(1, 1, 1, 0); S.hide_tip() end)
 
 	local function fs(x, size, w)
-		local t = W.Text(r, "", size or 11)
+		local t = W.Text(r, "", size or "body")
 		t:SetPoint("LEFT", x, 0); t:SetJustifyH("LEFT")
 		if w then t:SetWidth(w) end
 		return t
 	end
-	r.raid   = fs(M.raid, 11, M.gs - M.raid - 4)
-	r.gs     = fs(M.gs, 11)
-	r.sender = fs(M.sender, 11, M.ress - M.sender - 4)
+	r.raid   = fs(M.raid, "body", M.gs - M.raid - 4)
+	r.gs     = fs(M.gs, "body")
+	r.sender = fs(M.sender, "body", M.ress - M.sender - 4)
 
 	-- Ress chip (bordered YES/NO) with the shared reserved-loot tooltip
 	r.ress = CreateFrame("Button", nil, r)
-	r.ress:SetSize(RESS_W, 15); r.ress:SetPoint("LEFT", M.ress, 0)
+	r.ress:SetSize(RESS_W, 19); r.ress:SetPoint("LEFT", M.ress, 0)
 	Okanvil:Skin(r.ress, "input")
-	r.ress.txt = W.Text(r.ress, "", 10); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
+	r.ress.txt = W.Text(r.ress, "", "label"); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
 	r.ress:SetScript("OnEnter", function(s) S.show_tip(s, s._res) end)
 	r.ress:SetScript("OnLeave", function() S.hide_tip() end)
 
 	-- /W  +  Join (reuse the module's whisper/join)
-	r.wsp = W.Button(r, "/W"); r.wsp:SetSize(24, 15); r.wsp:SetPoint("LEFT", M.wsp, 0)
+	r.wsp = W.Button(r, "/W"); r.wsp:SetSize(30, 19); r.wsp:SetPoint("LEFT", M.wsp, 0)
 	r.wsp:SetScript("OnClick", function(s)
 		if s._info then Okanvil.RaidFinder_Whisper(s._info) end
 	end)
-	r.join = W.Button(r, "Join", "primary"); r.join:SetSize(32, 15)
+	r.join = W.Button(r, "Join", "primary"); r.join:SetSize(40, 19)
 	r.join:SetPoint("LEFT", M.join, 0)
 	r.join:SetScript("OnClick", function(s)
 		if s._info then Okanvil.RaidFinder_Join(s._info) end
@@ -206,11 +216,11 @@ local function build()
 	if not S then return nil end
 
 	local f = Okanvil:Popup("Mini Raid Browser")
-	local rows = MAX_ROWS
+	local rows = VISIBLE_ROWS
 	f:SetSize(WIN_W, 44 + 16 + rows * ROW_H + 12)  -- titlebar+count + colhdr + rows + pad
 
 	-- count / hint line under the title bar
-	f.count = W.Text(f, "", 10, "dim")
+	f.count = W.Text(f, "", "note", "dim")
 	f.count:SetPoint("TOPLEFT", 8, -30)
 
 	-- Straight through to the Raid Finder page, where the filters live. The mini list
@@ -239,7 +249,7 @@ local function build()
 	local hdr = W.Frame(well, "input")
 	hdr:SetPoint("TOPLEFT", 2, -2); hdr:SetPoint("TOPRIGHT", -2, 0); hdr:SetHeight(16)
 	local function colhC(x, w, t)
-		local fsx = W.Text(hdr, t, 10, "accent"); fsx:SetJustifyH("CENTER")
+		local fsx = W.Text(hdr, t, "label", "accent"); fsx:SetJustifyH("CENTER")
 		fsx:SetPoint("LEFT", x, 0); fsx:SetWidth(w)
 	end
 
@@ -247,7 +257,7 @@ local function build()
 	local function sortHeader(x, t, key)
 		local b = CreateFrame("Button", nil, hdr)
 		b:SetHeight(16); b:SetPoint("LEFT", x, 0)
-		local fsx = W.Text(b, t, 10, "accent"); fsx:SetPoint("LEFT", 2, 0)
+		local fsx = W.Text(b, t, "label", "accent"); fsx:SetPoint("LEFT", 2, 0)
 		b:SetWidth(fsx:GetStringWidth() + 16)
 		b.label, b.key, b.fs = t, key, fsx
 		b:SetScript("OnClick", function()

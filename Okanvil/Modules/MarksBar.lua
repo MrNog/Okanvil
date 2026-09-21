@@ -33,6 +33,14 @@ local bar
 -- shown at all -- a button into a module you switched off would do nothing.
 local SHORTCUTS = {
 	{
+		-- The addon itself, first on the bar. Every other shortcut here opens one
+		-- particular tool; this one opens the window they all live in, so it does
+		-- not need a gate -- there is nothing to switch it off.
+		key  = "okanvil",
+		icon = "Interface\\Icons\\Trade_BlackSmithing",   -- the anvil, same as the minimap
+		run  = function() Okanvil:Toggle() end,
+	},
+	{
 		key  = "loot",
 		icon = "Interface\\Icons\\INV_Misc_Coin_02",
 		gate = function() return Okanvil:IsModuleEnabled("__loot") end,
@@ -41,10 +49,42 @@ local SHORTCUTS = {
 		end,
 	},
 	{
+		key  = "prio",
+		icon = "Interface\\Icons\\INV_Misc_Book_11",
+		-- officer material: no button for anyone who could not open the list anyway
+		gate = function()
+			if not (Okanvil.LootPrio ~= nil and Okanvil:IsModuleEnabled("__loot")) then return false end
+			return not (Okanvil.U and Okanvil.U.canSeePrio) or Okanvil.U.canSeePrio()
+		end,
+		run  = function()
+			if Okanvil.LootPrio and Okanvil.LootPrio.Toggle then Okanvil.LootPrio.Toggle() end
+		end,
+	},
+	{
 		key  = "finder",
 		icon = "Interface\\Icons\\INV_Misc_GroupLooking",   -- the Raid Finder's own icon
-		gate = function() return Okanvil.RaidFinderMini_Toggle ~= nil end,
+		-- Gate on the MODULE, not on the function existing. The file loads either
+		-- way, so the function is always there -- switching the module off in
+		-- Modules left its button on the bar, still working.
+		gate = function()
+			return Okanvil.RaidFinderMini_Toggle ~= nil
+				and Okanvil:IsModuleEnabled("Okanvil-RaidFinder")
+		end,
 		run  = function() Okanvil.RaidFinderMini_Toggle() end,
+	},
+	{
+		key  = "pug",
+		-- Same texture as the PuG nav entry and page header, so the shortcut and the
+		-- page it opens read as one thing.
+		icon = "Interface\\Icons\\Ability_Warrior_RallyingCry",
+		gate = function() return Okanvil:IsModuleEnabled("Okanvil-PuG") end,
+		-- The only shortcut that opens a PAGE rather than a floating window, so it
+		-- has to raise the main window first -- ShowPanel on a hidden window would
+		-- switch the page behind it and look like nothing happened.
+		run  = function()
+			if not Okanvil.win or not Okanvil.win:IsShown() then Okanvil:Toggle() end
+			Okanvil:ShowPanel("Okanvil-PuG")
+		end,
 	},
 	{
 		key  = "buffs",
@@ -57,6 +97,14 @@ local SHORTCUTS = {
 			local RC = Okanvil.RaidCheck
 			if RC:IsToastShown() then RC:HideToast() else RC:ShowToast(true) end
 		end,
+	},
+	{
+		key  = "farm",
+		icon = "Interface\\Icons\\INV_Misc_Bag_10",
+		gate = function()
+			return Okanvil.Farm_Toggle ~= nil and Okanvil:IsModuleEnabled("Okanvil-Farm")
+		end,
+		run  = function() Okanvil.Farm_Toggle() end,
 	},
 	{
 		key  = "ready",
@@ -322,6 +370,11 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("RAID_ROSTER_UPDATE")      -- promotion/demotion changes canMark()
 ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
+-- The GUILD roster decides whether the priority shortcut is shown, and it arrives
+-- well after PLAYER_LOGIN -- so the bar was laid out while the answer was still
+-- "no guild, no ranks", and an officer (or an officer's alt) had no prio button
+-- until something raid-related happened to refresh it.
+ev:RegisterEvent("GUILD_ROSTER_UPDATE")
 ev:SetScript("OnEvent", function(_, event)
 	if event == "PLAYER_LOGIN" then
 		build()
