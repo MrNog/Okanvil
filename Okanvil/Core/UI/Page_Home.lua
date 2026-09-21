@@ -561,8 +561,19 @@ function Okanvil:BuildHome()
 					if sb then sb:SetValue(sb:GetValue() - d * (self:GetHeight() or 24)) end
 				end)
 
+				-- Whisper sits on the OUTSIDE, inv keeps its place.
+				--
+				-- Anchoring the new button to the row's right edge and hanging inv off
+				-- it leaves inv where the eye already expects it, and the zone column
+				-- reflows on its own because it is anchored to inv rather than to a
+				-- measured width.
+				row.wbtn = W.Button(row, "w", "secondary")
+				row.wbtn:SetSize(22, math.max(15, gfs + 5)); row.wbtn:SetPoint("RIGHT", -10, 0)
+				row.wbtn:Tooltip("Whisper")
+
 				row.btn = W.Button(row, "inv", "secondary")
-				row.btn:SetSize(38, math.max(15, gfs + 5)); row.btn:SetPoint("RIGHT", -10, 0)
+				row.btn:SetSize(38, math.max(15, gfs + 5))
+				row.btn:SetPoint("RIGHT", row.wbtn, "LEFT", -4, 0)
 				row.btn:Tooltip("Invite to your group/raid")
 				-- zone column: current location, right-aligned just left of the inv
 				-- button (like the default Blizzard guild list's location column).
@@ -592,6 +603,7 @@ function Okanvil:BuildHome()
 			row.main:SetFont(Okanvil:Font(), gfs - 1)
 			row.zone:SetFont(Okanvil:Font(), gfs - 1)
 			if row.btn then row.btn:SetSize(38, math.max(15, gfs + 5)) end
+			if row.wbtn then row.wbtn:SetSize(22, math.max(15, gfs + 5)) end
 			-- name column has a fixed right bound so it never runs into the rank column
 			row.name:SetPoint("RIGHT", row, "LEFT", RANK_X - 6, 0)
 			-- Just the name, class-coloured. No bullet, no icon: the rank is carried by
@@ -635,6 +647,25 @@ function Okanvil:BuildHome()
 				if InviteUnit then InviteUnit(who) else GuildInvite(who) end
 			end)
 			row.btn:SetShown(who ~= myName)
+
+			-- Open the chat box addressed to them rather than sending anything: a
+			-- button that fired a message off on one click would be a button you
+			-- could not take back.
+			--
+			-- ChatFrame_SendTell is a Blizzard UI helper, so a UI replacement can
+			-- have removed it -- same guard and fallback RaidFinder's whisper uses.
+			row.wbtn:SetScript("OnClick", function()
+				if ChatFrame_SendTell then
+					ChatFrame_SendTell(who)
+				elseif ChatEdit_ActivateChat and ChatFrame1EditBox then
+					ChatFrame1EditBox:SetAttribute("chatType", "WHISPER")
+					ChatFrame1EditBox:SetAttribute("tellTarget", who)
+					ChatEdit_ActivateChat(ChatFrame1EditBox)
+				else
+					Okanvil:Print("|cffff5555Could not open a whisper window.|r")
+				end
+			end)
+			row.wbtn:SetShown(who ~= myName)
 		end
 		local h = math.max(1, #onlineList * ROWH)
 		wrap.gchild:SetHeight(h); wrap.gchild:SetWidth(wrap.gsf:GetWidth())

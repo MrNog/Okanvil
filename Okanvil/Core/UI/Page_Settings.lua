@@ -523,19 +523,7 @@ function Okanvil:Settings_Invite(p)
 
 	refreshPreview(kwBox.edit:GetText())
 
-	-- ---- login toast ----
-	--
-	-- One switch, no rank filter. The filter box narrowed the toast to named
-	-- ranks, which is a setting nobody reaches for: you either want to know when
-	-- guildies log in or you do not, and the checkbox already says which. Leaving
-	-- the box there made the page look like it had a decision in it that it did
-	-- not.
-	local ltLbl = W.Text(p, "LOGIN TOAST", "note", "dim"); ltLbl:SetPoint("TOPLEFT", X, -158)
-	local ltChk = W.Check(p, "Pop a toast when someone logs in, with an Invite button",
-		function() return I.db().loginToast ~= false end,
-		function(v) I.db().loginToast = v and true or false end)
-	ltChk:SetPoint("TOPLEFT", X, -178)
-
-	local ltHint = W.Text(p, "Shown for everyone in the guild.", "note", "dim")
-	ltHint:SetPoint("TOPLEFT", X, -202); ltHint:SetJustifyH("LEFT")
+	-- The login toast and its switch are gone: it double-counted one person into
+	-- (+1)(+2)(+4) as the roster refreshed, and arrived late regardless. Home's
+	-- guild list answers "who is on" without guessing.
 end
