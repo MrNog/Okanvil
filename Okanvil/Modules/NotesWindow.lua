@@ -26,7 +26,7 @@ local function cfg()
 	local d = db()
 	if not d then return {} end
 	d.window = d.window or {
-		shown = false, locked = true, alpha = 0.6, size = 13,
+		locked = true, alpha = 0.6, size = 13,
 		onlyInRoom = true,   -- hide unless standing in the selected boss's room
 		w = 260, h = 190, point = nil,
 	}
@@ -356,104 +356,82 @@ function WIN.Refresh()
 	end
 end
 
-function WIN.Toggle(state)
+-- Build the frame if it is not there yet. Returns false when it cannot be, and
+-- says why -- a window that silently fails to appear before a pull is the one
+-- failure nobody can diagnose mid-raid.
+local function ensure()
 	if not db() then
 		Okanvil:Print("|cffff5555Notes not loaded yet.|r")
-		return
+		return false
 	end
 	local ok, err = pcall(build)
 	if not ok then
 		Okanvil:Print("|cffff5555Fight window failed to build:|r " .. tostring(err))
-		return
+		return false
 	end
 	if not win then
 		Okanvil:Print("|cffff5555Fight window did not build.|r")
-		return
+		return false
 	end
-	local c = cfg()
-	-- Toggle the SETTING, not the frame. Out of the boss's room the frame is
-	-- hidden while the window is on, so reading the frame meant every press out
-	-- there turned it "on" again -- and it could never be switched off, or on.
-	if state == nil then state = not c.shown end
-	c.shown = state and true or false
-	if state then
-		applyPoint(); applyLook()
-		-- PRESSING THE BUTTON OPENS THE WINDOW. Full stop.
-		--
-		-- This briefly asked ApplyVisibility to decide instead, so that turning it
-		-- on in Dalaran would not paint an ICC note over the world -- but that
-		-- made the button do nothing at all outside a boss room, which reads as
-		-- broken. "Follow the room" is what closes it when you walk out; opening
-		-- it by hand is a deliberate act and is allowed anywhere.
-		win._manual = true      -- opened by hand: the room must not close it
-		win:Show()
-		WIN.Refresh()
-	else
-		win._manual = nil
-		win:Hide()
-	end
+	return true
 end
-
--- Is the window turned ON -- not "is the frame currently painted". The header
--- button's label asks this question, and out of the boss's room the two answers
--- differ.
-function WIN.IsShown() return cfg().shown and true or false end
 
 -- Is the frame actually on screen right now?
 function WIN.IsVisible() return win and win:IsShown() or false end
 
 -- ------------------------------------------------------------
--- Visibility follows the room -- on zone changes only.
+-- Visibility follows the room, and nothing else.
 --
--- Walking into a boss's room brings the note up by itself, and walking out
--- puts it away. What it must never do is undo the button: you open the window
--- in Dalaran to read a note, and the next zone event would have closed it with
--- no explanation. The button owns `shown`; this only reacts to moving.
+-- Walking into a room a note is mapped to brings it up; walking out puts it
+-- away. There is no on/off to override that any more, which is what makes the
+-- window trustworthy: on screen means the note applies HERE. The old button
+-- could open it anywhere and then exempted it from the room check, so it hung
+-- around in cities and dungeons looking exactly like a note that had triggered.
+--
+-- "Follow the room" (onlyInRoom) is the one remaining choice: switch it off and
+-- the window stays up wherever you are, for reading a plan between pulls.
 -- ------------------------------------------------------------
 function WIN.ApplyVisibility()
-	if not win then return end
 	-- Module off: the fight window is part of Notes, so it goes away with it.
+	-- Asked FIRST, before anything is built -- a disabled module must not be the
+	-- reason a frame comes into existence.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive("Okanvil-Notes") then
-		if win:IsShown() then win:Hide() end
+		if win and win:IsShown() then win:Hide() end
 		return
 	end
-	local c = cfg()
-	if not c.shown then
-		if win:IsShown() then win:Hide() end
-		return
+	if not db() then return end
+
+	-- Does the window belong on screen here? InNoteRoom may not exist yet: this
+	-- file and Notes.lua load in .toc order and a zone event can arrive between
+	-- them, so treat a missing room check as "cannot tell" and show nothing
+	-- rather than guessing yes, which would paint a note over the world.
+	local want
+	if cfg().onlyInRoom == false then
+		want = true
+	elseif N.InNoteRoom then
+		want = N.InNoteRoom() and true or false
+	else
+		want = false
 	end
-	if c.onlyInRoom == false or not N.InNoteRoom then
-		if not win:IsShown() then win:Show(); WIN.Refresh() end
-		return
+
+	-- Built on demand: with no button to open it, the first time the window is
+	-- ever wanted is a zone event, and a nil frame here would mean it never
+	-- appeared at all. Nothing is built for a window that is not wanted.
+	if not win then
+		if not want then return end
+		if not ensure() then return end
+		applyPoint(); applyLook()
 	end
-	-- Following the room means BOTH ways. This only ever opened the window; the
-	-- closing lived in onZone and needed a real in->out transition to have been
-	-- seen, so a window that was already up in the wrong place (opened by hand,
-	-- or left over from a reload in another zone) stayed up for ever.
-	local inRoom = N.InNoteRoom()
-	if inRoom then
-		win._manual = nil                 -- back in a room: the room drives again
-		if not win:IsShown() then win:Show(); WIN.Refresh() end
-	elseif win:IsShown() and not win._manual then
-		-- Only close a window the ROOM opened. One you opened by hand stays --
-		-- closing it would undo the button press you just made, which is how it
-		-- came to look like the button did nothing.
+
+	if want and not win:IsShown() then
+		win:Show(); WIN.Refresh()
+	elseif not want and win:IsShown() then
 		win:Hide()
 	end
 end
 
--- Leaving a boss's room puts the window away again -- but only on an actual
--- move. Hiding lives here rather than in ApplyVisibility so that opening the
--- window by hand, anywhere, stays open until you close it.
-local lastRoom
+-- Zone events arrive in bursts, and the answer is the same for all of them.
 local function onZone()
-	local room = N.InNoteRoom and N.InNoteRoom() or false
-	local left = (lastRoom == true and room == false)
-	lastRoom = room
-	if left and win and win:IsShown() and cfg().onlyInRoom ~= false then
-		win:Hide()
-		return
-	end
 	WIN.ApplyVisibility()
 end
 
@@ -501,9 +479,9 @@ function WIN.ResetPosition()
 	savePoint()
 end
 
--- Restore on login if it was open when you logged out.
+-- Nothing to restore on login: the room decides, and PLAYER_ENTERING_WORLD
+-- above already asks it. This only covers the case where that fired before the
+-- notes db existed.
 local boot = CreateFrame("Frame")
 boot:RegisterEvent("PLAYER_LOGIN")
-boot:SetScript("OnEvent", function()
-	if db() and cfg().shown then WIN.Toggle(true) end
-end)
+boot:SetScript("OnEvent", function() WIN.ApplyVisibility() end)

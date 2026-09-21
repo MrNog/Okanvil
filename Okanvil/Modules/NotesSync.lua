@@ -251,6 +251,10 @@ local function askNext()
 		function()
 			d.notes[rec.name] = rec.text
 			d.stamps[rec.name] = rec.stamp
+			-- Theirs now, not yours: the page says who a note came from, and
+			-- leaving your name on text you just replaced would say you wrote it.
+			d.authors = d.authors or {}
+			d.authors[rec.name] = rec.who
 			Okanvil:Print(("Replaced your |cffffd200%s|r note with %s's."):format(rec.name, rec.who))
 			if N.Broadcast then N.Broadcast() end
 			if N.Refresh then N.Refresh() end
@@ -267,6 +271,7 @@ local function merge(list, who)
 	if not (d and list) then return 0 end
 	d.stamps = d.stamps or {}
 	d.notes = d.notes or {}
+	d.authors = d.authors or {}
 	local n, ask = 0, {}
 	for _, rec in ipairs(list) do
 		if rec.name == SLOTREC then
@@ -298,6 +303,11 @@ local function merge(list, who)
 				-- Nothing of yours here: take it.
 				d.notes[rec.name] = rec.text
 				d.stamps[rec.name] = rec.stamp
+				-- Credited to whoever sent it. A pack carries the shipped notes
+				-- too (see encode's withPack), and those are nobody's work --
+				-- but they only travel to a client that has none, where marking
+				-- them as the sender's is still truer than marking them yours.
+				d.authors[rec.name] = who
 				n = n + 1
 			elseif d.notes[rec.name] == rec.text then
 				-- Same text, newer stamp. Nothing to decide.

@@ -65,6 +65,19 @@ local ZONE_NOTE = {
 	["The Frozen Throne"]            = "The Lich King",
 
 	["The Ruby Sanctum"]             = "Halion",
+
+	-- The practice rooms: the target dummies in the capitals. A note named after
+	-- one of these runs there through this same lookup, which is the whole
+	-- reason there is no test-mode bypass any more -- you test on the real path
+	-- rather than on a flag that answers yes everywhere and then follows you
+	-- into a dungeon.
+	--
+	-- Both factions, because the note list is account-wide and an alt on the
+	-- other side would otherwise have nowhere to practise.
+	["Valley of Honor"]              = "Valley of Honor",
+	["Valley of Wisdom"]             = "Valley of Honor",
+	["The Great Forge"]              = "Valley of Honor",
+	["Hall of Arms"]                 = "Valley of Honor",
 }
 
 -- The order the list shows them in: the order you meet them, not alphabetical.
@@ -104,6 +117,14 @@ local defaults = {
 	selected = nil,    -- which note the page is showing
 	share = true,      -- swap notes with other officers automatically
 	stamps = {},       -- [name] = time() of the last edit, for the sync
+	-- [name] = who last wrote the text we hold. Your own name for a note you
+	-- typed, the sender's for one that arrived from an officer.
+	--
+	-- Needed because the notes table is ACCOUNT-WIDE while "did I write this?"
+	-- is not: an alt shares every note the main ever stored, so asking whether
+	-- a row exists -- which is all there used to be -- marked the whole list as
+	-- the alt's own work the first time it opened the page.
+	authors = {},
 	-- Role slots -> names, for the {Holy1} style tags the shipped pack uses.
 	-- EMPTY by default: they are a roster, and a roster belongs to whoever
 	-- installs this. An unset slot renders as "{Holy1}" in the note, which says
@@ -222,10 +243,34 @@ function N.Get(name)
 	return Okanvil.NotesPack and Okanvil.NotesPack[name] or nil
 end
 
--- Has the user written their own, as opposed to reading the shipped one?
-function N.IsOwn(name)
+-- Is there text of our own stored for this note, as opposed to the shipped one?
+-- Says nothing about WHO wrote it -- see N.IsOwn.
+function N.HasStored(name)
 	local t = name and db and db.notes and db.notes[name]
 	return t ~= nil and t ~= ""
+end
+
+-- Did THIS character write the note we hold?
+--
+-- Not the same question as "is there a stored note", because the notes table is
+-- account-wide and a note sent by an officer is stored exactly like one you
+-- typed. Both of those made a fresh alt show "edited" against a list it had
+-- never touched.
+--
+-- Notes stored before authors were tracked have no entry. They are reported as
+-- NOT ours: the tag is there to point out the few notes you changed, and
+-- guessing yes on every old note would bring back the wall of green it is
+-- meant to replace.
+function N.IsOwn(name)
+	if not N.HasStored(name) then return false end
+	local by = db and db.authors and db.authors[name]
+	return by ~= nil and by == (UnitName("player") or "")
+end
+
+-- Who wrote the note we hold, or nil when it predates author tracking.
+function N.AuthorOf(name)
+	if not N.HasStored(name) then return nil end
+	return db and db.authors and db.authors[name]
 end
 
 -- Does the pack carry this note, regardless of what the user has written over
@@ -284,7 +329,13 @@ function N.Set(name, text)
 	db.notes[name] = text or ""
 	-- Stamp only a real change: Commit runs on every focus loss, and re-stamping
 	-- unchanged text would make this client look newer than everyone else.
-	if old ~= db.notes[name] and N.Touch then N.Touch(name) end
+	if old ~= db.notes[name] then
+		-- Typed here, so this character owns it now -- even if the text that was
+		-- sitting there arrived from somebody else.
+		db.authors = db.authors or {}
+		db.authors[name] = UnitName("player") or ""
+		if N.Touch then N.Touch(name) end
+	end
 	if name == db.selected then N.Broadcast() end
 end
 
@@ -330,30 +381,19 @@ end
 -- 3.3.5a has no ENCOUNTER_START, so anything watching for a pull falls back to
 -- "entered combat" -- which is also true for a dungeon trash pack, a duel, or a
 -- mob on the way in. This is the question that separates those: the note only
--- belongs here if the subzone asked for it.
--- Saying YES outside a raid is always a bug: every route to yes below is meant
--- to describe a boss room, and a 5-man or the open world is neither. Rather
--- than ask the player to catch it live with a /dump they will not remember,
--- record which route answered and where -- it persists in OkanvilBugDB and
--- reads back with /okerr, or straight out of the SavedVariables file.
-local function yes(route)
-	local kind = IsInInstance and select(2, IsInInstance()) or nil
-	if kind ~= "raid" then
-		local sub = GetSubZoneText()
-		if not sub or sub == "" then sub = "-" end
-		Okanvil:Err("Notes.InNoteRoom", ("said yes via %s outside a raid -- %s / %s (instanceType=%s), note=%s")
-			:format(route, tostring(GetZoneText()), sub, tostring(kind or "none"),
-				tostring(db and db.selected)))
-		-- ...and REFUSE. This used to log the bug and then answer yes anyway, so
-		-- an ICC note ran its timers in a 5-man -- "High Energy" counting down in
-		-- Halls of Reflection. Every route to yes describes a boss room; a
-		-- dungeon or the open world is neither, so no route may say yes there.
-		--
-		-- Test mode is the one exception: it exists to run a note anywhere.
-		if not N.testMode then return false end
-	end
-	return true
-end
+-- belongs here if the room asked for it.
+--
+-- THE ROOM IS THE PROOF, not the instance type. A matched ZONE_NOTE entry says
+-- this subzone is a place a note runs; nothing more is needed, and asking
+-- IsInInstance() on top of it only adds a way to be wrong. It was wrong in the
+-- worst direction: on this client the instance type reads "none" for a second
+-- or two after zoning in, so standing in The Frost Queen's Lair with Sindragosa
+-- selected was refused eleven times in one night -- the right note, the right
+-- room, no timers.
+--
+-- The routes that do NOT name a room carry their own instance check instead
+-- (see oneRoomRaid below), because there the choice of note is the only signal
+-- and it needs the raid around it to mean anything.
 
 function N.InNoteRoom()
 	-- Off is off. The module table exists whether or not the module is enabled --
@@ -362,25 +402,15 @@ function N.InNoteRoom()
 	-- here. Without this, disabling Notes hid the tab and left the timers running.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return false end
 
-	-- Test mode: pretend we are standing in the selected note's room, wherever
-	-- we actually are. For trying the timers on a target dummy -- the raider
-	-- running only the aura has no Okanvil and is never gated, so without this
-	-- the two sides of a test behave differently and only theirs works.
-	--
-	-- Deliberately not persisted: it turns itself off at logout, because a
-	-- forgotten bypass means every trash pull runs a boss note.
-	if N.testMode then
-		if (db and db.selected) ~= nil then return yes("testMode") end
-		return false
-	end
-
-	-- No special case for the test note: Valley of Honor is in ZONE_NOTE, so the
-	-- ordinary zone lookup below answers for it exactly as it does for a boss
-	-- room. That is the point -- the test exercises the real path.
+	-- The room names a note, and it is the one you have selected. This is the
+	-- whole test, and it works the same in Icecrown and on a target dummy: add
+	-- the subzone you practise in to ZONE_NOTE and a note written for it runs
+	-- there by this very path. That is why there is no test mode -- a bypass
+	-- that says yes everywhere is a bypass you forget to switch off, and then
+	-- every trash pull runs a boss note.
 	local here = N.NoteForHere()
 	if here then
-		if here == (db and db.selected) then return yes("zone:" .. here) end
-		return false
+		return here == (db and db.selected)
 	end
 
 	-- A one-room raid has no subzone to ask. Trial of the Crusader is a single
@@ -388,9 +418,13 @@ function N.InNoteRoom()
 	-- returning false would mean the timers never start, however carefully the
 	-- note was picked. Here the CHOICE is the signal: you selected it, you are
 	-- standing in the raid it belongs to, that is as much as can be known.
+	--
+	-- Which is also why this one asks where it is and the zone route does not:
+	-- with no room to vouch for it, the raid around it is the only thing left.
+	-- ONE_ROOM_RAIDS is keyed by zone name, so being in that zone is already
+	-- established by the time we get here.
 	if N.IsOneRoomRaid and N.IsOneRoomRaid() then
-		if (db and db.selected) ~= nil then return yes("oneRoomRaid") end
-		return false
+		return (db and db.selected) ~= nil
 	end
 	return false
 end
@@ -898,6 +932,9 @@ function N.PromptDelete()
 		if F then F.editing = nil end
 		db.notes[name] = nil
 		if db.stamps then db.stamps[name] = nil end
+		-- The text is gone, so the credit for it goes too. Left behind, it would
+		-- put somebody's name against the shipped note that takes its place.
+		if db.authors then db.authors[name] = nil end
 		if not packed then
 			-- The list no longer has it, so the selection has to move or the page
 			-- sits on a note that is not there any more.
@@ -931,21 +968,15 @@ local function build(panel)
 		pills = true,
 		drawerWidth = 0,
 		footerHeight = 0,
-		-- In the header, not on the page: these act on the raid or on a separate
-		-- window, rather than on the note you are looking at.
-		primaryText = function()
-			return (Okanvil.NotesWindow and Okanvil.NotesWindow.IsShown())
-				and "Hide fight window" or "Fight window"
-		end,
-		onPrimary = function()
-			if Okanvil.NotesWindow then Okanvil.NotesWindow.Toggle() end
-			if F and F.dash then F.dash:Refresh() end
-		end,
-
+		-- No button for the fight window. It follows the room: walk into one a
+		-- note is mapped to and it appears, walk out and it goes. A button meant
+		-- the window could also be switched on by hand, and a hand-opened window
+		-- was exempt from the room check -- so it sat on screen through cities
+		-- and dungeons, looking like the note had triggered there.
+		--
 		-- Send and the audit are officer work: a raider cannot send (the sync
 		-- refuses them) and has nobody to audit, so showing the buttons would
-		-- only promise something that never happens. The fight window stays --
-		-- that is what a raider opens.
+		-- only promise something that never happens.
 		secondaryText = function() return "Send to raid" end,
 		secondaryWidth = 100,
 		-- CanEdit is now true outside a guild (your notes are yours alone there),
@@ -1375,10 +1406,17 @@ function N.Refresh()
 		-- The boss, never the key: the size is the tab you are on, and repeating
 		-- it on every row is noise you have to read past twelve times.
 		r.name:SetText((has and "|cffdcddde" or "|cff6f7176") .. N.BossOf(name) .. "|r")
-		-- A mark only where there is something to say: you edited this one. The
-		-- shipped notes are the normal case and need no badge -- a dot on almost
-		-- every row says nothing.
-		r.dot:SetText(own and "|cff7cfc8aedited|r" or "")
+		-- A mark only where there is something to say. Green "edited" is yours;
+		-- a note somebody sent you carries their name in grey instead. The
+		-- shipped notes are the normal case and get no badge at all -- a mark on
+		-- almost every row says nothing, which is what "edited" on all twelve
+		-- amounted to before the two cases were told apart.
+		if own then
+			r.dot:SetText("|cff7cfc8aedited|r")
+		else
+			local by = N.AuthorOf(name)
+			r.dot:SetText(by and ("|cff6f7176" .. by .. "|r") or "")
+		end
 		r.sel:SetShown(name == db.selected)
 		r:Show()
 	end
@@ -1401,7 +1439,11 @@ function N.Refresh()
 	-- button that appears to work, then loses what was typed to the next Send, is
 	-- worse than no button.
 	F.clear:SetShown(sel ~= nil and canEdit)
-	F.clear.text:SetText(N.IsOwn(sel) and "Reset" or "Clear")
+	-- HasStored, not IsOwn: the word turns on whether there is stored text to
+	-- put back, which is true of a note an officer sent you just as much as one
+	-- you typed. Asking who wrote it would label a received note "Clear" and
+	-- then reset it anyway.
+	F.clear.text:SetText(N.HasStored(sel) and "Reset" or "Clear")
 	F.mode:SetShown(sel ~= nil and canEdit)
 	if F.addBtn then F.addBtn:SetShown(canEdit) end
 	if F.delBtn then F.delBtn:SetShown(canEdit) end
@@ -1577,38 +1619,34 @@ core:SetScript("OnEvent", function(_, event, arg1)
 end)
 
 -- ------------------------------------------------------------
--- /oknotes test -- run the timers outside a boss room.
+-- /oknotes -- where this room stands, and a manual Send.
 --
--- A raider running only the aura has no Okanvil, so nothing gates their pull:
--- any combat starts the note. The leader DOES have Okanvil and is gated by the
--- room check, so without a bypass a two-person test on a target dummy works for
--- one of you and not the other.
---
--- Not saved: it is off again next login.
+-- To practise a note on a target dummy, map the subzone you stand in: add it to
+-- ZONE_NOTE, write a note under that name, and it runs there through the same
+-- path Icecrown uses. That replaced a test mode that answered yes everywhere,
+-- which drifted in both directions -- it ran boss notes on dungeon trash when
+-- left on, and a raider running only the aura was never gated by it anyway.
 -- ------------------------------------------------------------
 SLASH_OKNOTES1 = "/oknotes"
 SlashCmdList["OKNOTES"] = function(msg)
 	local arg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
-
-	if arg == "test" then
-		N.testMode = not N.testMode
-		if N.testMode then
-			Okanvil:Print("Notes test mode |cff7cfc8aON|r -- any fight runs |cffe0b860"
-				.. (db and db.selected or "?") .. "|r. /oknotes test to stop.")
-		else
-			Okanvil:Print("Notes test mode |cffff5555OFF|r.")
-		end
-		return
-	end
 
 	if arg == "send" then
 		if N.SendNow then N.SendNow() end
 		return
 	end
 
-	Okanvil:Print("|cffe0b860/oknotes test|r -- run the selected note anywhere (target dummy)")
 	Okanvil:Print("|cffe0b860/oknotes send|r -- push your notes to the group now")
-	if N.testMode then
-		Okanvil:Print("Test mode is |cff7cfc8aON|r.")
+	-- Where the note you have selected would run, and whether that is here. The
+	-- question "why are my timers not starting" used to be answered by a test
+	-- mode that made them start everywhere; this answers it instead.
+	local here = N.NoteForHere and N.NoteForHere()
+	local sel = db and db.selected
+	if here then
+		Okanvil:Print(("This room wants |cffe0b860%s|r -- you have |cffe0b860%s|r selected.")
+			:format(here, tostring(sel or "nothing")))
+	else
+		Okanvil:Print(("|cff8a8d93No note is mapped to this room, so nothing runs here.|r"
+			.. " Selected: |cffe0b860%s|r"):format(tostring(sel or "nothing")))
 	end
 end
