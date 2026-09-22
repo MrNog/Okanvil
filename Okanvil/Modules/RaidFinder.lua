@@ -17,7 +17,7 @@ local W = Okanvil.W
 -- Not INV_Misc_GroupLooking: PuG already uses that one, and two identical icons in
 -- the nav make those two rows impossible to tell apart at a glance. (The spyglass
 -- is taken too -- that is ID Finder.)
-local ICON = "Interface\\Icons\\Ability_Warrior_OffensiveStance"
+local ICON = (Okanvil.ICONS and Okanvil.ICONS.raidfinder) or "Interface\\Icons\\Ability_Warrior_OffensiveStance"
 
 local db                                     -- OkanvilRaidFinderDB (account-wide)
 local defaults = {

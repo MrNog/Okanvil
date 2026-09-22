@@ -70,10 +70,21 @@ end
 -- Returns the rule and its index, or nil.
 function RecruitLogic.matchReply(db, msg)
 	for i, r in ipairs(db.replies or {}) do
-		local kw = (r.keywords and r.keywords ~= "") and r.keywords or db.keywords
-		if r.enabled ~= false and r.text and r.text ~= ""
-			and RecruitLogic.matchList(msg, kw) then
-			return r, i
+		if r.enabled ~= false and r.text and r.text ~= "" then
+			-- `anyMsg` answers EVERY whisper, whatever it says.
+			--
+			-- For the AFK reply, which is the case the keyword list cannot express:
+			-- a rule with no keywords of its own falls back to the INVITE keywords,
+			-- so "do yall need a disc priest?" matched nothing and went unanswered
+			-- while you were away. If you are AFK you are AFK for everyone, not only
+			-- for the people who happened to type "inv".
+			if r.anyMsg then
+				return r, i
+			end
+			local kw = (r.keywords and r.keywords ~= "") and r.keywords or db.keywords
+			if RecruitLogic.matchList(msg, kw) then
+				return r, i
+			end
 		end
 	end
 	return nil
@@ -123,6 +134,17 @@ function RecruitLogic.decide(db, msg, ctx)
 			out.reply = rule.text
 			out.ruleIndex = idx
 		end
+	end
+
+	-- The welcome goes with the invite and outranks any rule that matched:
+	-- one whisper gets one answer, and for someone just invited that answer
+	-- is the welcome. It ignores the reply guards on purpose -- those exist
+	-- to keep canned replies from going out, and this line IS the invite
+	-- speaking, so it is silent only when the invite itself is.
+	if out.invite and db.welcome and db.welcome ~= "" then
+		out.reply = db.welcome
+		out.ruleIndex = nil
+		out.isWelcome = true
 	end
 	return out
 end

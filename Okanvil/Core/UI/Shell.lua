@@ -316,10 +316,28 @@ Okanvil.ICONS = {
 	loot    = "Interface\\Icons\\INV_Misc_Coin_02",
 	logs    = "Interface\\Icons\\INV_Scroll_03",
 	ids     = "Interface\\Icons\\INV_Misc_Spyglass_02",
-	recruit = "Interface\\Icons\\Achievement_General_StayClassy",
+	-- A shout for each module that calls out to people -- Recruit, Raid
+	-- Finder and PuG below. Recruit had lost its icon entirely: the path it
+	-- carried does not resolve in this client, and the nav hides a texture
+	-- it cannot load rather than showing a placeholder.
+	recruit = "Interface\\Icons\\Ability_Warrior_RallyingCry",
 	modules = "Interface\\Icons\\INV_Misc_Gear_01",
 	settings= "Interface\\Icons\\Trade_Engineering",
 	raidcheck = "Interface\\Icons\\INV_Misc_Food_15",   -- food buff (Raid Check)
+	-- The Horde banner, not the loot bag: the council speaks for the guild, and
+	-- sharing the coin icon with Loot made two different pages look like one.
+	council = "Interface\\Icons\\INV_Misc_Tournaments_Banner_Orc",
+
+	-- The module pages. These used to be written into each module's own file,
+	-- and the marks bar kept a third copy -- so Loot Council was a banner in one
+	-- list and a book in the other, and Raid Finder shared the pull timer's icon.
+	-- One table, read by every list that draws a module.
+	-- A folded note, not the scroll: Combat Logs already owns the scroll, and
+	-- two modules sharing one texture made the Modules list unreadable.
+	notes      = "Interface\\Icons\\INV_Misc_Note_01",
+	pug        = "Interface\\Icons\\Ability_Hunter_Harass",
+	farm       = "Interface\\Icons\\INV_Misc_Bag_10",
+	raidfinder = "Interface\\Icons\\Ability_Warrior_BattleShout",
 }
 
 Okanvil.NATIVE = {
@@ -340,7 +358,7 @@ Okanvil.NATIVE = {
 	-- The raider only ever sees a popup; the officer board is its own window. The
 	-- PAGE is where the council is configured and where a round is started by hand
 	-- -- the settings a master looter wants before the pull, not during it.
-	{ key = "__council", title = "Loot Council", icon = Okanvil.ICONS.loot,
+	{ key = "__council", title = "Loot Council", icon = Okanvil.ICONS.council,
 	  desc = "Ask the raid what an item is worth to them, then award it. Off = no popups, "
 	      .. "no comms handlers, and the proficiency tables are released." },
 }
@@ -368,6 +386,31 @@ Okanvil.NAV_GROUPS = {
 -- Settings is pinned to the bottom of the list. An unnamed module falls through
 -- to the end alphabetically, which put Farm under Settings the moment it got a
 -- nav row -- and "how the addon behaves" reads wrong anywhere but last.
+-- Nav title -> the panel key that opens it.
+--
+-- Public because two things need it: the Raid Check shortcut strip, which draws
+-- one icon per entry, and the Modules page, which offers a Shortcut switch only
+-- for rows that HAVE one. A title missing from here has no page to jump to, so
+-- its switch would be a button that does nothing.
+Okanvil.PANEL_KEY = {
+	["Home"] = "__home",
+	["Loot"] = "__loot",
+	["Settings"] = "__settings",
+	["Modules"] = "__modules",
+	["Invite"] = "__invite",
+	["Loot Council"] = "__council",
+	["Notes"] = "Okanvil-Notes",
+	["Raid Finder"] = "Okanvil-RaidFinder",
+	["PuG"] = "Okanvil-PuG",
+	["Recruit"] = "Okanvil-Recruit",
+	["ID Finder"] = "Okanvil-IDs",
+	["Farm"] = "Okanvil-Farm",
+}
+
+-- The reverse, for a module row that knows its key but not its title.
+Okanvil.PANEL_TITLE = {}
+for title, key in pairs(Okanvil.PANEL_KEY) do Okanvil.PANEL_TITLE[key] = title end
+
 Okanvil.NAV_LAST = "Settings"
 -- flat order, derived: anything not named above still falls through alphabetically
 Okanvil.NAV_ORDER = {}

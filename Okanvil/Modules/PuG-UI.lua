@@ -1267,7 +1267,7 @@ function M.BuildUI(parent)
 
 	local dash = W.Dashboard(parent, {
 		title = "PuG",
-		icon = "Interface\\Icons\\Ability_Warrior_RallyingCry",
+		icon = (Okanvil.ICONS and Okanvil.ICONS.pug) or "Interface\\Icons\\Ability_Warrior_RallyingCry",
 		drawerWidth = 0,          -- one full-width page; the board needs the room
 		footerHeight = 0,
 		primaryText = function() return M.IsActive() and "STOP spamming" or "START spamming" end,

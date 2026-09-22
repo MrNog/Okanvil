@@ -610,8 +610,24 @@ local function buildUI(host)
 			r.hl:SetAllPoints()
 			r.hl:SetTexture(0.75, 0.58, 0.23, 0.22) -- gold hover, matches the shell
 			r.hl:Hide()
-			-- hover shows the item/spell tooltip; no click action -- the id is right
-			-- there in the row to read (3.3.5a has no OS clipboard anyway).
+			-- Hover shows the tooltip; clicking opens the id in a focused, selected
+			-- field so Ctrl+C takes it. 3.3.5a gives Lua no way to reach the OS
+			-- clipboard, so handing you a box to copy out of is as close as an
+			-- addon gets -- and it beats reading a five-digit id off the screen
+			-- and typing it into WeakAuras by hand.
+			r:EnableMouse(true)
+			r:SetScript("OnMouseUp", function(s, button)
+				if button ~= "LeftButton" or not s._d then return end
+				-- Shift-click writes the link into whatever you are typing in, the
+				-- way the rest of the game does; a plain click copies the id.
+				local link = (s._d.isItem and "item:" or "spell:") .. s._d.id
+				if IsShiftKeyDown and IsShiftKeyDown() and ChatEdit_InsertLink then
+					local _, full = GetItemInfo(s._d.id)
+					if not s._d.isItem and GetSpellLink then full = GetSpellLink(s._d.id) end
+					if full and ChatEdit_InsertLink(full) then return end
+				end
+				Okanvil:ShowExport(tostring(s._d.id), (s._d.name or link) .. "  --  Ctrl+C")
+			end)
 			r:SetScript("OnEnter", function(s)
 				s.hl:Show()
 				if s._d then

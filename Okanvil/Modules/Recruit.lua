@@ -32,6 +32,10 @@ local defaults = {
 	-- Auto-replies: a list of { keywords, text, enabled }. Independent of the
 	-- invite -- answering "what's the discord?" must not also invite the asker.
 	replies = {},
+	-- What an invited player hears. This is the ONE line that goes out with an
+	-- invite, in place of any auto-reply: someone who asked to join and was
+	-- invited does not also want to be told you are away.
+	welcome = "Invite sent, welcome! Raids, signups & info are on our Discord -- an officer will get to you there.",
 	-- Only answer while advertising is ON. Off a recruiting session (running a
 	-- pug, raiding) the module stays quiet.
 	repliesNeedActive = true,
@@ -425,7 +429,9 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 			end
 		end
 		db = RecruitDB
-		db.active = false
+		-- Kept across a reload, like the PuG advert: the whisper catcher is
+		-- switched on for a recruiting night, not for a session, and a reload
+		-- in the middle of one should not quietly stop answering applicants.
 		-- The single auto-reply (and the AFK one) became the first entries in the
 		-- rules list. Carry whatever text was configured across rather than
 		-- silently dropping it, then clear the old keys so this runs once.
@@ -456,7 +462,7 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 		Okanvil_Plugins[ADDON] = {
 			title = "Recruit",
 			desc = "Recruitment/pug advertiser with auto-reply and auto-invite. For officers & pug leaders.",
-			icon = "Interface\\Icons\\Ability_Warrior_BattleShout",
+			icon = (Okanvil.ICONS and Okanvil.ICONS.recruit) or "Interface\\Icons\\Ability_Warrior_BattleShout",
 			build = function(panel)
 				Rec_BuildUI(panel)
 			end,
@@ -475,6 +481,13 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 		-- the Recruit tab (and Modules lets you toggle it off).
 		if Okanvil and Okanvil.Register then
 			Okanvil:Register(ADDON)   -- silent; /recruit still opens it
+		end
+
+		-- Say it is still catching. The switch now survives a reload, and a
+		-- catcher answering applicants you have forgotten about is worse than
+		-- one line in chat.
+		if db.active then
+			Okanvil:Print("|cffe0b860Recruit is still catching whispers.|r")
 		end
 		return
 	end
@@ -850,8 +863,12 @@ local function Rec_BuildToast()
 	local icon = t:CreateTexture(nil, "ARTWORK")
 	icon:SetSize(38, 38)
 	icon:SetPoint("LEFT", 9, 0)
-	icon:SetTexture("Interface\\Icons\\Ability_Warrior_BattleShout")
+	icon:SetTexture((Okanvil.ICONS and Okanvil.ICONS.recruit) or "Interface\\Icons\\Ability_Warrior_BattleShout")
 	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	-- Kept, so the texture can be set again when the toast is shown. Built
+	-- once and never touched, it held whatever ICONS.recruit was at build
+	-- time -- change the icon and the toast kept the old one until a reload.
+	t.icon = icon
 
 	local top = t:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 	top:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, -4)
@@ -883,6 +900,9 @@ function Rec_ShowToast(name, classFile, title)
 	Rec_BuildToast()
 	if toast.unlocked then
 		return
+	end
+	if toast.icon and Okanvil.ICONS and Okanvil.ICONS.recruit then
+		toast.icon:SetTexture(Okanvil.ICONS.recruit)
 	end
 	toast.top:SetText(title or ("|cffF1C40FNew member joined " .. gname() .. "!|r"))
 	toast.bottom:SetText(nameColor(name, classFile) .. name .. "|r")
@@ -923,7 +943,7 @@ function Rec_BuildUI(parent)
 
 	local dash = W.Dashboard(f, {
 		title = "Recruit",
-		icon = "Interface\\Icons\\Ability_Warrior_BattleShout",
+		icon = (Okanvil.ICONS and Okanvil.ICONS.recruit) or "Interface\\Icons\\Ability_Warrior_BattleShout",
 		pills = true,
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -1242,6 +1262,7 @@ function Rec_RenderRules()
 		local shadowed = false
 		if on then
 			for j = 1, i - 1 do
+				-- An "any whisper" rule above this one answers first, every time.
 				if list[j].enabled ~= false and (list[j].text or "") ~= "" then
 					shadowed = true
 					break
@@ -1251,6 +1272,10 @@ function Rec_RenderRules()
 		local kwText = ""
 		if f.editing == i then
 			kwText = ""
+		elseif rule.anyMsg then
+			-- Said on the row, because it changes who gets this: a rule that answers
+			-- everything shadows every rule under it, whatever their keywords.
+			kwText = "|cffe0b860answers any whisper|r"
 		elseif (rule.text or "") == "" then
 			kwText = "|cff6f7176nothing to send -- never fires|r"
 		elseif shadowed then
@@ -1289,9 +1314,29 @@ function Rec_RenderRules()
 				ed.txBox:SetPoint("TOPLEFT", 60, -9)
 				ed.txBox:SetPoint("RIGHT", ed, "RIGHT", -8, 0)
 
+				-- "Answer anything" -- for the AFK reply.
+				--
+				-- Every other rule answers the invite keywords from Setup, which is
+				-- right for a recruitment line: it goes to someone who asked about the
+				-- guild. An AFK notice is the opposite -- if you are away you are away
+				-- for whoever whispers, and "do yall need a disc priest?" matched none
+				-- of those words and went unanswered.
+				-- getFn/setFn read ed._rule, not a captured upvalue: the editor frame
+				-- is built once and reused for every rule, so a closure over the rule
+				-- open at build time would keep writing to that one for ever.
+				ed.any = W.Check(ed, "Answer any whisper",
+					function() return ed._rule and ed._rule.anyMsg and true or false end,
+					function(v)
+						if ed._rule then ed._rule.anyMsg = v and true or nil end
+						Rec_RenderRules()
+					end)
+				ed.any:SetPoint("TOPLEFT", 60, -52)
+				ed.any:Tooltip("Send this reply to EVERY whisper, not only the ones"
+					.. "\nthat contain a keyword. For an AFK notice.")
+
 				ed.done = W.Button(ed, "Done", "primary")
 				ed.done:SetSize(58, 20)
-				ed.done:SetPoint("TOPLEFT", 60, -55)
+				ed.done:SetPoint("TOPLEFT", 60, -76)
 
 				ed.del = W.Button(ed, "Delete", "danger")
 				ed.del:SetSize(58, 20)
@@ -1301,10 +1346,12 @@ function Rec_RenderRules()
 			ed:ClearAllPoints()
 			ed:SetPoint("TOPLEFT", f.ruleHost, "TOPLEFT", 14, y)
 			ed:SetPoint("RIGHT", f.ruleHost, "RIGHT", 0, 0)
-			ed:SetHeight(82)
+			ed:SetHeight(104)
 			ed:Show()
 
 			ed.txBox.edit:SetText(rule.text or "")
+			ed._rule = rule
+			if ed.any.refresh then ed.any.refresh() end
 			-- Commit on focus loss, not on every keystroke: OnTextChanged would
 			-- re-render the list under the cursor while it is being typed in.
 			ed.txBox.edit:SetScript("OnEditFocusLost", function(s)

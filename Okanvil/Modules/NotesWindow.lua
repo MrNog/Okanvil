@@ -39,6 +39,11 @@ end
 local function applyLook()
 	if not win then return end
 	local c = cfg()
+	-- Push the saved icon size into the parser here rather than from the
+	-- setter alone: this also runs on the first draw, so a size chosen in an
+	-- earlier session is in effect before the first note is rendered.
+	local PP = Okanvil.NotesParse
+	if PP and PP.SetIconSize then PP.SetIconSize(c.iconSize or 18) end
 	win:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], c.alpha or 0.85)
 	win:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], (c.alpha or 0.85) + 0.1)
 	-- Locked: click-through everywhere but the rows, so it never eats a click
@@ -68,7 +73,6 @@ local function applyLook()
 		r:SetPoint("TOPRIGHT", 0, -(i - 1) * ROW_H)
 		r.t:SetFont(font, size, flag)
 		r.txt:SetFont(font, size, flag)
-		r.t:SetWidth(size * 3.2)
 	end
 	if win._entries then
 		win:SetHeight(18 + (#win._entries * ROW_H) + 6)
@@ -101,9 +105,13 @@ local function row(i)
 	r:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
 	r:SetPoint("TOPRIGHT", 0, -(i - 1) * ROW_H)
 
+	-- Time first, then the line it belongs to -- you read the clock and then what
+	-- to do at it. A fixed column would indent every untimed line by its width,
+	-- so the clock is only as wide as it needs to be and the text anchors to it:
+	-- untimed lines leave it empty and start at the left edge instead (see fill).
 	r.t = W.Text(r, "", "head", "accent")
 	r.t:SetPoint("LEFT", 4, 0)
-	r.t:SetWidth(38); r.t:SetJustifyH("RIGHT")
+	r.t:SetJustifyH("LEFT")
 
 	r.mark = r:CreateTexture(nil, "BACKGROUND")
 	r.mark:SetTexture(FLAT)
@@ -114,7 +122,6 @@ local function row(i)
 	r.mark:Hide()
 
 	r.txt = W.Text(r, "", "head")
-	r.txt:SetPoint("LEFT", r.t, "RIGHT", 6, 0)
 	r.txt:SetPoint("RIGHT", -4, 0)
 	r.txt:SetJustifyH("LEFT")
 	if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
@@ -330,6 +337,7 @@ function WIN.Refresh()
 		if r.mark then r.mark:SetShown(e.mine and true or false) end
 		r.txt:SetAlpha(e.mine and 1 or 0.72)
 		if e.plain then
+			-- No clock for a line that has no clock.
 			r.t:SetText("")
 			r:SetAlpha(1)
 		else
@@ -345,6 +353,17 @@ function WIN.Refresh()
 				r.t:SetText(col .. fmt(left) .. "|r")
 				r:SetAlpha(1)
 			end
+		end
+
+		-- The text follows the clock, so an untimed line is not indented past an
+		-- empty column: it takes the left edge for itself. A fired timer blanks
+		-- its clock too, and the line sliding left is how you see it went off.
+		r.txt:ClearAllPoints()
+		r.txt:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+		if r.t:GetText() ~= "" then
+			r.txt:SetPoint("LEFT", r.t, "RIGHT", 6, 0)
+		else
+			r.txt:SetPoint("LEFT", r, "LEFT", 4, 0)
 		end
 	end
 
@@ -467,6 +486,15 @@ end
 function WIN.GetSize() return cfg().size or 13 end
 function WIN.SetSize(px)
 	cfg().size = px or 13
+	applyLook()
+end
+
+-- Icon size, kept apart from the text size on purpose: the icons say WHICH
+-- cooldown and the text says who and when, and which of the two you want
+-- bigger depends on how you read the note mid-pull.
+function WIN.GetIconSize() return cfg().iconSize or 18 end
+function WIN.SetIconSize(px)
+	cfg().iconSize = px or 18
 	applyLook()
 end
 

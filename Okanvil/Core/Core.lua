@@ -576,6 +576,33 @@ function Okanvil:ModuleActive(name)
 	return self:IsModuleEnabled(name)
 end
 
+-- Is this page on the Raid Check shortcut strip?
+--
+-- Separate from whether the module is ENABLED: a module can be on and still not
+-- earn a place on a strip you read mid-pull. Twelve icons is more than anyone
+-- wants there, and which twelve matters to one guild and not another.
+--
+-- Per character, beside the enable flag, and ABSENT MEANS ON so the strip looks
+-- the same on a fresh install as it did before there was a switch.
+function Okanvil:IsShortcutEnabled(name)
+	local cdb = self.cdb
+	if not cdb then return true end
+	local m = cdb.modules and cdb.modules[name]
+	if not m or m.shortcut == nil then return true end
+	return m.shortcut and true or false
+end
+
+function Okanvil:SetShortcutEnabled(name, on)
+	local cdb = self.cdb
+	if not cdb then return end
+	cdb.modules = cdb.modules or {}
+	cdb.modules[name] = cdb.modules[name] or {}
+	cdb.modules[name].shortcut = on and true or false
+	-- The marks bar is where the shortcuts live. It keeps its own buttons, so
+	-- it has to be told to draw them again.
+	if self.MarksBar and self.MarksBar.Refresh then self.MarksBar:Refresh() end
+end
+
 function Okanvil:SetModuleEnabled(name, enabled)
 	local cdb = self.cdb
 	cdb.modules = cdb.modules or {}

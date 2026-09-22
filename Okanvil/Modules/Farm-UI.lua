@@ -62,7 +62,7 @@ local function build()
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(22)
 	local ico = hdr:CreateTexture(nil, "OVERLAY")
 	ico:SetSize(14, 14); ico:SetPoint("LEFT", 6, 0)
-	ico:SetTexture("Interface\\Icons\\INV_Misc_Bag_10")
+	ico:SetTexture((Okanvil.ICONS and Okanvil.ICONS.farm) or "Interface\\Icons\\INV_Misc_Bag_10")
 	ico:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	local title = W.Text(hdr, "Farm", "body", "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0)
 
@@ -303,7 +303,7 @@ function Okanvil:BuildFarm(host)
 	local fill = Okanvil.UI.newFillPanel()
 	local dash = W.Dashboard(host, {
 		title = "Farm",
-		icon = "Interface\\Icons\\INV_Misc_Bag_10",
+		icon = (Okanvil.ICONS and Okanvil.ICONS.farm) or "Interface\\Icons\\INV_Misc_Bag_10",
 		drawerWidth = 0,
 		footerHeight = 0,
 		primaryText = function() return "Open the farm window" end,
@@ -448,7 +448,7 @@ Okanvil_Plugins[ADDON] = {
 	-- the window, so the history had nowhere to be reached from and the runs
 	-- banked into a list nobody could see.
 	desc  = "Gold per hour while you farm, and a log of past runs.",
-	icon  = "Interface\\Icons\\INV_Misc_Bag_10",
+	icon  = (Okanvil.ICONS and Okanvil.ICONS.farm) or "Interface\\Icons\\INV_Misc_Bag_10",
 	build = function(panel) Okanvil:BuildFarm(panel) end,
 }
 if Okanvil and Okanvil.Register then

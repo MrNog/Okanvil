@@ -76,8 +76,8 @@ end
 -- gating on the guild roster alone locked out a leader who was not an officer
 -- -- or one whose roster had not loaded yet.
 --
--- Being trusted only earns a sender the right to be CONSIDERED. Nothing of
--- yours is replaced without you saying so; see merge.
+-- Being trusted is what lets a sender's notes land at all: an untrusted name on
+-- the wire is ignored outright, and a trusted one's newer notes replace yours.
 local function senderTrusted(who)
 	if not (who and who ~= "") then return false end
 	if Okanvil.U and Okanvil.U.isOfficer and Okanvil.U.isOfficer(who) then return true end
@@ -220,59 +220,23 @@ end
 -- and both edits should survive. Only a strictly newer stamp wins, so a repeat
 -- of the same payload changes nothing.
 -- ------------------------------------------------------------
--- Take what is safe to take, and ASK about the rest.
+-- Newest wins, per note.
 --
--- A note you wrote is work. The old merge replaced it the moment a higher stamp
--- arrived, so a raider who opened someone else's pack could wipe a boss plan
--- typed minutes before a pull, silently, with no way back. "Newest wins" is
--- fine between two people editing the same plan; it is not fine when the thing
--- being overwritten is something only you have.
+-- Per note and not wholesale, so two officers who each edited a different boss
+-- both keep their work: only a note with a LATER stamp than the one you hold
+-- replaces it, and a repeat of the same payload changes nothing.
 --
--- So: a note you do not have yet is simply taken -- there is nothing to lose.
--- A note you DO have, with your own text in it, is queued and confirmed one by
--- one. Answering No keeps yours and leaves your stamp alone, so the same pack
--- arriving again asks again rather than sneaking past.
-local pendingAsk = nil      -- queue of { name =, text =, stamp =, who = }
-
-local function askNext()
-	local q = pendingAsk
-	if not q or #q == 0 then pendingAsk = nil return end
-	local rec = table.remove(q, 1)
-
-	local d = db()
-	if not d then pendingAsk = nil return end
-	-- It may have been settled while this one waited in line.
-	if (d.stamps[rec.name] or 0) >= rec.stamp then return askNext() end
-
-	Okanvil:Confirm(
-		("|cffe0b860%s|r sent a note for |cffffd200%s|r.\n\nYou already have one. Replace yours?")
-			:format(rec.who, rec.name),
-		"Replace",
-		function()
-			d.notes[rec.name] = rec.text
-			d.stamps[rec.name] = rec.stamp
-			-- Theirs now, not yours: the page says who a note came from, and
-			-- leaving your name on text you just replaced would say you wrote it.
-			d.authors = d.authors or {}
-			d.authors[rec.name] = rec.who
-			Okanvil:Print(("Replaced your |cffffd200%s|r note with %s's."):format(rec.name, rec.who))
-			if N.Broadcast then N.Broadcast() end
-			if N.Refresh then N.Refresh() end
-			askNext()
-		end,
-		function()
-			Okanvil:Print(("Kept your |cffffd200%s|r note."):format(rec.name))
-			askNext()
-		end)
-end
-
+-- No confirmation. An earlier version queued a dialog for every note that
+-- differed, to protect text somebody had typed themselves -- but the sender is
+-- the officer who owns the plan, the correction usually arrives mid-fight, and
+-- twenty-four people do not want a prompt per boss while they are tanking.
 local function merge(list, who)
 	local d = db()
 	if not (d and list) then return 0 end
 	d.stamps = d.stamps or {}
 	d.notes = d.notes or {}
 	d.authors = d.authors or {}
-	local n, ask = 0, {}
+	local n = 0
 	for _, rec in ipairs(list) do
 		if rec.name == SLOTREC then
 			-- The roster, not a note. Wholesale, not per slot: it describes one
@@ -313,17 +277,25 @@ local function merge(list, who)
 				-- Same text, newer stamp. Nothing to decide.
 				if rec.stamp > mine then d.stamps[rec.name] = rec.stamp end
 			elseif rec.stamp > mine then
-				ask[#ask + 1] = { name = rec.name, text = rec.text, stamp = rec.stamp, who = who }
+				-- NEWER WINS, with no question asked.
+				--
+				-- This used to queue a confirm per note, to protect work somebody had
+				-- typed themselves. In practice the sender is the officer who owns the
+				-- plan, the fix arrives mid-fight, and a dialog per boss lands on
+				-- twenty-four people who are tanking -- so the protection cost more
+				-- than it saved. The stamps still decide: only a note edited LATER
+				-- than yours replaces it, so two officers editing different bosses
+				-- both survive.
+				d.notes[rec.name] = rec.text
+				d.stamps[rec.name] = rec.stamp
+				d.authors[rec.name] = who
+				n = n + 1
 			end
 		end
 	end
 	if n > 0 then
 		if N.Broadcast then N.Broadcast() end
 		if N.Refresh then N.Refresh() end
-	end
-	if #ask > 0 then
-		pendingAsk = ask
-		askNext()
 	end
 	return n
 end
@@ -458,9 +430,30 @@ function N.SendNow()
 	N.AnnounceSelected(true)
 
 	local sel = (db() and db().selected)
+
+	-- How many people we are WAITING on, counted now rather than at the tally:
+	-- somebody leaving mid-send would otherwise make the denominator shrink and
+	-- an incomplete send read as complete.
+	local me = UnitName("player") or ""
+	local expect = 0
+	local nRaid = (GetNumRaidMembers() or 0)
+	if nRaid > 0 then
+		for i = 1, nRaid do
+			local who = GetRaidRosterInfo(i)
+			who = who and (who:gsub("%-.*$", ""))
+			if who and who ~= me then expect = expect + 1 end
+		end
+	else
+		expect = (GetNumPartyMembers() or 0)
+	end
+	lastSend.expect = expect
+
 	Okanvil:Print(("Sent |cffffd200%d|r %s to the %s%s"):format(
 		n, n == 1 and "note" or "notes", chan:lower(),
 		sel and (" -- live: |cffe0b860" .. sel .. "|r") or "."))
+	if expect > 0 then
+		Okanvil:Print(("|cff8a8d93Waiting for %d to confirm...|r"):format(expect))
+	end
 
 	-- The replies land over the next second or two. Report the tally once
 	-- rather than a line per person, and name whoever stayed silent -- that is
@@ -595,7 +588,22 @@ if Comms then
 		-- 25-man that would be 24 lines of chat for one button press. The
 		-- summary goes out once, a few seconds later.
 		if lastSend and (GetTime() - lastSend.at) < 20 then
+			local isNew = lastSend.got[who] == nil
 			lastSend.got[who] = tonumber(applied) or 0
+
+			-- A running count, not a line per person: in a 25-man that would be
+			-- twenty-four lines for one button press. One line that grows tells you
+			-- the send is landing without burying the chat -- and it is the only
+			-- sign of life in the four seconds before the tally.
+			if isNew and (lastSend.expect or 0) > 0 then
+				local got = 0
+				for _ in pairs(lastSend.got) do got = got + 1 end
+				if got == lastSend.expect then
+					Okanvil:Print(("|cff7cfc8aAll %d in sync.|r"):format(got))
+				else
+					Okanvil:Print(("|cff8a8d93%d/%d|r %s"):format(got, lastSend.expect, who))
+				end
+			end
 			if N.Refresh then N.Refresh() end
 		end
 

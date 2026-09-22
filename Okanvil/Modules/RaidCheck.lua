@@ -510,6 +510,18 @@ local function buildToast()
 	close:SetPoint("TOPRIGHT", -5, -5)
 	close:SetScript("OnClick", function() f:Hide() end)
 
+	-- Shortcuts to the pages, in the order the nav lists them.
+	--
+	-- The check is run while the raid assembles, which is also the minute
+	-- somebody asks for the cooldowns, whether the loot rules are set, or who is
+	-- still missing -- and walking back through the nav meant closing this first,
+	-- which is why it was easier not to look.
+	--
+	-- Read from NAV_GROUPS rather than listed here, so the strip follows the menu
+	-- by itself: reorder the nav and these move with it. Sections are separated by
+	-- a gap, the same grouping the nav shows with its headers.
+
+
 	-- Column header. Each is a real button so it can carry a TOOLTIP -- an icon strip
 	-- with no labels is a guessing game, and rotated text is not worth the trouble at
 	-- this size. Hover a header to see what the column checks.
@@ -718,6 +730,7 @@ end
 -- refresh the open toast without re-showing it (and without resetting the fade).
 function RC:RenderToast()
 	local f = buildToast()
+
 	local cols = buildColumns()
 
 	for _, r in ipairs(f.rows) do r:Hide() end

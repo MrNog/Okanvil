@@ -132,6 +132,7 @@ local defaults = {
 	slots = {},
 	slotStamp = 0,     -- when the slots last changed, for the sync
 	viewSize = nil,    -- 10/25 tab; nil = follow the raid you are in
+	viewHeroic = nil,  -- normal/heroic tab; nil = follow the raid you are in
 	viewRaid = nil,    -- ICC/ToC/RS tab; nil = follow the zone you are in
 }
 
@@ -158,22 +159,50 @@ local defaults = {
 -- ------------------------------------------------------------
 local SIZE_SUFFIX = " (10)"
 
--- The KEY a note is stored under, for a boss and a size. The 25 keeps the bare
--- name, so the notes written before there were two sizes are already the 25s.
-function N.KeyFor(boss, size)
+-- Heroic gets its own note, because it is a different fight with the same boss
+-- name -- and, more sharply than the 10/25 split, a different set of SPELL IDS.
+-- Eighty ICC abilities are numbered per difficulty: Putricide's Unstable
+-- Experiment is 70351 on 10N, 71966 on 25N and 71967 on 10HC. A note written
+-- for one difficulty does not merely read oddly at another, its anchors wait
+-- for casts that never come, and nothing on screen says why.
+local HC_SUFFIX = " (HC)"
+
+-- The KEY a note is stored under, for a boss, a size and a difficulty. The 25
+-- normal keeps the bare name, so every note written before either split already
+-- is the 25 normal.
+--
+--   Professor Putricide             25 normal
+--   Professor Putricide (10)        10 normal
+--   Professor Putricide (HC)        25 heroic
+--   Professor Putricide (10) (HC)   10 heroic
+--
+-- Suffixes in a fixed order, size then difficulty, so a key can be taken apart
+-- again by stripping from the end.
+function N.KeyFor(boss, size, heroic)
 	if not boss or boss == "" then return boss end
-	return (size == 10) and (boss .. SIZE_SUFFIX) or boss
+	local key = (size == 10) and (boss .. SIZE_SUFFIX) or boss
+	if heroic then key = key .. HC_SUFFIX end
+	return key
 end
 
--- The boss, with any size marker taken back off. What the list shows.
+local function esc(s) return (s:gsub("[%(%)]", "%%%0")) end
+
+-- The boss, with any marker taken back off. What the list shows.
 function N.BossOf(key)
 	if not key then return key end
-	local bare = key:match("^(.-)" .. SIZE_SUFFIX:gsub("[%(%)]", "%%%0") .. "$")
-	return bare or key
+	local bare = key:match("^(.-)" .. esc(HC_SUFFIX) .. "$") or key
+	bare = bare:match("^(.-)" .. esc(SIZE_SUFFIX) .. "$") or bare
+	return bare
 end
 
 function N.SizeOf(key)
-	return (key and N.BossOf(key) ~= key) and 10 or 25
+	if not key then return 25 end
+	local noHC = key:match("^(.-)" .. esc(HC_SUFFIX) .. "$") or key
+	return noHC:match(esc(SIZE_SUFFIX) .. "$") and 10 or 25
+end
+
+function N.IsHeroic(key)
+	return key ~= nil and key:match(esc(HC_SUFFIX) .. "$") ~= nil
 end
 
 -- 10 or 25, from the group we are actually in.
@@ -194,6 +223,20 @@ function N.RaidSize()
 	return (n > 10) and 25 or 10
 end
 
+-- Heroic or not, from the group we are actually in. The same call that gives
+-- the size already says this; it was simply thrown away before.
+--
+-- Returns nil outside a raid -- no opinion -- rather than false, so the page
+-- can tell "we are in a normal raid" from "we are in Dalaran".
+function N.RaidHeroic()
+	if (GetNumRaidMembers and GetNumRaidMembers() or 0) == 0 then return nil end
+	if not GetRaidDifficulty then return nil end
+	local d = GetRaidDifficulty()
+	if d == 3 or d == 4 then return true end
+	if d == 1 or d == 2 then return false end
+	return nil
+end
+
 -- Which size the PAGE is showing. Follows the raid you are in, until you press
 -- a tab yourself -- reading the 10 plan while sat in town is a normal thing to
 -- want, and a page that fights you about it is worse than one that guesses.
@@ -202,31 +245,69 @@ function N.ViewSize()
 	return N.RaidSize() or 25
 end
 
-function N.SetViewSize(size)
-	if not db then return end
-	db.viewSize = (size == 10) and 10 or 25
-	-- Follow the tab: the note that was live should stay live, at the new size.
+-- Which difficulty the PAGE is showing, on the same terms as the size: follows
+-- the raid until a tab is pressed.
+function N.ViewHeroic()
+	if db and db.viewHeroic ~= nil then return db.viewHeroic end
+	return N.RaidHeroic() or false
+end
+
+-- Both tabs land here, because they do the same thing to the selection: keep
+-- the boss, change which of its versions is live.
+local function reselect()
 	local boss = N.BossOf(db.selected)
 	if boss then
-		local want = N.KeyFor(boss, db.viewSize)
-		if (db.notes and db.notes[want]) or want == db.selected then
-			db.selected = want
-		else
-			db.selected = want    -- empty on purpose: the note you have yet to write
-		end
+		-- Empty on purpose when that version is unwritten: the note you have yet
+		-- to write is still the one this tab is about.
+		db.selected = N.KeyFor(boss, N.ViewSize(), N.ViewHeroic())
 	end
 	N.Broadcast()
 	if N.Refresh then N.Refresh() end
 end
 
--- The note name for this boss at the size we are raiding.
+function N.SetViewSize(size)
+	if not db then return end
+	db.viewSize = (size == 10) and 10 or 25
+	reselect()
+end
+
+function N.SetViewHeroic(on)
+	if not db then return end
+	db.viewHeroic = on and true or false
+	reselect()
+end
+
+-- The note name for this boss at the size and difficulty we are raiding.
 --
--- Only ever returns the 10-man name when a 10-man note actually exists: a guild
--- that keeps one note per boss should not have the tab go blank the moment they
--- run a 10.
+-- SIZE falls back, DIFFICULTY does not, and the asymmetry is deliberate.
+--
+-- A 10 and a 25 are the same fight with fewer people, so a guild that keeps one
+-- note per boss should not have the window go blank the moment they run a 10 --
+-- the 25 plan is still broadly right. Heroic is not like that: its abilities
+-- carry DIFFERENT SPELL IDS, so a normal note shown in a heroic raid is not
+-- merely approximate, its anchors wait for casts that never come. Showing it
+-- would be worse than showing nothing, because nothing is at least obvious.
 function N.SizedName(name)
 	if not name or name == "" then return name end
-	if N.RaidSize() ~= 10 then return name end
+
+	local heroic = N.RaidHeroic()
+	local size = N.RaidSize()
+
+	-- Heroic: exact match or nothing.
+	if heroic then
+		local want = N.KeyFor(name, size, true)
+		local t = db and db.notes and db.notes[want]
+		if t and t ~= "" then return want end
+		-- The 25 heroic note, for a 10 heroic raid that has not written its own.
+		if size == 10 then
+			local wide = N.KeyFor(name, 25, true)
+			local w = db and db.notes and db.notes[wide]
+			if w and w ~= "" then return wide end
+		end
+		return want          -- unwritten: the page shows it empty, and says so
+	end
+
+	if size ~= 10 then return name end
 	local ten = N.KeyFor(name, 10)
 	local t = db and db.notes and db.notes[ten]
 	if t and t ~= "" then return ten end
@@ -296,6 +377,13 @@ end
 local wasOfficer = false
 
 function N.CanEdit()
+	-- Unlocked by hand, per character: "/oknotes unlock".
+	--
+	-- The rank checks below cover the normal cases, but they depend on the
+	-- guild roster saying who you are, and a character the roster has not
+	-- caught up with -- a fresh alt, a note not written yet -- is locked out
+	-- of notes nobody else is going to send it. This is the way back in.
+	if Okanvil.cdb and Okanvil.cdb.notesUnlocked then return true end
 	if not (Okanvil.U and Okanvil.U.isOfficer) then return true end   -- no roster API: do not lock anyone out
 	-- NO GUILD, NO GATE. The lock exists because an officer's Send overwrites
 	-- what a raider typed -- an edit that looks like it worked and then quietly
@@ -308,6 +396,15 @@ function N.CanEdit()
 		return true
 	end
 	if wasOfficer then return true end      -- known officer, roster just went cold
+
+	-- An officer's own alt edits too. The lock is there so an officer's Send
+	-- cannot quietly overwrite what a raider typed -- but an officer taking a
+	-- second character into the raid is the same person, and locking them out
+	-- of their own notes helps nobody. The roster already knows: the guild
+	-- note says "<Main> alt", which is how the Home page counts people.
+	local main = Okanvil.U.mainOf and Okanvil.U.mainOf(me)
+	if main and Okanvil.U.isOfficer(main) then return true end
+
 	if GuildRoster then GuildRoster() end   -- warm it for the next check
 	return false
 end
@@ -366,7 +463,13 @@ function N.Current()
 	-- where the codes happen to sit.
 	local P = Okanvil.NotesParse
 	if text ~= "" and P and P.FillSlots then
-		text = P.FillSlots(text):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+		-- Unescape FIRST. A note pasted out of MRT carries doubled pipes
+		-- ("||cff..."), and stripping colour codes before collapsing them
+		-- leaves a stray "|" in every coloured name -- so the aura matched
+		-- its owner against "|Okanor|" and answered no to its own line.
+		-- Render does this in the same order for the same reason.
+		text = P.FillSlots(text:gsub("||", "|"))
+			:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
 	end
 
 	return text
@@ -476,6 +579,7 @@ function N.Raids() return RAIDS end
 
 function N.List()
 	local size = N.ViewSize()
+	local heroic = N.ViewHeroic()
 	local raidKey = N.ViewRaid()
 	local bosses
 	for _, raid in ipairs(RAIDS) do
@@ -485,7 +589,7 @@ function N.List()
 
 	local seen, out = {}, {}
 	for _, n in ipairs(bosses) do
-		local key = N.KeyFor(n, size)
+		local key = N.KeyFor(n, size, heroic)
 		out[#out + 1] = key
 		seen[key] = true
 	end
@@ -500,7 +604,10 @@ function N.List()
 
 	local extra = {}
 	for n in pairs((db and db.notes) or {}) do
-		if not seen[n] and N.SizeOf(n) == size
+		-- Matched on BOTH markers: a note written for the other difficulty is a
+		-- different note, and listing it here would offer a plan whose anchors
+		-- cannot fire at the difficulty this tab is showing.
+		if not seen[n] and N.SizeOf(n) == size and N.IsHeroic(n) == heroic
 			and isLastTab and not known[N.BossOf(n)] then
 			extra[#extra + 1] = n
 			seen[n] = true
@@ -722,6 +829,10 @@ end
 
 local function showHelp()
 	if helpPanel then
+		-- Kept, not rebuilt, so Popup() never runs again on this path: say
+		-- so ourselves, or the panel this one replaces stays underneath it.
+		if Okanvil.ClosePopup then Okanvil:ClosePopup(helpPanel) end
+		if Okanvil.SetPopup then Okanvil:SetPopup(helpPanel) end
 		parkHelp(helpPanel)
 		helpPanel:Show()
 		helpPanel:Raise()
@@ -826,8 +937,102 @@ local function showHelp()
 	f:SetHeight(math.abs(y) + (shown:GetStringHeight() or 14) + 18)
 end
 
-local LIST_W = 180
-local ROW_H = 24
+-- ------------------------------------------------------------
+-- What the bosses were SEEN casting.
+--
+-- The ID Finder answers "does this spell exist", which is not the question a
+-- note needs. Every difficulty's variant ships in the client's spell table, so
+-- a lookup happily returns a name for an id this core's boss never casts --
+-- and a line anchored to it waits for ever, looking exactly like a bug.
+--
+-- This panel answers the real question: what did we WATCH it cast. Filled in
+-- the background by NotesParse, from the first pull onward -- a wipe at 30%
+-- still records everything up to 30%, so there is no need to kill anything
+-- first.
+-- ------------------------------------------------------------
+local seenPanel
+
+local function showSeen()
+	local P = Okanvil.NotesParse
+	if not (P and P.SourcesSeen) then return end
+
+	if seenPanel then
+		seenPanel:Hide()
+		seenPanel = nil
+	end
+
+	local f = Okanvil:Popup("Spells seen cast")
+	if not _G.Okanvil_NotesSeen then
+		_G.Okanvil_NotesSeen = f
+		tinsert(UISpecialFrames, "Okanvil_NotesSeen")
+		local shell = _G.Okanvil_Window
+		if shell and not shell._okNotesSeenHooked then
+			shell._okNotesSeenHooked = true
+			shell:HookScript("OnHide", function()
+				if seenPanel then seenPanel:Hide() end
+			end)
+		end
+	end
+
+	local PANEL_W = 460
+	f:SetWidth(PANEL_W)
+	seenPanel = f
+	if parkHelp then parkHelp(f) end
+
+	local X, y = 14, -34
+
+	-- The boss whose room we are in comes first, because that is the note being
+	-- written. Everything else follows, so a source seen once on the way in is
+	-- still reachable.
+	local sources = P.SourcesSeen()
+	if #sources == 0 then
+		local none = W.Text(f, "Nothing recorded yet. Pull a boss -- this fills in"
+			.. " by itself, with nothing to switch on.", "note", "dim")
+		none:SetPoint("TOPLEFT", X, y)
+		none:SetWidth(PANEL_W - X * 2)
+		none:SetJustifyH("LEFT")
+		f:SetHeight(110)
+		return
+	end
+
+	local shown = 0
+	for _, src in ipairs(sources) do
+		local rows = P.SpellsSeen(src)
+		if #rows > 0 and shown < 6 then
+			shown = shown + 1
+			local h = W.Text(f, src:upper(), "head", "accent")
+			h:SetPoint("TOPLEFT", X, y)
+			y = y - 20
+
+			for i = 1, math.min(#rows, 14) do
+				local r = rows[i]
+				-- Written the way it goes INTO a note, so it can be read straight
+				-- across into the editor rather than reassembled by hand.
+				local code = W.Text(f, ("%s:%d"):format(r.prefix or "?", r.id or 0), "note")
+				code:SetPoint("TOPLEFT", X, y)
+				code:SetFont("Fonts\ARIALN.TTF", 13)
+
+				local nm = W.Text(f, ("%s  |cff6f7176x%d|r"):format(r.name or "?", r.n or 0),
+					"note", "dim")
+				nm:SetPoint("TOPLEFT", X + 110, y)
+				nm:SetWidth(PANEL_W - X - 124)
+				nm:SetJustifyH("LEFT")
+				y = y - 17
+			end
+			y = y - 10
+		end
+	end
+
+	f:SetHeight(math.abs(y) + 18)
+end
+
+-- Roughly 30/70 across the content panel.
+--
+-- The list holds names like "Deathbringer Saurfang (10) (HC)" and was
+-- clipping them to "Deathbringer Sa..."; the note beside it is a column of
+-- short timed lines that never needed the width it was given.
+local LIST_W = 260
+local ROW_H = 34
 
 local function listRow(i)
 	local r = F.rows[i]
@@ -847,14 +1052,21 @@ local function listRow(i)
 	hl:SetAllPoints(); hl:SetTexture(FLAT)
 	hl:SetVertexColor(1, 1, 1, 0.05)
 
-	r.dot = W.Text(r, "", "note", "dim")
-	r.dot:SetPoint("RIGHT", -7, 0)
-
+	-- Two lines: the boss, then who last wrote the note.
+	--
+	-- The credit used to be a word squeezed against the right edge, which cost
+	-- the name the room it needed -- "Deathbringer Sa..." -- and said "edited"
+	-- without saying by whom. Underneath it fits, and it can say the name.
 	r.name = W.Text(r, "", "body")
-	r.name:SetPoint("LEFT", 7, 0)
-	r.name:SetPoint("RIGHT", r.dot, "LEFT", -5, 0)
+	r.name:SetPoint("TOPLEFT", 7, -4)
+	r.name:SetPoint("RIGHT", -7, 0)
 	r.name:SetJustifyH("LEFT")
 	if r.name.SetWordWrap then r.name:SetWordWrap(false) end
+
+	r.dot = W.Text(r, "", "note", "dim")
+	r.dot:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
+	r.dot:SetPoint("RIGHT", -7, 0)
+	r.dot:SetJustifyH("LEFT")
 
 	r:EnableMouse(true)
 	r:SetScript("OnMouseUp", function(self)
@@ -889,15 +1101,21 @@ function N.PromptNew()
 	Okanvil:Prompt("New note", "Boss or fight name", "", function(name)
 		name = (name or ""):gsub("^%s+", ""):gsub("%s+$", "")
 		if name == "" then return end
-		local existing = db and db.notes and db.notes[name]
-		if existing ~= nil or N.HasPacked(name) then
-			Okanvil:Print(("|cff8a8d93A note for|r %s |cff8a8d93already exists -- opening it.|r"):format(name))
+		-- Keyed for the TAB YOU ARE ON, not the bare name.
+		--
+		-- The typed name was stored as-is, which is the 25-normal key -- so a note
+		-- created while looking at 10 heroic was written to 25 normal and vanished
+		-- from the list the moment it was made.
+		local key = N.KeyFor(name, N.ViewSize(), N.ViewHeroic())
+		local existing = db and db.notes and db.notes[key]
+		if existing ~= nil or N.HasPacked(key) then
+			Okanvil:Print(("|cff8a8d93A note for|r %s |cff8a8d93already exists -- opening it.|r"):format(key))
 		else
 			db.notes = db.notes or {}
-			db.notes[name] = ""
-			if N.Touch then N.Touch(name) end
+			db.notes[key] = ""
+			if N.Touch then N.Touch(key) end
 		end
-		N.Select(name)
+		N.Select(key)
 		N.Refresh()
 	end)
 end
@@ -964,7 +1182,7 @@ local function build(panel)
 
 	local dash = W.Dashboard(panel, {
 		title = "Notes",
-		icon = "Interface\\Icons\\INV_Scroll_03",
+		icon = (Okanvil.ICONS and Okanvil.ICONS.notes) or "Interface\\Icons\\INV_Scroll_03",
 		pills = true,
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -1010,6 +1228,11 @@ local function build(panel)
 			end
 			return N.auditLine or ""
 		end,
+		-- Before the first pill is built, not after: BuildPage puts the Follow
+		-- the room switch on the toolbar, and the toolbar is only reachable
+		-- through the dashboard this hands over.
+		onReady = function(d) F.dash = d end,
+
 		tabs = {
 			{ key = "notes", label = "Notes", height = 420, fill = true,
 			  build = function(p) N.BuildPage(p) end },
@@ -1024,19 +1247,44 @@ end
 
 function N.BuildPage(p)
 	-- ---- top strip: where you are, and the auto-switch toggle ----
-	F.here = W.Text(p, "", "body", "dim")
-	F.here:SetPoint("TOPLEFT", 6, -10)
+	-- Where you are, at the FOOT. It is status, not a control: reading it is how
+	-- you check the page followed you into the room, which is a glance after the
+	-- fact rather than something you act on -- and at the top it cost the list a
+	-- row it needed more.
+	F.here = W.Text(p, "", "note", "dim")
+	-- Anchored to the count rather than to the panel: the two are one status
+	-- line, and pinning both to the same left edge stacked them on each other.
+	-- Placed after F.count is built, at the end of BuildPage.
 
-	F.auto = W.Check(p, "Follow the room",
+	-- On the TAB ROW, at the right end, not down in the page foot.
+	--
+	-- It is a page-wide switch -- it decides what the whole page shows, the same
+	-- way the Notes/Fight window pills do -- so it belongs on the row those pills
+	-- sit on, opposite them. In the foot it was a fourth thing competing for a
+	-- strip that already held the count, the room and the syntax hint, and it
+	-- cost the note card a row it wanted more.
+	--
+	-- Parented to the dashboard's toolbar, which is free at its right end: this
+	-- page has no drawer, so nothing else claims that corner.
+	local toolbar = (F.dash and F.dash.toolbar) or p
+	F.auto = W.Check(toolbar, "Follow the room",
 		function() return db.autoZone end,
 		function(v)
 			db.autoZone = v and true or false
 			if v then applyZone() end
 			N.Refresh()
 		end)
-	-- The checkbox label sits to the RIGHT of the 18px box, so anchoring the box
-	-- to the edge would push the words off the panel. Leave room for both.
-	F.auto:SetPoint("TOPRIGHT", p, "TOPRIGHT", -124, -8)
+	-- The checkbox label sits to the RIGHT of the 18px box, so the whole widget
+	-- is anchored by its box and the words run on past it -- anchoring the box
+	-- itself to the right edge would push the text off the panel. Measured and
+	-- offset instead, so the LABEL ends at the edge.
+	if toolbar == p then
+		F.auto:SetPoint("TOPRIGHT", -10, -6)
+	else
+		-- +6 is the gap W.Check leaves between the box and its label.
+		local lw = (F.auto.text and F.auto.text:GetStringWidth()) or 92
+		F.auto:SetPoint("RIGHT", toolbar, "RIGHT", -(lw + 6), 0)
+	end
 	F.auto:Tooltip("Switch to the boss's note when you walk into their room.\nNever switches while you are in combat.")
 
 	-- ---- left: the note list ----
@@ -1053,44 +1301,94 @@ function N.BuildPage(p)
 	-- time pressure and puts the two plans for one boss in different places.
 	local TAB_H = 22
 
-	-- Raid on the first row, size on the second. Two questions, asked in the
-	-- order you answer them: which instance tonight, then which lockout.
-	local raids = N.Raids()
-	local rw = (LIST_W - (#raids - 1) * 3) / #raids
-	F.raidTabs = {}
-	for i, raid in ipairs(raids) do
-		local b = W.Button(p, raid.label, "secondary")
-		b:SetSize(rw, TAB_H)
-		b:SetPoint("TOPLEFT", 6 + (i - 1) * (rw + 3), -40)
-		b._raid = raid.key
-		b:Tooltip(raid.zone)
-		b:SetScript("OnClick", function() N.SetViewRaid(raid.key) end)
-		F.raidTabs[#F.raidTabs + 1] = b
-	end
+	-- Raid and size sit over the LIST they filter, not in the page header.
+	-- They choose which notes the column below shows, so they belong to that
+	-- column -- in the header they were a long way from what they changed, and
+	-- the header has its own job (the note being sent, the send tally).
+	--
+	-- One row, because they fit: the raid pills are the wide ones and the two
+	-- sizes are narrow, so the whole filter is one band over the list rather
+	-- than two bands eating the page.
+	-- TWO rows, size over raid, each spanning the full width of the list they
+	-- filter. One cramped row of 40px pills left two thirds of the band empty
+	-- while the pills themselves were too small to hit comfortably -- so both
+	-- rows now divide LIST_W between their buttons and grow to fill it.
+	--
+	-- Size on TOP because it is the coarser question: which raid you are
+	-- reading for is asked once a night, which boss changes constantly.
+	local TAB_Y = -40
+	local ROW_H, ROW_GAP = 26, 4
+	-- Where BOTH cards start: under the two filter rows on the left, under the
+	-- boss name and its Normal/Heroic pills on the right. One number, so the two
+	-- columns cannot drift apart again.
+	local CARD_Y = TAB_Y - (ROW_H * 2 + ROW_GAP) - 6
+	do
+		local GAP = 4
 
-	F.sizeTabs = {}
-	for i, size in ipairs({ 25, 10 }) do
-		local b = W.Button(p, tostring(size) .. " man", "secondary")
-		b:SetSize(LIST_W / 2 - 3, TAB_H)
-		b:SetPoint("TOPLEFT", 6 + (i - 1) * (LIST_W / 2 + 3), -40 - TAB_H - 3)
-		b._size = size
-		b:SetScript("OnClick", function() N.SetViewSize(size) end)
-		F.sizeTabs[#F.sizeTabs + 1] = b
+		-- ---- row 1: 10 / 25, half the list each ----
+		-- 10 first: it is the size this guild actually runs.
+		F.sizeTabs = {}
+		do
+			local n = 2
+			local w = (LIST_W - GAP * (n - 1)) / n
+			local x = 6
+			for _, size in ipairs({ 10, 25 }) do
+				local b = W.Button(p, tostring(size) .. " man", "secondary")
+				b:SetSize(w, ROW_H)
+				b:SetPoint("TOPLEFT", x, TAB_Y)
+				b._size = size
+				b:Tooltip(size .. " man")
+				b:SetScript("OnClick", function() N.SetViewSize(size) end)
+				F.sizeTabs[#F.sizeTabs + 1] = b
+				x = x + w + GAP
+			end
+		end
+
+		-- ---- row 2: the raids, an equal share each ----
+		-- Widths come from how many raids Raids() returns, not from a hardcoded
+		-- three, so adding a fourth raid to Notes-Data re-divides the row instead
+		-- of running it off the end of the list.
+		F.raidTabs = {}
+		do
+			local raids = N.Raids()
+			local n = math.max(#raids, 1)
+			local w = (LIST_W - GAP * (n - 1)) / n
+			local x = 6
+			local y = TAB_Y - ROW_H - ROW_GAP
+			for _, raid in ipairs(raids) do
+				local b = W.Button(p, raid.label, "secondary")
+				b:SetSize(w, ROW_H)
+				b:SetPoint("TOPLEFT", x, y)
+				b._raid = raid.key
+				b:Tooltip(raid.zone)
+				b:SetScript("OnClick", function() N.SetViewRaid(raid.key) end)
+				F.raidTabs[#F.raidTabs + 1] = b
+				x = x + w + GAP
+			end
+		end
 	end
 
 	local lcard = W.Frame(p, "dark")
-	lcard:SetPoint("TOPLEFT", 6, -40 - (TAB_H + 3) * 2 - 3)
-	lcard:SetPoint("BOTTOMLEFT", 6, 40)
+	-- Below BOTH filter rows now, measured from them rather than by a constant:
+	-- the band is two rows of ROW_H plus the gap between them.
+	-- The buttons hang BELOW the card, so the card has to stop high enough to
+	-- leave room for them: their 22px plus the 6px gap, over the same 30px foot
+	-- the note card on the right uses. A flat 40 here was two things at once --
+	-- too high to reach the foot, too low to clear the buttons -- so the list
+	-- was clipped mid-row and a band of empty panel sat underneath it.
+	local BTN_H, BTN_GAP, FOOT = 22, 6, 30
+	lcard:SetPoint("TOPLEFT", 6, CARD_Y)
+	lcard:SetPoint("BOTTOMLEFT", 6, FOOT + BTN_H + BTN_GAP)
 	lcard:SetWidth(LIST_W)
 
 	F.addBtn = W.Button(p, "+ New", "primary")
-	F.addBtn:SetSize(LIST_W / 2 - 3, 22)
-	F.addBtn:SetPoint("TOPLEFT", lcard, "BOTTOMLEFT", 0, -6)
+	F.addBtn:SetSize(LIST_W / 2 - 3, BTN_H)
+	F.addBtn:SetPoint("TOPLEFT", lcard, "BOTTOMLEFT", 0, -BTN_GAP)
 	F.addBtn:SetScript("OnClick", function() N.PromptNew() end)
 
 	F.delBtn = W.Button(p, "Delete", "danger")
-	F.delBtn:SetSize(LIST_W / 2 - 3, 22)
-	F.delBtn:SetPoint("TOPRIGHT", lcard, "BOTTOMRIGHT", 0, -6)
+	F.delBtn:SetSize(LIST_W / 2 - 3, BTN_H)
+	F.delBtn:SetPoint("TOPRIGHT", lcard, "BOTTOMRIGHT", 0, -BTN_GAP)
 	F.delBtn:SetScript("OnClick", function() N.PromptDelete() end)
 
 	local lsf = CreateFrame("ScrollFrame", nil, lcard)
@@ -1112,13 +1410,44 @@ function N.BuildPage(p)
 	-- ---- right: the note itself ----
 	local RX = 6 + LIST_W + 10
 	F.title = W.Text(p, "", "head", "accent")
-	F.title:SetPoint("TOPLEFT", RX, -42)
+	-- Centred in the band above the card rather than pinned to the top of it:
+	-- that band is two filter rows deep now, and at -12 the boss name sat up
+	-- against the tabs with the gap all underneath it.
+	-- +30, not +24: the title row carries the difficulty pills as well, and at
+	-- 24 they sat right on the card below -- the first line of the note read
+	-- as part of the header.
+	F.title:SetPoint("TOPLEFT", RX, CARD_Y + 30)
+
+	-- Normal / Heroic, on the NOTE rather than on the page.
+	--
+	-- Here and not up with the size pills because it belongs to the plan, not to
+	-- the browsing: the boss stays selected and its place in the list does not
+	-- move, only which of its two versions you are reading. Sat directly over the
+	-- note it switches, so there is no doubt about what it applies to.
+	F.diffTabs = {}
+	for i, hc in ipairs({ false, true }) do
+		local b = W.Button(p, hc and "Heroic" or "Normal", "secondary")
+		b:SetSize(62, TAB_H)
+		-- Beside the boss name, because it changes which version of THAT
+		-- plan you are reading -- not which page you are on.
+		b:SetPoint("LEFT", F.title, "RIGHT", 12 + (i - 1) * 60, 1)
+		b._hc = hc
+		b:Tooltip(hc
+			and "The heroic plan."
+				.. "\nHeroic abilities carry DIFFERENT spell ids, so a normal"
+				.. "\nnote's timers never fire here -- this is its own note."
+			or "The normal plan.")
+		b:SetScript("OnClick", function() N.SetViewHeroic(hc) end)
+		F.diffTabs[#F.diffTabs + 1] = b
+	end
 
 	-- No "Fill names" button. The slots resolve as you type now, so writing the
 	-- names into the text bought nothing and cost the note its link to the slot
 	-- table -- change a paladin and that one note would have been left behind.
 	F.clear = W.Button(p, "Clear")
-	F.clear:SetSize(54, 20); F.clear:SetPoint("TOPRIGHT", -10, -38)
+	-- On the boss name's line: these act on the note under them, so they
+	-- share its row rather than sitting in a band of their own.
+	F.clear:SetSize(54, 20); F.clear:SetPoint("TOPRIGHT", -10, -8)
 	F.clear:Tooltip("Undo your edits to this note.\nIt goes back to the one Okanvil ships with.")
 	F.clear:SetScript("OnClick", function()
 		local sel = db.selected
@@ -1151,6 +1480,17 @@ function N.BuildPage(p)
 	F.help:SetPoint("RIGHT", F.mode, "LEFT", -5, 0)
 	F.help:Tooltip("How to write a note line, and the class colours.\nOpens beside this window.")
 	F.help:SetScript("OnClick", showHelp)
+
+	-- The ids this core's bosses actually cast, beside the syntax that uses
+	-- them. Here rather than in Settings because it is read WHILE writing a
+	-- line, in the half-second between wondering which id and typing one.
+	F.seen = W.Button(p, "ids")
+	F.seen:SetSize(34, 20)
+	F.seen:SetPoint("RIGHT", F.help, "LEFT", -5, 0)
+	F.seen:Tooltip("What the bosses were seen casting, and how often."
+		.. "\nRecorded by itself from every pull -- nothing to switch on."
+		.. "\nUse it when a timer never starts: the id may not exist here.")
+	F.seen:SetScript("OnClick", showSeen)
 	F.mode:SetScript("OnClick", function()
 		N.Commit()
 		F.editMode = not F.editMode
@@ -1159,11 +1499,18 @@ function N.BuildPage(p)
 
 	-- ---- read view: the note as timed lines ----
 	F.readCard = W.Frame(p, "dark")
-	F.readCard:SetPoint("TOPLEFT", RX, -66)
-	F.readCard:SetPoint("BOTTOMRIGHT", -10, 34)
+	-- CARD_Y, not -40: the note card and the list card are two halves of one
+	-- view and have to start on the same line. The filter band grew to two rows
+	-- and the left card moved down with it, leaving the right one floating a
+	-- row and a half higher with a strip of bare panel beside its heading.
+	F.readCard:SetPoint("TOPLEFT", RX, CARD_Y)
+	-- 30: the foot is ONE row again. Follow the room moved up to the toolbar,
+	-- so the card takes back the 22px its second row was holding.
+	F.readCard:SetPoint("BOTTOMRIGHT", -10, 30)
 
 	local rsf = CreateFrame("ScrollFrame", nil, F.readCard)
-	rsf:SetPoint("TOPLEFT", 4, -4); rsf:SetPoint("BOTTOMRIGHT", -10, 4)
+	-- -8 at the top: a line starting 4px under the border touched it.
+	rsf:SetPoint("TOPLEFT", 4, -8); rsf:SetPoint("BOTTOMRIGHT", -10, 4)
 	local rchild = CreateFrame("Frame", nil, rsf); rchild:SetSize(10, 1)
 	rsf:SetScrollChild(rchild)
 	local rsb = CreateFrame("Slider", nil, F.readCard)
@@ -1190,15 +1537,38 @@ function N.BuildPage(p)
 
 	F.edit = W.MultiEdit(p)
 	F.edit:SetTextSize(14)      -- a note is read as much as typed in
-	F.edit:SetPoint("TOPLEFT", RX, -66)
-	F.edit:SetPoint("BOTTOMRIGHT", -10, 34)
+	F.edit:SetPoint("TOPLEFT", RX, CARD_Y)
+	-- Same foot as the read card: the two are one card in two modes, and a
+	-- different bottom made the note jump as you switched between them.
+	F.edit:SetPoint("BOTTOMRIGHT", -10, 30)
 	F.edit.edit:SetScript("OnEditFocusLost", function() N.Commit(); N.Refresh() end)
 
+	-- One status line, left to right: what the note holds, where you are, and
+	-- the switch that decides whether the page follows you.
+	--
+	-- Each takes a WIDTH. Without one a FontString grows to whatever it holds,
+	-- and three of them on one row simply drew over each other -- the note count,
+	-- the room and the syntax hint all in the same 40 pixels, unreadable.
 	F.count = W.Text(p, "", "note", "dim")
 	F.count:SetPoint("BOTTOMLEFT", RX, 12)
+	F.count:SetWidth(120)
+	F.count:SetJustifyH("LEFT")
 
-	F.hint = W.Text(p, "MRT note format. Write player names; press ? for the syntax and class colours.", "note", "dim")
+	F.here:ClearAllPoints()
+	F.here:SetPoint("LEFT", F.count, "RIGHT", 8, 0)
+	F.here:SetWidth(150)
+	F.here:SetJustifyH("LEFT")
+
+
+	-- Short, because it shares the row. The long version is one click away
+	-- behind the ? and does not need repeating along the bottom of the window.
+	F.hint = W.Text(p, "MRT format -- press ? for the syntax", "note", "dim")
 	F.hint:SetPoint("BOTTOMRIGHT", -10, 12)
+	F.hint:SetJustifyH("RIGHT")
+
+	-- No anchor for F.auto here: it lives on the toolbar now, beside the pills.
+	-- The foot is one row again -- the count, the room and the syntax hint --
+	-- which is what let the note card drop from 52 to 30.
 
 	N.Refresh()
 end
@@ -1256,6 +1626,20 @@ function N.BuildWindowPage(p)
 
 	local sHint = W.Text(p, "The window grows to fit the note at whatever size you pick.", "note", "dim")
 	sHint:SetPoint("TOPLEFT", X, y)
+	y = y - 40
+
+	-- Icons separately from the text. They carry the part you read fastest --
+	-- which cooldown -- so they are worth making bigger than the words beside
+	-- them, and tying the two together would stop you doing that.
+	F.wIcon = W.Slider(p, "Icon size", 12, 32, 2,
+		function() return WIN and WIN.GetIconSize() or 18 end,
+		function(v) if WIN then WIN.SetIconSize(v) end end)
+	F.wIcon:SetPoint("TOPLEFT", X, y)
+	F.wIcon:SetWidth(240)
+	y = y - 30
+
+	local iHint = W.Text(p, "The spell and marker icons inside a note.", "note", "dim")
+	iHint:SetPoint("TOPLEFT", X, y)
 	y = y - 42
 
 	-- No role slots.
@@ -1393,6 +1777,12 @@ function N.Refresh()
 			b:SetKind(b._size == vs and "primary" or "secondary")
 		end
 	end
+	if F.diffTabs then
+		local vh = N.ViewHeroic()
+		for _, b in ipairs(F.diffTabs) do
+			b:SetKind(b._hc == vh and "primary" or "secondary")
+		end
+	end
 
 	-- the list
 	for _, r in ipairs(F.rows) do r:Hide() end
@@ -1406,16 +1796,22 @@ function N.Refresh()
 		-- The boss, never the key: the size is the tab you are on, and repeating
 		-- it on every row is noise you have to read past twelve times.
 		r.name:SetText((has and "|cffdcddde" or "|cff6f7176") .. N.BossOf(name) .. "|r")
-		-- A mark only where there is something to say. Green "edited" is yours;
-		-- a note somebody sent you carries their name in grey instead. The
-		-- shipped notes are the normal case and get no badge at all -- a mark on
-		-- almost every row says nothing, which is what "edited" on all twelve
-		-- amounted to before the two cases were told apart.
-		if own then
-			r.dot:SetText("|cff7cfc8aedited|r")
+		-- WHO and WHEN, not "edited".
+		--
+		-- The old badge said a note had been changed without saying by whom, which
+		-- is the half worth knowing: a plan somebody else rewrote this morning is a
+		-- different thing from one you typed last week. The shipped notes say
+		-- nothing at all -- a badge on every row is a badge nobody reads.
+		local by = N.AuthorOf(name)
+		if by then
+			local stamp = db.stamps and db.stamps[name]
+			local when = stamp and date("%d %b", stamp) or nil
+			local col = own and "|cff7cfc8a" or "|cff8a8d93"
+			r.dot:SetText(when
+				and ("|cff6f7176last edit|r %s%s|r |cff6f7176%s|r"):format(col, by, when)
+				or ("|cff6f7176last edit|r %s%s|r"):format(col, by))
 		else
-			local by = N.AuthorOf(name)
-			r.dot:SetText(by and ("|cff6f7176" .. by .. "|r") or "")
+			r.dot:SetText("")
 		end
 		r.sel:SetShown(name == db.selected)
 		r:Show()
@@ -1430,6 +1826,8 @@ function N.Refresh()
 	local canEdit = N.CanEdit()
 	-- Boss on the left, size dim on the right: the title is the one place worth
 	-- saying which plan this is, because the editor below it changes with it.
+	-- Boss and size only. The difficulty is the lit tab right beside this, so
+	-- naming it again in the title said the same thing twice in two colours.
 	F.title:SetText(sel
 		and (N.BossOf(sel) .. ("  |cff6f7176%d man|r"):format(N.SizeOf(sel)))
 		or "|cff6f7176Pick a note|r")
@@ -1465,7 +1863,16 @@ function N.Refresh()
 		F.entries = Okanvil.NotesParse and Okanvil.NotesParse.Parse(text) or {}
 		local timed = 0
 		for _, e in ipairs(F.entries) do if e.time then timed = timed + 1 end end
-		F.count:SetText(("|cff6f7176%d lines, %d timed|r"):format(#F.entries, timed))
+		-- An empty heroic note is the expected state, not a fault -- the plan
+		-- simply has not been written yet -- but it has to SAY so, because the
+		-- normal version sitting one tab away looks like it should have appeared.
+		if #F.entries == 0 and N.IsHeroic(sel) then
+			-- Short: it shares the footer row. The why is in the Heroic tab's
+			-- own tooltip, where there is room for it.
+			F.count:SetText("|cffe8734aNo heroic note yet|r")
+		else
+			F.count:SetText(("|cff6f7176%d lines, %d timed|r"):format(#F.entries, timed))
+		end
 		if not editing then N.PaintLines() end
 	else
 		F.editing = nil
@@ -1477,7 +1884,9 @@ end
 -- ------------------------------------------------------------
 -- The read view: one row per note line, with a live countdown.
 -- ------------------------------------------------------------
-local LROW_H = 26
+-- Taller than the list rows: this is the half you read at a glance mid-pull,
+-- and the page has the vertical room now that the filters moved to the header.
+local LROW_H = 32
 
 local function lineRow(i)
 	local r = F.lineRows[i]
@@ -1487,9 +1896,11 @@ local function lineRow(i)
 	r:SetPoint("TOPLEFT", 0, -(i - 1) * LROW_H)
 	r:SetPoint("TOPRIGHT", 0, -(i - 1) * LROW_H)
 
+	-- Time on the RIGHT, matching MRT's reminder bars and the fight window.
+	-- A left column reserves its width even on a line that has no clock.
 	r.t = W.Text(r, "", "head", "accent")
-	r.t:SetPoint("LEFT", 6, 0)
-	r.t:SetWidth(52); r.t:SetJustifyH("RIGHT")
+	r.t:SetPoint("RIGHT", -6, 0)
+	r.t:SetJustifyH("RIGHT")
 
 	r.mark = r:CreateTexture(nil, "BACKGROUND")
 	r.mark:SetTexture(FLAT)
@@ -1500,8 +1911,8 @@ local function lineRow(i)
 	r.mark:Hide()
 
 	r.txt = W.Text(r, "", "head")
-	r.txt:SetPoint("LEFT", r.t, "RIGHT", 10, 0)
-	r.txt:SetPoint("RIGHT", -6, 0)
+	r.txt:SetPoint("LEFT", 6, 0)
+	r.txt:SetPoint("RIGHT", r.t, "LEFT", -10, 0)
 	r.txt:SetJustifyH("LEFT")
 	if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
 
@@ -1532,6 +1943,11 @@ function N.PaintLines()
 		if r.mark then r.mark:SetShown(e.mine and true or false) end
 
 		if e.plain then
+			-- A line with no {time:} keeps no clock column.
+			--
+			-- The width was reserved either way, so a plain reminder started 52px in
+			-- with nothing to its left -- a gap that read as a missing timer rather
+			-- than as a line that never had one.
 			r.t:SetText("")
 			r:SetAlpha(1)
 		else
@@ -1604,7 +2020,7 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		Okanvil_Plugins[ADDON] = {
 			title = "Notes",
 			desc = "Raid notes per boss, switching on their own as you walk into each room.",
-			icon = "Interface\\Icons\\INV_Scroll_03",
+			icon = (Okanvil.ICONS and Okanvil.ICONS.notes) or "Interface\\Icons\\INV_Scroll_03",
 			build = function(panel) build(panel) end,
 			refresh = function() N.Refresh() end,
 		}
@@ -1636,7 +2052,73 @@ SlashCmdList["OKNOTES"] = function(msg)
 		return
 	end
 
+	if arg == "unlock" then
+		if not Okanvil.cdb then
+			Okanvil:Print("Not ready yet -- try again once you are logged in.")
+			return
+		end
+		Okanvil.cdb.notesUnlocked = not Okanvil.cdb.notesUnlocked
+		if Okanvil.cdb.notesUnlocked then
+			Okanvil:Print("Notes |cff00ff00unlocked|r on this character -- you can edit them.")
+		else
+			Okanvil:Print("Notes |cffff5555locked|r again on this character.")
+		end
+		if N.Refresh then N.Refresh() end
+		return
+	end
+
+	local P = Okanvil.NotesParse
+
+	-- Why a line never counted down. An anchored line waits for a combat-log
+	-- event, and when that event never arrives the line just sits there -- the
+	-- same thing you see when the spell id is wrong for this core, so the log
+	-- has to be watched rather than guessed at.
+	if arg == "watch" then
+		if not (P and P.SetDebug) then return end
+		P.SetDebug(not P.Debug())
+		if P.Debug() then
+			Okanvil:Print("Notes log recording |cff7cfc8aON|r -- pull the boss, then |cffe0b860/reload|r.")
+			Okanvil:Print("|cff8a8d93The pull is written to SavedVariables\\Okanvil.lua"
+				.. " (OkanvilNotesDB.log), so nothing scrolls away.|r")
+			-- Prove the switch reached the SAVED table, not just the copy in
+			-- memory. Code synced while the client is running does not take
+			-- effect until it reloads the Lua, and until then a watch that looks
+			-- fine writes nothing -- which is indistinguishable from a bug.
+			local stored = OkanvilNotesDB and OkanvilNotesDB.log
+			if stored and stored.watching then
+				Okanvil:Print("|cff7cfc8aSaved.|r The flag is in the file -- /reload will write the pull.")
+			else
+				Okanvil:Print("|cffff5555Not saved|r -- this client is running older code. Restart WoW.")
+			end
+		else
+			Okanvil:Print("Notes log recording |cffff5555OFF|r.")
+		end
+		return
+	end
+
+	-- What the LAST pull actually produced. Survives the wipe that produced it,
+	-- which is the point: nobody reads chat mid-fight.
+	if arg == "anchors" then
+		if not (P and P.SeenAnchors) then return end
+		local seen = P.SeenAnchors()
+		local keys = {}
+		for k in pairs(seen) do keys[#keys + 1] = k end
+		table.sort(keys, function(a, b) return (seen[a] or 0) < (seen[b] or 0) end)
+		if #keys == 0 then
+			Okanvil:Print("|cff8a8d93No anchor events seen since the last pull.|r"
+				.. " Either nothing was cast, or the ids are not arriving.")
+			return
+		end
+		Okanvil:Print(("|cffe0b860%d|r anchor events since the last pull:"):format(#keys))
+		for i = 1, math.min(#keys, 40) do
+			Okanvil:Print(("  |cff8a8d93+%5.1fs|r  %s"):format(seen[keys[i]] or 0, keys[i]))
+		end
+		return
+	end
+
 	Okanvil:Print("|cffe0b860/oknotes send|r -- push your notes to the group now")
+	Okanvil:Print("|cffe0b860/oknotes watch|r -- print combat-log ids as they arrive")
+	Okanvil:Print("|cffe0b860/oknotes anchors|r -- what the last pull produced")
 	-- Where the note you have selected would run, and whether that is here. The
 	-- question "why are my timers not starting" used to be answered by a test
 	-- mode that made them start everywhere; this answers it instead.

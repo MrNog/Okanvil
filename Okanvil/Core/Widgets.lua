@@ -424,6 +424,23 @@ function W.EditBox(parent, onEnter)
 			onEnter(s:GetText()); s:ClearFocus()
 		end)
 	end
+	-- The whole box is clickable, not just the glyphs. An EditBox only takes
+	-- focus where it has text to hit, so clicking an empty field anywhere but
+	-- the top-left -- where the cursor sits -- did nothing at all, and a short
+	-- value left most of the field dead. The frame behind it catches the click
+	-- and hands over focus, putting the cursor nearest to where you clicked.
+	box:EnableMouse(true)
+	box:SetScript("OnMouseDown", function(_, button)
+		if button ~= "LeftButton" then return end
+		e:SetFocus()
+		-- Clicking past the end of the text puts the cursor at the end, which is
+		-- what the empty space to the right of a value means.
+		local x = GetCursorPosition() / (e:GetEffectiveScale() or 1)
+		if x > (e:GetLeft() or 0) + (e:GetStringWidth() or 0) then
+			e:SetCursorPosition(e:GetText() and #e:GetText() or 0)
+		end
+	end)
+
 	Okanvil:TrackEditBox(e)   -- so the window can release keyboard focus on hide
 	box.edit = e
 	function box:Size(w, h) box:SetSize(w, h); return box end
@@ -485,6 +502,19 @@ function W.MultiEdit(parent, onDone)
 	e:SetScript("OnEditFocusLost", function()
 		box:SetBackdropBorderColor(unpack3(C.border))
 		if onDone then onDone(e:GetText()) end
+	end)
+
+	-- The empty space below the last line is clickable too. A multiline
+	-- EditBox is only as tall as the text it holds, so in a box with two lines
+	-- of text everything under them belonged to the scroll frame and clicking
+	-- there did nothing -- you had to hit the text itself to start typing.
+	-- Clicking the empty part means "carry on at the end", so that is where
+	-- the cursor goes.
+	box:EnableMouse(true)
+	box:SetScript("OnMouseDown", function(_, button)
+		if button ~= "LeftButton" then return end
+		e:SetFocus()
+		e:SetCursorPosition(e:GetText() and #e:GetText() or 0)
 	end)
 
 	box.edit = e
@@ -709,6 +739,23 @@ function W.Dashboard(parent, cfg)
 	end
 	local htitle = W.Text(header, cfg.title, nil, "accent")
 	htitle:SetPoint("LEFT", ix, 0)
+	D.htitle = htitle
+
+	-- Filters beside the title, for a page whose controls choose WHAT the page
+	-- is showing rather than acting on it.
+	--
+	-- The strip between the title and the buttons is dead space on every page,
+	-- and a page that puts raid/size pills in its body spends a whole band on
+	-- them -- which on Notes pushed the note itself halfway down the window.
+	-- The page builds its own controls here; the shell only says where.
+	if cfg.headerBuild then
+		local anchor = W.Frame(header, "bare")
+		anchor:SetPoint("LEFT", htitle, "RIGHT", 10, 0)
+		anchor:SetPoint("TOP", 0, 0); anchor:SetPoint("BOTTOM", 0, 0)
+		anchor:SetWidth(1)
+		D.headerSlot = anchor
+		cfg.headerBuild(header, anchor)
+	end
 
 	-- header CTA (primary button, right)
 	local cta
@@ -987,6 +1034,12 @@ function W.Dashboard(parent, cfg)
 	end
 	D:Refresh()
 
+	-- Hand the dashboard back BEFORE the first page is built. A pill page is
+	-- built inside this function, so a module that stores the return value only
+	-- sees it afterwards -- and any build() wanting the header or the toolbar
+	-- (to put a page-wide control at its free end) found nil and fell back.
+	if cfg.onReady then cfg.onReady(D) end
+
 	-- In pill mode the first pill IS the landing -- there is no separate page
 	-- underneath for it to sit on top of, so open it now rather than showing an
 	-- empty body until something is clicked.
@@ -999,7 +1052,26 @@ end
 -- ------------------------------------------------------------
 -- Popup -- draggable, screen-clamped dialog (for plugin sub-windows)
 -- ------------------------------------------------------------
+-- The one popup that is open.
+--
+-- Two of these on screen at once is unreadable: they are the same size, the
+-- same colour, and they stack -- so the help panel under the id list looked
+-- like one torn window. Opening a second closes the first, which also means
+-- a stray one can never be left behind something.
+local openPopup
+
+-- Close whatever popup is up. Public because a panel that is kept and
+-- re-Shown never goes through Popup() again, so it has to say so itself.
+function Okanvil:ClosePopup(except)
+	if openPopup and openPopup ~= except and openPopup:IsShown() then
+		openPopup:Hide()
+	end
+end
+
+function Okanvil:SetPopup(f) openPopup = f end
+
 function Okanvil:Popup(title)
+	self:ClosePopup()
 	local f = CreateFrame("Frame", nil, UIParent)
 	f:SetFrameStrata("DIALOG")
 	f:SetClampedToScreen(true)
@@ -1008,6 +1080,13 @@ function Okanvil:Popup(title)
 	f:SetMovable(true)
 	f:SetPoint("CENTER")
 	self:Skin(f)
+	-- Opaque, whatever the window alpha is set to. The shell can be made
+	-- see-through so the fight shows behind it; a popup is the opposite --
+	-- it exists to be READ, and at 60% the raid frames behind it turned a
+	-- table of spell ids into noise.
+	local C = Okanvil.Colors
+	f:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.97)
+	f:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
 	local hdr = W.Frame(f, "raise")
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(24)
 	hdr:EnableMouse(true); hdr:RegisterForDrag("LeftButton")
@@ -1019,6 +1098,11 @@ function Okanvil:Popup(title)
 	local close = W.Button(hdr, "X"); close:SetSize(20, 18); close:SetPoint("RIGHT", -2, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 	f.header, f.title = hdr, t
+
+	openPopup = f
+	f:HookScript("OnHide", function(sf)
+		if openPopup == sf then openPopup = nil end
+	end)
 	return Mod(f)
 end
 

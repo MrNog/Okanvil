@@ -1805,7 +1805,7 @@ local dashRef            -- the page's Dashboard, so the header CTA can repaint
 function C_.BuildPage(p)
 	local dash
 	dash = W.Dashboard(p, {
-		icon  = (Okanvil.ICONS and Okanvil.ICONS.loot) or "Interface\\Icons\\INV_Box_01",
+		icon  = (Okanvil.ICONS and Okanvil.ICONS.council) or "Interface\\Icons\\INV_Misc_Tournaments_Banner_Orc",
 		title = "Loot Council",
 		drawerWidth = 0,      -- no side list: this page is one column of settings
 		footerHeight = 0,

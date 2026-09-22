@@ -9,6 +9,7 @@
 --   {time:00:52}                 52s after the pull
 --   {time:00:22,SAA:74792:3}     22s after the 3rd application of 74792
 --   {spell:64205}                inline icon
+--   {item:36892}                inline icon for an ITEM (healthstone)
 --   {skull} {star} ...           raid target icons
 -- ============================================================
 
@@ -46,6 +47,159 @@ local phaseAt = nil
 function P.InCombat() return pullAt ~= nil end
 function P.Phase() return phase end
 
+-- Record every anchorable event a pull produces. Off by default.
+--
+-- Exists because "the line never counted down" has causes that look identical
+-- from the outside -- out of combat, the wrong spell id for this core, or the
+-- id arriving in a different argument slot -- and no way to tell them apart
+-- without seeing what the log actually hands over.
+--
+-- WRITTEN DOWN, not printed. A boss fight produces more lines than a chat frame
+-- keeps, so by the time the pull is over the start of it has scrolled away and
+-- cannot be copied out -- which is the half that matters, since the anchors a
+-- note waits on are the early ones. This goes to the same SavedVariables file
+-- the error log uses, so it survives the wipe and can be read out of the file
+-- afterwards.
+-- The saved record. Declared in the .toc beside OkanvilBugDB, and kept to a few
+-- pulls: a raid night of every cast would be a file nobody can open.
+local LOG_PULLS = 4
+
+-- Created at load, not at the pull. The table only ever appeared in the file
+-- once recording had caught a fight, so a run that recorded nothing -- watch
+-- left off, or the pull never registering -- was indistinguishable from the
+-- addon never having loaded at all. An empty table in the file at least says
+-- which of those it was.
+--
+-- Declared before anything that calls it: a local is only in scope from its own
+-- line down, so the switch below referred to a global that did not exist.
+--
+-- Lives INSIDE OkanvilNotesDB rather than in a table of its own. A new
+-- SavedVariable has to be named in the .toc, and the client reads the .toc only
+-- when it starts -- never on /reload -- so a table added while the game is
+-- running is simply never written, and the log looked broken when it was only
+-- undeclared. Hanging it off a variable that is already saved means it records
+-- from the next /reload, with no restart.
+local function logDB()
+	OkanvilNotesDB = OkanvilNotesDB or {}
+	OkanvilNotesDB.log = OkanvilNotesDB.log or {}
+	OkanvilNotesDB.log.pulls = OkanvilNotesDB.log.pulls or {}
+	return OkanvilNotesDB.log
+end
+
+-- Kept in the saved file, not just in memory: /reload is how the file gets
+-- written, so a switch that forgot itself on reload could never survive long
+-- enough to record the pull it was turned on for.
+function P.SetDebug(on)
+	logDB().watching = on and true or false
+	P.debug = on and true or false
+end
+
+function P.Debug()
+	local d = OkanvilNotesDB and OkanvilNotesDB.log
+	if d and d.watching then return true end
+	return P.debug and true or false
+end
+
+P.debug = false
+
+-- This pull's events, in order: { key =, at =, name = }. Also mirrored into
+-- OkanvilNotesDB.log, which is what actually reaches disk.
+local seenKeys = {}
+function P.SeenAnchors() return seenKeys end
+
+-- ------------------------------------------------------------
+-- The spell catalogue: what each boss was actually SEEN casting.
+--
+-- Written for the one question a note cannot answer on its own -- "does this
+-- id exist HERE". The ID Finder says a spell exists, because the client ships
+-- every difficulty's variant in its spell table; it cannot say whether this
+-- core's boss ever casts it. A note anchored to a spell the boss never uses
+-- waits for ever and looks exactly like a broken addon.
+--
+-- ONE ROW PER SPELL, not per occurrence: { id, name, prefix, n }. A boss fight
+-- is thousands of events and a handful of distinct spells, so counting is what
+-- makes this small enough to keep for every boss in the game.
+--
+-- Silent by design. Nothing prints, nothing warns, nothing asks -- you read it
+-- when you sit down to write a note, not while you are tanking.
+-- ------------------------------------------------------------
+local function catalogue()
+	local d = logDB()
+	d.seen = d.seen or {}
+	return d.seen
+end
+
+-- The boss this cast belongs to. The source NAME, not the note or the room: a
+-- room can hold two bosses (the Plagueworks) and the note is whatever happens
+-- to be selected, which may be the wrong one or none at all.
+local function noteSpell(srcName, prefix, spellID, spellName)
+	if not srcName or srcName == "" then return end
+	local seen = catalogue()
+	local boss = seen[srcName]
+	if not boss then
+		boss = {}
+		seen[srcName] = boss
+	end
+	local key = prefix .. ":" .. spellID
+	local row = boss[key]
+	if row then
+		row.n = row.n + 1
+		return
+	end
+	-- Bounded per source, so a boss with a long tail of trash abilities cannot
+	-- grow the file without limit.
+	local count = 0
+	for _ in pairs(boss) do count = count + 1 end
+	if count >= 60 then return end
+	boss[key] = {
+		id = spellID,
+		name = (type(spellName) == "string" and spellName) or "?",
+		prefix = prefix,
+		n = 1,
+	}
+end
+
+-- Every spell recorded against one source, most cast first.
+function P.SpellsSeen(srcName)
+	local seen = (OkanvilNotesDB and OkanvilNotesDB.log and OkanvilNotesDB.log.seen) or {}
+	local boss = seen[srcName]
+	if not boss then return {} end
+	local out = {}
+	for _, row in pairs(boss) do out[#out + 1] = row end
+	table.sort(out, function(a, b) return (a.n or 0) > (b.n or 0) end)
+	return out
+end
+
+-- Who we have seen cast anything, so the UI can offer a list.
+function P.SourcesSeen()
+	local seen = (OkanvilNotesDB and OkanvilNotesDB.log and OkanvilNotesDB.log.seen) or {}
+	local out = {}
+	for name in pairs(seen) do out[#out + 1] = name end
+	table.sort(out)
+	return out
+end
+
+function P.ClearCatalogue()
+	local d = logDB()
+	d.seen = {}
+end
+
+local function logPull()
+	local pulls = logDB().pulls
+	local rec = {
+		start = time(),
+		zone = (GetZoneText and GetZoneText()) or "?",
+		room = (GetSubZoneText and GetSubZoneText()) or "?",
+		note = (OkanvilNotesDB and OkanvilNotesDB.selected) or "?",
+		events = {},
+	}
+	pulls[#pulls + 1] = rec
+	while #pulls > LOG_PULLS do table.remove(pulls, 1) end
+	return rec
+end
+
+local pullRec = nil
+
 local function resetEncounter()
 	pullAt = nil
 	phase, phaseAt = 1, nil
@@ -82,9 +236,16 @@ local function parseAnchor(opts)
 	for opt in opts:gmatch("[^,]+") do
 		local prefix, spellID, count = opt:match("^(%a+):(%d+):?(%d*)$")
 		if prefix and (prefix == "SCC" or prefix == "SCS" or prefix == "SAA" or prefix == "SAR") then
+			-- The parts are kept beside the key because the key is not final: most
+			-- Icecrown abilities carry a different id per difficulty, so the number
+			-- written in the note is translated at match time (see Remaining). The
+			-- key stays as typed, for anything that wants to show it back.
 			return {
-				kind = "event",
-				key  = prefix .. ":" .. spellID .. ":" .. ((count ~= "" and count) or "1"),
+				kind   = "event",
+				prefix = prefix,
+				spell  = tonumber(spellID),
+				count  = (count ~= "" and count) or "1",
+				key    = prefix .. ":" .. spellID .. ":" .. ((count ~= "" and count) or "1"),
 			}
 		end
 		local ph = opt:match("^p(%d+)$")
@@ -131,21 +292,69 @@ function P.FillSlots(text)
 	end))
 end
 
+-- How big an inline icon is drawn. The window owns the number (it is a
+-- setting beside the text size) and pushes it here, so the parser stays
+-- free of the window and a note rendered anywhere else still has a size.
+P.iconSize = 18
+function P.SetIconSize(px)
+	P.iconSize = tonumber(px) or 18
+end
+
 function P.Render(text)
 	if not text or text == "" then return "" end
+	local S = ":" .. (P.iconSize or 18) .. "|t"
 	-- Notes copied out of MRT carry escaped pipes (||cff...), which a FontString
 	-- prints literally instead of colouring. Unescape first.
 	text = text:gsub("||", "|")
 	text = P.FillSlots(text)
 	text = text:gsub("{spell:(%d+):?%d*}", function(id)
-		return "|T" .. P.SpellIcon(id) .. ":18|t"
+		return "|T" .. P.SpellIcon(id) .. S
+	end)
+	-- Items too, for the lines that call for a healthstone or a potion: those
+	-- are things in your bags, and asking for a spell id would mean naming the
+	-- warlock spell that makes the stone rather than the stone you click.
+	--
+	-- NOT MRT syntax. A note written with this and sent to someone reading it
+	-- in MRT shows the tag as plain text there.
+	text = text:gsub("{item:(%d+):?%d*}", function(id)
+		return "|T" .. P.ItemIcon(id) .. S
 	end)
 	text = text:gsub("{(%a+%d?)}", function(tag)
 		local n = ICONS[tag:lower()]
 		if not n then return "{" .. tag .. "}" end
-		return "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_" .. n .. ":18|t"
+		return "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_" .. n .. S
 	end)
 	return text
+end
+
+-- An item icon. Same problem as a boss spell: an item the client has not seen
+-- this session answers nil to everything, so the tooltip is asked for it
+-- first to pull it into the cache. Without that, an id nobody in the group
+-- happens to be carrying renders as nothing at all.
+local itemIconCache = {}
+function P.ItemIcon(id)
+	id = tonumber(id)
+	if not id then return "Interface\\Icons\\INV_Misc_QuestionMark" end
+	if itemIconCache[id] then return itemIconCache[id] end
+
+	local icon = GetItemIcon and GetItemIcon(id)
+	if not icon then
+		local tip = _G.OkanvilNotesTip
+		if not tip then
+			tip = CreateFrame("GameTooltip", "OkanvilNotesTip", UIParent, "GameTooltipTemplate")
+		end
+		pcall(function()
+			tip:SetOwner(UIParent, "ANCHOR_NONE")
+			tip:SetHyperlink("item:" .. id)
+			tip:Hide()
+		end)
+		icon = (GetItemIcon and GetItemIcon(id)) or select(10, GetItemInfo(id))
+	end
+
+	icon = icon or "Interface\\Icons\\INV_Misc_QuestionMark"
+	-- Only cache a real answer: the server may still be sending the item.
+	if icon ~= "Interface\\Icons\\INV_Misc_QuestionMark" then itemIconCache[id] = icon end
+	return icon
 end
 
 -- A spell outside your own spellbook -- every boss ability in these notes --
@@ -274,6 +483,28 @@ end
 -- ------------------------------------------------------------
 -- Watching the fight
 -- ------------------------------------------------------------
+
+-- Did an NPC cast this -- a creature OR a vehicle?
+--
+-- U.guidIsNPC answers for the creature type alone, which is not enough here:
+-- several encounters do their work through something the client files as a
+-- vehicle (the Gunship, Halion's twilight realm, Putricide's oozes), and
+-- dropping those threw away the very casts those notes anchor to.
+--
+-- Reads the type nibble out of a normalised 16-digit hex string rather than a
+-- fixed offset, because a GUID can arrive as a number on some cores -- the same
+-- trap that left the farm tracker's kill counter stuck at zero.
+local function isNPCsrc(guid)
+	if not guid then return false end
+	local hex = tostring(guid):match("^0[xX](%x+)$") or tostring(guid):match("^(%x+)$")
+	if not hex then return false end
+	if #hex < 16 then hex = string.rep("0", 16 - #hex) .. hex end
+	local b = tonumber(hex:sub(3, 3), 16)
+	if not b then return false end
+	b = b % 8
+	return b == 3 or b == 5          -- 3 creature, 5 vehicle
+end
+
 local watch = CreateFrame("Frame")
 watch:RegisterEvent("PLAYER_REGEN_DISABLED")
 watch:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -294,6 +525,13 @@ watch:SetScript("OnEvent", function(_, event, ...)
 		resetEncounter()
 		pullAt = GetTime()
 		phaseAt = pullAt
+		-- A fresh pull starts a fresh record. Kept past PLAYER_REGEN_ENABLED,
+		-- unlike the counters, so a wipe can still be read back afterwards.
+		seenKeys = {}
+		pullRec = P.Debug() and logPull() or nil
+		if pullRec then
+			Okanvil:Print("|cff7cfc8a[notes]|r recording this pull -- /reload when done.")
+		end
 		return
 	end
 
@@ -310,14 +548,56 @@ watch:SetScript("OnEvent", function(_, event, ...)
 	--   destGUID, destName, destFlags, spellID, spellName, spellSchool
 	-- Reading the retail position silently counted spellName as the id, so
 	-- every {time:...,SCC:nnn:k} anchor waited for an occurrence that never came.
-	local _, sub, _, _, _, _, _, _, spellID = ...
+	local _, sub, srcGUID, srcName, _, _, dstName, _, spellID = ...
 	local prefix = CLEU_PREFIX[sub]
-	if not (prefix and type(spellID) == "number") then return end
+	if not prefix then return end
+
+	-- ONLY what an NPC did. Every note anchor names a boss ability, and counting
+	-- anything else is not merely noise: leaving combat drops every buff in the
+	-- raid at once, so a whole raid's worth of SPELL_AURA_REMOVED lands in one
+	-- frame and bumps counters a note is waiting on. "The 3rd Frostbolt Volley"
+	-- has to mean the boss's third, not the third aura to fall off a raider.
+	--
+	-- Creatures AND vehicles. U.guidIsNPC answers only for the creature type,
+	-- and several encounters do their work through something the client counts
+	-- as a vehicle -- the Gunship, Halion's twilight realm, Putricide's oozes --
+	-- so asking it alone threw away the very casts those notes are anchored to.
+	if not isNPCsrc(srcGUID) then return end
+
+	-- The id must be a number in slot 9. When it is not, the core is laying the
+	-- log out differently and EVERY anchored line in every note will wait for
+	-- something that never arrives -- so say so once rather than fail in silence
+	-- for a whole fight.
+	if type(spellID) ~= "number" then
+		if pullRec and not pullRec.badSlot then
+			pullRec.badSlot = ("%s -> %s (%s)"):format(sub, tostring(spellID), type(spellID))
+		end
+		return
+	end
 
 	local base = prefix .. ":" .. spellID
 	local n = (counters[base] or 0) + 1
 	counters[base] = n
-	reached[base .. ":" .. n] = GetTime()
+	local key = base .. ":" .. n
+	reached[key] = GetTime()
+	local at = GetTime() - (pullAt or 0)
+	seenKeys[key] = at
+
+	local spellName = select(10, ...)
+
+	-- The catalogue runs ALWAYS, with nothing switched on. One row per spell
+	-- per boss, so it costs a counter bump for everything after the first
+	-- sighting -- cheap enough to leave on for every pull of every night, which
+	-- is the point: the answer is already there when you sit down to write.
+	noteSpell(srcName, prefix, spellID, spellName)
+
+	-- The full ordered trace is the opt-in half (/oknotes watch), because that
+	-- one IS per occurrence and would grow without bound.
+	if pullRec and #pullRec.events < 400 then
+		pullRec.events[#pullRec.events + 1] = {
+			key = key, at = at, name = tostring(spellName or "?"),
+		}
+	end
 end)
 
 -- DBM already tracks phases and fires a callback for them (DBM-Core.lua:6926),
@@ -341,4 +621,13 @@ end
 
 local boot = CreateFrame("Frame")
 boot:RegisterEvent("PLAYER_LOGIN")
-boot:SetScript("OnEvent", function() P.HookDBM() end)
+boot:SetScript("OnEvent", function()
+	P.HookDBM()
+	-- Bring the switch back across the /reload that saved the file, and make
+	-- sure the table exists either way: an absent table says the addon never
+	-- loaded, an empty one says it loaded and caught nothing. Those needed
+	-- telling apart.
+	local d = logDB()
+	P.debug = d.watching and true or false
+	d.lastLogin = time()
+end)

@@ -1228,7 +1228,17 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		OkanvilPuGDB.guildInterval = nil
 
 		db = OkanvilPuGDB
-		db.active = false          -- never resume spamming across a reload
+		-- The spammer SURVIVES a reload.
+		--
+		-- It used to be forced off here, on the grounds that a /reload happens for
+		-- reasons that have nothing to do with the advert -- a Lua error, new code,
+		-- a stutter -- and coming back spamming a channel you had forgotten about
+		-- is how a mute happens. But the same reload lands mid-advert on purpose
+		-- far more often than by accident, and having to notice and restart it
+		-- every time cost more than it saved.
+		--
+		-- The trade is made safe by SAYING SO: see the login notice below, which
+		-- prints once and names the thing that is running.
 		-- A profile saved before "no res" and reserved items became mutually
 		-- exclusive can hold both. Settle it once, the same way the controls do
 		-- now: the named item is the specific claim, so it wins.
@@ -1242,7 +1252,7 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		Okanvil_Plugins[ADDON] = {
 			title = "PuG",
 			desc = "Build a raid: pick the instance, the roles you need, and spam the LFM line. Whispers become an invite list.",
-			icon = "Interface\\Icons\\Ability_Warrior_RallyingCry",
+			icon = (Okanvil.ICONS and Okanvil.ICONS.pug) or "Interface\\Icons\\Ability_Warrior_RallyingCry",
 			build = function(panel) M.BuildUI(panel) end,
 			refresh = function() if M.RefreshUI then M.RefreshUI() end end,
 		}
@@ -1252,6 +1262,19 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 	if event == "PLAYER_LOGIN" then
 		if not db then return end
 		if Okanvil and Okanvil.Register then Okanvil:Register(ADDON) end
+
+		-- An advert left running comes back running -- but SILENT for a full
+		-- interval first.
+		--
+		-- Start() posts immediately, because a leader who just pressed the button
+		-- wants the line out now. A reload is the opposite: it may be deliberate,
+		-- or it may be a Lua error you are still reading, and a line going out the
+		-- instant the UI comes back is one you never chose to send. Waiting the
+		-- whole cycle leaves time to notice and press Stop.
+		if db.active then
+			chElapsed = {}
+			Print(("|cffe0b860LFM is still running|r -- next line in %ds."):format(SPAM_EVERY))
+		end
 		return
 	end
 

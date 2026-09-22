@@ -101,10 +101,21 @@ function Okanvil:Settings_Modules(panel)
 				r.title = W.Text(r, "", "body"); r.title:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -1)
 				r.desc = W.Text(r, "", "note", "dim")
 				r.desc:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -15)
-				r.desc:SetPoint("RIGHT", r, "RIGHT", -110, 0); r.desc:SetJustifyH("LEFT")
+				-- Clear of BOTH buttons now, not just the enable one.
+				r.desc:SetPoint("RIGHT", r, "RIGHT", -190, 0); r.desc:SetJustifyH("LEFT")
 				r.toggle = W.Button(r, "")
 				r.toggle:SetSize(88, 24)
 				r.toggle:SetPoint("RIGHT", -8, 0)
+
+				-- Second switch: is this page on the Raid Check strip?
+				--
+				-- A different question from whether the module is on. Twelve icons
+				-- over a grid you read mid-pull is more than anyone wants, and which
+				-- of them earn the space is one guild's answer, not the addon's.
+				r.sc = W.Button(r, "")
+				r.sc:SetSize(74, 24)
+				r.sc:SetPoint("RIGHT", r.toggle, "LEFT", -5, 0)
+				r.sc:Tooltip("Show this page on the Raid Check shortcut strip.")
 				wrap.rows[i] = r
 			end
 			r:ClearAllPoints()
@@ -121,6 +132,31 @@ function Okanvil:Settings_Modules(panel)
 				if r.toggle._paint then r.toggle._paint(false) end
 			end
 			paintToggle()
+
+			-- Only for a module that HAS a page on the strip. Guild draws no nav row
+			-- at all and Combat Logs lives inside Settings, so a Shortcut switch on
+			-- those rows was a button with nothing to show or hide.
+			local hasPanel = (Okanvil.PANEL_TITLE and Okanvil.PANEL_TITLE[name]) ~= nil
+			r.sc:SetShown(hasPanel)
+
+			local function paintSc()
+				if not hasPanel then return end
+				local on = not Okanvil.IsShortcutEnabled
+					or Okanvil:IsShortcutEnabled(name)
+				-- Says what it is. A star meant nothing to anyone who had not been
+				-- told what it was for, and a control nobody can read is a control
+				-- nobody uses.
+				r.sc.text:SetText(on and "|cffe0b860Shortcut|r" or "|cff6f7176Hidden|r")
+				r.sc._active = on
+				if r.sc._paint then r.sc._paint(false) end
+			end
+			paintSc()
+			r.sc:SetScript("OnClick", function()
+				if not Okanvil.SetShortcutEnabled then return end
+				Okanvil:SetShortcutEnabled(name, not Okanvil:IsShortcutEnabled(name))
+				paintSc()
+			end)
+
 			r.toggle:SetScript("OnClick", function()
 				Okanvil:SetModuleEnabled(name, not Okanvil:IsModuleEnabled(name))
 				paintToggle()
