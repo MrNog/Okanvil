@@ -668,7 +668,9 @@ watch:SetScript("OnEvent", function(_, event, ...)
 		seenKeys = {}
 		catZone = raidZone()
 		catDiff = catZone and raidDiff() or nil
-		pullRec = P.Debug() and logPull() or nil
+		-- Raid pulls only, like the catalogue: notes are for raid bosses, and a
+		-- watch left on would otherwise log (and announce) every dungeon pack.
+		pullRec = (P.Debug() and catZone) and logPull() or nil
 		if pullRec then
 			Okanvil:Print("|cff7cfc8a[notes]|r recording this pull -- /reload when done.")
 		end

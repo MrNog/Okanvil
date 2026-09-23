@@ -9,8 +9,14 @@
 --     RegisterAddonMessagePrefix on this patch -- CHAT_MSG_ADDON just arrives,
 --     we filter by prefix in the handler.
 --   * CHAT_MSG_ADDON fires as (prefix, message, channel, sender).
---   * prefix + text must stay under ~255 bytes and shares the chat throttle, so
---     payloads are short and fire-and-forget (pair a PUSH with a FETCH/ACK).
+--   * prefix + text must stay under ~255 bytes and shares the chat throttle.
+--
+-- TRANSPORT: AceComm-3.0 over ChatThrottleLib, the same pair RCLootCouncil uses.
+-- ChatThrottleLib queues every message under the server's rate limit instead of
+-- letting a burst (a council question, its answers and a priority list, all in
+-- the same second) be dropped with no error; AceComm splits anything longer
+-- than one message and rebuilds it on the far side. Messages are still
+-- fire-and-forget: pair a PUSH with a FETCH/ACK.
 --
 -- WIRE FORMAT (versioned so mismatched clients ignore what they don't know):
 --     OKV1|<TYPE>|<arg1>|<arg2>|...
@@ -36,6 +42,24 @@ local SEP     = "|"
 -- with C.On("MLFIX", handler). Kept load-order safe: a module can register
 -- before or after Comms loads, as long as Comms loads first in the .toc (it does).
 local handlers = {}
+
+-- The AceComm endpoint. A private table rather than embedding into C, so its
+-- mixin names (SendCommMessage, RegisterComm...) never collide with ours.
+local AceComm = LibStub and LibStub("AceComm-3.0", true)
+local endpoint = AceComm and AceComm:Embed({}) or nil
+
+-- Put one Okanvil string on the wire. prio is ChatThrottleLib's: "ALERT",
+-- "NORMAL" (default) or "BULK" -- bulk transfers use BULK so a question or an
+-- answer is never stuck in the queue behind twenty chunks of a list.
+local function wire(text, chan, target, prio)
+	if endpoint then
+		endpoint:SendCommMessage(PREFIX, text, chan, target, prio or "NORMAL")
+	elseif target then
+		SendAddonMessage(PREFIX, text, chan, target)
+	else
+		SendAddonMessage(PREFIX, text, chan)
+	end
+end
 
 -- ------------------------------------------------------------
 -- Encode / decode. We escape the separator inside args so a name or payload that
@@ -87,9 +111,7 @@ end
 function C.Send(msgType, ...)
 	local chan = groupChannel()
 	if not chan then return false end
-	local text = pack(msgType, ...)
-	if #text > 240 then return false end   -- stay well under the ~255B cap; long payloads must chunk (none yet)
-	SendAddonMessage(PREFIX, text, chan)
+	wire(pack(msgType, ...), chan)
 	return true
 end
 
@@ -99,9 +121,7 @@ end
 -- first. Returns false when you are not in a guild.
 function C.SendGuild(msgType, ...)
 	if not (IsInGuild and IsInGuild()) then return false end
-	local text = pack(msgType, ...)
-	if #text > 240 then return false end
-	SendAddonMessage(PREFIX, text, "GUILD")
+	wire(pack(msgType, ...), "GUILD")
 	return true
 end
 
@@ -115,9 +135,7 @@ function C.Whisper(msgType, target, ...)
 	-- go through C.Reply, which delivers locally instead.
 	local me = UnitName and UnitName("player")
 	if me and target == me then return false end
-	local text = pack(msgType, ...)
-	if #text > 240 then return false end
-	SendAddonMessage(PREFIX, text, "WHISPER", target)
+	wire(pack(msgType, ...), "WHISPER", target)
 	return true
 end
 
@@ -154,10 +172,17 @@ local function onMessage(prefix, message, channel, sender)
 end
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("CHAT_MSG_ADDON")
-ev:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
-	onMessage(prefix, message, channel, sender)
-end)
+if endpoint then
+	-- AceComm hands over whole messages, multipart ones already reassembled.
+	endpoint:RegisterComm(PREFIX, function(prefix, message, channel, sender)
+		onMessage(prefix, message, channel, sender)
+	end)
+else
+	ev:RegisterEvent("CHAT_MSG_ADDON")
+	ev:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
+		onMessage(prefix, message, channel, sender)
+	end)
+end
 
 -- ------------------------------------------------------------
 -- Small shared helper other modules reuse: run fn() ONCE after `delay` seconds.
@@ -203,7 +228,6 @@ ev:Hide()   -- OnUpdate only runs while timers are pending
 -- the sender was allowed to send it.
 -- ------------------------------------------------------------
 local BIG_CHUNK   = 180        -- payload bytes per message, well under the cap
-local BIG_GAP     = 0.35       -- seconds between sends: stay under the chat throttle
 local BIG_TIMEOUT = 60         -- give up on a half-finished transfer after this
 local bigIn  = {}              -- sender.."\0"..tag -> { id, total, parts, at }
 local bigHandlers = {}         -- tag -> fn(sender, text)
@@ -228,20 +252,14 @@ function C.SendBig(tag, text, chan, target)
 	local total = math.ceil(#text / BIG_CHUNK)
 	for i = 1, total do
 		local part = text:sub((i - 1) * BIG_CHUNK + 1, i * BIG_CHUNK)
-		-- spread the series over time: firing 20 messages in one frame trips the
-		-- client's own throttle and the tail is silently dropped.
-		C.After(BIG_GAP * (i - 1), function()
-			-- The PART is escaped too, not just the tag and id.
-			--
-			-- It used to go on the wire raw, which worked for as long as the only
-			-- payload was the loot list. A raid note is full of '|' -- every
-			-- colour code is |cff......|r -- and the receiver splits on exactly
-			-- that character, so the note shattered into fragments and only the
-			-- piece before the first colour survived.
-			local body = table.concat({ VERSION, "BIG", encField(tag), encField(id), i, total, encField(part) }, SEP)
-			if target then SendAddonMessage(PREFIX, body, chan, target)
-			else SendAddonMessage(PREFIX, body, chan) end
-		end)
+		-- The PART is escaped too, not just the tag and id. A raid note is full of
+		-- '|' -- every colour code is |cff......|r -- and the receiver splits on
+		-- exactly that character, so a raw part shatters into fragments.
+		--
+		-- All chunks are queued at once: ChatThrottleLib paces them out in order,
+		-- at BULK priority so they never hold up a council question.
+		local body = table.concat({ VERSION, "BIG", encField(tag), encField(id), i, total, encField(part) }, SEP)
+		wire(body, chan, target, "BULK")
 	end
 	return total
 end
@@ -334,7 +352,7 @@ function C.RequestVersions(scope, onDone, timeout)
 	local me = UnitName and UnitName("player")
 	if me then verReplies[me] = tostring(Okanvil.version or "?") end
 	verRunning = true
-	SendAddonMessage(PREFIX, pack("VERQ"), chan)
+	wire(pack("VERQ"), chan)
 	C.After(timeout or 5, function()
 		verRunning = false
 		if C.onVersionReply then C.onVersionReply() end
@@ -429,10 +447,10 @@ end
 --                 onDone = fn(replies, round) }
 -- Returns the round id, or false when there is nobody to ask.
 --
--- SIZE: this goes through C.Send, which silently refuses anything over 240
--- bytes. A question is expected to be small (an item link and a flag). Anything
--- carrying a LIST must go out with C.SendBig under its own tag and use Ask only
--- to announce it.
+-- SIZE: keep a question small (an item link and a flag). AceComm would split a
+-- long one, but every chunk then has to arrive before anyone can answer. Anything
+-- carrying a LIST goes out with C.SendBig under its own tag and uses Ask only to
+-- announce it.
 function C.Ask(topic, payload, opts)
 	opts = opts or {}
 	local round = newRound()
@@ -514,7 +532,9 @@ C.On("ASK", function(sender, topic, round, payload)
 		return
 	end
 	if reply == nil then return end                 -- handler will answer later, or chose silence
-	C.Whisper("ANS", sender, topic, round, tostring(reply))
+	-- C.Reply, not C.Whisper: the asker hears their own broadcast too, and a
+	-- whisper to yourself is dropped -- their own "can't use it" never landed.
+	C.Reply(sender, topic, round, reply)
 end)
 
 -- Send a late answer to a question asked earlier. The counterpart to a handler
