@@ -1382,11 +1382,14 @@ local LOOT_PATTERNS
 local function buildLootPatterns()
 	if LOOT_PATTERNS then return LOOT_PATTERNS end
 	LOOT_PATTERNS = {}
-	local function add(template, extract)
+	-- `pushed`: the line is "receives ITEM", not "receives LOOT" -- a quest reward, a
+	-- purchase, something created. Boss loot never arrives that way (a corpse and a
+	-- master-loot give both say "loot"), so those lines are matched but never recorded.
+	local function add(template, extract, pushed)
 		if type(template) ~= "string" or template == "" then return end
 		local p = template:gsub("([%%%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
 		p = p:gsub("%%%%s", "(.+)"):gsub("%%%%d", "(%%d+)")
-		LOOT_PATTERNS[#LOOT_PATTERNS + 1] = { p, extract }
+		LOOT_PATTERNS[#LOOT_PATTERNS + 1] = { p, extract, pushed }
 	end
 	local me = function() return UnitName("player") end
 	-- A generic "%s won" also matches "You won: [item]" and hands back the word
@@ -1399,13 +1402,13 @@ local function buildLootPatterns()
 	-- checked ahead of them is what recorded winners as "You".
 	add(LOOT_ITEM_SELF_MULTIPLE,        function(l)    return me(), l end)
 	add(LOOT_ITEM_SELF,                 function(l)    return me(), l end)
-	add(LOOT_ITEM_PUSHED_SELF_MULTIPLE, function(l)    return me(), l end)
-	add(LOOT_ITEM_PUSHED_SELF,          function(l)    return me(), l end)
+	add(LOOT_ITEM_PUSHED_SELF_MULTIPLE, function(l)    return me(), l end, true)
+	add(LOOT_ITEM_PUSHED_SELF,          function(l)    return me(), l end, true)
 	add(LOOT_ROLL_YOU_WON,              function(l)    return me(), l end)
 	add(LOOT_ITEM_MULTIPLE,             function(n, l) return who(n), l end)
 	add(LOOT_ITEM,                      function(n, l) return who(n), l end)
-	add(LOOT_ITEM_PUSHED_MULTIPLE,      function(n, l) return who(n), l end)
-	add(LOOT_ITEM_PUSHED,               function(n, l) return who(n), l end)
+	add(LOOT_ITEM_PUSHED_MULTIPLE,      function(n, l) return who(n), l end, true)
+	add(LOOT_ITEM_PUSHED,               function(n, l) return who(n), l end, true)
 	add(LOOT_ROLL_WON,                  function(n, l) return who(n), l end)
 	return LOOT_PATTERNS
 end
@@ -1732,6 +1735,11 @@ local function onChatLoot(msg)
 		local a, b = msg:match(patterns[i][1])
 		if a then
 			local player, link = patterns[i][2](a, b)
+			-- A quest reward or a purchase ("receives item") is never boss loot.
+			if patterns[i][3] then return end
+			-- Our own loot out of a bag we opened (Sack of Frosty Treasures, a clam,
+			-- a lockbox): it arrives as "You receive loot", exactly like a corpse.
+			if player == UnitName("player") and L.BagLootActive() then return end
 			if player and link then tagReceiver(player, link) end
 			return
 		end
@@ -2464,7 +2472,39 @@ end
 --
 -- Do NOT try to read GetLootSlotLink here to double-check: the window is being torn
 -- down, so it answers nil for a slot we never gave away, which would read as success.
+-- ------------------------------------------------------------
+-- LOOT FROM A BAG, NOT A CORPSE.
+--
+-- Opening Sack of Frosty Treasures (the ICC weekly), a clam or a lockbox fires the
+-- same LOOT_OPENED as a corpse and the same "You receive loot" lines -- and minutes
+-- after a boss kill those lines were minted as that boss's drops (the race path in
+-- tagReceiver). 3.3.5a has no GetLootSourceInfo, but a bag only opens because you
+-- USED an item in your bags: a loot window within a moment of that is the bag's.
+-- Everything we receive from it, and for a short grace after it closes (the chat
+-- lines can land after the window), is not boss loot.
+-- ------------------------------------------------------------
+local BAG_USE_WINDOW = 1.5   -- seconds between using the bag item and its loot window
+local BAG_LOOT_GRACE = 2     -- seconds after the window closes that its lines may land
+local lastBagUseAt, bagLootOpen, bagLootUntil = 0, false, 0
+
+if hooksecurefunc and UseContainerItem then
+	hooksecurefunc("UseContainerItem", function() lastBagUseAt = GetTime() end)
+end
+
+local function noteLootOpened()
+	bagLootOpen = (GetTime() - lastBagUseAt) <= BAG_USE_WINDOW
+	return bagLootOpen
+end
+
+function L.BagLootActive()
+	return bagLootOpen or GetTime() < bagLootUntil
+end
+
 local function onLootClosed()
+	if bagLootOpen then
+		bagLootOpen = false
+		bagLootUntil = GetTime() + BAG_LOOT_GRACE
+	end
 	if pendingAward then awardFailed("loot window closed before the item was handed over") end
 end
 
@@ -3360,7 +3400,8 @@ ev:SetScript("OnEvent", function(_, event, ...)
 	-- Loot module DISABLED = no loot capture, no boss scan, nothing.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive("__loot") then return end
 	if event == "LOOT_OPENED" then
-		captureCorpse()
+		-- A bag's loot window is never a corpse: nothing in it is recorded.
+		if not noteLootOpened() then captureCorpse() end
 		-- the award button can hand items over again while this window is open
 		if Okanvil.RollMgr and Okanvil.RollMgr.SyncAward then Okanvil.RollMgr.SyncAward() end
 	elseif event == "LOOT_SLOT_CLEARED" then
