@@ -111,10 +111,13 @@ local function buildTopStrip(p)
 			if info then
 				local ok = false
 				for _, s in ipairs(info.sizes) do if s == d.size then ok = true end end
-				if not ok then d.size = info.sizes[1] end
+				if not ok then
+					d.size = info.sizes[1]
+					M.ApplySizeComp()   -- a forced size change gets that size's comp
+				end
 				if not info.hc then d.hc = false end
 			end
-			M.FitNeedsToSize()      -- a forced size change can leave targets too big
+			M.FitNeedsToSize()
 			M.RefreshUI()
 		end)
 	F.raidDD:SetSize(186, 22)
@@ -122,8 +125,8 @@ local function buildTopStrip(p)
 
 	F.size10 = W.Button(p, "10", nil):Size(34, 22):Point("TOPLEFT", 196, -4)
 	F.size25 = W.Button(p, "25", nil):Size(34, 22):Point("TOPLEFT", 232, -4)
-	F.size10:OnClick(function() pickTakesOver(); d.size = 10; M.FitNeedsToSize(); M.RefreshUI() end)
-	F.size25:OnClick(function() pickTakesOver(); d.size = 25; M.FitNeedsToSize(); M.RefreshUI() end)
+	F.size10:OnClick(function() pickTakesOver(); d.size = 10; M.ApplySizeComp(); M.RefreshUI() end)
+	F.size25:OnClick(function() pickTakesOver(); d.size = 25; M.ApplySizeComp(); M.RefreshUI() end)
 
 	F.diffBtn = W.Button(p, "Normal", nil):Size(70, 22):Point("TOPLEFT", 270, -4)
 	F.diffBtn:OnClick(function() pickTakesOver(); d.hc = not d.hc; M.RefreshUI() end)
@@ -573,6 +576,14 @@ local function buildBottom(p)
 	F.preview:SetPoint("TOPLEFT", 6, -6)
 	F.preview:SetPoint("RIGHT", p, "RIGHT", -180, 0)
 	F.preview:SetHeight(40)
+
+	-- Losing focus is what saves an edit (see the handler above), so a send the user
+	-- clicks releases the box first.
+	M.CommitPreview = function()
+		if F.preview and F.preview.edit and F.preview.edit:HasFocus() then
+			F.preview.edit:ClearFocus()
+		end
+	end
 
 	F.autoTag = W.Text(p, "", "label", "dim")
 	F.autoTag:SetPoint("TOPLEFT", 8, -50)
@@ -1028,7 +1039,7 @@ function M.RefreshPreview()
 		F.previewShown = msg
 	end
 	if d.useCustom and d.custom ~= "" then
-		F.autoTag:SetText("|cffe0b860Hand-edited|r |cff8a8d93-- click any Reserve / Want / Spec button to go back to auto.|r")
+		F.autoTag:SetText("|cffe0b860Your text|r |cff8a8d93-- kept as you wrote it; the \"need ...\" counts still update. Rebuild to go back to auto.|r")
 	else
 		F.autoTag:SetText("|cff8a8d93Built from your picks -- updates as people join.|r")
 	end

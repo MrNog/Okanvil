@@ -665,7 +665,8 @@ local function my_spec()
 	-- (name is #1, NOT #2 -- #2 is the icon path, which leaked into the whisper.)
 	local bestPts, bestName = -1, nil
 	for i = 1, GetNumTalentTabs and GetNumTalentTabs() or 3 do
-		local name, _, pts = GetTalentTabInfo(i)
+		local name, _, pts = GetTalentTabInfo(i, false, false,
+			(GetActiveTalentGroup and GetActiveTalentGroup(false)) or 1)
 		if pts and pts > bestPts then bestPts, bestName = pts, name end
 	end
 	if not bestName then return nil end
@@ -697,7 +698,8 @@ local function my_class_tab()
 	if not (class and GetTalentTabInfo) then return nil, nil end
 	local bestPts, bestName = -1, nil
 	for i = 1, (GetNumTalentTabs and GetNumTalentTabs()) or 3 do
-		local name, _, pts = GetTalentTabInfo(i)
+		local name, _, pts = GetTalentTabInfo(i, false, false,
+			(GetActiveTalentGroup and GetActiveTalentGroup(false)) or 1)
 		if pts and pts > bestPts then bestPts, bestName = pts, name end
 	end
 	return class, bestName

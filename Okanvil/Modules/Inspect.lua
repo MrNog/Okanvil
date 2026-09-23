@@ -69,18 +69,26 @@ local ROLES = {
 	HUNTER = {}, MAGE = {}, ROGUE = {}, WARLOCK = {},
 }
 
+-- Which of a player's two specs is the one they are playing right now. Every talent
+-- call below names it: without it the client can answer from the OTHER spec, and a
+-- dual-spec prot paladin whose first spec is holy came back as holy.
+local function activeGroup(inspect)
+	return (GetActiveTalentGroup and GetActiveTalentGroup(inspect and true or false)) or 1
+end
+
 -- Read the spec out of the INSPECT CACHE. Every talent call takes the inspect
 -- flag `true` -- without it the API answers about YOUR OWN talents and every
 -- player in the raid comes back as your spec.
 local function readSpec(unit)
 	local _, class = UnitClass(unit)
 	if not class then return nil end
+	local group = activeGroup(true)
 
 	-- The tab's icon comes from the client, so the spec picture is the game's
 	-- own and needs no table of texture paths to keep in step with it.
 	local bestPts, bestIdx, bestIcon = -1, 0, nil
 	for i = 1, 3 do
-		local _, icon, pts = GetTalentTabInfo(i, true)
+		local _, icon, pts = GetTalentTabInfo(i, true, false, group)
 		if pts and pts > bestPts then bestPts, bestIdx, bestIcon = pts, i, icon end
 	end
 	-- A fresh character with no points spent has no spec to report. Returning
@@ -93,7 +101,7 @@ local function readSpec(unit)
 	-- both loot eligibility and whether the raid has a tank. "Protector of the
 	-- Pack" (Feral tab, talent 22) is tank-only, so any point in it means bear.
 	if class == "DRUID" and bestIdx == 2 then
-		local _, _, _, _, pts = GetTalentInfo(2, 22, true)
+		local _, _, _, _, pts = GetTalentInfo(2, 22, true, false, group)
 		spec = (pts and pts > 0) and "Feral (Bear)" or "Feral (Cat)"
 	end
 
@@ -276,13 +284,13 @@ function fireNext()
 				local _, class = UnitClass("player")
 				local bestPts, bestIdx, bestIcon = -1, 0, nil
 				for i = 1, 3 do
-					local _, icon, pts = GetTalentTabInfo(i)
+					local _, icon, pts = GetTalentTabInfo(i, false, false, activeGroup(false))
 					if pts and pts > bestPts then bestPts, bestIdx, bestIcon = pts, i, icon end
 				end
 				if bestIdx > 0 and bestPts > 0 and class then
 					local spec = (TREES[class] and TREES[class][bestIdx]) or ("Tree " .. bestIdx)
 					if class == "DRUID" and bestIdx == 2 then
-						local _, _, _, _, pts = GetTalentInfo(2, 22)
+						local _, _, _, _, pts = GetTalentInfo(2, 22, false, false, activeGroup(false))
 						spec = (pts and pts > 0) and "Feral (Bear)" or "Feral (Cat)"
 					end
 					local role

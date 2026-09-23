@@ -974,9 +974,19 @@ function RM.Refresh()
 		if f.sbThumb then f.sbThumb:Hide(); if f.sbTrack then f.sbTrack:Hide() end end
 		fitList(f, ROW_H)   -- nothing to show -> collapse to a single empty row
 	else
-		-- auto-jump to the newest boss when fresh loot just arrived (a new kill).
-		-- DropsByBoss() lists bosses in arrival order, so newest = last.
-		if f._jumpNewest then f.bossIdx = f.bossCount; f._jumpNewest = nil end
+		-- Fresh loot just arrived: jump to the page holding the NEWEST drop. Not simply
+		-- the last page -- Trash always sits last, so a boss kill after some trash
+		-- would have opened on Trash instead of the boss that just died.
+		if f._jumpNewest then
+			local best, bestT = f.bossCount, -1
+			for gi, grp in ipairs(groups) do
+				for _, d in ipairs(grp.items) do
+					if (d.t or 0) > bestT then best, bestT = gi, (d.t or 0) end
+				end
+			end
+			f.bossIdx = best
+			f._jumpNewest = nil
+		end
 		f.bossIdx = math.max(1, math.min(f.bossIdx or 1, f.bossCount))
 		local g = groups[f.bossIdx]
 		if f.bossHd then

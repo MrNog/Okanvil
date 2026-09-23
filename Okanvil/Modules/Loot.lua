@@ -570,9 +570,11 @@ local function sessions()
 	cdb.lootSessions = cdb.lootSessions or {}
 	return cdb.lootSessions
 end
--- Winners recorded as the literal word "You" (see buildLootPatterns) are put
--- back to this character's name. The loot history is per character, so "You"
--- in it can only ever have been whoever owns it. Once per login.
+-- Once per login, two repairs to the saved history:
+--   * winners recorded as the literal word "You" (see buildLootPatterns) are put
+--     back to this character's name -- the history is per character, so "You" in
+--     it can only ever have been whoever owns it;
+--   * trash-only items filed under a boss go back to the Trash page.
 local youFixed = false
 local function fixYouWinners()
 	if youFixed then return end
@@ -584,6 +586,10 @@ local function fixYouWinners()
 		for _, d in ipairs(sess.drops or {}) do
 			if d.receivedBy == you or d.receivedBy == "You" then d.receivedBy = me end
 			if d.heldBy == you or d.heldBy == "You" then d.heldBy = me end
+			-- A trash-only item filed under the boss fought before it (see itemBossFix).
+			if OkanvilItemBoss and d.id and OkanvilItemBoss[d.id] == "Trash" and d.boss ~= "Trash" then
+				d.boss = "Trash"
+			end
 		end
 	end
 end
@@ -1010,9 +1016,13 @@ end
 -- trash anywhere in the instance, so its id does not identify an encounter. Correcting one
 -- invents a kill -- a trash BoE was relabelled "Rotface" on a night that stopped at
 -- Saurfang. BoEs keep whatever the scanner said (usually the honest "Trash").
+-- The one BoE answer that IS exact: an item the table lists as "Trash" drops from trash
+-- and nothing else (the ICC trash BoEs, the Ulduar trash pieces), so it goes on the
+-- Trash page whatever boss was fought last.
 local function itemBossFix(boss, id, boe)
-	if boe then return boss end
 	local real = OkanvilItemBoss and id and OkanvilItemBoss[id]
+	if real == "Trash" then return "Trash" end
+	if boe then return boss end
 	if not real or real == boss then return boss end
 	return real
 end
@@ -1423,6 +1433,18 @@ local noteReceivedForAward
 -- but tagReceiver (defined first) has to consult it.
 local isDEProduct, consumeDEWinner
 
+-- Does OkanvilItemBoss list any item for this boss? Built once on first use.
+local tableBosses
+local function bossHasTable(boss)
+	if not OkanvilItemBoss then return false end
+	if not tableBosses then
+		tableBosses = {}
+		for _, b in pairs(OkanvilItemBoss) do tableBosses[b] = true end
+		tableBosses.Trash = nil
+	end
+	return tableBosses[boss] == true
+end
+
 local function tagReceiver(player, link)
 	local id = itemIDFromLink(link)
 	if id == 0 then return end
@@ -1474,6 +1496,12 @@ local function tagReceiver(player, link)
 			end
 		end
 		if not boss then return end   -- not part of an active kill -> not boss loot
+		-- Where we have the boss's loot table, only its own loot passes. Somebody else
+		-- opening a quest bag or a clam right after a kill ("X receives loot: [Ikfirus's
+		-- Sack of Wonder]") reads exactly like a master-loot give, and nothing but the
+		-- item tells them apart. A boss with no table (Naxx, older raids) keeps the old
+		-- behaviour: there is nothing to check against.
+		if bossHasTable(boss) and OkanvilItemBoss[id] ~= boss then return end
 		-- No allowDup: we only reach here when NO row for this id exists at all, so this is a
 		-- first sighting, never an extra copy of something already listed.
 		target = storeDrop(boss, id, link, name, rarity, isBoE(link))
@@ -2692,6 +2720,10 @@ end
 -- buffer), never sessions()[1] blindly -- that is what used to show the previous
 -- run's loot until the first item of the new run dropped. Skips `hidden` drops
 -- (the mini roll's "Clear list" button), which remain in the history and the export.
+-- How recent the newest session's last drop must be to still count as tonight's
+-- run of the instance you just entered (see DropsByBoss).
+local SAME_NIGHT = 6 * 3600
+
 function L.DropsByBoss()
 	-- Inside a live run: that run's drops. OUTSIDE one (you hearthed out and opened the
 	-- mini roll to review): fall back to the MOST RECENT session instead of the empty
@@ -2701,9 +2733,22 @@ function L.DropsByBoss()
 	local s
 	if shouldRecordHere() then
 		s = activeBucket()
-		-- inside a zone but the run hasn't minted a session yet (lockout pending):
-		-- don't show an empty window, fall back to the newest session we have.
-		if not s or #(s.drops or {}) == 0 then s = sessions()[1] or s end
+		-- Inside a zone but this run has no loot of its own yet. The newest saved
+		-- session stands in ONLY when it is this same instance, tonight (the lockout
+		-- answer can lag a zone-in, and a reload mid-raid should not blank the list).
+		-- Anything else -- another instance, or last week's run of this one -- is not
+		-- this run: a fresh instance starts on an empty list.
+		if not s or #(s.drops or {}) == 0 then
+			local newest = sessions()[1]
+			local here = (GetInstanceInfo and (GetInstanceInfo())) or ""
+			if newest and here ~= "" and (newest.zone or "") == here then
+				local lastAt = newest.t or 0
+				for _, dp in ipairs(newest.drops or {}) do
+					if (dp.t or 0) > lastAt then lastAt = dp.t end
+				end
+				if (time() - lastAt) <= SAME_NIGHT then s = newest end
+			end
+		end
 	else
 		-- OUTSIDE a live run: always the newest saved session. Do NOT go through
 		-- currentSession() -- out here runKey() flips with your zone/continent, so it
@@ -2718,6 +2763,15 @@ function L.DropsByBoss()
 			local b = (dp.boss ~= "" and dp.boss) or "Trash"
 			if not byBoss[b] then byBoss[b] = { boss = b, items = {} }; order[#order + 1] = byBoss[b] end
 			table.insert(byBoss[b].items, dp)
+		end
+	end
+	-- Bosses in the order they died, and every trash drop on ONE page after them, so
+	-- the last page is always Trash -- the same as the Loot page's cards.
+	for i, g in ipairs(order) do
+		if g.boss == "Trash" then
+			table.remove(order, i)
+			order[#order + 1] = g
+			break
 		end
 	end
 	return order

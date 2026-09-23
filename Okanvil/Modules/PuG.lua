@@ -439,6 +439,24 @@ function M.SetNeed(role, value)
 	drain(total - size, donorOrder(role), floor)
 end
 
+-- The usual comp for each raid size. Switching size loads the new size's comp
+-- rather than trimming the old one: cutting a 25-man's 2/5/8/10 down to ten from
+-- the dps end left 2 Tank 5 Heal 3 Melee 0 Ranged.
+local SIZE_COMP = {
+	[10] = { tank = 2, healer = 2, melee = 3, ranged = 3 },
+	[25] = { tank = 2, healer = 5, melee = 8, ranged = 10 },
+}
+
+function M.ApplySizeComp()
+	local comp = SIZE_COMP[tonumber(db.size) or 25]
+	if comp then
+		for _, r in ipairs(ROLES) do db.need[r] = comp[r] end
+	end
+	-- People already placed on the board keep their seats: FitNeedsToSize raises a
+	-- target that fell under them and trims the rest back to the raid size.
+	M.FitNeedsToSize()
+end
+
 -- Switching 25 -> 10 leaves targets that no longer fit (a 25-man comp is 22 too
 -- many for a 10-man). Trim from the dps end until it does, same donor order.
 function M.FitNeedsToSize()
@@ -761,6 +779,57 @@ local function wantText(role)
 	return table.concat(want, "/")
 end
 
+-- The "need ..." clause of the line on its own: "need 1 Tank (DK) 2 Heal", or
+-- "almost full" once every role is filled. Role runs only; a class run asks by
+-- class and returns nil.
+local function needClause()
+	if db.classRun then return nil end
+	local need = stillNeeded()
+	local bits = {}
+	for _, r in ipairs(ROLES) do
+		if need[r] > 0 then
+			local bit = need[r] .. " " .. ROLE_SHORT[r]
+			local ask = wantText(r)
+			if ask ~= "" then bit = bit .. " (" .. ask .. ")" end
+			bits[#bits + 1] = bit
+		end
+	end
+	if #bits == 0 then return "almost full" end
+	return "need " .. table.concat(bits, " ")
+end
+
+-- Words a hand-written need clause names its roles with.
+local ROLE_WORDS = {
+	tank = true, tanks = true, heal = true, heals = true, healer = true, healers = true,
+	melee = true, ranged = true, range = true, dps = true, mdps = true, rdps = true,
+}
+
+-- Put the live need clause into a line the user edited, keeping every other word
+-- they wrote ("Weekly", "wsp me", their own gs note). The clause is "need" followed
+-- by counted roles -- "need 1 Tank (DK) 2 Heal, 3 Melee" -- or "almost full". A
+-- line with neither is left exactly as typed.
+local function spliceNeed(text, clause)
+	if not clause or not text or text == "" then return text end
+	local lower = text:lower()
+	local s = lower:find("%f[%a]need%f[%A]")
+	if s then
+		local pos, last = s + 4, nil
+		while true do
+			-- one "<n> <role>", with whatever separator the user put before it
+			local a, b, word = lower:find("^[%s,/+&]*%d+%s*(%a+)", pos)
+			if not a or not ROLE_WORDS[word] then break end
+			last, pos = b, b + 1
+			local c, d = lower:find("^%s*%b()", pos)       -- "(DK/Pala)"
+			if c then last, pos = d, d + 1 end
+		end
+		if last then return text:sub(1, s - 1) .. clause .. text:sub(last + 1) end
+	end
+	local a, b = lower:find("almost full", 1, true)
+	if a then return text:sub(1, a - 1) .. clause .. text:sub(b + 1) end
+	return text
+end
+M.SpliceNeed = spliceNeed
+
 -- "LFM ICC25 HC need 1 Tank (DK/Pala) 2 Heal 5 DPS 5.8k+ gs wsp me"
 local function buildMessage()
 	local need = stillNeeded()
@@ -815,12 +884,22 @@ local function buildMessage()
 end
 M.BuildMessage = buildMessage
 
--- The line that actually gets sent: the hand-edited one if the user took control.
+-- The line that actually gets sent. A hand-edited line keeps the user's words,
+-- but its need clause follows the board, so the counts never go stale.
 local function outgoing()
-	if db.useCustom and db.custom ~= "" then return db.custom end
+	if db.useCustom and db.custom ~= "" then return spliceNeed(db.custom, needClause()) end
 	return buildMessage()
 end
 M.Outgoing = outgoing
+
+-- For a send the user clicked: the message box only saves an edit when it loses
+-- focus, so clicking Send with the cursor still in it posted the text from BEFORE
+-- the edit. Release the box first (which saves it), then read the line.
+-- Not for the timed spam: that would pull focus out from under someone typing.
+local function clickedOutgoing()
+	if M.CommitPreview then M.CommitPreview() end
+	return outgoing()
+end
 
 -- ------------------------------------------------------------
 -- Channels (same resolution Recruit uses: a name may be a number, a live
@@ -1133,7 +1212,7 @@ end)
 
 function M.Start()
 	if not db then return end
-	local msg = outgoing()
+	local msg = clickedOutgoing()
 	if msg == "" then
 		Print("|cffff5555Nothing to advertise|r -- the message is empty.")
 		return
@@ -1183,7 +1262,7 @@ function M.DB() return db end
 
 -- Send the line once, right now, everywhere it would normally go.
 function M.SendNow()
-	local msg = outgoing()
+	local msg = clickedOutgoing()
 	if msg == "" then
 		Print("|cffff5555Nothing to send|r -- the message is empty.")
 		return
