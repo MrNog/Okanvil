@@ -313,8 +313,56 @@ local function buildMessages(p, y0)
 	return wy - 30
 end
 
--- ---- History (landing/main): sessions accordion with an internal-scroll detail
--- box. Full width: the page has no drawer beside it.
+-- ---- History (landing/main): one row per session; clicking it opens it in place
+-- into one card per boss, one tile per drop -- the same shape as an expanded
+-- snapshot on Home. The page itself scrolls; there is no box inside it with a
+-- scrollbar of its own.
+local CARD_MIN_W, CARD_GAP, CARD_HEAD_H, TILE_H = 310, 8, 24, 24
+local MOSAIC_N = 8
+
+-- What a drop's line under the item says: who has it, and how it got there.
+local function dropOutcome(L, d)
+	if d.de then return "|cff8a5ad9Disenchanted|r" end
+	if d.receivedBy and d.receivedBy ~= "" then
+		local how = ""
+		if d.council then
+			how = "council" .. ((d.councilResponse and d.councilResponse ~= "")
+				and (" " .. tostring(d.councilResponse):upper()) or "")
+		elseif d.rollValue then
+			how = (d.rollSpec == "off" and "OS " or "MS ") .. tostring(d.rollValue)
+		end
+		return L.ClassColorName(d.receivedBy)
+			.. (how ~= "" and ("  |cff6f7176" .. how .. "|r") or "")
+	end
+	-- Under master loot someone carries the drop until it is rolled for; that is
+	-- unfinished business, not an award, so it reads in amber.
+	if d.heldBy and d.heldBy ~= "" then
+		return "|cffe0b860held|r |cffdcddde" .. d.heldBy .. "|r"
+	end
+	return "|cff5e6166not given yet|r"
+end
+
+-- One line for the closed row: how big the night was and what is left to do.
+local function sessionSummary(s)
+	local bosses, seen, epics, open = 0, {}, 0, 0
+	for _, d in ipairs(s.drops or {}) do
+		local b = (d.boss and d.boss ~= "") and d.boss or "Trash"
+		if not seen[b] then seen[b] = true; bosses = bosses + 1 end
+		if (d.rarity or 0) >= 4 then epics = epics + 1 end
+		if not d.de and not (d.receivedBy and d.receivedBy ~= "") then open = open + 1 end
+	end
+	local n = #(s.drops or {})
+	if n == 0 then return "|cff8a8d93no drops|r" end
+	local parts = {
+		("%d boss%s"):format(bosses, bosses == 1 and "" or "es"),
+		("%d drop%s"):format(n, n == 1 and "" or "s"),
+	}
+	if epics > 0 then parts[#parts + 1] = ("|cffa335ee%d epic%s|r|cff8a8d93"):format(epics, epics == 1 and "" or "s") end
+	local line = "|cff8a8d93" .. table.concat(parts, "  ·  ") .. "|r"
+	if open > 0 then line = line .. ("  |cff8a8d93·|r  |cffe0b860%d not given|r"):format(open) end
+	return line
+end
+
 function Okanvil:Loot_BuildHistory(main)
 	local L = Okanvil.Loot
 	local fill = Okanvil._lootFill
@@ -323,46 +371,137 @@ function Okanvil:Loot_BuildHistory(main)
 	-- a scroll panel INSIDE main so the sessions list scrolls without resizing
 	local p, _, sf, sb = Okanvil.UI.DashScroll(main, X)
 
-	local rows, detailRows = {}, {}
+	local rows, cards = {}, {}
 	local expanded = nil
 
-	-- one reusable fixed-height detail box (internal scroll) for the open session
-	local DETAIL_H = 260
-	local dbox = W.Frame(p, "dark")
-	local dsf = CreateFrame("ScrollFrame", nil, dbox)
-	dsf:SetPoint("TOPLEFT", 4, -4); dsf:SetPoint("BOTTOMRIGHT", -10, 4)
-	local dchild = CreateFrame("Frame", nil, dsf); dchild:SetSize(10, 1); dsf:SetScrollChild(dchild)
-	local dsb = CreateFrame("Slider", nil, dbox)
-	dsb:SetPoint("TOPRIGHT", -3, -4); dsb:SetPoint("BOTTOMRIGHT", -3, 4); dsb:SetWidth(4)
-	dsb:SetOrientation("VERTICAL"); dsb:SetValueStep(1)
-	local dth = dsb:CreateTexture(nil, "OVERLAY"); dth:SetTexture(FLAT); dth:SetVertexColor(u3(C.accent)); dth:SetSize(4, 40)
-	dsb:SetThumbTexture(dth)
-	dsb:SetScript("OnValueChanged", function(_, v) dsf:SetVerticalScroll(v) end)
-	dsf:EnableMouseWheel(true)
-	dsf:SetScript("OnMouseWheel", function(_, d) dsb:SetValue(dsb:GetValue() - d * 28) end)
-	dsf:SetScript("OnSizeChanged", function() dchild:SetWidth(dsf:GetWidth()) end)
-	dbox:Hide()
+	local function dropTile(card, i)
+		card.tiles = card.tiles or {}
+		local t = card.tiles[i]
+		if t then return t end
+		t = CreateFrame("Button", nil, card)
+		t.icon = t:CreateTexture(nil, "ARTWORK")
+		t.icon:SetSize(18, 18); t.icon:SetPoint("LEFT", 8, 0)
+		t.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		-- Winner first, anchored right, so the item name takes whatever is left
+		-- and is the one that truncates.
+		t.who = W.Text(t, "", "label")
+		t.who:SetPoint("RIGHT", t, "RIGHT", -8, 0)
+		t.who:SetJustifyH("RIGHT")
+		if t.who.SetWordWrap then t.who:SetWordWrap(false) end
+		t.name = W.Text(t, "", "label")
+		t.name:SetPoint("LEFT", t.icon, "RIGHT", 6, 0)
+		t.name:SetPoint("RIGHT", t.who, "LEFT", -8, 0)
+		t.name:SetJustifyH("LEFT")
+		if t.name.SetWordWrap then t.name:SetWordWrap(false) end
+		local hl = t:CreateTexture(nil, "HIGHLIGHT")
+		hl:SetAllPoints(); hl:SetTexture(FLAT)
+		hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.08)
+		-- Hover for the item, shift-click to link it -- the old list did both.
+		t:SetScript("OnEnter", function(self)
+			if not self._link then return end
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetHyperlink(self._link)
+			GameTooltip:Show()
+		end)
+		t:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		t:SetScript("OnClick", function(self)
+			if self._link and IsShiftKeyDown() and ChatEdit_InsertLink then ChatEdit_InsertLink(self._link) end
+		end)
+		card.tiles[i] = t
+		return t
+	end
 
-	local function detailRow(idx, yTop)
-		local r = detailRows[idx]
-		if not r then
-			r = CreateFrame("Button", nil, dchild); r:SetHeight(18)
-			r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(16, 16); r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92); r.icon:Hide()
-			r.txt = r:CreateFontString(nil, "OVERLAY"); r.txt:SetFont(Okanvil:Font()); r.txt:SetJustifyH("LEFT")
-			local hl = r:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetTexture(FLAT); hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.10)
-			detailRows[idx] = r
+	local function fillTile(t, d)
+		t._link = (d.item and d.item ~= "") and d.item or nil
+		t.icon:SetTexture(Okanvil:ItemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark")
+		-- The name in its rarity colour without the link's brackets.
+		local q = d.rarity and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[d.rarity]
+		local hex = q and q.hex or "|cffa335ee"
+		local name = (d.name and d.name ~= "") and d.name
+			or (t._link and t._link:match("%[(.-)%]")) or "?"
+		local qty = (d.qty and d.qty > 1) and ("  |cff8a8d93x" .. d.qty .. "|r") or ""
+		t.name:SetText(hex .. name .. "|r" .. qty)
+		t.who:SetText(dropOutcome(L, d))
+	end
+
+	-- Lays the session's boss cards out below y; returns the y under them.
+	local function drawCards(s, y)
+		local groups, order = {}, {}
+		for _, d in ipairs(s.drops or {}) do
+			local b = (d.boss and d.boss ~= "") and d.boss or "Trash"
+			if not groups[b] then groups[b] = {}; order[#order + 1] = b end
+			local list = groups[b]
+			list[#list + 1] = d
 		end
-		r:ClearAllPoints(); r:SetPoint("TOPLEFT", 8, -yTop); r:SetPoint("RIGHT", dchild, "RIGHT", -6, 0)
-		r:SetScript("OnEnter", nil); r:SetScript("OnLeave", nil); r:SetScript("OnClick", nil)
-		r.icon:Hide(); r:Show()
-		return r
+		if #order == 0 then return y end
+		-- The bosses in the order they died, and whatever came off trash after them.
+		for k, b in ipairs(order) do
+			if b == "Trash" then
+				table.remove(order, k)
+				order[#order + 1] = "Trash"
+				break
+			end
+		end
+
+		local width = math.max(CARD_MIN_W, p:GetWidth() - X * 2)
+		local cols = math.max(1, math.min(#order,
+			math.floor((width + CARD_GAP) / (CARD_MIN_W + CARD_GAP))))
+		local cardW = (width - (cols - 1) * CARD_GAP) / cols
+
+		-- Masonry, not rows: each card drops into whichever column is shortest
+		-- so far, straight under the card above it. In rows every card waited for
+		-- the tallest one beside it, and a 2-drop boss next to a 4-drop one left a
+		-- hole the height of the difference. Ties go left, so the kill order still
+		-- reads left to right, top to bottom.
+		local colY = {}
+		for c = 1, cols do colY[c] = y end
+		for idx, b in ipairs(order) do
+			local col = 1
+			for c = 2, cols do
+				if colY[c] < colY[col] then col = c end
+			end
+			local top = colY[col]
+			col = col - 1
+			local card = cards[idx]
+			if not card then
+				card = W.Frame(p, "raise")
+				card.head = W.Text(card, "", "note", "accent")
+				card.head:SetPoint("TOPLEFT", 10, -7)
+				card.count = W.Text(card, "", "note", "dim")
+				card.count:SetPoint("TOPRIGHT", -10, -7)
+				cards[idx] = card
+			end
+			local list = groups[b]
+			local h = CARD_HEAD_H + #list * TILE_H + 4
+			card:ClearAllPoints()
+			card:SetPoint("TOPLEFT", X + col * (cardW + CARD_GAP), -top)
+			card:SetSize(cardW, h)
+			card.head:SetText(b:upper())
+			card.count:SetText(#list .. (#list == 1 and " drop" or " drops"))
+			for _, t in ipairs(card.tiles or {}) do t:Hide() end
+			for i, d in ipairs(list) do
+				local t = dropTile(card, i)
+				t:ClearAllPoints()
+				t:SetPoint("TOPLEFT", 0, -(CARD_HEAD_H + (i - 1) * TILE_H))
+				t:SetSize(cardW, TILE_H)
+				fillTile(t, d)
+				t:Show()
+			end
+			card:Show()
+			colY[col + 1] = top + h + CARD_GAP
+		end
+		local bottom = y
+		for c = 1, cols do
+			if colY[c] > bottom then bottom = colY[c] end
+		end
+		return bottom + 10 - CARD_GAP
 	end
 
 	local function rebuild()
 		for _, r in ipairs(rows) do r:Hide() end
-		for _, r in ipairs(detailRows) do r:Hide() end
-		dbox:Hide()
+		for _, c in ipairs(cards) do c:Hide() end
 		local sessions = (L.Sessions and L.Sessions()) or {}
+		local RH = Okanvil.UI.RECORD_ROW_H
 		if #sessions == 0 then
 			p._empty = p._empty or W.Text(p, "", "body", "dim")
 			p._empty:SetPoint("TOPLEFT", X, -4)
@@ -374,41 +513,94 @@ function Okanvil:Loot_BuildHistory(main)
 		for i, s in ipairs(sessions) do
 			local r = rows[i]
 			if not r then
-				r = W.Frame(p, "input")
-				r.title = W.Text(r, "", "body"); r.title:SetPoint("TOPLEFT", 10, -6)
-				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("BOTTOMLEFT", 10, 6)
+				r = Okanvil.UI.RecordRow(p, function(row)
+					if row._s then
+						if expanded == row._s then expanded = nil else expanded = row._s end
+						rebuild()
+					end
+				end)
 				r.del = W.Button(r, "X", "danger"); r.del:SetSize(24, 22); r.del:SetPoint("RIGHT", -8, 0)
 				r.export = W.Button(r, "Export"); r.export:SetSize(72, 22); r.export:SetPoint("RIGHT", r.del, "LEFT", -6, 0)
-				r.view = W.Button(r, "View"); r.view:SetSize(60, 22); r.view:SetPoint("RIGHT", r.export, "LEFT", -6, 0)
-				r:EnableMouse(true)
+				-- What dropped, at a glance: the night's items as a strip of
+				-- icons, best first, beside the buttons.
+				r.mosaic = {}
+				for k = 1, MOSAIC_N do
+					local m = r:CreateTexture(nil, "ARTWORK")
+					m:SetSize(24, 24)
+					m:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+					if k == 1 then
+						m:SetPoint("RIGHT", r.export, "LEFT", -14, 0)
+					else
+						m:SetPoint("RIGHT", r.mosaic[k - 1], "LEFT", -3, 0)
+					end
+					r.mosaic[k] = m
+				end
+				r.more = W.Text(r, "", "note", "dim")
+				r.more:SetPoint("RIGHT", r.mosaic[MOSAIC_N], "LEFT", -6, 0)
 				rows[i] = r
 			end
-			r:ClearAllPoints(); r:SetPoint("TOPLEFT", X, -y); r:SetPoint("RIGHT", p, "RIGHT", -X, 0); r:SetHeight(40)
+			r._s = s
+			r:ClearAllPoints(); r:SetPoint("TOPLEFT", X, -y); r:SetPoint("RIGHT", p, "RIGHT", -X, 0); r:SetHeight(RH)
 			local where = (s.zone ~= "" and s.zone) or "World"
 			local isOpen = (expanded == s)
-			r.title:SetText((isOpen and "|cffffd200v|r  " or "|cff8a8d93>|r  ") .. where .. "  |cff8a8d93" .. (s.day or "") .. "|r")
-			r.sub:SetText("|cff8a8d93" .. #s.drops .. " drops|r")
-			r.view.text:SetText(isOpen and "Close" or "View")
-			r.view:SetScript("OnClick", function() if expanded == s then expanded = nil else expanded = s end; rebuild() end)
+			local size, heroic = Okanvil.UI.RaidDifficulty(s.difficulty)
+			Okanvil.UI.PaintRecordRow(r, {
+				size = size, heroic = heroic,
+				dungeon = s.key and s.key:find("^run|") ~= nil,
+				title = where .. "   |cff8a8d93" .. Okanvil.UI.NightStamp(s.t) .. "|r",
+				sub = sessionSummary(s),
+				open = isOpen,
+			})
+			-- Rarest first, so an epic or a legendary is what the strip shows.
+			local pics = {}
+			for _, d in ipairs(s.drops or {}) do pics[#pics + 1] = d end
+			table.sort(pics, function(a, b) return (a.rarity or 0) > (b.rarity or 0) end)
+			for k = 1, MOSAIC_N do
+				local d = pics[k]
+				local m = r.mosaic[k]
+				if d then
+					m:SetTexture(Okanvil:ItemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark")
+					m:Show()
+				else
+					m:Hide()
+				end
+			end
+			r.more:SetText(#pics > MOSAIC_N and ("+" .. (#pics - MOSAIC_N)) or "")
 			r.export:SetScript("OnClick", function() Okanvil:ShowExport(L.SessionJSON(s), "Loot -- " .. (s.day or where)) end)
 			r.del:SetScript("OnClick", function() if expanded == s then expanded = nil end; L.DeleteSession(s) end)
 			r:Show()
-			y = y + 46
+			y = y + RH + 6
 			if isOpen then
-				dbox:ClearAllPoints(); dbox:SetPoint("TOPLEFT", X, -y); dbox:SetPoint("RIGHT", p, "RIGHT", -X, 0)
-				dbox:SetHeight(DETAIL_H); dbox:Show()
-				dchild:SetWidth(dsf:GetWidth())
-				local dy = select(2, L.RenderInline(s, detailRow, 0, 4))
-				dchild:SetHeight(math.max(1, dy))
-				local maxs = math.max(0, dy - (DETAIL_H - 8))
-				dsb:SetMinMaxValues(0, maxs); dsb:SetValue(0); dsb:SetShown(maxs > 4)
-				y = y + DETAIL_H + 6
+				if #(s.drops or {}) == 0 then
+					p._none = p._none or W.Text(p, "", "body", "dim")
+					p._none:ClearAllPoints(); p._none:SetPoint("TOPLEFT", X + 10, -y)
+					p._none:SetText("|cff888888No drops recorded.|r")
+					p._none:Show()
+					y = y + 26
+				else
+					if p._none then p._none:Hide() end
+					y = drawCards(s, y)
+				end
 			end
 		end
+		if not expanded and p._none then p._none:Hide() end
 		p:SetHeight(math.max(y + 6, sf:GetHeight()))
 		local maxs = math.max(0, p:GetHeight() - sf:GetHeight())
 		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
 	end
+
+	-- A wider or narrower window changes how many boss cards fit in a row, so an
+	-- open session is laid out again when the WIDTH changes (not the height: that
+	-- is this function's own doing).
+	local lastW = 0
+	p:SetScript("OnSizeChanged", function(self, w)
+		w = math.floor(w or 0)
+		if expanded and w > 0 and math.abs(w - lastW) > 2 then
+			lastW = w
+			rebuild()
+		end
+	end)
+
 	if fill then fill._rebuildHistory = rebuild end
 	rebuild()
 end

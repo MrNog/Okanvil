@@ -286,3 +286,28 @@ player to stack on without anyone having to call it out.
 | Vile Spirits | `SAR` | `70498` | `70498` | `70498` |
 | Vile Spirits | `SCS` | `70498` | `70498` | `70498` |
 
+
+---
+
+# Trial of the Crusader
+
+Read the same way, out of a real ToC log. Several abilities carry one id per
+difficulty; the first is the one our notes use.
+
+| ability | anchor | ids seen |
+|---|---|---|
+| Staggering Stomp | `SCS` | `67647`, `67648`, `67649` |
+| Paralytic Spray | `SCS` | `67615`, `67616`, `67617` |
+| Burning Spray | `SCS` | `67627` |
+| Incinerate Flesh | `SAA` | `67049`, `67050`, `67051` |
+| Infernal Eruption | `SCC` | `67901`, `67902`, `67903` |
+| Twin's Pact | `SCS` | `67303`, `67305`, `67306`, `67307`, `67308` |
+| Dark Vortex | `SCS` | `67182`, `67183`, `67184` |
+| Light Vortex | `SCS` | `67206`, `67208` |
+| Penetrating Cold | `SAA` | `67700`, `68509` |
+| Leeching Swarm | `SCS` | `67630`, `68646` |
+| Pursued by Anub'arak | `SCC` | `67574` |
+
+The ids these notes carried before were none of these: all eighteen anchored
+lines were waiting on casts that never happen, so no ToC note had a working
+timer until this pass.

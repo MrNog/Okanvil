@@ -938,19 +938,48 @@ local function showHelp()
 end
 
 -- ------------------------------------------------------------
--- What the bosses were SEEN casting.
+-- What the bosses were SEEN casting, one library per raid.
 --
 -- The ID Finder answers "does this spell exist", which is not the question a
 -- note needs. Every difficulty's variant ships in the client's spell table, so
 -- a lookup happily returns a name for an id this core's boss never casts --
 -- and a line anchored to it waits for ever, looking exactly like a bug.
 --
--- This panel answers the real question: what did we WATCH it cast. Filled in
--- the background by NotesParse, from the first pull onward -- a wipe at 30%
--- still records everything up to 30%, so there is no need to kill anything
--- first.
+-- This panel answers the real question: what did we WATCH it cast, in the raid
+-- whose tab is open. Filled in the background by NotesParse on every raid pull
+-- -- a wipe at 30% still records everything up to 30%.
 -- ------------------------------------------------------------
 local seenPanel
+local seenShows      -- "<raid key>|<boss>" the open panel was drawn for
+
+local SEEN_W, SEEN_MAX_H = 460, 620
+
+local function viewRaidEntry()
+	local key = N.ViewRaid()
+	for _, raid in ipairs(RAIDS) do
+		if raid.key == key then return raid end
+	end
+	return RAIDS[1]
+end
+
+-- Does this caster belong to the selected note? Either name may hold the
+-- other: "Rotface & Festergut" holds "Rotface", "Blood-Queen Lana'thel" holds
+-- "Queen Lana'thel".
+local function belongsTo(src, boss)
+	if not (src and boss and boss ~= "") then return false end
+	local s, b = src:lower(), boss:lower()
+	return s:find(b, 1, true) ~= nil or b:find(s, 1, true) ~= nil
+end
+
+local function viewDiff()
+	return N.ViewSize() .. (N.ViewHeroic() and "H" or "N")
+end
+
+local function diffLabel(diff)
+	local size, hc = diff:match("^(%d+)([NH])$")
+	if not size then return "difficulty unknown" end
+	return size .. " " .. (hc == "H" and "Heroic" or "Normal")
+end
 
 local function showSeen()
 	local P = Okanvil.NotesParse
@@ -961,7 +990,12 @@ local function showSeen()
 		seenPanel = nil
 	end
 
-	local f = Okanvil:Popup("Spells seen cast")
+	local raid = viewRaidEntry()
+	local diff = viewDiff()
+	local boss = N.BossOf(db and db.selected) or ""
+	seenShows = raid.key .. "|" .. diff .. "|" .. boss
+
+	local f = Okanvil:Popup(("Spells seen cast -- %s %s"):format(raid.label, diffLabel(diff)))
 	if not _G.Okanvil_NotesSeen then
 		_G.Okanvil_NotesSeen = f
 		tinsert(UISpecialFrames, "Okanvil_NotesSeen")
@@ -974,56 +1008,128 @@ local function showSeen()
 		end
 	end
 
-	local PANEL_W = 460
-	f:SetWidth(PANEL_W)
+	f:SetWidth(SEEN_W)
 	seenPanel = f
 	if parkHelp then parkHelp(f) end
 
-	local X, y = 14, -34
+	local X = 14
 
-	-- The boss whose room we are in comes first, because that is the note being
-	-- written. Everything else follows, so a source seen once on the way in is
-	-- still reachable.
-	local sources = P.SourcesSeen()
-	if #sources == 0 then
-		local none = W.Text(f, "Nothing recorded yet. Pull a boss -- this fills in"
-			.. " by itself, with nothing to switch on.", "note", "dim")
-		none:SetPoint("TOPLEFT", X, y)
-		none:SetWidth(PANEL_W - X * 2)
+	-- The selected note's boss first, because that is the note being written;
+	-- the rest of the raid follows busiest first, so the trash sinks.
+	local function ordered(d)
+		local first, rest = {}, {}
+		for _, src in ipairs(P.SourcesSeen(raid.zone, d)) do
+			if belongsTo(src, boss) then first[#first + 1] = src else rest[#rest + 1] = src end
+		end
+		for _, src in ipairs(rest) do first[#first + 1] = src end
+		return first
+	end
+	local sources = ordered(diff)
+	-- Records whose difficulty was never known go last, under their own label:
+	-- they are real ids, just not proven to be THIS difficulty's.
+	local unknown = ordered(P.UNKNOWN_DIFF or "?")
+
+	if #sources == 0 and #unknown == 0 then
+		local none = W.Text(f, ("Nothing recorded for %s %s yet. Pull a boss there"
+			.. " -- it records by itself, once per boss and difficulty."):format(
+				raid.zone, diffLabel(diff)),
+			"note", "dim")
+		none:SetPoint("TOPLEFT", X, -34)
+		none:SetWidth(SEEN_W - X * 2)
 		none:SetJustifyH("LEFT")
 		f:SetHeight(110)
 		return
 	end
 
-	local shown = 0
-	for _, src in ipairs(sources) do
-		local rows = P.SpellsSeen(src)
-		if #rows > 0 and shown < 6 then
-			shown = shown + 1
-			local h = W.Text(f, src:upper(), "head", "accent")
-			h:SetPoint("TOPLEFT", X, y)
-			y = y - 20
+	local sf = CreateFrame("ScrollFrame", nil, f)
+	sf:SetPoint("TOPLEFT", 0, -30)
+	sf:SetPoint("BOTTOMRIGHT", -10, 8)
+	local child = CreateFrame("Frame", nil, sf)
+	child:SetSize(SEEN_W - 10, 1)
+	sf:SetScrollChild(child)
 
-			for i = 1, math.min(#rows, 14) do
-				local r = rows[i]
-				-- Written the way it goes INTO a note, so it can be read straight
-				-- across into the editor rather than reassembled by hand.
-				local code = W.Text(f, ("%s:%d"):format(r.prefix or "?", r.id or 0), "note")
-				code:SetPoint("TOPLEFT", X, y)
-				code:SetFont("Fonts\ARIALN.TTF", 13)
+	local y = -4
 
-				local nm = W.Text(f, ("%s  |cff6f7176x%d|r"):format(r.name or "?", r.n or 0),
-					"note", "dim")
-				nm:SetPoint("TOPLEFT", X + 110, y)
-				nm:SetWidth(PANEL_W - X - 124)
-				nm:SetJustifyH("LEFT")
-				y = y - 17
-			end
-			y = y - 10
+	local function drawSource(d, src)
+		local rows = P.SpellsSeen(raid.zone, d, src)
+		if #rows == 0 then return end
+
+		local h = W.Text(child, src:upper(), "head", "accent")
+		h:SetPoint("TOPLEFT", X, y)
+
+		-- Complete once it was seen dying: later kills leave it alone, and
+		-- "redo" throws it away so the next pull records it again.
+		local killed = P.KilledAt(raid.zone, d, src)
+		local state = W.Text(child, killed
+			and ("|cff7cfc8akilled|r |cff6f7176%s|r"):format(date("%d %b", killed))
+			or "|cffe0b860recording|r", "note")
+		state:SetPoint("LEFT", h, "RIGHT", 8, 0)
+
+		local redo = W.Button(child, "redo")
+		redo:SetSize(40, 16)
+		redo:SetPoint("TOPRIGHT", child, "TOPRIGHT", -8, y + 1)
+		redo:Tooltip("Forget these ids and record this boss again on the next pull.")
+		redo:SetScript("OnClick", function()
+			P.ResetSource(raid.zone, d, src)
+			showSeen()
+		end)
+		y = y - 20
+
+		for i = 1, #rows do
+			local r = rows[i]
+			-- Written the way it goes INTO a note, so it can be read straight
+			-- across into the editor rather than reassembled by hand.
+			local code = W.Text(child, ("%s:%d"):format(r.prefix or "?", r.id or 0), "note")
+			code:SetPoint("TOPLEFT", X, y)
+			code:SetFont("Fonts\\ARIALN.TTF", 13)
+
+			local nm = W.Text(child, ("%s  |cff6f7176x%d|r"):format(r.name or "?", r.n or 0),
+				"note", "dim")
+			nm:SetPoint("TOPLEFT", X + 110, y)
+			nm:SetWidth(SEEN_W - X - 134)
+			nm:SetJustifyH("LEFT")
+			y = y - 17
 		end
+		y = y - 10
 	end
 
-	f:SetHeight(math.abs(y) + 18)
+	for _, src in ipairs(sources) do drawSource(diff, src) end
+
+	if #unknown > 0 then
+		local sep = W.Text(child, "DIFFICULTY UNKNOWN", "note", "dim")
+		sep:SetPoint("TOPLEFT", X, y)
+		y = y - 20
+		for _, src in ipairs(unknown) do drawSource(P.UNKNOWN_DIFF or "?", src) end
+	end
+
+	local contentH = math.abs(y)
+	child:SetHeight(contentH)
+	local viewH = math.min(contentH, SEEN_MAX_H - 38)
+	f:SetHeight(viewH + 38)
+
+	local overflow = contentH - viewH
+	if overflow > 0 then
+		local sb = CreateFrame("Slider", nil, f)
+		sb:SetPoint("TOPRIGHT", -4, -30); sb:SetPoint("BOTTOMRIGHT", -4, 8); sb:SetWidth(4)
+		sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
+		local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetSize(4, 30)
+		do local a = Okanvil.Colors.accent; th:SetVertexColor(a[1], a[2], a[3], 1) end
+		sb:SetThumbTexture(th)
+		sb:SetMinMaxValues(0, overflow)
+		sb:SetValue(0)
+		sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
+		sf:EnableMouseWheel(true)
+		sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 40) end)
+	end
+end
+
+-- Follows the page: switching raid, size, difficulty or boss redraws an open
+-- panel, so it never shows one raid's ids under another raid's note.
+local function refreshSeen()
+	if not (seenPanel and seenPanel:IsShown()) then return end
+	local want = viewRaidEntry().key .. "|" .. viewDiff() .. "|"
+		.. (N.BossOf(db and db.selected) or "")
+	if want ~= seenShows then showSeen() end
 end
 
 -- Roughly 30/70 across the content panel.
@@ -1316,7 +1422,11 @@ function N.BuildPage(p)
 	--
 	-- Size on TOP because it is the coarser question: which raid you are
 	-- reading for is asked once a night, which boss changes constantly.
-	local TAB_Y = -40
+	--
+	-- The band starts at the top of the page. The note's own buttons share the
+	-- boss name's row on the right, so nothing sits above this -- a strip left
+	-- clear for them cost both columns a row and showed nothing.
+	local TAB_Y = -8
 	local ROW_H, ROW_GAP = 26, 4
 	-- Where BOTH cards start: under the two filter rows on the left, under the
 	-- boss name and its Normal/Heroic pills on the right. One number, so the two
@@ -1410,13 +1520,11 @@ function N.BuildPage(p)
 	-- ---- right: the note itself ----
 	local RX = 6 + LIST_W + 10
 	F.title = W.Text(p, "", "head", "accent")
-	-- Centred in the band above the card rather than pinned to the top of it:
-	-- that band is two filter rows deep now, and at -12 the boss name sat up
-	-- against the tabs with the gap all underneath it.
-	-- +30, not +24: the title row carries the difficulty pills as well, and at
-	-- 24 they sat right on the card below -- the first line of the note read
-	-- as part of the header.
-	F.title:SetPoint("TOPLEFT", RX, CARD_Y + 30)
+	-- On the SIZE row's line, not centred in the band: the boss name and the
+	-- note's own buttons make one header row across the top of the right
+	-- column, level with the first row of filters on the left. Centred, it sat
+	-- between the two filter rows and read as a caption for neither.
+	F.title:SetPoint("TOPLEFT", RX, TAB_Y - 4)
 
 	-- Normal / Heroic, on the NOTE rather than on the page.
 	--
@@ -1446,8 +1554,9 @@ function N.BuildPage(p)
 	-- table -- change a paladin and that one note would have been left behind.
 	F.clear = W.Button(p, "Clear")
 	-- On the boss name's line: these act on the note under them, so they
-	-- share its row rather than sitting in a band of their own.
-	F.clear:SetSize(54, 20); F.clear:SetPoint("TOPRIGHT", -10, -8)
+	-- share its row rather than sitting in a band of their own. Level with
+	-- TAB_Y, so the header reads as one row across both columns.
+	F.clear:SetSize(54, 20); F.clear:SetPoint("TOPRIGHT", -10, TAB_Y)
 	F.clear:Tooltip("Undo your edits to this note.\nIt goes back to the one Okanvil ships with.")
 	F.clear:SetScript("OnClick", function()
 		local sel = db.selected
@@ -1488,7 +1597,7 @@ function N.BuildPage(p)
 	F.seen:SetSize(34, 20)
 	F.seen:SetPoint("RIGHT", F.help, "LEFT", -5, 0)
 	F.seen:Tooltip("What the bosses were seen casting, and how often."
-		.. "\nRecorded by itself from every pull -- nothing to switch on."
+		.. "\nRecorded once per boss and difficulty, from the first kill -- nothing to switch on."
 		.. "\nUse it when a timer never starts: the id may not exist here.")
 	F.seen:SetScript("OnClick", showSeen)
 	F.mode:SetScript("OnClick", function()
@@ -1506,7 +1615,9 @@ function N.BuildPage(p)
 	F.readCard:SetPoint("TOPLEFT", RX, CARD_Y)
 	-- 30: the foot is ONE row again. Follow the room moved up to the toolbar,
 	-- so the card takes back the 22px its second row was holding.
-	F.readCard:SetPoint("BOTTOMRIGHT", -10, 30)
+	-- -6: the same margin the list card keeps on the left, so the two halves
+	-- sit symmetrically in the page instead of the note stopping short of the edge.
+	F.readCard:SetPoint("BOTTOMRIGHT", -6, 30)
 
 	local rsf = CreateFrame("ScrollFrame", nil, F.readCard)
 	-- -8 at the top: a line starting 4px under the border touched it.
@@ -1540,7 +1651,7 @@ function N.BuildPage(p)
 	F.edit:SetPoint("TOPLEFT", RX, CARD_Y)
 	-- Same foot as the read card: the two are one card in two modes, and a
 	-- different bottom made the note jump as you switched between them.
-	F.edit:SetPoint("BOTTOMRIGHT", -10, 30)
+	F.edit:SetPoint("BOTTOMRIGHT", -6, 30)
 	F.edit.edit:SetScript("OnEditFocusLost", function() N.Commit(); N.Refresh() end)
 
 	-- One status line, left to right: what the note holds, where you are, and
@@ -1738,6 +1849,7 @@ end
 
 function N.Refresh()
 	if not (F and F.listChild) then return end
+	refreshSeen()
 
 	-- where you are
 	local here = N.NoteForHere()

@@ -65,26 +65,7 @@ function Okanvil:Settings_Modules(panel)
 	wrap.rows = {}
 	local function rebuild()
 		for _, r in ipairs(wrap.rows) do r:Hide() end
-		-- one unified list: built-in modules first (in NATIVE order), then plugins.
-		-- Each item = { key, title, icon, desc } -- the key is what IsModuleEnabled
-		-- and the nav use.
-		local items = {}
-		for _, m in ipairs(Okanvil.NATIVE) do
-			-- `core` modules have no switch: they are part of a page rather than a
-			-- feature you turn on, and listing them only offers a way to break it.
-			if not m.core then
-				items[#items + 1] = { key = m.key, title = m.title, icon = m.icon, desc = m.desc }
-			end
-		end
-		local names = {}
-		for name in pairs(Okanvil.entries) do names[#names + 1] = name end
-		table.sort(names, function(a, b)
-			return (Okanvil.entries[a].title or a) < (Okanvil.entries[b].title or b)
-		end)
-		for _, name in ipairs(names) do
-			local e = Okanvil.entries[name]
-			items[#items + 1] = { key = name, title = e.title or name, icon = e.icon, desc = e.desc }
-		end
+		local items = Okanvil:ModuleItems()
 		if wrap.empty then wrap.empty:SetText("") end
 
 		-- Starts at 0: the hint is outside the scroll frame now, so the rows no

@@ -21,7 +21,7 @@ local HOME, LOOT, SETTINGS = "__home", "__loot", "__settings"
 -- used to be buried: Modules was a Settings pill, and Invite had no entry at
 -- all -- a module with no menu row and its options somewhere else is a module
 -- nobody finds.
-local MODULES, INVITE = "__modules", "__invite"
+local MODULES = "__modules"
 local COUNCIL = "__council"
 
 -- FIXED window size (MRT-style): the window is NOT resizable -- a hand-tuned size
@@ -341,7 +341,11 @@ Okanvil.ICONS = {
 }
 
 Okanvil.NATIVE = {
-	{ key = "__invite", title = "Invite", icon = Okanvil.ICONS.invite,
+	-- Not a module you switch any more: keyword auto-invite is a setting with its
+	-- own on/off on the Invite tab of Settings (off by default), and the rest is
+	-- the engine the snapshot Invite buttons send through. `core` keeps it out of
+	-- the Modules list and the first-run setup; noNav keeps it out of the menu.
+	{ key = "__invite", title = "Invite", icon = Okanvil.ICONS.invite, noNav = true, core = true,
 	  desc = "Auto-invite on a keyword, plus the login toast. Off = neither fires. "
 	      .. "The inv buttons on Home stay either way -- those are manual invites." },
 	-- `core` = not a module you switch: the guild roster IS Home, and turning it
@@ -363,6 +367,30 @@ Okanvil.NATIVE = {
 	      .. "no comms handlers, and the proficiency tables are released." },
 }
 
+-- Every switchable module, as the Modules page and the first-run setup list
+-- them: built-in modules first (in NATIVE order), then plugins by title. Each
+-- item = { key, title, icon, desc } -- the key is what IsModuleEnabled and the
+-- nav use. `core` modules have no switch: they are part of a page rather than a
+-- feature you turn on, and listing them only offers a way to break it.
+function Okanvil:ModuleItems()
+	local items = {}
+	for _, m in ipairs(self.NATIVE) do
+		if not m.core then
+			items[#items + 1] = { key = m.key, title = m.title, icon = m.icon, desc = m.desc }
+		end
+	end
+	local names = {}
+	for name in pairs(self.entries) do names[#names + 1] = name end
+	table.sort(names, function(a, b)
+		return (self.entries[a].title or a) < (self.entries[b].title or b)
+	end)
+	for _, name in ipairs(names) do
+		local e = self.entries[name]
+		items[#items + 1] = { key = name, title = e.title or name, icon = e.icon, desc = e.desc }
+	end
+	return items
+end
+
 -- Nav display order (top to bottom), by module TITLE. This is the ONE place to
 -- set where a module sits in the menu -- add a new feature's title here at the
 -- index you want. Home is always first; Modules + Settings are always last.
@@ -377,7 +405,7 @@ Okanvil.NAV_GROUPS = {
 	{ section = "RAID",   items = { "Loot", "Notes", "Raid Finder", "PuG" } },
 	-- Loot Council under GUILD, not RAID: what it configures is the guild's own
 	-- loot rules and its priority ladder, which outlive any one raid night.
-	{ section = "GUILD",  items = { "Invite", "Recruit", "Loot Council" } },
+	{ section = "GUILD",  items = { "Recruit", "Loot Council" } },
 	-- Modules and Settings last: neither is a feature, they are what the addon
 	-- has and how it behaves. Settings is the very last row -- see below, where
 	-- anything unnamed is appended BEFORE it rather than after.
@@ -397,7 +425,6 @@ Okanvil.PANEL_KEY = {
 	["Loot"] = "__loot",
 	["Settings"] = "__settings",
 	["Modules"] = "__modules",
-	["Invite"] = "__invite",
 	["Loot Council"] = "__council",
 	["Notes"] = "Okanvil-Notes",
 	["Raid Finder"] = "Okanvil-RaidFinder",
@@ -664,7 +691,18 @@ local function newScrollPanel()
 	return wrap
 end
 
+-- Open Settings on one of its tabs ("general", "loot", "raid", "invite").
+function Okanvil:OpenSettingsTab(tab)
+	if not self.win or not self.win:IsShown() then self:Toggle() end
+	self:ShowPanel(SETTINGS)
+	local fill = self.panels[SETTINGS]
+	if fill and fill.dash and fill.dash.OpenPage then fill.dash.OpenPage(tab) end
+end
+
 function Okanvil:ShowPanel(key)
+	-- Invite was a page; its settings are a Settings tab now. A window last
+	-- closed on it, or an old shortcut, lands there instead of on a blank page.
+	if key == "__invite" then return self:OpenSettingsTab("invite") end
 	self:CloseDropdown()
 	self:ClearAllFocus()          -- switching pages releases any text-box focus
 	for _, b in ipairs(self._navButtons) do
@@ -679,7 +717,6 @@ function Okanvil:ShowPanel(key)
 		elseif key == LOOT then entry = self:BuildLoot()
 		elseif key == SETTINGS then entry = self:BuildSettings()
 		elseif key == MODULES then entry = self:BuildModules()
-		elseif key == INVITE then entry = self:BuildInvite()
 		elseif key == COUNCIL then
 			entry = newFillPanel()
 			if Okanvil.Council and Okanvil.Council.BuildPage then
@@ -783,6 +820,87 @@ Okanvil.UI.FIELD_H  = 46   -- vertical stride of one labelled control
 -- Returns the scroll child to draw into, plus `relayout()` to call after the
 -- content height changes.
 -- ------------------------------------------------------------
+-- ------------------------------------------------------------
+-- RecordRow: the collapsed row of a saved night -- a loot session, an
+-- attendance snapshot. A size badge on the left (25 / HEROIC) says what kind of
+-- night it was before anything is read; the title and a summary sit beside it,
+-- and the page puts its own picture of the night and its buttons on the right.
+-- Clicking the row opens and closes it -- there is no View button.
+--
+--   local r = Okanvil.UI.RecordRow(parent, onToggle)
+--   Okanvil.UI.PaintRecordRow(r, { size = 25, heroic = true, dungeon = false,
+--       title = "...", sub = "...", open = bool })
+-- ------------------------------------------------------------
+Okanvil.UI.RECORD_ROW_H = 52
+
+function Okanvil.UI.RecordRow(parent, onToggle)
+	local r = W.Frame(parent, "input")
+	r:EnableMouse(true)
+	local hl = r:CreateTexture(nil, "HIGHLIGHT")
+	hl:SetAllPoints(); hl:SetTexture(FLAT)
+	hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.05)
+	if onToggle then
+		r:SetScript("OnMouseUp", function(_, button)
+			if button == "LeftButton" then onToggle(r) end
+		end)
+	end
+
+	-- Wide enough that HEROIC sits inside the box with room either side, and
+	-- tall enough that the size and the mode are two lines, not one squeezed one.
+	local badge = W.Frame(r, "dark")
+	badge:SetSize(64, 44)
+	badge:SetPoint("LEFT", 5, 0)
+	r.badge = badge
+	r.bsize = W.Text(badge, "", "title", "accent")
+	r.bsize:SetPoint("TOP", 0, -5)
+	r.bmode = W.Text(badge, "", "label", "dim")
+	r.bmode:SetPoint("BOTTOM", 0, 5)
+
+	r.title = W.Text(r, "", "head")
+	r.title:SetPoint("TOPLEFT", badge, "TOPRIGHT", 12, -2)
+	r.title:SetJustifyH("LEFT")
+	if r.title.SetWordWrap then r.title:SetWordWrap(false) end
+	r.sub = W.Text(r, "", "note", "dim")
+	r.sub:SetPoint("BOTTOMLEFT", badge, "BOTTOMRIGHT", 12, 2)
+	r.sub:SetJustifyH("LEFT")
+	if r.sub.SetWordWrap then r.sub:SetWordWrap(false) end
+	return r
+end
+
+function Okanvil.UI.PaintRecordRow(r, o)
+	if o.dungeon then
+		r.bsize:SetText("5")
+		r.bmode:SetText("DUNGEON")
+	elseif o.size then
+		r.bsize:SetText(tostring(o.size))
+		r.bmode:SetText(o.heroic and "|cffff8040HEROIC|r" or "NORMAL")
+	else
+		r.bsize:SetText("--")
+		r.bmode:SetText("")
+	end
+	-- Open = a gold rim on the badge, so the row that owns the cards below it is
+	-- the one that stands out.
+	local rim = o.open and C.accent or C.border
+	r.badge:SetBackdropBorderColor(rim[1], rim[2], rim[3], 1)
+	r.title:SetText(o.title or "")
+	r.sub:SetText(o.sub or "")
+end
+
+-- 3.3.5a raid difficulty index -> size, heroic.
+function Okanvil.UI.RaidDifficulty(diff)
+	if diff == 1 then return 10, false end
+	if diff == 2 then return 25, false end
+	if diff == 3 then return 10, true end
+	if diff == 4 then return 25, true end
+	return nil, false
+end
+
+-- "Tue 23 Sep  ·  21:30"
+function Okanvil.UI.NightStamp(t)
+	if not t or t == 0 then return "" end
+	return date("%a %d %b", t) .. "  |cff5e6166·|r  " .. date("%H:%M", t)
+end
+
 function Okanvil.UI.DashScroll(main, padX)
 	local X = padX or Okanvil.UI.PAD_X
 	local sf = CreateFrame("ScrollFrame", nil, main)

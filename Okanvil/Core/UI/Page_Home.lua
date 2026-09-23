@@ -140,14 +140,10 @@ function Okanvil:BuildHome()
 	wrap.gempty = gempty
 
 	-- ---- SNAPSHOTS card: same space as the online list, shown by the tab ----
-	-- Ported from the old Guild page rather than rewritten: this row layout and its
-	-- inline expansion already work, and attendance is data you cannot re-capture
-	-- if a rewrite gets it wrong.
+	-- One row per snapshot; View expands it in place into group cards below.
 	local scard = W.Frame(p, "input")
 	scard:SetAllPoints(gcard)
 	local sh = W.Text(scard, "SAVED SNAPSHOTS", "note", "dim"); sh:SetPoint("TOPLEFT", 10, -8)
-	local snapNow = W.Button(scard, "Snapshot group now")
-	snapNow:SetSize(150, 22); snapNow:SetPoint("TOPRIGHT", -10, -4)
 	local ssf = CreateFrame("ScrollFrame", nil, scard)
 	ssf:SetPoint("TOPLEFT", 8, -28); ssf:SetPoint("BOTTOMRIGHT", -12, 6)
 	local schild = CreateFrame("Frame", nil, ssf); schild:SetSize(10, 1)
@@ -166,23 +162,140 @@ function Okanvil:BuildHome()
 	ssf:EnableMouseWheel(true)
 	ssf:SetScript("OnMouseWheel", function(_, d) ssb:SetValue(ssb:GetValue() - d * 46) end)
 	scard:Hide()
-	-- three columns of names when a snapshot is expanded: a 25-man is five
-	-- groups of five, which fits three-across without scrolling
-	local SNAP_COLS = 3
-	wrap.snapRows, wrap.snapDetail, wrap.snapOpen = {}, {}, nil
+	wrap.snapRows, wrap.snapCards, wrap.snapOpen = {}, {}, nil
+
+	-- ---- expanded snapshot: one card per raid group, one tile per player ----
+	-- Cards sit side by side as far as the width allows, so a 25-man's five
+	-- groups read as five columns on a full-width window and wrap on a narrow one.
+	local CARD_MIN_W, CARD_GAP, CARD_HEAD_H, PROW_H = 190, 8, 26, 38
+	local ROLE_BADGE = { MAINTANK = "MT", MAINASSIST = "MA" }
+
+	-- The class crest when the spec was never inspected: still says what the
+	-- player is, just not which tree.
+	local function classIcon(tex, token)
+		local c = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[token or ""]
+		if c then
+			tex:SetTexture("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
+			tex:SetTexCoord(c[1], c[2], c[3], c[4])
+		else
+			tex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+			tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		end
+	end
+
+	local function playerTile(card, i)
+		card.tiles = card.tiles or {}
+		local r = card.tiles[i]
+		if r then return r end
+		r = CreateFrame("Frame", nil, card)
+		r.icon = r:CreateTexture(nil, "ARTWORK")
+		r.icon:SetSize(28, 28); r.icon:SetPoint("LEFT", 8, 0)
+		r.name = W.Text(r, "", "body")
+		r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 8, 1)
+		r.name:SetJustifyH("LEFT")
+		r.spec = W.Text(r, "", "note", "dim")
+		r.spec:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", 8, 0)
+		r.spec:SetJustifyH("LEFT")
+		r.badge = W.Text(r, "", "note", "accent")
+		r.badge:SetPoint("RIGHT", -8, 0)
+		card.tiles[i] = r
+		return r
+	end
+
+	local function fillTile(r, p, width)
+		-- The spec saved with the snapshot is what they played that night. The
+		-- live inspect cache only stands in for a snapshot saved without one, and
+		-- only when it is recent -- an old reading is shown as unknown rather than
+		-- passed off as current.
+		local spec, icon = p.spec, p.specIcon
+		if not spec then
+			local I = Okanvil.Inspect
+			local info = I and I.Info and I.Info(p.name)
+			if info and I.IsFresh and I.IsFresh(p.name) then spec, icon = info.spec, info.icon end
+		end
+		if icon then
+			r.icon:SetTexture(icon)
+			r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		else
+			classIcon(r.icon, p.class)
+		end
+
+		local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[p.class or ""]
+		if c then r.name:SetTextColor(c.r, c.g, c.b) end
+		r.name:SetText(p.name or "?")
+		r.name:SetWidth(width - 84)
+
+		local sub = spec or "spec unknown"
+		if (p.level or 0) > 0 and p.level < 80 then sub = sub .. "  |cff5e6166lvl " .. p.level .. "|r" end
+		if p.online == false then sub = sub .. "  |cff5e6166offline|r" end
+		r.spec:SetText(sub)
+		r.spec:SetWidth(width - 84)
+
+		r.badge:SetText(ROLE_BADGE[p.role or ""] or "")
+		r:SetAlpha(p.online == false and 0.5 or 1)
+	end
+
+	-- Lays the cards out under the snapshot row at offset y; returns the y below them.
+	local function drawSnapCards(snap, y)
+		local groups, order = {}, {}
+		for _, p in ipairs(snap.players or {}) do
+			local g = p.group or 0
+			if not groups[g] then groups[g] = {}; order[#order + 1] = g end
+			local list = groups[g]
+			list[#list + 1] = p
+		end
+		if #order == 0 then return y end
+
+		local width = math.max(CARD_MIN_W, schild:GetWidth() - 8)
+		local cols = math.max(1, math.min(#order,
+			math.floor((width + CARD_GAP) / (CARD_MIN_W + CARD_GAP))))
+		local cardW = (width - (cols - 1) * CARD_GAP) / cols
+
+		local top, lineH = y, 0
+		for idx, g in ipairs(order) do
+			local col = (idx - 1) % cols
+			if col == 0 and idx > 1 then
+				top = top + lineH + CARD_GAP
+				lineH = 0
+			end
+			local card = wrap.snapCards[idx]
+			if not card then
+				card = W.Frame(schild, "raise")
+				card.head = W.Text(card, "", "note", "dim")
+				card.head:SetPoint("TOPLEFT", 10, -8)
+				wrap.snapCards[idx] = card
+			end
+			local list = groups[g]
+			local h = CARD_HEAD_H + #list * PROW_H + 6
+			card:ClearAllPoints()
+			card:SetPoint("TOPLEFT", 4 + col * (cardW + CARD_GAP), -top)
+			card:SetSize(cardW, h)
+			card.head:SetText(g > 0 and ("GROUP " .. g) or "PARTY")
+			for _, t in ipairs(card.tiles or {}) do t:Hide() end
+			for i, p in ipairs(list) do
+				local r = playerTile(card, i)
+				r:ClearAllPoints()
+				r:SetPoint("TOPLEFT", 0, -(CARD_HEAD_H + (i - 1) * PROW_H))
+				r:SetSize(cardW, PROW_H)
+				fillTile(r, p, cardW)
+				r:Show()
+			end
+			card:Show()
+			if h > lineH then lineH = h end
+		end
+		return top + lineH + 12
+	end
 
 	local function rebuildSnaps()
 		local G = Okanvil.Guild
 		for _, r in ipairs(wrap.snapRows) do r:Hide() end
-		for _, set in ipairs(wrap.snapDetail) do
-			for _, t in ipairs(set) do t:Hide() end
-		end
+		for _, c in ipairs(wrap.snapCards) do c:Hide() end
 		local snaps = (Okanvil.db.guild and Okanvil.db.guild.snapshots) or {}
 		schild:SetWidth(math.max(40, ssf:GetWidth()))
 		if #snaps == 0 or not G then
 			wrap.snapEmpty = wrap.snapEmpty or W.Text(schild, "", "body", "dim")
 			wrap.snapEmpty:ClearAllPoints(); wrap.snapEmpty:SetPoint("TOPLEFT", 4, -6)
-			wrap.snapEmpty:SetText(G and "|cff888888No snapshots yet. They save at the first pull, or use the button above.|r"
+			wrap.snapEmpty:SetText(G and "|cff888888No snapshots yet. One is saved automatically at the first pull of a raid.|r"
 				or "|cff888888Guild module not loaded.|r")
 			wrap.snapEmpty:Show(); schild:SetHeight(40); ssb:SetShown(false); return
 		end
@@ -192,37 +305,35 @@ function Okanvil:BuildHome()
 		for i, snap in ipairs(snaps) do
 			local r = wrap.snapRows[i]
 			if not r then
-				r = W.Frame(schild, "dark")
-				r.title = W.Text(r, "", "body"); r.title:SetPoint("TOPLEFT", 10, -6)
-				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("BOTTOMLEFT", 10, 6)
+				r = Okanvil.UI.RecordRow(schild, function(row)
+					local sn = row._snap
+					if not sn then return end
+					if wrap.snapOpen == sn then wrap.snapOpen = nil else wrap.snapOpen = sn end
+					rebuildSnaps()
+				end)
 				r.del = W.Button(r, "X", "danger"); r.del:SetSize(24, 22); r.del:SetPoint("RIGHT", -8, 0)
 				r.export = W.Button(r, "Export"); r.export:SetSize(72, 22); r.export:SetPoint("RIGHT", r.del, "LEFT", -6, 0)
-				r.view = W.Button(r, "View"); r.view:SetSize(60, 22); r.view:SetPoint("RIGHT", r.export, "LEFT", -6, 0)
 				r.inv = W.Button(r, "Invite", "primary"); r.inv:SetSize(60, 22)
-				r.inv:SetPoint("RIGHT", r.view, "LEFT", -6, 0)
-				r:EnableMouse(true)
+				r.inv:SetPoint("RIGHT", r.export, "LEFT", -6, 0)
 				wrap.snapRows[i] = r
 			end
+			r._snap = snap
+			local RH = Okanvil.UI.RECORD_ROW_H
 			r:ClearAllPoints(); r:SetPoint("TOPLEFT", 0, -y); r:SetPoint("RIGHT", schild, "RIGHT", 0, 0)
-			r:SetHeight(40)
+			r:SetHeight(RH)
 			local dateStr = date("%b %d  %H:%M", snap.t)
 			local where = (snap.zone ~= "" and snap.zone) or "Unknown"
 			local isOpen = (wrap.snapOpen == snap)
-			r.title:SetText((isOpen and "|cffffd200v|r  " or "|cff8a8d93>|r  ")
-				.. where .. ((snap.boss or "") ~= "" and ("  |cff8a8d93-- " .. snap.boss .. "|r") or ""))
-			r.sub:SetText(dateStr .. "  |cff8a8d93|  " .. (snap.count or 0) .. " players  |  " .. (snap.trigger or "") .. "|r")
-			r.view.text:SetText(isOpen and "Close" or "View")
-			r.view:SetScript("OnClick", function()
-				-- if/else, NOT "cond and nil or snap": that idiom cannot yield nil,
-				-- because `and nil` is falsy so the `or` branch always wins. Written
-				-- as a ternary this row could open but never close.
-				if wrap.snapOpen == snap then
-					wrap.snapOpen = nil
-				else
-					wrap.snapOpen = snap
-				end
-				rebuildSnaps()
-			end)
+			local size, heroic = Okanvil.UI.RaidDifficulty(snap.difficulty)
+			Okanvil.UI.PaintRecordRow(r, {
+				size = size or ((snap.groupSize or 0) > 0 and snap.groupSize or nil),
+				heroic = heroic,
+				title = where .. ((snap.boss or "") ~= "" and ("  |cff8a8d93--|r  " .. snap.boss) or ""),
+				sub = Okanvil.UI.NightStamp(snap.t) .. "   |cff5e6166·|r   " .. (snap.count or 0)
+					.. " players   |cff5e6166·|r   " .. (snap.trigger or ""),
+				open = isOpen,
+			})
+
 			r.export:SetScript("OnClick", function()
 				Okanvil:ShowExport(G.SnapshotJSON(snap), "Attendance -- " .. dateStr)
 			end)
@@ -240,54 +351,8 @@ function Okanvil:BuildHome()
 				rebuildSnaps()
 			end)
 			r:Show()
-			y = y + 46
-			if isOpen then
-				-- Three columns, bigger text. One column ran the groups straight down
-				-- and left two thirds of a 900px card empty, so a 25-man snapshot
-				-- scrolled for no reason.
-				di = di + 1
-				local set = wrap.snapDetail[di]
-				if not set then
-					set = {}
-					for c = 1, SNAP_COLS do
-						local t = W.Text(schild, "", "body")
-						t:SetJustifyH("LEFT")
-						t:SetJustifyV("TOP")
-						-- NO SetWordWrap(false) here. It is right for the one-line row
-						-- labels this was copied from, but each column is a MULTI-LINE
-						-- block ("Group 1\n  Name\n  Name"): wrapping off collapses the
-						-- whole thing to one truncated line -- "Group 1...".
-						set[c] = t
-					end
-					wrap.snapDetail[di] = set
-				end
-				local cols = G.SnapshotColumns and G.SnapshotColumns(snap, SNAP_COLS)
-					or { G.SnapshotBodyText(snap) }
-				local colW = math.max(80, (schild:GetWidth() - 28) / SNAP_COLS)
-				-- Height from the LINE COUNT, not GetStringHeight(): a font string
-				-- measures 0 until WoW has laid it out, which is the same frame we
-				-- are positioning in. Measuring there left `tallest` at 0, so the
-				-- next row drew straight on top of this expansion -- covering its
-				-- own Close button, which is why Close appeared dead.
-				local LINE_H = 15
-				local mostLines = 0
-				for c = 1, SNAP_COLS do
-					local t = set[c]
-					local txt = cols[c] or ""
-					t:ClearAllPoints()
-					t:SetPoint("TOPLEFT", 14 + (c - 1) * colW, -y)
-					t:SetWidth(colW - 8)
-					t:SetText(txt)
-					t:Show()
-					local n = 0
-					if txt ~= "" then
-						n = 1
-						for _ in txt:gmatch("\n") do n = n + 1 end
-					end
-					if n > mostLines then mostLines = n end
-				end
-				y = y + mostLines * LINE_H + 12
-			end
+			y = y + RH + 6
+			if isOpen then y = drawSnapCards(snap, y) end
 		end
 		schild:SetHeight(math.max(1, y))
 		local maxs = math.max(0, y - ssf:GetHeight())
@@ -295,13 +360,6 @@ function Okanvil:BuildHome()
 	end
 	wrap.rebuildSnaps = rebuildSnaps
 
-	snapNow:SetScript("OnClick", function()
-		local G = Okanvil.Guild
-		if not (G and G.SaveSnapshot) then return end
-		local snap, err = G.SaveSnapshot("manual")
-		if not snap then Okanvil:Print("Snapshot failed: " .. (err or "?"))
-		else wrap.snapOpen = snap; rebuildSnaps() end
-	end)
 	-- Re-measure only, like the online card: rebuildSnaps() re-renders every row
 	-- and rebuilds the body text of any expanded one, which is far too much to run
 	-- on each frame of a resize.

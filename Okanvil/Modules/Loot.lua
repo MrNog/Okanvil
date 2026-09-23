@@ -570,7 +570,25 @@ local function sessions()
 	cdb.lootSessions = cdb.lootSessions or {}
 	return cdb.lootSessions
 end
-function L.Sessions() return sessions() end
+-- Winners recorded as the literal word "You" (see buildLootPatterns) are put
+-- back to this character's name. The loot history is per character, so "You"
+-- in it can only ever have been whoever owns it. Once per login.
+local youFixed = false
+local function fixYouWinners()
+	if youFixed then return end
+	local me = UnitName("player")
+	if not me or me == "" or me == UNKNOWNOBJECT then return end
+	youFixed = true
+	local you = YOU or "You"
+	for _, sess in ipairs(sessions() or {}) do
+		for _, d in ipairs(sess.drops or {}) do
+			if d.receivedBy == you or d.receivedBy == "You" then d.receivedBy = me end
+			if d.heldBy == you or d.heldBy == "You" then d.heldBy = me end
+		end
+	end
+end
+
+function L.Sessions() fixYouWinners(); return sessions() end
 
 -- ------------------------------------------------------------
 -- ONE-TIME MIGRATION: relabel stored "Trash" drops in RAID sessions.
@@ -1371,16 +1389,24 @@ local function buildLootPatterns()
 		LOOT_PATTERNS[#LOOT_PATTERNS + 1] = { p, extract }
 	end
 	local me = function() return UnitName("player") end
-	add(LOOT_ITEM_MULTIPLE,             function(n, l) return n, l end)
+	-- A generic "%s won" also matches "You won: [item]" and hands back the word
+	-- "You" as the player; whatever gets through as YOU is us.
+	local function who(n)
+		if n == (YOU or "You") or n == "You" then return me() end
+		return n
+	end
+	-- The SELF lines go first: they are the specific ones, and a generic pattern
+	-- checked ahead of them is what recorded winners as "You".
 	add(LOOT_ITEM_SELF_MULTIPLE,        function(l)    return me(), l end)
-	add(LOOT_ITEM,                      function(n, l) return n, l end)
 	add(LOOT_ITEM_SELF,                 function(l)    return me(), l end)
-	add(LOOT_ITEM_PUSHED_MULTIPLE,      function(n, l) return n, l end)
 	add(LOOT_ITEM_PUSHED_SELF_MULTIPLE, function(l)    return me(), l end)
-	add(LOOT_ITEM_PUSHED,               function(n, l) return n, l end)
 	add(LOOT_ITEM_PUSHED_SELF,          function(l)    return me(), l end)
-	add(LOOT_ROLL_WON,                  function(n, l) return n, l end)
 	add(LOOT_ROLL_YOU_WON,              function(l)    return me(), l end)
+	add(LOOT_ITEM_MULTIPLE,             function(n, l) return who(n), l end)
+	add(LOOT_ITEM,                      function(n, l) return who(n), l end)
+	add(LOOT_ITEM_PUSHED_MULTIPLE,      function(n, l) return who(n), l end)
+	add(LOOT_ITEM_PUSHED,               function(n, l) return who(n), l end)
+	add(LOOT_ROLL_WON,                  function(n, l) return who(n), l end)
 	return LOOT_PATTERNS
 end
 

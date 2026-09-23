@@ -60,9 +60,13 @@ end
 -- question the leader did not ask, so we keep the id and mirror it back.
 local function simplify_links(msg)
 	local hadAchiev = msg:find("achievement:") ~= nil
-	local achievId = tonumber(msg:match("|Hachievement:(%d+)"))
+	-- Either case: this runs on the LOWERCASED message, where |H is |h. Matching
+	-- only the upper-case form left every link whole, and the digits inside it
+	-- (an achievement id like 3812) were then read as a 3.8k gearscore.
+	local achievId = tonumber(msg:match("|[hH]achievement:(%d+)"))
 	-- |cff...|Hachievement:...|h[Name]|h|r  ->  [Name]
-	msg = msg:gsub("|c%x-|H.-|h(%[.-%])|h|r", "%1")
+	msg = msg:gsub("|[cC]%x-|[hH].-|[hH](%[.-%])|[hH]|[rR]", "%1")
+	msg = msg:gsub("|[hH].-|[hH](%[.-%])|[hH]", "%1")
 	return msg, hadAchiev, achievId
 end
 
@@ -398,7 +402,10 @@ local role_full_pats = {
 -- Map the captured word back onto one of our three roles.
 local function roleOfWord(w)
 	if not w then return nil end
-	w = w:lower():gsub("s$", "")
+	w = w:lower()
+	-- Before the plural "s" comes off: "dps" ends in one and would become "dp".
+	if w == "dps" or w == "dd" then return "dps" end
+	w = w:gsub("s$", "")
 	if w == "tank" or w == "mt" or w == "ot" or w == "bear" or w == "prot" then return "tank" end
 	if w == "heal" or w == "healer" or w == "healz" then return "healer" end
 	if w == "dps" or w == "dd" then return "dps" end
@@ -406,6 +413,13 @@ local function roleOfWord(w)
 end
 
 local function lex_roles(msg)
+	-- A count glued to the role -- "3heals", "7dps", "2tanks" -- has no word
+	-- boundary between the digit and the letter, so the role patterns below never
+	-- saw it. Split only those: "5k" is a gearscore and stays as it is.
+	msg = msg:gsub("(%d+)(%a+)", function(n, w)
+		if roleOfWord(w) then return n .. " " .. w end
+	end)
+
 	-- Roles the message says are already FULL. Strip the phrase so the role word
 	-- inside it is never read as a request.
 	local full = {}
@@ -628,6 +642,11 @@ local item_aliases = {
 	["death verdict"]       = "Death's Verdict",
 	["death verdicts"]      = "Death's Verdict",
 	["death choice"]        = "Death's Choice",
+	-- the two-letter shorthand in "(bop+dc res)". Only ever read in a reserve
+	-- context (a cluster, or a message with res/hr/sr in it), so "dc" meaning
+	-- Discord or a disconnect in ordinary chat does not become an item.
+	["dc"]                  = "Death's Choice",
+	["dv"]                  = "Death's Verdict",
 	-- ICC weapons/trinkets commonly hard-reserved
 	["dbw"]                 = "Deathbringer's Will",
 	["deathbringer's will"] = "Deathbringer's Will",
@@ -664,6 +683,13 @@ end
 --     items (Ulduar Orb = Runed Orb, ICC Frags = Shadowfrost Shard, ...)
 --     because it knows the raid. `link` is an explicit item the leader pasted.
 function RF.lex_reserved(message)
+	-- Only ITEM links are loot. An achievement ([Call of the Crusade]) or a quest
+	-- ([Patchwerk Must Die!]) pasted into an LFM is what the run is FOR, not what
+	-- is reserved -- so every other kind of link is taken out, text and all,
+	-- before anything below reads the message.
+	message = message:gsub("|H(%a+):[^|]*|h(%[.-%])|h", function(kind)
+		if kind ~= "item" then return "" end
+	end)
 	local lower = message:lower()
 	for _, t in ipairs(none_tokens) do
 		if lower:find(t) then return false end
@@ -712,6 +738,16 @@ function RF.lex_reserved(message)
 		local known, unknown = {}, {}
 		for tok in s:gmatch("[%a]+") do
 			if token_cat[tok] then known[#known + 1] = token_cat[tok]
+			-- "bop" / "bo" / "op" written as one word inside the cluster: every
+			-- letter is a category, the same as B+O+P spelled out.
+			elseif #tok <= 4 and tok:find("^[bopf]+$") then
+				for L in tok:gmatch("%a") do
+					if letter_cats[L] then known[#known + 1] = letter_cats[L] end
+				end
+			-- An item nickname ("dc") is read by the named-item pass below; here it
+			-- is neither a category nor junk that should sink the cluster.
+			elseif item_aliases[tok] then
+				-- nothing
 			elseif not filler[tok] then unknown[#unknown + 1] = tok:upper() end
 		end
 		-- reject if there's more junk than reserve tokens (not a real cluster)
@@ -754,17 +790,27 @@ function RF.lex_reserved(message)
 	-- MODULE feeds to the ID Finder to render a real live link.
 	local link = message:match("|H.-|h(%[.-%])|h")
 	if link then link = clean_links(link) end
-	local itemName
+	-- A pasted link carries the item's id: keep it, because the cleaned text
+	-- alone is only a name and could not be turned back into a real item.
+	local itemId = tonumber(message:match("|Hitem:(%d+)"))
+	local itemName = link and link:match("^%[(.-)%]$") or nil
 	if not link then
-		-- typed [Name] that is NOT a hyperlink (no |H before it)
+		-- typed [Name] that is NOT a hyperlink (no |H before it). A name we know
+		-- (the aliases) counts on its own; any other bracketed text only when the
+		-- message is about reserving at all -- "[LFM]" or "[25]" is not an item.
 		local typed = message:match("%[([^%[%]|]+)%]")
+		-- "[Call of the Grand Crusade (25 player)]" typed out rather than linked is
+		-- still an achievement: the "(N player)" tail is theirs, never an item's.
+		if typed and typed:lower():find("%(%s*%d+%s*player%s*%)") then typed = nil end
 		if typed then
 			local canon = alias_item(typed)
-			itemName = canon
-			link = "[" .. (canon or typed:gsub("^%s+",""):gsub("%s+$","")) .. "]"
+			if canon or has_reserve_signal(lower) then
+				itemName = canon
+				link = "[" .. (canon or typed:gsub("^%s+",""):gsub("%s+$","")) .. "]"
+			end
 		end
 	end
-	if not itemName then
+	if not itemName and not itemId then
 		-- bare nickname anywhere (GTS/DBW/etc.), require a reserve signal so a
 		-- stray word in chatter can't invent a reserved item.
 		if has_reserve_signal(lower) then
@@ -780,7 +826,7 @@ function RF.lex_reserved(message)
 	end
 
 	if #cats > 0 or link then
-		return { cats = cats, link = link, itemName = itemName }
+		return { cats = cats, link = link, itemName = itemName, itemId = itemId }
 	end
 	-- bare "reserved/SR/HR" with no parsed detail -> still YES, generic
 	if has_reserve_signal(lower) then return { cats = {}, link = nil, unspecified = true } end

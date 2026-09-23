@@ -167,6 +167,20 @@ local function snapshotRaid(trigger, bossName)
 		end
 	end
 
+	-- A first guess from the Inspect cache, RECENT entries only: a spec read weeks
+	-- ago survives a respec or a dual-spec swap, and showing it as tonight's is
+	-- worse than showing none. G.ScanSnapshotSpecs replaces these with a fresh
+	-- scan right after the snapshot is saved.
+	local I = Okanvil.Inspect
+	if I and I.Info and I.IsFresh then
+		for _, p in ipairs(players) do
+			local info = I.Info(p.name)
+			if info and info.spec and I.IsFresh(p.name, 1) then
+				p.spec, p.specIcon = info.spec, info.icon
+			end
+		end
+	end
+
 	table.sort(players, function(a, b)
 		if a.group ~= b.group then return a.group < b.group end
 		return a.name < b.name
@@ -192,7 +206,57 @@ function G.SaveSnapshot(trigger, bossName)
 		table.remove(db.guild.snapshots)
 	end
 	if G.onSnapshot then G.onSnapshot() end       -- refresh the tab if open
+	G.ScanSnapshotSpecs(snap)
 	return snap
+end
+
+-- ------------------------------------------------------------
+-- Specs as they are TONIGHT, from a forced inspect scan of the group.
+--
+-- The snapshot is the attendance record, so the spec beside each name has to be
+-- what that player is actually running -- not the cache's memory of them, and
+-- not what an officer note said months ago. The scan reads every talent tree
+-- again and overwrites the snapshot's spec with whatever it just read; anyone
+-- it could not reach (offline, out of range) keeps the recent guess or none.
+--
+-- In combat it waits: the automatic snapshot is taken at the first pull, and an
+-- inspect round in the middle of a boss both misses whoever is out of range and
+-- is the last thing anyone wants running then. Busy (another module is already
+-- scanning) it tries again a few times.
+-- ------------------------------------------------------------
+local afterCombat = {}
+local combatWatch = CreateFrame("Frame")
+combatWatch:RegisterEvent("PLAYER_REGEN_ENABLED")
+combatWatch:SetScript("OnEvent", function()
+	local pending = afterCombat
+	afterCombat = {}
+	for _, fn in ipairs(pending) do pcall(fn) end
+end)
+
+function G.ScanSnapshotSpecs(snap, tries)
+	local I = Okanvil.Inspect
+	if not (snap and I and I.ScanGroup and I.Info) then return end
+	tries = tries or 0
+	if InCombatLockdown and InCombatLockdown() then
+		afterCombat[#afterCombat + 1] = function() G.ScanSnapshotSpecs(snap, tries) end
+		return
+	end
+	local started = time()
+	local ok = I.ScanGroup(true, function()
+		for _, p in ipairs(snap.players or {}) do
+			local info = I.Info(p.name)
+			-- Only what THIS scan read: an entry older than the scan's start is
+			-- someone it could not reach, and their old spec is not tonight's.
+			if info and info.spec and (info.at or 0) >= started then
+				p.spec, p.specIcon = info.spec, info.icon
+			end
+		end
+		snap.specsAt = time()
+		if G.onSnapshot then G.onSnapshot() end
+	end)
+	if not ok and tries < 6 and Okanvil.Comms and Okanvil.Comms.After then
+		Okanvil.Comms.After(10, function() G.ScanSnapshotSpecs(snap, tries + 1) end)
+	end
 end
 
 function G.DeleteSnapshot(snap)

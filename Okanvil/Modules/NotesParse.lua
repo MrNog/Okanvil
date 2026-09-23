@@ -116,42 +116,132 @@ function P.SeenAnchors() return seenKeys end
 -- core's boss ever casts it. A note anchored to a spell the boss never uses
 -- waits for ever and looks exactly like a broken addon.
 --
--- ONE ROW PER SPELL, not per occurrence: { id, name, prefix, n }. A boss fight
--- is thousands of events and a handful of distinct spells, so counting is what
--- makes this small enough to keep for every boss in the game.
+-- One library per raid AND difficulty, because heroic and 25-man abilities
+-- carry their own spell ids:
+--
+--   log.lib[zone][diff][source] = { spells = { [prefix:id] = row }, killed = time }
+--   diff = "10N" | "10H" | "25N" | "25H" | "?" (difficulty not known)
+--
+-- Recorded ONCE. Pulls count a source's casts until it is seen dying; a wipe at
+-- 30% keeps what it saw and the next pull carries on from there. After the kill
+-- the counts are frozen, but a spell never seen before is still added: a phase
+-- skipped by a fast kill turns up the first time a later pull reaches it.
+-- "redo" on the panel throws a source away to record it from scratch.
+--
+-- Only pulls inside a raid instance are catalogued, so a fight in Dalaran or a
+-- dungeon never lands next to the bosses a note is written for.
 --
 -- Silent by design. Nothing prints, nothing warns, nothing asks -- you read it
 -- when you sit down to write a note, not while you are tanking.
 -- ------------------------------------------------------------
-local function catalogue()
+
+-- Boss NPCs of each raid, by name. Used only to carry a catalogue that was
+-- recorded without a zone (a flat source table) into the right library; any
+-- source not listed here has no raid to go to and is dropped with it.
+local LEGACY_BOSSES = {
+	["Trial of the Crusader"] = {
+		"Gormok the Impaler", "Acidmaw", "Dreadscale", "Icehowl",
+		"Lord Jaraxxus", "Fjola Lightbane", "Eydis Darkbane", "Anub'arak",
+	},
+	["Icecrown Citadel"] = {
+		"Lord Marrowgar", "Lady Deathwhisper", "Deathbringer Saurfang",
+		"Festergut", "Rotface", "Professor Putricide", "Prince Valanar",
+		"Prince Keleseth", "Prince Taldaram", "Blood-Queen Lana'thel",
+		"Valithria Dreamwalker", "Sindragosa", "The Lich King",
+	},
+	["The Ruby Sanctum"] = {
+		"Halion", "Baltharus the Warborn", "Saviana Ragefire", "General Zarithrian",
+	},
+}
+
+local UNKNOWN_DIFF = "?"
+P.UNKNOWN_DIFF = UNKNOWN_DIFF
+
+local function libraries()
 	local d = logDB()
-	d.seen = d.seen or {}
-	return d.seen
+	d.lib = d.lib or {}
+	local function carry(zone, name, spells)
+		d.lib[zone] = d.lib[zone] or {}
+		local bucket = d.lib[zone][UNKNOWN_DIFF] or {}
+		d.lib[zone][UNKNOWN_DIFF] = bucket
+		bucket[name] = bucket[name] or { spells = spells }
+	end
+	-- Flat { [source] = spells }: bosses whose raid is certain move over.
+	if d.seen then
+		for zone, bosses in pairs(LEGACY_BOSSES) do
+			for _, name in ipairs(bosses) do
+				if d.seen[name] then carry(zone, name, d.seen[name]) end
+			end
+		end
+		d.seen = nil
+	end
+	-- Per raid with no difficulty: { [zone] = { [source] = spells } }.
+	if d.raids then
+		for zone, sources in pairs(d.raids) do
+			for name, spells in pairs(sources) do carry(zone, name, spells) end
+		end
+		d.raids = nil
+	end
+	return d.lib
+end
+
+-- The raid and difficulty this pull is in, or nil outside a raid instance.
+-- Read once per pull: neither changes mid-fight, and the combat log fires
+-- thousands of times.
+local catZone, catDiff
+local function raidZone()
+	local inInstance, itype = IsInInstance()
+	if not inInstance or itype ~= "raid" then return nil end
+	local zone = (GetZoneText and GetZoneText()) or ""
+	return zone ~= "" and zone or nil
+end
+
+local function raidDiff()
+	local N = Okanvil.Notes
+	local size = N and N.RaidSize and N.RaidSize()
+	local heroic = N and N.RaidHeroic and N.RaidHeroic()
+	if not size or heroic == nil then return UNKNOWN_DIFF end
+	return size .. (heroic and "H" or "N")
+end
+
+function P.DiffKey(size, heroic)
+	return (size or 25) .. (heroic and "H" or "N")
+end
+
+local function entryFor(zone, diff, srcName)
+	local libs = libraries()
+	libs[zone] = libs[zone] or {}
+	local bucket = libs[zone][diff]
+	if not bucket then
+		bucket = {}
+		libs[zone][diff] = bucket
+	end
+	local e = bucket[srcName]
+	if not e then
+		e = { spells = {} }
+		bucket[srcName] = e
+	end
+	return e
 end
 
 -- The boss this cast belongs to. The source NAME, not the note or the room: a
 -- room can hold two bosses (the Plagueworks) and the note is whatever happens
 -- to be selected, which may be the wrong one or none at all.
-local function noteSpell(srcName, prefix, spellID, spellName)
+local function noteSpell(zone, diff, srcName, prefix, spellID, spellName)
 	if not srcName or srcName == "" then return end
-	local seen = catalogue()
-	local boss = seen[srcName]
-	if not boss then
-		boss = {}
-		seen[srcName] = boss
-	end
+	local e = entryFor(zone, diff, srcName)
 	local key = prefix .. ":" .. spellID
-	local row = boss[key]
+	local row = e.spells[key]
 	if row then
-		row.n = row.n + 1
+		if not e.killed then row.n = row.n + 1 end
 		return
 	end
 	-- Bounded per source, so a boss with a long tail of trash abilities cannot
 	-- grow the file without limit.
 	local count = 0
-	for _ in pairs(boss) do count = count + 1 end
+	for _ in pairs(e.spells) do count = count + 1 end
 	if count >= 60 then return end
-	boss[key] = {
+	e.spells[key] = {
 		id = spellID,
 		name = (type(spellName) == "string" and spellName) or "?",
 		prefix = prefix,
@@ -159,29 +249,67 @@ local function noteSpell(srcName, prefix, spellID, spellName)
 	}
 end
 
+-- A source seen dying is complete. Only one that has cast something has an
+-- entry to mark, so trash killed before it did anything leaves nothing behind.
+local function markKilled(zone, diff, name)
+	local lib = libraries()[zone]
+	local e = lib and lib[diff] and lib[diff][name]
+	if e and not e.killed then e.killed = time() end
+end
+
+local function bucketOf(zone, diff)
+	local lib = libraries()[zone]
+	return lib and lib[diff]
+end
+
 -- Every spell recorded against one source, most cast first.
-function P.SpellsSeen(srcName)
-	local seen = (OkanvilNotesDB and OkanvilNotesDB.log and OkanvilNotesDB.log.seen) or {}
-	local boss = seen[srcName]
-	if not boss then return {} end
+function P.SpellsSeen(zone, diff, srcName)
+	local b = bucketOf(zone, diff)
+	local e = b and b[srcName]
+	if not e then return {} end
 	local out = {}
-	for _, row in pairs(boss) do out[#out + 1] = row end
-	table.sort(out, function(a, b) return (a.n or 0) > (b.n or 0) end)
+	for _, row in pairs(e.spells) do out[#out + 1] = row end
+	table.sort(out, function(x, y) return (x.n or 0) > (y.n or 0) end)
 	return out
 end
 
--- Who we have seen cast anything, so the UI can offer a list.
-function P.SourcesSeen()
-	local seen = (OkanvilNotesDB and OkanvilNotesDB.log and OkanvilNotesDB.log.seen) or {}
-	local out = {}
-	for name in pairs(seen) do out[#out + 1] = name end
-	table.sort(out)
+-- When the source was seen dying, or nil while it is still being recorded.
+function P.KilledAt(zone, diff, srcName)
+	local b = bucketOf(zone, diff)
+	return b and b[srcName] and b[srcName].killed
+end
+
+-- Everyone seen casting in one raid and difficulty, busiest first: a boss
+-- casts far more than the trash around it, so the bosses rise to the top.
+function P.SourcesSeen(zone, diff)
+	local b = bucketOf(zone, diff)
+	if not b then return {} end
+	local out, total = {}, {}
+	for name, e in pairs(b) do
+		local n = 0
+		for _, row in pairs(e.spells) do n = n + (row.n or 0) end
+		if n > 0 then
+			out[#out + 1] = name
+			total[name] = n
+		end
+	end
+	table.sort(out, function(x, y)
+		if total[x] ~= total[y] then return total[x] > total[y] end
+		return x < y
+	end)
 	return out
 end
 
-function P.ClearCatalogue()
-	local d = logDB()
-	d.seen = {}
+-- Throws one source's record away so the next pull records it from scratch.
+function P.ResetSource(zone, diff, srcName)
+	local b = bucketOf(zone, diff)
+	if b then b[srcName] = nil end
+end
+
+-- Wipes one raid's library, or every library when no zone is given.
+function P.ClearCatalogue(zone)
+	local libs = libraries()
+	if zone then libs[zone] = nil else logDB().lib = {} end
 end
 
 local function logPull()
@@ -433,7 +561,14 @@ end
 function P.Parse(note)
 	local out = {}
 	if not note or note == "" then return out end
-	for line in note:gmatch("[^\r\n]+") do
+	-- Split on the newline itself, not on runs of non-newline characters.
+	-- "[^\r\n]+" needs at least one character to match, so a blank line
+	-- produced nothing at all and the gap a note used to separate two fights
+	-- -- Rotface above, Festergut below -- silently closed up.
+	-- The extra parentheses matter: gsub returns the string AND a count, and
+	-- the count would land in the concatenation.
+	local body = (note:gsub("\r?\n$", "")) .. "\n"
+	for line in body:gmatch("([^\r\n]*)\r?\n") do
 		local secs, opts, rest = parseTime(line)
 		if secs then
 			out[#out + 1] = {
@@ -444,8 +579,11 @@ function P.Parse(note)
 				spellID = tonumber(line:match("{spell:(%d+)")),
 				mine    = P.IsMine(rest),
 			}
-		elseif line:match("%S") then
-			out[#out + 1] = { text = line, raw = line, plain = true }
+		else
+			-- A blank line is kept, as a blank row: it is spacing the author put
+			-- there on purpose, and dropping it ran two sections together.
+			out[#out + 1] = { text = line, raw = line, plain = true,
+			                  blank = not line:match("%S") }
 		end
 	end
 	return out
@@ -528,6 +666,8 @@ watch:SetScript("OnEvent", function(_, event, ...)
 		-- A fresh pull starts a fresh record. Kept past PLAYER_REGEN_ENABLED,
 		-- unlike the counters, so a wipe can still be read back afterwards.
 		seenKeys = {}
+		catZone = raidZone()
+		catDiff = catZone and raidDiff() or nil
 		pullRec = P.Debug() and logPull() or nil
 		if pullRec then
 			Okanvil:Print("|cff7cfc8a[notes]|r recording this pull -- /reload when done.")
@@ -549,6 +689,12 @@ watch:SetScript("OnEvent", function(_, event, ...)
 	-- Reading the retail position silently counted spellName as the id, so
 	-- every {time:...,SCC:nnn:k} anchor waited for an occurrence that never came.
 	local _, sub, srcGUID, srcName, _, _, dstName, _, spellID = ...
+
+	-- A catalogued NPC dying closes its record for this difficulty.
+	if sub == "UNIT_DIED" then
+		if catZone and isNPCsrc((select(6, ...))) then markKilled(catZone, catDiff, dstName) end
+		return
+	end
 	local prefix = CLEU_PREFIX[sub]
 	if not prefix then return end
 
@@ -585,11 +731,11 @@ watch:SetScript("OnEvent", function(_, event, ...)
 
 	local spellName = select(10, ...)
 
-	-- The catalogue runs ALWAYS, with nothing switched on. One row per spell
+	-- The catalogue runs on every raid pull, with nothing switched on. One row per spell
 	-- per boss, so it costs a counter bump for everything after the first
 	-- sighting -- cheap enough to leave on for every pull of every night, which
 	-- is the point: the answer is already there when you sit down to write.
-	noteSpell(srcName, prefix, spellID, spellName)
+	if catZone then noteSpell(catZone, catDiff, srcName, prefix, spellID, spellName) end
 
 	-- The full ordered trace is the opt-in half (/oknotes watch), because that
 	-- one IS per occurrence and would grow without bound.

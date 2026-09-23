@@ -47,9 +47,12 @@ function Okanvil:BuildSettings()
 			-- Two columns: the ready-check popup and the marks bar side by side.
 			{ key = "raid",    label = "Raid",       height = 300,
 			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
-			-- No Invite or Modules pill: both are nav entries now. A module with no
-			-- menu row and its options in Settings is one nobody finds, and Modules
-			-- is not configuration -- it is what the addon has.
+			-- Keyword auto-invite: three switches and a keyword list, set once --
+			-- configuration, not a page of its own.
+			{ key = "invite",  label = "Invite",     height = 220,
+			  build = function(pg) Okanvil:Settings_Invite(pg) end },
+			-- No Modules pill: Modules is not configuration, it is what the addon
+			-- has, and it is its own nav entry.
 			-- No Advanced pill either. It held a dev toggle (which is /okanvil tab)
 			-- and one button, now under ABOUT in General.
 		},
@@ -165,6 +168,13 @@ function Okanvil:Settings_General(p)
 	vbtn:SetScript("OnClick", function() Okanvil:ShowVersionChecker() end)
 	local vh = W.Text(p, "|cff6f7176who in your group or guild runs which Okanvil|r", "note", "dim")
 	vh:SetPoint("LEFT", vbtn, "RIGHT", 10, 0)
+	y1 = y1 - 32
+
+	local sbtn = W.Button(p, "Run setup again", "secondary")
+	sbtn:SetSize(140, 24); sbtn:SetPoint("TOPLEFT", C1, y1)
+	sbtn:SetScript("OnClick", function() Okanvil:ShowSetup() end)
+	local sh = W.Text(p, "|cff6f7176the welcome window: modules and the marks bar|r", "note", "dim")
+	sh:SetPoint("LEFT", sbtn, "RIGHT", 10, 0)
 end
 
 function Okanvil:Settings_RaidTools(p)
@@ -429,41 +439,6 @@ end
 -- plus a mass-invite-by-rank block that went unused, because inviting is faster
 -- from the per-row buttons on Home.
 -- ------------------------------------------------------------
--- Invite as its own nav entry under GUILD. It was a module with no menu row and
--- its options inside Settings, which meant the only way to find it was to
--- already know it existed.
-function Okanvil:BuildInvite()
-	local fill = newFillPanel()
-	local host = fill.child
-
-	-- The master switch lives in the header, where every other page puts its one
-	-- real action. It used to be the first thing in the body, under a label, so
-	-- the single most important state on the page -- is auto-invite running? --
-	-- read as just another setting in the list.
-	local I = Okanvil.Invite
-	local dash
-	dash = W.Dashboard(host, {
-		title = "Invite",
-		icon = Okanvil.ICONS.invite,
-		drawerWidth = 0,
-		footerHeight = 0,
-		primaryText = function()
-			if not I then return "Auto-Invite: OFF" end
-			return I.KeywordEnabled() and "Auto-Invite: ON" or "Auto-Invite: OFF"
-		end,
-		primaryKind = function()
-			return (I and I.KeywordEnabled()) and "primary" or "secondary"
-		end,
-		onPrimary = function()
-			if not I then return end
-			I.SetKeywordEnabled(not I.KeywordEnabled())
-			if dash then dash:Refresh() end
-		end,
-	})
-	self:Settings_Invite(dash.main)
-	return fill
-end
-
 function Okanvil:Settings_Invite(p)
 	local I = Okanvil.Invite
 	local X = 14
@@ -473,27 +448,31 @@ function Okanvil:Settings_Invite(p)
 		return
 	end
 
-	-- The ON/OFF switch and its "AUTO-INVITE" label are gone from here: the switch
-	-- is the header CTA now, which is where every other page keeps its one real
-	-- action, and a label for a control that is no longer below it was noise.
+	-- The master switch, first: is keyword auto-invite running at all.
+	local onChk = W.Check(p, "Auto-invite on a keyword",
+		function() return I.KeywordEnabled() end,
+		function(v) I.SetKeywordEnabled(v and true or false) end)
+	onChk:SetPoint("TOPLEFT", X, -10)
+	onChk:Tooltip("Invite whoever whispers or says one of the keywords below.")
 	local warn = W.Text(p, "|cff8a8d93Can't run with Recruit (shared keyword) -- enabling one disables the other.|r", "note", "dim")
-	warn:SetPoint("TOPLEFT", X, -10); warn:SetWidth(420); warn:SetJustifyH("LEFT")
+	warn:SetPoint("LEFT", onChk, "LEFT", 220, 0); warn:SetWidth(460); warn:SetJustifyH("LEFT")
 
+	local Y0 = -24   -- everything below sits under the switch
 	local wChk = W.Check(p, "On whisper", function() return I.db().whisperInvite end,
 		function(v) I.db().whisperInvite = v end)
-	wChk:SetPoint("TOPLEFT", X, -32)
+	wChk:SetPoint("TOPLEFT", X, -32 + Y0)
 	local gChk = W.Check(p, "On guild chat", function() return I.db().guildInvite end,
 		function(v) I.db().guildInvite = v end)
 	gChk:SetPoint("LEFT", wChk, "LEFT", 165, 0)
 
-	local kwLbl = W.Text(p, "KEYWORDS", "note", "dim"); kwLbl:SetPoint("TOPLEFT", X, -66)
+	local kwLbl = W.Text(p, "KEYWORDS", "note", "dim"); kwLbl:SetPoint("TOPLEFT", X, -66 + Y0)
 
 	-- Live preview. Matching is WHOLE WORD, which is right ("reinvite" must not
 	-- trigger) but not obvious: "inv" alone does NOT match "invite", so the most
 	-- natural thing a person types was being ignored. Showing what does and does
 	-- not match means never having to guess again.
 	local preview = W.Text(p, "", "note", "dim")
-	preview:SetPoint("TOPLEFT", X, -120); preview:SetWidth(430); preview:SetJustifyH("LEFT")
+	preview:SetPoint("TOPLEFT", X, -120 + Y0); preview:SetWidth(430); preview:SetJustifyH("LEFT")
 
 	local SAMPLES = { "inv", "invite", "+", "inv pls", "invite me", "reinvite" }
 	local function refreshPreview(text)
@@ -514,7 +493,7 @@ function Okanvil:Settings_Invite(p)
 	end
 
 	local kwBox = W.EditBox(p, function(t) I.db().keyword = t or ""; refreshPreview(t) end)
-	kwBox:Size(300, 22); kwBox:SetPoint("TOPLEFT", X, -86)
+	kwBox:Size(300, 22); kwBox:SetPoint("TOPLEFT", X, -86 + Y0)
 	kwBox.edit:SetText(I.db().keyword or "inv, invite, +")
 	kwBox.edit:SetScript("OnTextChanged", function(s) refreshPreview(s:GetText()) end)
 

@@ -559,6 +559,10 @@ function Okanvil:IsModuleEnabled(name)
 	-- export and the automatic attendance capture -- both of which only matter to
 	-- a guild running a web hub -- so a guild without one, or a character in no
 	-- guild at all, must be able to turn it off.
+	-- Invite has no switch any more (see NATIVE). A character that turned it off
+	-- back when it had one would otherwise stay off with no way to turn it on --
+	-- and the snapshot Invite buttons would say the module is off.
+	if name == "__invite" then return true end
 	local m = self.cdb and self.cdb.modules and self.cdb.modules[name]
 	if m and m.enabled == false then
 		return false
@@ -667,8 +671,12 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		return
 	end
 	if event == "ADDON_LOADED" and arg1 == "Okanvil" then
+		-- No saved file at all = an install that has never run: the first-run
+		-- setup is owed. An existing user never gets the flag, so it never shows.
+		local fresh = (Okanvil_DB == nil)
 		Okanvil_DB = Okanvil_DB or {}
 		applyDefaults(Okanvil_DB, defaults)
+		if fresh then Okanvil_DB.setupPending = true end
 		Okanvil.db = Okanvil_DB
 		-- PER-CHARACTER state (which modules THIS toon shows). Content settings
 		-- (brand, fonts, recruit messages, item DB...) stay account-wide in db;
@@ -717,6 +725,14 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		end
 
 		Okanvil:Print("loaded -- |cff00ff00/okanvil|r. " .. Okanvil:CountPlugins() .. " plugin(s).")
+
+		-- A few seconds in, so it lands after the login spam and the loading
+		-- screen rather than under them.
+		if Okanvil.db.setupPending and Okanvil.ShowSetup and Okanvil.Comms and Okanvil.Comms.After then
+			Okanvil.Comms.After(4, function()
+				if Okanvil.db.setupPending and not InCombatLockdown() then Okanvil:ShowSetup() end
+			end)
+		end
 	end
 end)
 
@@ -729,6 +745,17 @@ SlashCmdList["Okanvil"] = function(arg)
 	-- own spelling of its name); only the command word is matched lowercased
 	local raw = (arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	arg = raw:lower()
+	if arg == "setup" then
+		if Okanvil.ShowSetup then
+			Okanvil:ShowSetup()
+		else
+			-- A file added to the .toc is only read when the client starts;
+			-- /reload re-runs the files it already knew about.
+			Okanvil:Print("|cffff5555Setup is not loaded.|r Exit WoW completely and start it"
+				.. " again -- /reload does not pick up new addon files.")
+		end
+		return
+	end
 	if arg == "tab" then
 		-- opt in to the dedicated chat tab: from now on Print() lands there
 		local f = Okanvil:DevFrame(true)

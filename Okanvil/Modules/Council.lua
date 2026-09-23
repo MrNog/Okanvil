@@ -770,8 +770,12 @@ if C then
 		-- timer, so the repeat is answered from what we have and ignored.
 		if current and current.round == round then
 			sendReply()
+			if C_.ResendVotes then C_.ResendVotes(round) end
 			return nil
 		end
+		-- A council member opens the board for this round too, before answering
+		-- it as a raider: the question is the only thing that carries the items.
+		if canSeeBoard() and C_.MirrorRound then C_.MirrorRound(sender, payload, round) end
 		local reply = onAsked(sender, payload)
 		if current then
 			current.round = round
@@ -808,7 +812,8 @@ local COL_PRIO = 285
 local COL_GEAR = 340     -- equipped icon
 local COL_SPEC = 374     -- equipped item name, just right of its icon
 local COL_DIFF = 640     -- the ilvl gap
-local BOARD_W  = 720
+local COL_VOTE = 700     -- council votes: count, two names, the Vote button
+local BOARD_W  = 980
 
 -- "<idx>=<response>/<equippedID>/<diff>", with the two gear fields optional so an
 -- older client (or one that could not read its own slot) still parses.
@@ -827,6 +832,178 @@ local function parseReply(payload)
 		end
 	end
 	return out
+end
+
+-- ------------------------------------------------------------
+-- COUNCIL VOTES.
+--
+-- Each council member may put ONE vote per item on a candidate, and move it or
+-- take it back until the item is given. A vote is a suggestion shown on the
+-- board, never a decision: the Give button still gives to whoever is selected.
+--
+-- The council is the officers (and officers' alts) who are IN the raid right
+-- now, plus the master looter -- someone who is not here is not on the council
+-- for this item, so the strip and the "n/m voted" count shrink with them.
+--
+--   rec.votes[itemIdx][voter] = candidateName
+--
+-- Wire: CVOTE <round> <itemIdx> <candidate>  ("" candidate = vote withdrawn).
+-- Sent to the group like the answers, so every board sees every vote.
+-- ------------------------------------------------------------
+local function bareName(n) return n and (n:gsub("%-.*$", "")) or n end
+
+-- May this name vote? Checked on every vote that arrives, not only on the one
+-- we send: the wire says who sent it, not whether they were entitled to.
+local function isCouncilName(name)
+	if not name or name == "" then return false end
+	local L = Okanvil.Loot
+	local ml = L and L.MasterLooterName and L.MasterLooterName()
+	if ml and bareName(ml) == name then return true end
+	-- No guild, no ranks: the same rule canSeeBoard applies.
+	if not (IsInGuild and IsInGuild()) then return true end
+	local U = Okanvil.U
+	return (U and U.canSeePrio and U.canSeePrio(name)) and true or false
+end
+
+-- The council present for this round, in raid order. Cached for 30 seconds on
+-- the round: the rank check walks the guild roster once per name, and a board
+-- repaints on every reply that lands.
+local function councilOf(rec)
+	local now = GetTime()
+	if rec._council and (now - (rec._councilAt or 0)) < 30 then return rec._council end
+	local out, seen = {}, {}
+	local function add(n)
+		n = bareName(n)
+		if n and n ~= "" and not seen[n] then
+			seen[n] = true
+			out[#out + 1] = n
+		end
+	end
+	local inGuild = IsInGuild and IsInGuild()
+	local L = Okanvil.Loot
+	local ml = L and L.MasterLooterName and L.MasterLooterName()
+	local function consider(n)
+		n = bareName(n)
+		if not n then return end
+		-- Outside a guild everyone in the raid would qualify, so only the people
+		-- actually running the loot are listed there.
+		if inGuild then
+			if isCouncilName(n) then add(n) end
+		elseif (ml and bareName(ml) == n) or n == rec.asker then
+			add(n)
+		end
+	end
+	local nRaid = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+	if nRaid > 0 then
+		for i = 1, nRaid do consider((GetRaidRosterInfo(i))) end
+	else
+		consider(UnitName("player"))
+		for i = 1, ((GetNumPartyMembers and GetNumPartyMembers()) or 0) do
+			consider(UnitName("party" .. i))
+		end
+	end
+	if #out == 0 then add(UnitName("player")) end
+	rec._council, rec._councilAt = out, now
+	return out
+end
+
+local function applyVote(rec, idx, voter, cand)
+	rec.votes = rec.votes or {}
+	rec.votes[idx] = rec.votes[idx] or {}
+	rec.votes[idx][voter] = (cand and cand ~= "") and cand or nil
+end
+
+-- Vote for `cand` on item `idx` of the open round; the same candidate again
+-- takes the vote back.
+function C_.Vote(idx, cand)
+	local rec = C_.current
+	if not (rec and rec.round and idx and cand) then return end
+	local me = UnitName("player")
+	local cur = rec.votes and rec.votes[idx] and rec.votes[idx][me]
+	if cur == cand then cand = "" end
+	applyVote(rec, idx, me, cand)
+	C.Send("CVOTE", rec.round, idx, cand)
+	C_.SaveAsk()
+	C_.RepaintBoard()
+end
+
+-- Our own votes on a round, sent again. Called whenever the question is
+-- re-broadcast, so a council member who reloaded gets everyone's votes back
+-- within one re-send.
+function C_.ResendVotes(round)
+	local rec = C_.rounds[round]
+	if not (rec and rec.votes) then return end
+	local me = UnitName("player")
+	for idx, byVoter in pairs(rec.votes) do
+		if byVoter[me] then C.Send("CVOTE", round, idx, byVoter[me]) end
+	end
+end
+
+if C then
+	C.On("CVOTE", function(sender, round, idx, cand)
+		local rec = round and C_.rounds[round]
+		idx = tonumber(idx)
+		if not (rec and idx) then return end
+		-- Ours was applied when we cast it; the echo off the raid channel is not
+		-- news, and applying it twice would undo a quick change of mind.
+		if sender == UnitName("player") then return end
+		if not isCouncilName(sender) then return end
+		applyVote(rec, idx, sender, cand)
+		if rec == C_.current then
+			C_.SaveAsk()
+			C_.RepaintBoard()
+		end
+	end)
+end
+
+-- ------------------------------------------------------------
+-- THE BOARD ON EVERY COUNCIL MEMBER.
+--
+-- The answers already go to the whole group, but only the client that asked had
+-- a round to file them under -- everyone else dropped them, so the board existed
+-- on one screen. A council member who receives the question now opens the same
+-- round on their own client and collects the same answers: that is what lets
+-- them vote. The Give button stays with whoever can hand the item out.
+-- ------------------------------------------------------------
+function C_.MirrorRound(asker, payload, round)
+	if not (round and payload and payload ~= "") then return end
+	if C_.rounds[round] then return end
+	local parts = {}
+	for part in (payload .. SEP_ITEM):gmatch("(.-)%" .. SEP_ITEM) do parts[#parts + 1] = part end
+	local boss = table.remove(parts, 1) or ""
+	local items = {}
+	for _, raw in ipairs(parts) do
+		local id = tonumber(raw)
+		if id then
+			Okanvil:WarmItem(id)
+			items[#items + 1] = select(2, GetItemInfo(id)) or ("item:" .. id)
+		end
+	end
+	if #items == 0 then return end
+
+	local rec = {
+		items = items, boss = boss, replies = {}, at = GetTime(),
+		round = round, payload = payload, asker = asker, mirror = true,
+	}
+	C_.rounds[round] = rec
+	C_.current = rec
+	C.Adopt(TOPIC, round, {
+		timeout = 1800,
+		onReply = function(sender, body)
+			rec.replies[sender] = parseReply(body)
+			if rec == C_.current then C_.RepaintBoard() end
+			C_.SaveAsk()
+		end,
+		onDone = function()
+			rec.closed = true
+			C_.SaveAsk()
+			if rec == C_.current then C_.RepaintBoard() end
+		end,
+	})
+	boardItem = 1
+	tabFirst = 1
+	C_.SaveAsk()
+	C_.RepaintBoard()
 end
 
 -- Ask the group about a list of item links.
@@ -952,8 +1129,9 @@ end
 -- This is the honest minimum: one item at a time, one row per raider who could
 -- answer, and the per-item count. The full board of the plan -- item icons down
 -- the edge, the prio ladder in the header, spec/gear/recent columns, the award
--- button -- is stage 3 and is NOT here. No votes, no quorum, no tally: RATS
--- decides on voice and the board's job is to have the facts on screen.
+-- button -- is stage 3 and is NOT here. Council votes are shown (see COUNCIL
+-- VOTES above) but decide nothing: no quorum, no auto-award. The master looter
+-- gives to whoever is selected, and the board's job is to have the facts on screen.
 -- ============================================================
 
 local function ensureBoard()
@@ -1027,6 +1205,15 @@ local function ensureBoard()
 	if prio.SetWordWrap then prio:SetWordWrap(false) end
 	f.prio = prio
 
+	-- The council present, one name each, ticked once they have voted on the
+	-- item on screen.
+	local council = W.Text(f, "", "body")
+	council:SetPoint("TOPLEFT", 12, -(TAB_TOP + TAB_S + 48))
+	council:SetPoint("RIGHT", f, "RIGHT", -12, 0)
+	council:SetJustifyH("LEFT")
+	if council.SetWordWrap then council:SetWordWrap(false) end
+	f.council = council
+
 	-- ---- award row (bottom) -------------------------------------------
 	-- The primary button NAMES the person it would give to. It is a suggestion in
 	-- a button, not a decision: clicking any row changes who it names, and the
@@ -1098,12 +1285,19 @@ local function ensureBoard()
 	end)
 	f.give = give
 
+	-- In place of Give on a board that cannot hand the item out.
+	local giveNote = W.Text(f, "Only the master looter gives the item. Your vote is a suggestion.",
+		"body", "dim")
+	giveNote:SetPoint("BOTTOMLEFT", 12, 16)
+	giveNote:Hide()
+	f.giveNote = giveNote
+
 	-- NO "Skip" button. An item is undecided until Give is pressed, so skipping it
 	-- is simply not pressing anything -- a button that only restated the default
 	-- state was one more thing on screen that did nothing.
 
 	-- Column headers.
-	local hy = -(TAB_TOP + TAB_S + 48)
+	local hy = -(TAB_TOP + TAB_S + 70)
 	local function col(text, x)
 		local t = W.Text(f, text, "note", "dim")
 		t:SetPoint("TOPLEFT", 12 + x, hy)
@@ -1111,7 +1305,7 @@ local function ensureBoard()
 	end
 	f.hdrs = {
 		col("PLAYER", COL_NAME), col("WANTS", COL_WANT), col("PRIO", COL_PRIO),
-		col("EQUIPPED", COL_GEAR), col("ILVL", COL_DIFF),
+		col("EQUIPPED", COL_GEAR), col("ILVL", COL_DIFF), col("COUNCIL VOTES", COL_VOTE),
 	}
 
 	f.rows = {}
@@ -1254,9 +1448,16 @@ function C_.RepaintBoard()
 	-- The PRIO ladder for this item, from the website's list. The council's own
 	-- order -- P.Names gives it top-first, so the index IS the position.
 	local prioPos, prioLine = {}, nil
+	-- Officers and officers' alts only -- the same rule as the Priority tab. The
+	-- board itself also opens for a master looter outside that circle (and for
+	-- anyone in no guild), and neither is meant to read the guild's order: no
+	-- ladder, no PRIO column, and it does not sort their rows either.
+	local U = Okanvil.U
+	local canPrio = U and U.canSeePrio and U.canSeePrio() and true or false
+	if f.hdrs and f.hdrs[3] then f.hdrs[3]:SetText(canPrio and "PRIO" or "") end
 	do
 		local P = Okanvil.LootPrio
-		if P and P.ForLink then
+		if canPrio and P and P.ForLink then
 			-- P.ForLink returns the stored RECORD, not the ladder -- the ladder
 			-- string is rec.p. Passing the record straight to P.Plain called
 			-- gmatch on a table.
@@ -1330,10 +1531,28 @@ function C_.RepaintBoard()
 			end
 		end)
 	end
-	f.count:SetText(("%d answered%s|cff8a8d93%s|r"):format(
+	-- Who is on the council for this item, and who has voted on it.
+	local members = councilOf(rec)
+	local itemVotes = (rec.votes and rec.votes[boardItem]) or {}
+	local votedN, strip = 0, {}
+	do
+		local L = Okanvil.Loot
+		for _, m in ipairs(members) do
+			local did = itemVotes[m] ~= nil
+			if did then votedN = votedN + 1 end
+			local nm = L and L.ClassColorName and L.ClassColorName(m) or m
+			strip[#strip + 1] = (did
+				and "|TInterface\\RaidFrame\\ReadyCheck-Ready:14|t"
+				or "|TInterface\\RaidFrame\\ReadyCheck-Waiting:14|t") .. nm
+		end
+	end
+	f.council:SetText("|cff8a8d93COUNCIL|r   " .. table.concat(strip, "    "))
+
+	f.count:SetText(("%d answered%s|cff8a8d93%s|r   |cffe0b860%d/%d council voted|r"):format(
 		answered,
 		waiting > 0 and ("  |cffe0b860" .. waiting .. " deciding|r") or "",
-		naCount > 0 and ("  ·  " .. naCount .. " can't use") or ""))
+		naCount > 0 and ("  ·  " .. naCount .. " can't use") or "",
+		votedN, #members))
 
 	-- The full ladder under the item name: the PRIO column gives each candidate's
 	-- position, but the ladder shows the SHAPE of the decision -- who is level with
@@ -1347,7 +1566,7 @@ function C_.RepaintBoard()
 			if r then r:Hide() end
 		else
 			if not r then
-				local top = TAB_TOP + TAB_S + 66
+				local top = TAB_TOP + TAB_S + 88
 				r = CreateFrame("Frame", nil, f)
 				r:SetPoint("TOPLEFT", 12, -(top + (i - 1) * BR_H))
 				r:SetPoint("TOPRIGHT", -12, -(top + (i - 1) * BR_H))
@@ -1464,6 +1683,60 @@ function C_.RepaintBoard()
 					end
 				end)
 				r.hit = hit
+
+				-- COUNCIL VOTES: a gold count, the first two voters, "+N" for the
+				-- rest. Hover it for every name.
+				r.vpill = CreateFrame("Frame", nil, r)
+				r.vpill:SetSize(22, 20)
+				r.vpill:SetPoint("LEFT", COL_VOTE, 0)
+				local vbg = r.vpill:CreateTexture(nil, "ARTWORK")
+				vbg:SetAllPoints()
+				vbg:SetTexture("Interface\\Buttons\\WHITE8x8")
+				vbg:SetVertexColor(0.88, 0.72, 0.38, 1)
+				r.vcount = W.Text(r.vpill, "", "body")
+				r.vcount:SetPoint("CENTER", 0, 0)
+				r.vcount:SetTextColor(0.08, 0.08, 0.09)
+				r.vnames = W.Text(r, "", "body")
+				r.vnames:SetPoint("LEFT", COL_VOTE + 28, 0)
+				r.vnames:SetJustifyH("LEFT")
+				if r.vnames.SetWordWrap then r.vnames:SetWordWrap(false) end
+
+				r.vbtn = W.Button(r, "Vote")
+				r.vbtn:SetSize(52, 22)
+				r.vbtn:SetPoint("RIGHT", -4, 0)
+				r.vbtn:SetFrameLevel(r:GetFrameLevel() + 5)
+				r.vbtn:SetScript("OnClick", function()
+					if r._who then C_.Vote(boardItem, r._who) end
+				end)
+				r.vnames:SetPoint("RIGHT", r.vbtn, "LEFT", -8, 0)
+
+				local vhot = CreateFrame("Button", nil, r)
+				vhot:SetPoint("LEFT", COL_VOTE, 0)
+				vhot:SetPoint("RIGHT", r.vbtn, "LEFT", -4, 0)
+				vhot:SetHeight(BR_H - 2)
+				vhot:SetFrameLevel(r:GetFrameLevel() + 5)
+				vhot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+				-- The votes area is part of the row: a click there still selects.
+				vhot:SetScript("OnClick", function(_, button)
+					local fn = hit:GetScript("OnClick")
+					if fn then fn(hit, button) end
+				end)
+				vhot:SetScript("OnEnter", function(self)
+					local list = r._voters
+					if not (list and #list > 0) then return end
+					local L2 = Okanvil.Loot
+					GameTooltip:SetOwner(self, "ANCHOR_NONE")
+					GameTooltip:ClearAllPoints()
+					GameTooltip:SetPoint("TOPLEFT", f, "TOPRIGHT", 8, 0)
+					GameTooltip:AddLine(("%d vote%s for %s"):format(#list,
+						#list == 1 and "" or "s", tostring(r._who)), 0.88, 0.72, 0.38)
+					for _, v in ipairs(list) do
+						GameTooltip:AddLine(L2 and L2.ClassColorName and L2.ClassColorName(v) or v)
+					end
+					GameTooltip:Show()
+				end)
+				vhot:SetScript("OnLeave", function() GameTooltip:Hide() end)
+				r.vhot = vhot
 				-- Hovering the equipped icon shows what it is. Anchored off the
 				-- window so it never covers the table.
 				-- The equipped item's NAME is in the column, so there is nothing a
@@ -1502,7 +1775,7 @@ function C_.RepaintBoard()
 				r.what:SetTextColor(info.color[1], info.color[2], info.color[3])
 			end
 
-			r.prio:SetText(d.prio and ("#" .. d.prio) or "-")
+			r.prio:SetText(canPrio and (d.prio and ("#" .. d.prio) or "-") or "")
 
 			-- WHAT THEY HAVE IN THAT SLOT -- the item itself, not a gearscore. A
 			-- council arguing over a weapon wants to see the weapon being replaced;
@@ -1530,6 +1803,36 @@ function C_.RepaintBoard()
 				r.diff:SetText(("%s%d|r"):format(c, d.diff))
 			else
 				r.diff:SetText("")
+			end
+
+			-- Council votes on this candidate, for the item on screen.
+			local me = UnitName("player")
+			local itemVotes = (rec.votes and rec.votes[boardItem]) or {}
+			local voters = {}
+			for voter, cand in pairs(itemVotes) do
+				if cand == d.name then voters[#voters + 1] = voter end
+			end
+			table.sort(voters)
+			r._voters = voters
+			if #voters > 0 then
+				r.vcount:SetText(#voters)
+				r.vpill:Show()
+				local shown = {}
+				for k = 1, math.min(2, #voters) do
+					shown[k] = L and L.ClassColorName and L.ClassColorName(voters[k]) or voters[k]
+				end
+				local more = #voters > 2 and ("  |cff8a8d93+" .. (#voters - 2) .. "|r") or ""
+				r.vnames:SetText(table.concat(shown, "  ") .. more)
+			else
+				r.vpill:Hide()
+				r.vnames:SetText("")
+			end
+			if itemVotes[me] == d.name then
+				r.vbtn:SetKind("primary")
+				r.vbtn.text:SetText("Voted")
+			else
+				r.vbtn:SetKind("secondary")
+				r.vbtn.text:SetText("Vote")
 			end
 			r:Show()
 		end
@@ -1563,8 +1866,19 @@ function C_.RepaintBoard()
 	-- SetKind repaints (which sets the label colour), so any override has to come
 	-- AFTER it. Disable() is deliberately not used: it would fight the widget's own
 	-- hover repaint: the click is guarded by f._armed instead.
+	-- A mirrored board belongs to a council member who is not running the loot:
+	-- no Give there unless they are the master looter.
+	local canGive = not rec.mirror
+	if rec.mirror then
+		local L = Okanvil.Loot
+		canGive = (L and L.IsMasterLooter and L.IsMasterLooter()) and true or false
+	end
+	if canGive then f.give:Show(); f.giveNote:Hide() else f.give:Hide(); f.giveNote:Show() end
+
 	local awardedTo = rec.awarded and rec.awarded[boardItem]
-	if awardedTo then
+	if not canGive then
+		f._armed = false
+	elseif awardedTo then
 		f.give:SetKind("secondary")
 		f.give.text:SetText("given to " .. awardedTo)
 		f.give.text:SetTextColor(0.45, 0.85, 0.5)          -- green: done
@@ -1598,7 +1912,7 @@ function C_.RepaintBoard()
 		f.count:SetText("|cff8a8d93waiting...|r")
 	end
 	-- +46 at the bottom for the Give / Skip row.
-	f:SetHeight(TAB_TOP + TAB_S + 66 + math.max(#rows, 1) * BR_H + 46)
+	f:SetHeight(TAB_TOP + TAB_S + 88 + math.max(#rows, 1) * BR_H + 46)
 	f:Show()
 end
 
@@ -1927,7 +2241,8 @@ function C_.BuildRunTab(body)
 	end
 
 	opt("Ask when I become master looter",
-		"At the start of a raid, once. Say no and rolls carry on as they are.",
+		"When the master looter becomes you, or you zone into a raid as leader with no "
+			.. "master looter set (Yes makes you ML). Say no and rolls carry on as they are.",
 		function() return db().askOnML ~= false end,
 		function(v) db().askOnML = v end)
 
@@ -1936,10 +2251,14 @@ function C_.BuildRunTab(body)
 		function() return db().autoAsk end,
 		function(v) db().autoAsk = v end)
 
-	opt("Hide the priority ladder on the board",
-		"For a council that decides without the website's order.",
-		function() return db().hidePrio end,
-		function(v) db().hidePrio = v; C_.RepaintBoard() end)
+	-- Only an officer ever sees the ladder, so only an officer is offered a switch
+	-- for it.
+	if Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() then
+		opt("Hide the priority ladder on the board",
+			"For a council that decides without the website's order.",
+			function() return db().hidePrio end,
+			function(v) db().hidePrio = v; C_.RepaintBoard() end)
+	end
 
 	opt("Whisper the winner when it cannot be given",
 		"Under auto loot the item is in your bags -- the winner is told to trade you.",
@@ -2119,21 +2438,33 @@ end
 -- ============================================================
 -- "IS TONIGHT A COUNCIL NIGHT?"
 --
--- Copied wholesale from the Combat Logs module's "Log this instance?" prompt
--- (Logs.lua askToLog), because that one works and every clever thing I tried
--- here did not: one event, one module-scope variable, its own frame, and the
--- variable cleared when you leave the instance so the next raid asks again.
+-- Two ways in, both ending in the same prompt:
 --
--- What was here before: a key stored in SavedVariables (a test in the morning
--- used up the evening's question), a ten-second poll, and Okanvil:Confirm --
--- which reuses ONE dialog, so the Logs prompt firing at the same moment on
--- zone-in silently replaced this one. It had been asking all along; you just
--- never saw it.
+--   1. The master looter CHANGES and it is now you -> "use loot council?"
+--      Only on a change: the same ML seen again on a roster update is not a new
+--      question, and a No stands until the ML moves.
+--   2. You zone into a raid as leader and nobody is ML yet -> "become master
+--      looter and run loot council?"; Yes sets master loot to you first.
+--
+-- Its own frame, not Okanvil:Confirm: that reuses ONE dialog, so the Logs
+-- prompt firing on the same zone-in would silently replace this one.
+-- The Loot page's "Set me as ML" button stays the manual way in.
 -- ============================================================
-local askedCouncilZone      -- last raid zone we prompted for; nil = ask again
+local lastML            -- ML name seen by the last check; "" = no master loot
+local declinedLeadZone  -- raid zone where the leader said No to becoming ML
+
+local function sameName(a, b)
+	return a and b and a:gsub("%-.*", ""):lower() == b:gsub("%-.*", ""):lower()
+end
+
+local function currentZone()
+	local zone = (GetRealZoneText and GetRealZoneText()) or ""
+	if zone == "" then zone = (GetZoneText and GetZoneText()) or "?" end
+	return zone
+end
 
 local askNightF
-local function askCouncilNight()
+local function askCouncilNight(becomeML)
 	if not askNightF then
 		local f = CreateFrame("Frame", nil, UIParent)
 		f:SetSize(300, 110)
@@ -2149,52 +2480,99 @@ local function askCouncilNight()
 		f.txt:SetPoint("TOPRIGHT", -12, -12)
 		f.txt:SetJustifyH("CENTER")
 
-		local yes = W.Button(f, "Council night", "primary")
+		local yes = W.Button(f, "Yes", "primary")
 		yes:SetSize(132, 24); yes:SetPoint("BOTTOMLEFT", 12, 12)
-		yes:SetScript("OnClick", function() f:Hide(); C_.SetActive(true) end)
+		yes:SetScript("OnClick", function()
+			f:Hide()
+			if f.becomeML then
+				local L = Okanvil.Loot
+				local r = L and L.SetMeAsMasterLooter and L.SetMeAsMasterLooter()
+				if r ~= true then
+					Okanvil:Print("|cffff5555Could not set master loot|r (" .. tostring(r) .. ").")
+					return
+				end
+				-- Claim the change now so the PARTY_LOOT_METHOD_CHANGED this
+				-- causes is not seen as a new ML and asked about a second time.
+				lastML = UnitName("player")
+				Okanvil:Print("Loot method set to |cff7cfc8amaster|r -- you are the Master Looter.")
+			end
+			C_.SetActive(true)
+		end)
 
 		local no = W.Button(f, "No")
 		no:SetSize(132, 24); no:SetPoint("BOTTOMRIGHT", -12, 12)
-		no:SetScript("OnClick", function() f:Hide(); C_.SetActive(false) end)
+		no:SetScript("OnClick", function()
+			f:Hide()
+			if f.becomeML then declinedLeadZone = currentZone() end
+			C_.SetActive(false)
+		end)
 		askNightF = f
 	end
-	askNightF.txt:SetText("Use |cffe0b860loot council|r tonight?\n"
-		.. "|cff8a8d93Rolls keep working either way.|r")
+	askNightF.becomeML = becomeML
+	askNightF.txt:SetText(becomeML
+		and ("No master looter yet.\nBecome |cff7cfc8amaster looter|r and run |cffe0b860loot council|r?")
+		or  ("You are the master looter.\nUse |cffe0b860loot council|r tonight?\n"
+			.. "|cff8a8d93Rolls keep working either way.|r"))
 	if PlaySound then PlaySound("igMainMenuOpen") end
 	askNightF:Show()
 end
 
+local function mayAsk()
+	return enabled() and not C_.testMode and not C_.active and db().askOnML ~= false
+end
+
+-- Branch 1: runs on every loot-method / roster change, acts only when the ML moved.
+local function mlCheck()
+	local L = Okanvil.Loot
+	if not (L and L.MasterLooterName) then return end
+	local ml = L.MasterLooterName() or ""
+	if ml == lastML then return end
+	lastML = ml
+	local me = UnitName("player")
+	if not sameName(ml, me) then
+		-- Someone else (or nobody) runs the loot now: a question about it is stale.
+		if askNightF and askNightF:IsShown() and not askNightF.becomeML then askNightF:Hide() end
+		return
+	end
+	if mayAsk() then askCouncilNight(false) end
+end
+
+-- Branch 2: zoned into a raid as leader with no master looter set.
+local function raidEnterCheck()
+	local inInstance, itype = IsInInstance and IsInInstance()
+	if not inInstance or itype ~= "raid" then
+		declinedLeadZone = nil          -- left the raid: ask again next time
+		return
+	end
+	local L = Okanvil.Loot
+	if not L or (L.MasterLooterName and L.MasterLooterName()) then return end
+	if not (L.CanSetLootMethod and L.CanSetLootMethod()) then return end
+	-- A wipe run-back re-enters the instance; one No per raid zone is enough.
+	if declinedLeadZone == currentZone() then return end
+	if mayAsk() then askCouncilNight(true) end
+end
+
 do
+	local mlQueued, enterQueued
 	local ev = CreateFrame("Frame")
 	ev:RegisterEvent("PLAYER_ENTERING_WORLD")
+	ev:RegisterEvent("RAID_INSTANCE_WELCOME")
 	ev:RegisterEvent("RAID_ROSTER_UPDATE")
+	ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
 	ev:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
-	ev:SetScript("OnEvent", function()
-		-- Deferred: the loot method and the instance type are both unreliable
-		-- for a second or two after a zone in.
-		C.After(3, function()
-			local inInstance, itype = IsInInstance and IsInInstance()
-			if not inInstance or itype ~= "raid" then
-				askedCouncilZone = nil          -- left the raid: ask again next time
-				return
-			end
-			if not enabled() then return end
-			if C_.testMode or C_.active then return end
-			if db().askOnML == false then return end
-
-			-- Whoever is running the loot: the master looter, or the raid leader
-			-- before master loot has been set.
-			local L = Okanvil.Loot
-			local mine = (L and L.IsMasterLooter and L.IsMasterLooter())
-				or (IsRaidLeader and IsRaidLeader())
-			if not mine then return end
-
-			local zone = (GetRealZoneText and GetRealZoneText()) or ""
-			if zone == "" then zone = (GetZoneText and GetZoneText()) or "?" end
-			if zone == askedCouncilZone then return end
-			askedCouncilZone = zone
-			askCouncilNight()
-		end)
+	ev:SetScript("OnEvent", function(_, event)
+		-- Coalesced: a roster update storm schedules one check, not fifty.
+		if not mlQueued then
+			mlQueued = true
+			C.After(1, function() mlQueued = false; mlCheck() end)
+		end
+		-- Leader status and the loot method read wrong for a moment after a
+		-- zone-in, so the raid-enter check waits 2s.
+		if (event == "PLAYER_ENTERING_WORLD" or event == "RAID_INSTANCE_WELCOME")
+			and not enterQueued then
+			enterQueued = true
+			C.After(2, function() enterQueued = false; raidEnterCheck() end)
+		end
 	end)
 end
 
@@ -2446,7 +2824,8 @@ function C_.SaveAsk()
 	if C_.testMode then d.askRound = nil; return end
 	d.askRound = {
 		round = rec.round, boss = rec.boss, items = rec.items,
-		replies = rec.replies, awarded = rec.awarded,
+		replies = rec.replies, awarded = rec.awarded, votes = rec.votes,
+		asker = rec.asker, mirror = rec.mirror,
 		payload = rec.payload, savedAt = time(),
 		-- Where and with whom it was asked. A round belongs to the run it was
 		-- opened in; coming back somewhere else means it is over.
@@ -2478,7 +2857,8 @@ function C_.RestoreAsk()
 
 	local rec = {
 		round = s.round, boss = s.boss or "", items = s.items,
-		replies = s.replies or {}, awarded = s.awarded,
+		replies = s.replies or {}, awarded = s.awarded, votes = s.votes,
+		asker = s.asker, mirror = s.mirror,
 		payload = s.payload, at = GetTime(),
 	}
 	C_.rounds[s.round] = rec

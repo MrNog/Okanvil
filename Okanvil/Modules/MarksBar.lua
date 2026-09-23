@@ -110,10 +110,8 @@ local SHORTCUTS = {
 		key  = "invite",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.invite) or "Interface\\Icons\\Spell_ChargePositive",
 		gate = function() return Okanvil:IsModuleEnabled("__invite") end,
-		run  = function()
-			if not Okanvil.win or not Okanvil.win:IsShown() then Okanvil:Toggle() end
-			Okanvil:ShowPanel("__invite")
-		end,
+		-- Invite has no page of its own: its switches are on the Settings tab.
+		run  = function() Okanvil:OpenSettingsTab("invite") end,
 	},
 	{
 		key  = "ids",

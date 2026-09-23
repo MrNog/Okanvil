@@ -20,6 +20,7 @@ Core\UI\Page_Home.lua
 Core\UI\Page_Loot.lua
 Core\UI\Page_Settings.lua
 Core\UI\Page_Modules.lua
+Core\UI\Setup.lua
 
 Modules\Inspect.lua
 Modules\Guild.lua

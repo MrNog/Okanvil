@@ -75,12 +75,13 @@ shell history, not here.
 
 ## Validating Lua
 
-There is no Lua interpreter available. Validate structurally: a stripping block-balancer
-(strip comments/strings/long-brackets first — words like "the void" or "host for" contain
-`for`/`if`/`end` and produce false positives), then check `then`/`do`/`function`/`repeat`
-against `end`/`until`/`elseif` nets to zero, plus paren and brace balance. Sanity-check the
-balancer against the pristine `git show HEAD:<file>` before trusting a zero. Then the user
-loads in-game and reports the error line.
+Lua 5.1.5 (the version 3.3.5a embeds) is installed on PATH as `lua5.1` / `luac5.1`, and a
+user-level PostToolUse hook runs `luac5.1 -p` on every `.lua` Claude edits — a syntax error
+comes back immediately with file:line. To check the whole addon:
+`find Okanvil -name '*.lua' -exec luac5.1 -p {} \;` (silent = all parse).
+
+`luac -p` only proves the file parses; runtime errors (nil index, 4.x-only API) still need
+the user to load in-game and report the error line.
 
 3.3.5a traps: no `SetShown`/`SetEnabled`, no `C_Timer` (use `Okanvil.Comms.After`), no
 `SetClipsChildren` (use `Okanvil.Clip`), no `RegisterAddonMessagePrefix`, no HTTP.

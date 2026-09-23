@@ -76,10 +76,12 @@ local function readSpec(unit)
 	local _, class = UnitClass(unit)
 	if not class then return nil end
 
-	local bestPts, bestIdx = -1, 0
+	-- The tab's icon comes from the client, so the spec picture is the game's
+	-- own and needs no table of texture paths to keep in step with it.
+	local bestPts, bestIdx, bestIcon = -1, 0, nil
 	for i = 1, 3 do
-		local _, _, pts = GetTalentTabInfo(i, true)
-		if pts and pts > bestPts then bestPts, bestIdx = pts, i end
+		local _, icon, pts = GetTalentTabInfo(i, true)
+		if pts and pts > bestPts then bestPts, bestIdx, bestIcon = pts, i, icon end
 	end
 	-- A fresh character with no points spent has no spec to report. Returning
 	-- "Blood" for every talentless alt would poison the cache, so say nothing.
@@ -105,7 +107,7 @@ local function readSpec(unit)
 		role = (map and map[spec]) or "dps"
 	end
 
-	return spec, class, role
+	return spec, class, role, bestIcon
 end
 
 -- ------------------------------------------------------------
@@ -272,10 +274,10 @@ function fireNext()
 			-- for your own unit. Read your live talents directly instead.
 			if unit == "player" then
 				local _, class = UnitClass("player")
-				local bestPts, bestIdx = -1, 0
+				local bestPts, bestIdx, bestIcon = -1, 0, nil
 				for i = 1, 3 do
-					local _, _, pts = GetTalentTabInfo(i)
-					if pts and pts > bestPts then bestPts, bestIdx = pts, i end
+					local _, icon, pts = GetTalentTabInfo(i)
+					if pts and pts > bestPts then bestPts, bestIdx, bestIcon = pts, i, icon end
 				end
 				if bestIdx > 0 and bestPts > 0 and class then
 					local spec = (TREES[class] and TREES[class][bestIdx]) or ("Tree " .. bestIdx)
@@ -288,7 +290,7 @@ function fireNext()
 					elseif spec == "Feral (Cat)" then role = "dps"
 					else role = (ROLES[class] and ROLES[class][spec]) or "dps" end
 					local gs, avg, pvp, pvpSlots = readGear("player")
-					store(name, { spec = spec, class = class, role = role,
+					store(name, { spec = spec, class = class, role = role, icon = bestIcon,
 						gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots })
 				end
 				done = done + 1
@@ -337,13 +339,13 @@ ev:SetScript("OnEvent", function()
 	-- under us between request and answer, the cache now describes someone else --
 	-- storing it would file the wrong spec under curName.
 	if stripRealm(UnitName(curUnit)) == curName then
-		local spec, class, role = readSpec(curUnit)
+		local spec, class, role, icon = readSpec(curUnit)
 		-- Gear is read even when the talents came back empty: the two are cached
 		-- separately by the client, and a player with no spec still has a gearscore
 		-- worth knowing.
 		local gs, avg, pvp, pvpSlots = readGear(curUnit)
 		if (spec and class) or gs or avg then
-			store(curName, { spec = spec, class = class, role = role,
+			store(curName, { spec = spec, class = class, role = role, icon = icon,
 				gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots })
 		end
 	end
@@ -396,7 +398,7 @@ function M.Info(name)
 	if not e then return nil end
 	return {
 		name  = stripRealm(name),
-		spec  = e.spec,  class = e.class, role = e.role,
+		spec  = e.spec,  class = e.class, role = e.role, icon = e.icon,
 		gs    = e.gs,    ilvl  = e.ilvl,
 		pvp   = e.pvp or 0,
 		pvpSlots = e.pvpSlots,

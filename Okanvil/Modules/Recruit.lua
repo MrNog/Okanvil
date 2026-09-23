@@ -5,8 +5,9 @@
 -- of the invite, each with its own on/off.
 -- Guild name is configurable (default "Guild"); use {guild} in any
 -- message and it is replaced with the guild name at send time.
--- Two pills: Message (what you post, who gets invited, what gets answered) and
--- Whispers (who wrote, what happened, click into the Messages window).
+-- Three pills: Message (what you post and what gets answered), Inbox (who
+-- whispered, what they were sent, and a way back to each of them) and Setup (who
+-- gets invited, filters, toast).
 -- A native Okanvil module (no standalone window / minimap).
 -- ============================================================
 
@@ -42,7 +43,7 @@ local defaults = {
 	-- Never answer someone already in your party/raid: the pug next to you asking
 	-- for Discord gets a human answer, not a canned one.
 	repliesSkipGroup = true,
-	-- Per-name whisper conversations for the Messages window.
+	-- Per-name whisper conversations, read by the Inbox tab.
 	contacts = {},
 	replyCooldown = 600,
 	inviteCooldown = 300,
@@ -163,7 +164,7 @@ local function isInMyGroup(name)
 end
 
 -- ------------------------------------------------------------
--- Conversations -- what the Messages window reads.
+-- Conversations -- what the Inbox tab reads.
 -- One entry per person, holding their lines and ours interleaved, so the window
 -- shows a conversation rather than a list of their whispers with our answers
 -- missing. Capped per person: a recruiting session runs for hours.
@@ -544,7 +545,7 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 			SendChatMessage(sentReply, "WHISPER", nil, sender)
 		end
 
-		-- Feed the Messages window: their line, then ours if we answered.
+		-- Feed the Inbox: their line, then ours if we answered.
 		local classFile = resolveClass(clean)
 		Rec_LogIncoming(clean, msg, classFile)
 		if sentReply then Rec_LogOutgoing(clean, sentReply) end
@@ -973,6 +974,12 @@ function Rec_BuildUI(parent)
 				if e.blocked then blocked = blocked + 1 end
 			end
 			local state = db.active and "|cff7cfc8aAdvertising ON|r" or "|cffff5555Advertising OFF|r"
+			-- Unread whispers lead: they are the one number here that asks you to
+			-- do something, and missing them is how a recruit goes unanswered.
+			local unread = Rec_UnreadCount()
+			if unread > 0 then
+				state = state .. ("   |cffe0b860%d new|r|cff8a8d93 in Inbox|r"):format(unread)
+			end
 			-- Nothing happened yet: the row of zeroes says less than no row at all.
 			if invited + replied + blocked == 0 then return state end
 			return ("%s   |cff8a8d93|r |cff7cfc8a%d|r|cff8a8d93 inv|r  |cffe0b860%d|r|cff8a8d93 rep|r  |cffff5555%d|r|cff8a8d93 blk|r")
@@ -980,6 +987,7 @@ function Rec_BuildUI(parent)
 		end,
 		tabs = {
 			{ key = "message",  label = "Message",  height = 340, build = function(p) Rec_BuildMessage(p) end },
+			{ key = "inbox",    label = "Inbox",    height = 200, build = function(p) Rec_BuildInbox(p) end },
 			{ key = "setup",    label = "Setup",    height = 640, build = function(p) Rec_BuildSetup(p) end },
 		},
 	})
@@ -1200,6 +1208,10 @@ function Rec_RenderRules()
 	if not (f and f.ruleHost) then return end
 	local p = f.msgPage
 	local ROW_H, GAP = 40, 4
+	-- The open editor's height, used both to size it and to push the rows under
+	-- it down -- two numbers for one height is how the editor ended up drawn over
+	-- the next reply and the Add button.
+	local EDITOR_H = 104
 
 	for _, r in ipairs(f.ruleRows) do r:Hide() end
 
@@ -1346,7 +1358,7 @@ function Rec_RenderRules()
 			ed:ClearAllPoints()
 			ed:SetPoint("TOPLEFT", f.ruleHost, "TOPLEFT", 14, y)
 			ed:SetPoint("RIGHT", f.ruleHost, "RIGHT", 0, 0)
-			ed:SetHeight(104)
+			ed:SetHeight(EDITOR_H)
 			ed:Show()
 
 			ed.txBox.edit:SetText(rule.text or "")
@@ -1368,7 +1380,7 @@ function Rec_RenderRules()
 				f.editing = nil
 				Rec_RenderRules()
 			end)
-			y = y - (82 + GAP)
+			y = y - (EDITOR_H + GAP)
 		end
 	end
 	if f.ruleEditor and not f.editing then f.ruleEditor:Hide() end
@@ -1425,6 +1437,257 @@ end
 function Rec_RefreshWhispers()
 	local f = RecruitFrame
 	if f and f.dash then f.dash:Refresh() end
+	if Rec_RenderInbox then Rec_RenderInbox() end
+	if Rec_PaintInboxPill then Rec_PaintInboxPill() end
+end
+
+-- ------------------------------------------------------------
+-- Inbox -- everyone who whispered while advertising, newest first, with a way
+-- back to each of them. The header tally says HOW MANY answered; this says WHO,
+-- what they wrote, what we sent back, and where their invite stands -- so a
+-- whisper that scrolled past in chat is still here to answer after the pull.
+-- ------------------------------------------------------------
+local INBOX_ROW_H, INBOX_LINE_H, INBOX_MAX = 46, 15, 100
+
+local STATE_LABEL = {
+	joined   = "|cff7cfc8ajoined|r",
+	sent     = "|cffe0b860invite sent|r",
+	declined = "|cffff5555declined|r",
+	offline  = "|cff8a8d93was offline|r",
+}
+
+local function classHexOf(classFile)
+	local c = classFile and RAID_CLASS_COLORS and RAID_CLASS_COLORS[classFile]
+	if not c then return "ffdcddde" end
+	return ("ff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255)
+end
+
+local function whenText(t)
+	if not t then return "" end
+	if date("%Y%m%d", t) == date("%Y%m%d") then return date("%H:%M", t) end
+	return date("%d %b %H:%M", t)
+end
+
+-- Where this person stands, in one word: the invite outcome if there was one,
+-- else whether they were blocked or only answered.
+local function statusOf(name)
+	local s = db.session and db.session[name]
+	if s and s.state and STATE_LABEL[s.state] then return STATE_LABEL[s.state] end
+	for _, e in ipairs(db.log or {}) do
+		if e.who == name and e.blocked then return "|cffff5555blocked|r" end
+	end
+	if s and s.replied then return "|cff8a8d93auto-replied|r" end
+	return "|cff8a8d93no reply sent|r"
+end
+
+local function lastFromThem(c)
+	for i = #(c.log or {}), 1, -1 do
+		local l = c.log[i]
+		if l.them then return l.msg or "" end
+	end
+	return ""
+end
+
+function Rec_BuildInbox(p)
+	local f = RecruitFrame
+	f.inboxPage = p
+	f.inboxRows = {}
+	f.inboxOpen = {}
+
+	local markAll = W.Button(p, "Mark all read")
+	markAll:SetSize(110, 22)
+	markAll:SetPoint("TOPRIGHT", -8, -2)
+	markAll:SetScript("OnClick", function()
+		for _, c in pairs(db.contacts or {}) do c.unread = 0 end
+		Rec_RefreshWhispers()
+	end)
+	f.inboxMarkAll = markAll
+
+	-- The conversations only: the inv / rep / blk counts in the header are the
+	-- night's result and keep their own Clear on Setup.
+	local clear = W.Button(p, "Clear inbox", "danger")
+	clear:SetSize(96, 22)
+	clear:SetPoint("RIGHT", markAll, "LEFT", -6, 0)
+	clear:Tooltip("Delete every conversation in the Inbox.\nThe inv / rep / blk counts stay.")
+	clear:SetScript("OnClick", function() Rec_ClearInbox() end)
+
+	local hint = W.Text(p, "Everyone who whispered while advertising. Click a row for the"
+		.. " whole conversation.", "note", "dim")
+	hint:SetPoint("TOPLEFT", X, -6)
+	hint:SetPoint("RIGHT", clear, "LEFT", -10, 0)
+	hint:SetJustifyH("LEFT")
+
+	f.inboxEmpty = W.Text(p, "No whispers yet. Anyone who answers your advert while it is ON"
+		.. " lands here, with the auto-reply they got.", "body", "dim")
+	f.inboxEmpty:SetPoint("TOPLEFT", X, -40)
+	f.inboxEmpty:SetPoint("RIGHT", p, "RIGHT", -12, 0)
+	f.inboxEmpty:SetJustifyH("LEFT")
+
+	Rec_RenderInbox()
+end
+
+local function inboxRow(p, i)
+	local f = RecruitFrame
+	local r = f.inboxRows[i]
+	if r then return r end
+	r = W.Frame(p, "input")
+	r:EnableMouse(true)
+
+	r.dot = r:CreateTexture(nil, "OVERLAY")
+	r.dot:SetTexture(FLAT)
+	r.dot:SetSize(6, 6)
+	r.dot:SetPoint("TOPLEFT", 8, -12)
+	local a = Okanvil.Colors.accent
+	r.dot:SetVertexColor(a[1], a[2], a[3], 1)
+
+	r.name = W.Text(r, "", "body")
+	r.name:SetPoint("TOPLEFT", 20, -6)
+	r.status = W.Text(r, "", "note")
+	r.status:SetPoint("LEFT", r.name, "RIGHT", 10, 0)
+	r.when = W.Text(r, "", "note", "dim")
+	r.when:SetPoint("LEFT", r.status, "RIGHT", 10, 0)
+
+	r.friend = W.Button(r, "Friend")
+	r.friend:SetSize(58, 22); r.friend:SetPoint("TOPRIGHT", -8, -11)
+	r.friend:Tooltip("Add to your friends list -- you get a toast when they come online.")
+	r.invite = W.Button(r, "Invite")
+	r.invite:SetSize(58, 22); r.invite:SetPoint("RIGHT", r.friend, "LEFT", -6, 0)
+	r.invite:Tooltip("Send a guild invite.")
+	r.whisper = W.Button(r, "Whisper", "primary")
+	r.whisper:SetSize(70, 22); r.whisper:SetPoint("RIGHT", r.invite, "LEFT", -6, 0)
+	r.whisper:Tooltip("Open the chat box addressed to them.")
+
+	r.last = W.Text(r, "", "note", "dim")
+	r.last:SetPoint("TOPLEFT", 20, -26)
+	r.last:SetPoint("RIGHT", r.whisper, "LEFT", -10, 0)
+	r.last:SetJustifyH("LEFT")
+	if r.last.SetWordWrap then r.last:SetWordWrap(false) end
+
+	-- The whole conversation, shown under the row when it is opened.
+	r.convo = W.Text(r, "", "note")
+	r.convo:SetPoint("TOPLEFT", 20, -(INBOX_ROW_H - 2))
+	r.convo:SetPoint("RIGHT", r, "RIGHT", -12, 0)
+	r.convo:SetJustifyH("LEFT")
+	r.convo:SetJustifyV("TOP")
+
+	f.inboxRows[i] = r
+	return r
+end
+
+function Rec_RenderInbox()
+	local f = RecruitFrame
+	if not (f and f.inboxPage) then return end
+	local p = f.inboxPage
+
+	for _, r in ipairs(f.inboxRows) do r:Hide() end
+	local list = Rec_ContactList()
+	if #list == 0 then f.inboxEmpty:Show() else f.inboxEmpty:Hide() end
+
+	local canInvite = CanGuildInvite and CanGuildInvite()
+	local y = -32
+	for i = 1, math.min(#list, INBOX_MAX) do
+		local c = list[i]
+		local name = c.name
+		local r = inboxRow(p, i)
+		local open = f.inboxOpen[name]
+
+		r.name:SetText(("|c%s%s|r"):format(classHexOf(c.class), name))
+		r.status:SetText(statusOf(name))
+		r.when:SetText(whenText(c.t))
+		r.last:SetText(lastFromThem(c))
+		if (c.unread or 0) > 0 then r.dot:Show() else r.dot:Hide() end
+
+		local s = db.session and db.session[name]
+		if canInvite and not isInMyGuild(name) and not (s and s.state == "joined") then
+			r.invite:Show()
+		else
+			r.invite:Hide()
+		end
+		if s and s.watch then r.friend:Hide() else r.friend:Show() end
+
+		r.whisper:SetScript("OnClick", function()
+			-- Opened on the click, so the keyboard goes to the chat box because
+			-- you asked for it; ESC or sending hands it straight back.
+			if ChatFrame_SendTell then ChatFrame_SendTell(name) end
+		end)
+		r.invite:SetScript("OnClick", function()
+			GuildInvite(name)
+			db.session[name] = db.session[name] or {}
+			db.session[name].invited = true
+			db.session[name].state = "sent"
+			Print("Guild-invited |cff00ff00" .. name .. "|r.")
+			Rec_RefreshWhispers()
+		end)
+		r.friend:SetScript("OnClick", function() Rec_AddWatchFriend(name) end)
+
+		-- Opening a conversation is reading it.
+		r:SetScript("OnMouseUp", function()
+			f.inboxOpen[name] = not f.inboxOpen[name] or nil
+			c.unread = 0
+			Rec_RefreshWhispers()
+		end)
+
+		local h = INBOX_ROW_H
+		if open then
+			local lines = {}
+			for _, l in ipairs(c.log or {}) do
+				local who = l.them
+					and ("|c%s%s|r"):format(classHexOf(c.class), name)
+					or "|cffe0b860You|r"
+				lines[#lines + 1] = ("|cff6f7176%s|r  %s: |cffdcddde%s|r"):format(
+					date("%H:%M", l.t or 0), who, l.msg or "")
+			end
+			r.convo:SetText(table.concat(lines, "\n"))
+			r.convo:Show()
+			h = h + #lines * INBOX_LINE_H + 8
+		else
+			r.convo:Hide()
+		end
+
+		r:ClearAllPoints()
+		r:SetPoint("TOPLEFT", X, y)
+		r:SetPoint("RIGHT", p, "RIGHT", -8, 0)
+		r:SetHeight(h)
+		r:Show()
+		y = y - h - 4
+	end
+
+	p:SetHeight(math.max(200, math.abs(y) + 10))
+	local sf = f.dash and f.dash.pages and f.dash.pages.inbox
+	if sf and sf._relayout then sf._relayout() end
+end
+
+function Rec_ClearInbox()
+	local n = 0
+	for _ in pairs(db.contacts or {}) do n = n + 1 end
+	if n == 0 then
+		Print("The Inbox is already empty.")
+		return
+	end
+	-- Not undoable, so it asks.
+	Okanvil:Confirm(
+		("Delete %d conversation%s?\n\nThe inv / rep / blk counts stay."):format(
+			n, n == 1 and "" or "s"),
+		"Delete",
+		function()
+			db.contacts = db.contacts or {}
+			wipe(db.contacts)
+			local f = RecruitFrame
+			if f and f.inboxOpen then wipe(f.inboxOpen) end
+			Rec_RefreshWhispers()
+			Print("Inbox cleared.")
+		end)
+end
+
+-- The pill carries the unread count, so it is seen from the other two tabs --
+-- before the Inbox has ever been opened, which is exactly when it matters.
+function Rec_PaintInboxPill()
+	local f = RecruitFrame
+	local btn = f and f.dash and f.dash.tabBtns and f.dash.tabBtns.inbox
+	if not (btn and btn.text) then return end
+	local unread = Rec_UnreadCount()
+	btn.text:SetText(unread > 0 and ("Inbox (" .. unread .. ")") or "Inbox")
+	btn:SetWidth(math.max(60, (btn.text:GetStringWidth() or 40) + 22))
 end
 
 
@@ -1484,6 +1747,8 @@ function Rec_RefreshUI()
 	if f.dash then f.dash:Refresh() end     -- also repaints the header tally
 	Rec_ApplyMessage()
 	Rec_ApplySetup()
+	Rec_RenderInbox()
+	Rec_PaintInboxPill()
 end
 
 function Rec_AddWatchFriend(name)

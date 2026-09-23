@@ -413,6 +413,20 @@ local function cat_valid_for_raid(raidId, cat)
 	return true
 end
 
+-- The item the leader named, as an id: the one carried in a pasted link, else
+-- the name looked up in the ID Finder (the typed [Name] or a nickname).
+local function named_item_id(rv)
+	if type(rv) ~= "table" then return nil end
+	if rv.itemId then return rv.itemId end
+	local name = rv.itemName or (rv.link and rv.link:match("^%[(.-)%]$"))
+	if name and Okanvil.IDs and Okanvil.IDs.FindItem then
+		for _, r in ipairs(Okanvil.IDs.FindItem(name, 3)) do
+			if r.name and r.name:lower() == name:lower() then return r.id end
+		end
+	end
+	return nil
+end
+
 local function reserved_tooltip(info)
 	local rv = info.reserved
 	if type(rv) ~= "table" then return nil end
@@ -424,28 +438,55 @@ local function reserved_tooltip(info)
 			bits[#bits + 1] = link or ("|cffe0b860" .. cat .. "|r")   -- item link, else gold pill
 		end
 	end
-	-- Explicit named item (typed [Name] / nickname). Prefer a LIVE link resolved
-	-- from the canonical name via the ID Finder; else fall back to the raw text.
-	if rv.itemName and Okanvil.IDs and Okanvil.IDs.FindItem then
-		local resolved
-		for _, r in ipairs(Okanvil.IDs.FindItem(rv.itemName, 3)) do
-			if r.name and r.name:lower() == rv.itemName:lower() then
-				resolved = select(2, GetItemInfo(r.id)); break
-			end
-		end
-		bits[#bits + 1] = resolved or rv.link or ("|cffe0b860[" .. rv.itemName .. "]|r")
+	-- The named item, as a real link in its own rarity colour. Until the client
+	-- has the item cached there is no link yet: the name is shown in epic purple,
+	-- which is what a hard-reserved trophy is.
+	local nid = named_item_id(rv)
+	if nid then
+		if Okanvil.WarmItem then Okanvil:WarmItem(nid) end
+		local nm = rv.itemName or (rv.link and rv.link:match("^%[(.-)%]$")) or "?"
+		bits[#bits + 1] = select(2, GetItemInfo(nid)) or ("|cffa335ee[" .. nm .. "]|r")
 	elseif rv.link then
-		bits[#bits + 1] = rv.link
+		bits[#bits + 1] = "|cffa335ee" .. rv.link .. "|r"
 	end
-	if #bits == 0 then
-		return "|cffe0b860Reserved loot|r\n|cff8a8d93(details not specified)|r"
-	end
+	-- A reserve with nothing concrete behind it ("items res" and no more) has
+	-- nothing to list: the YES chip says it, and a tooltip saying so again is noise.
+	if #bits == 0 then return nil end
 	-- one entry per line, gold bullet prefix
 	local lines = { "|cffe0b860Reserved loot|r" }
 	for _, b in ipairs(bits) do
 		lines[#lines + 1] = "|cffe0b860\226\128\162|r " .. b   -- "• <entry>"
 	end
 	return table.concat(lines, "\n")
+end
+
+-- The item the leader reserved BY NAME -- the trophy they pasted or typed --
+-- for the Items column: { {id =, link =} }. Categories (orbs, keys, BoE) stay in
+-- the Ress tooltip: they are the same on every listing of that raid and say
+-- nothing a glance at the column needs.
+-- Cached on the listing against the reserve table it was built from: the
+-- ID Finder lookup is not free and the list repaints every second.
+local function reserved_items(info)
+	local rv = info.reserved
+	if type(rv) ~= "table" then return {} end
+	if info._resItemsFor == rv and info._resItems then
+		-- An item that was not cached yet came back without a link; try again.
+		for _, it in ipairs(info._resItems) do
+			if not it.link then it.link = select(2, GetItemInfo(it.id)) end
+		end
+		return info._resItems
+	end
+	local out, seen = {}, {}
+	local function add(id)
+		id = tonumber(id)
+		if not id or seen[id] then return end
+		seen[id] = true
+		if Okanvil.WarmItem then Okanvil:WarmItem(id) end
+		out[#out + 1] = { id = id, link = select(2, GetItemInfo(id)) }
+	end
+	add(named_item_id(rv))
+	info._resItemsFor, info._resItems = rv, out
+	return out
 end
 
 local ROLE_COLOR = { tank = "|cff4a90d9", healer = "|cff7cfc8a", dps = "|cffe05555" }
@@ -791,7 +832,9 @@ local COL = {
 	action   = 428,
 	leader   = 540,
 	age      = 650,
+	items    = 700,
 }
+local ITEM_ICONS = 5   -- reserved item icons shown in the Items column
 local ROW_H = 22
 local RESS_W = 42     -- Ress chip width (header centers over this)
 
@@ -870,6 +913,36 @@ local function make_row(parent)
 
 	r.leader = fs(COL.leader)
 	r.age    = fs(COL.age, 11)
+
+	-- Items: the reserved items themselves, one icon each, with the item's own
+	-- tooltip on hover. A single item also gets its name beside it.
+	r.items = {}
+	for k = 1, ITEM_ICONS do
+		local b = CreateFrame("Button", nil, r)
+		b:SetSize(18, 18)
+		b:SetPoint("LEFT", COL.items + (k - 1) * 22, 0)
+		b.tex = b:CreateTexture(nil, "ARTWORK")
+		b.tex:SetAllPoints()
+		b.tex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		b:SetScript("OnEnter", function(s)
+			r._hl:SetVertexColor(1, 1, 1, 0.06)
+			if not s._id then return end
+			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+			GameTooltip:SetHyperlink(s._link or ("item:" .. s._id))
+			GameTooltip:Show()
+		end)
+		b:SetScript("OnLeave", function() r._hl:SetVertexColor(1, 1, 1, 0); GameTooltip:Hide() end)
+		b:SetScript("OnClick", function(s)
+			if s._link and IsShiftKeyDown() and ChatEdit_InsertLink then ChatEdit_InsertLink(s._link) end
+		end)
+		b:Hide()
+		r.items[k] = b
+	end
+	r.itemName = W.Text(r, "", "label")
+	r.itemName:SetPoint("LEFT", r.items[1], "RIGHT", 6, 0)
+	r.itemName:SetPoint("RIGHT", r, "RIGHT", -6, 0)
+	r.itemName:SetJustifyH("LEFT")
+	if r.itemName.SetWordWrap then r.itemName:SetWordWrap(false) end
 	return r
 end
 
@@ -928,6 +1001,39 @@ function Okanvil.RaidFinder_Render()
 			r.ress:Show(); r.ress.txt:SetText("|cffe0b860YES|r")
 			r.ress:SetBackdropBorderColor(0.88, 0.72, 0.38, 1)                          -- gold
 			r.ress._res = reserved_tooltip(info)   -- pre-built multiline tooltip
+		end
+
+		-- Items column
+		local its = reserved_items(info)
+		for k = 1, ITEM_ICONS do
+			local b, it = r.items[k], its[k]
+			if it then
+				b._id, b._link = it.id, it.link
+				b.tex:SetTexture((GetItemIcon and GetItemIcon(it.id))
+					or select(10, GetItemInfo(it.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+				b:Show()
+			else
+				b._id, b._link = nil, nil
+				b:Hide()
+			end
+		end
+		-- One item: its name, in its rarity colour, from the link itself.
+		if #its == 1 then
+			local lk = its[1].link
+			local nm = lk and lk:match("%[(.-)%]")
+			local col = lk and lk:match("^(|c%x%x%x%x%x%x%x%x)") or "|cffa335ee"
+			r.itemName:SetText(nm and (col .. nm .. "|r") or "")
+		elseif #its > ITEM_ICONS then
+			r.itemName:ClearAllPoints()
+			r.itemName:SetPoint("LEFT", r.items[ITEM_ICONS], "RIGHT", 6, 0)
+			r.itemName:SetText("|cff8a8d93+" .. (#its - ITEM_ICONS) .. "|r")
+		else
+			r.itemName:SetText("")
+		end
+		if #its <= ITEM_ICONS then
+			r.itemName:ClearAllPoints()
+			r.itemName:SetPoint("LEFT", r.items[1], "RIGHT", 6, 0)
+			r.itemName:SetPoint("RIGHT", r, "RIGHT", -6, 0)
 		end
 
 		-- Saved (are you locked to this raid?)
@@ -1197,6 +1303,7 @@ local function buildUI(panel)
 	colhC(COL.ress, RESS_W, "Ress"); colhC(COL.saved, 44, "Saved"); colh(COL.action, "Action")
 	sortHeader(COL.leader, "Leader", "leader")
 	sortHeader(COL.age, "Age", "age")
+	colh(COL.items, "Items")
 
 	-- flat scroll list (plain ScrollFrame + our slider), like Logs history
 	local sf = CreateFrame("ScrollFrame", nil, well)
