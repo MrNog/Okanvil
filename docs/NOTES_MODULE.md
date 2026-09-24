@@ -249,8 +249,9 @@ before writing an aura from scratch.
 
 ## Sending to the raid
 
-`Core/Comms.lua` already chunks large payloads (`SendBig`/`OnBig`, 180 bytes per
-chunk, `OKANVIL` prefix) — the path that syncs loot priority between officers.
+`Core/Comms.lua` already sends large payloads (`SendBig`/`OnBig`: one compressed
+message that AceComm splits, `OKANVIL` prefix) — the path that syncs loot
+priority between officers.
 A note is a few KB, so this is wiring, not new machinery.
 
 Receivers need Okanvil to *store* a sent note. That is the open question below.

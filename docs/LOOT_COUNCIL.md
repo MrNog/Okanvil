@@ -41,10 +41,10 @@ strings.
 
 ## Two limits that will bite
 
-**`C.Send` silently rejects payloads over 240 bytes.** `Comms.lua:91` returns
-`false` and nothing else happens. A council roster of 25 responses is far past
-that, so anything carrying a list must go through `C.SendBig` (chunks at 180
-bytes, 0.35s apart — `Comms.lua:187-188`).
+**Size is not a limit, but priority is.** AceComm splits any message and
+rebuilds it on the far side, so `C.Send` takes a payload of any length. Big
+lists still go through `C.SendBig`: it sends at ChatThrottleLib's BULK priority,
+so a council question sent at the same moment is not queued behind it.
 
 **`C.On` allows one handler per message type**, last registration wins
 (`Comms.lua:81`). A council type must not collide with the existing ones:

@@ -35,9 +35,8 @@ end
 M.DB = db
 
 -- ------------------------------------------------------------
--- The live session. Deliberately NOT saved: a farm run is a thing you start and
--- stop in one sitting, and a half-finished session restored after a /reload would
--- quietly keep counting time you were not farming.
+-- The live session. Kept across a logout or /reload (see "Carry-over" below) and
+-- always brought back PAUSED, so the time you were offline never counts.
 -- ------------------------------------------------------------
 local S = {
 	running = false,
@@ -357,12 +356,53 @@ local function addCash(msg)
 	if total > 0 then S.cash = S.cash + total end
 end
 
+-- ------------------------------------------------------------
+-- Carry-over
+--
+-- Logging off with a run open used to throw it away: the session lived only in
+-- memory, so a paused run you meant to finish later was gone. It is now written
+-- to the character's saved variables on logout and put back on login, paused --
+-- press Start to keep going or Finish to bank it.
+-- ------------------------------------------------------------
+local CARRY = { "elapsed", "cash", "items", "quests", "itemsVendor", "itemsAH", "kills", "drops", "zone" }
+
+local function saveLive()
+	local d = db()
+	if M.Duration() <= 0 and M.Total() <= 0 then d.live = nil; return end
+	local snap = { elapsed = M.Duration(), loot = {} }
+	for _, k in ipairs(CARRY) do if k ~= "elapsed" then snap[k] = S[k] end end
+	for link, e in pairs(S.loot) do snap.loot[link] = { e[1], e[2] } end
+	d.live = snap
+end
+
+local function restoreLive()
+	local d = db()
+	local snap = d.live
+	d.live = nil
+	if type(snap) ~= "table" then return end
+	for _, k in ipairs(CARRY) do
+		if snap[k] ~= nil then S[k] = snap[k] end
+	end
+	S.running, S.startedAt = false, nil
+	S.loot = {}
+	for link, e in pairs(snap.loot or {}) do
+		if type(e) == "table" then S.loot[link] = { e[1] or 0, e[2] or 0 } end
+	end
+	Okanvil:Print(("Farm run restored, paused -- |cffffd200%s|r in %s. Start to carry on, Finish to save it.")
+		:format(M.Money(M.TotalAH(), true), M.Clock(S.elapsed)))
+	if M.onChange then M.onChange() end
+end
+
 local ev = CreateFrame("Frame")
+ev:RegisterEvent("PLAYER_LOGIN")
+ev:RegisterEvent("PLAYER_LOGOUT")
 ev:RegisterEvent("CHAT_MSG_LOOT")
 ev:RegisterEvent("CHAT_MSG_MONEY")
 ev:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 ev:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 ev:SetScript("OnEvent", function(_, event, ...)
+	if event == "PLAYER_LOGIN" then restoreLive(); return end
+	if event == "PLAYER_LOGOUT" then saveLive(); return end
 	-- Nothing is counted while paused or stopped: a farm rate has to be about the
 	-- time you were farming, or the number is a lie.
 	if not S.running then

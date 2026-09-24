@@ -650,14 +650,11 @@ function Rec_ShareMessage()
 		Okanvil:Print("|cffff5555Recruit:|r you are not in a guild.")
 		return
 	end
-	-- One message: an advertise line is ~200 bytes and C.Send caps at 240. A
-	-- longer one is refused rather than arriving truncated, which would leave
-	-- every other officer spamming half a sentence.
 	local ok = C.SendGuild and C.SendGuild("RECMSG", msg)
 	if ok then
 		Okanvil:Print("|cff7cfc8aRecruit:|r message sent to the other officers.")
 	else
-		Okanvil:Print("|cffff5555Recruit:|r could not send -- the message may be too long.")
+		Okanvil:Print("|cffff5555Recruit:|r could not send.")
 	end
 end
 

@@ -690,6 +690,11 @@ function W.DropDown(parent, listFn, getFn, setFn, preview)
 	return Mod(dd)
 end
 
+-- The same menu from any button, for a list that is an action rather than a
+-- setting. Give the button listFn() -> { {text=, value=}, ... } and setFn(value);
+-- a row whose value is false is a label and does nothing when clicked.
+W.OpenMenu = openMenu
+
 -- ============================================================
 -- Dashboard -- a reusable plugin shell (header strip + live main area +
 -- toggleable right stats drawer + config tabs that open as a FULL overlay

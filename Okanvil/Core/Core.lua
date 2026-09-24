@@ -455,6 +455,35 @@ function Okanvil:Err(context, err)
 	self:Dev("|cffff5555ERROR|r " .. ctx .. ": " .. msg)
 end
 
+-- ------------------------------------------------------------
+-- TRACE: an always-on record of what the addon did, written beside the errors
+-- of the same login (OkanvilBugDB.sessions[n].trace), the way the combat log is
+-- written whether or not anyone reads it. Nothing to switch on: after a bad
+-- night the answer is already in SavedVariables\Okanvil.lua.
+--
+-- One line per event, oldest first:
+--     "21:14:03.271 COMMS -> RAID LOOT 96b/64b <text>"   (-> sent, <- received)
+-- The seconds carry the fraction of GetTime(), so events in the same second keep
+-- their order. A long login keeps its newest TRACE_PER_SESS lines; the count of
+-- lines dropped from the front is kept in traceDropped.
+-- ------------------------------------------------------------
+local TRACE_PER_SESS = 4000
+local TRACE_TRIM     = 500    -- lines removed at once when full, so trimming is rare
+
+function Okanvil:Trace(cat, text)
+	local s = currentErrSession(self)
+	local t = s.trace
+	if not t then t = {}; s.trace = t end
+	if #t >= TRACE_PER_SESS then
+		local keep = {}
+		for i = TRACE_TRIM + 1, #t do keep[#keep + 1] = t[i] end
+		s.trace, t = keep, keep
+		s.traceDropped = (s.traceDropped or 0) + TRACE_TRIM
+	end
+	local ms = math.floor(((GetTime and GetTime()) or 0) % 1 * 1000)
+	t[#t + 1] = ("%s.%03d %s %s"):format(date("%H:%M:%S"), ms, tostring(cat or "?"), tostring(text or ""))
+end
+
 -- This session's distinct errors, most frequent first.
 function Okanvil:ErrorSummary()
 	local out = {}

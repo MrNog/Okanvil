@@ -13,15 +13,11 @@
 --  dungeon, "elite with >80k HP". That guess promotes beefy trash (a Drakkari Rhino)
 --  and would miss a low-HP boss. An id is exact and locale-proof.
 --
---  SOURCE -- do not hand-edit; regenerate with scratchpad/gen_bosses.py.
---  Merged from two verified lists, no id invented:
---    * WA/BossHP/BossHP.lua -- all WotLK raids AND 5-man dungeons. Battle-tested:
---      it drives an in-combat HP bar, so a wrong id would show no bar.
---    * Logs.lua's BOSS_IDS -- only the 6 encounter ids BossHP lacks (it tracks HP
---      phases, e.g. Mimiron's three, rather than the encounter).
---  Where they disagreed, BossHP won: Logs.lua was mis-keyed across ICC (it called
---  37813 "Deathbringer Saurfang", but that id is the Alliance Gunship; the real
---  Saurfang is 37215, which Logs.lua lacked entirely).
+--  SOURCES, no id invented:
+--    * WA/BossHP/BossHP.lua -- all WotLK raids AND 5-man dungeons.
+--    * DBM-Icecrown's SetCreatureID lines -- the authority for ICC. DBM's ICC
+--      mods are tuned against live Warmane logs, and they are what every raid
+--      already relies on to start its timers.
 --
 --  FORMAT: [creatureID] = "Boss Name"   (matching is by id; the name is the label)
 -- ============================================================
@@ -135,16 +131,18 @@ OkanvilBosses = {
 	-- ICECROWN CITADEL  (raid)
 	[36612] = "Lord Marrowgar",
 	[36855] = "Lady Deathwhisper",
-	[37813] = "Alliance Gunship",
-	[37960] = "Horde Gunship",
-	[37215] = "Deathbringer Saurfang",
+	[36939] = "High Overlord Saurfang",    -- Gunship: Horde commander
+	[36948] = "Muradin Bronzebeard",       -- Gunship: Alliance commander
+	[37215] = "Orgrim's Hammer",           -- Gunship: Horde ship
+	[37540] = "The Skybreaker",            -- Gunship: Alliance ship
+	[37813] = "Deathbringer Saurfang",
 	[36626] = "Festergut",
 	[36627] = "Rotface",
 	[36678] = "Professor Putricide",
-	[37955] = "Prince Keleseth",
-	[37972] = "Prince Taldaram",
 	[37970] = "Prince Valanar",
-	[37973] = "Blood Queen Lan'Athel",
+	[37972] = "Prince Keleseth",
+	[37973] = "Prince Taldaram",
+	[37955] = "Blood-Queen Lana'thel",
 	[36789] = "Valithria Dreamwalker",
 	[36853] = "Sindragosa",
 	[36597] = "The Lich King",
@@ -263,9 +261,9 @@ OkanvilBossGroups = {
 	["Runemaster Molgeim"] = "Iron Council",
 	["Stormcaller Brundir"] = "Iron Council",
 
-	-- Blood Prince Council (ICC).  NOTE the ids: 37955 Keleseth, 37972 Taldaram,
-	-- 37970 Valanar.  (Lana'thel is 37973 and is NOT part of the council.)
-	[37955] = "Blood Prince Council", [37972] = "Blood Prince Council", [37970] = "Blood Prince Council",
+	-- Blood Prince Council (ICC): 37970 Valanar, 37972 Keleseth, 37973 Taldaram.
+	-- Lana'thel (37955) is her own encounter and is NOT part of the council.
+	[37970] = "Blood Prince Council", [37972] = "Blood Prince Council", [37973] = "Blood Prince Council",
 	["Prince Keleseth"] = "Blood Prince Council",
 	["Prince Taldaram"] = "Blood Prince Council",
 	["Prince Valanar"] = "Blood Prince Council",
@@ -276,12 +274,13 @@ OkanvilBossGroups = {
 	-- standing on the deck -- a real ICC night filed the whole Gunship chest, and then
 	-- Saurfang's drops, under "Muradin Bronzebeard". The commanders and their adds all
 	-- collapse onto the encounter so any of them resolves to one page.
-	[37813] = "Gunship Battle", [37960] = "Gunship Battle",
+	[36939] = "Gunship Battle", [36948] = "Gunship Battle",
+	[37215] = "Gunship Battle", [37540] = "Gunship Battle",
 	["Alliance Gunship"] = "Gunship Battle",
 	["Horde Gunship"] = "Gunship Battle",
 	-- faction commanders (the NPC actually looted/targeted on the deck)
 	["Muradin Bronzebeard"] = "Gunship Battle",
-	["High Overlord Saurfang"] = "Gunship Battle",   -- NOT Deathbringer Saurfang (37215)
+	["High Overlord Saurfang"] = "Gunship Battle",   -- NOT Deathbringer Saurfang (37813)
 	["Orgrim's Hammer"] = "Gunship Battle",
 	["The Skybreaker"] = "Gunship Battle",
 

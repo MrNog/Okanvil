@@ -117,6 +117,16 @@ local function raid_lock_info(instance, size, heroic)
 	return false, nil
 end
 
+-- The saved state belongs to YOU, not to the listing, so it goes stale the moment
+-- you get saved: a listing first seen before your run kept saying "Open" while the
+-- same raid spammed by someone new read "Saved". Re-asked whenever the lockout
+-- list changes.
+local function relock_all()
+	for _, info in pairs(listings) do
+		info.locked, info.reset = raid_lock_info(info.instance, info.size, info.hc)
+	end
+end
+
 -- ------------------------------------------------------------
 -- CHAT SCANNING -> listings store
 -- ------------------------------------------------------------
@@ -145,6 +155,7 @@ local function record(sender, message)
 		existing.achievId  = info.achievId
 		existing.message   = message
 		existing._flash    = now             -- brief highlight; no reorder
+		existing.locked, existing.reset = raid_lock_info(info.instance, info.size, info.hc)
 	else
 		info.sender    = sender
 		info.message   = message
@@ -1243,13 +1254,18 @@ local function buildUI(panel)
 		end)
 	ui.ddWeekly:SetPoint("LEFT", ui.ddRole, "RIGHT", 8, 0); ui.ddWeekly:SetWidth(100)
 
-	-- Reset filters
+	-- Reset: filters back to All AND the list emptied. With the filters already on
+	-- All, clearing them alone changed nothing on screen; a fresh start is what the
+	-- button is pressed for. Listings still being spammed come back on their next line.
 	local reset = W.Button(bar, "Reset")
 	reset:SetPoint("RIGHT", 0, 0); reset:SetSize(70, 22)
 	reset:SetScript("OnClick", function()
 		filter.instance, filter.size, filter.role, filter.weekly = nil, nil, nil, nil
 		ui.ddRaid:refreshText(); ui.ddSize:refreshText(); ui.ddRole:refreshText(); ui.ddWeekly:refreshText()
+		for name in pairs(listings) do listings[name] = nil end
+		RequestRaidInfo()
 		Okanvil.RaidFinder_Render()
+		if Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
 	end)
 
 	-- count line
@@ -1337,6 +1353,7 @@ ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("CHAT_MSG_CHANNEL")
 ev:RegisterEvent("CHAT_MSG_YELL")
+ev:RegisterEvent("UPDATE_INSTANCE_INFO")   -- lockout list arrived (answer to RequestRaidInfo)
 -- talent/spec changes -> live-refresh the "Active spec" line in Settings.
 -- 3.3.5a spec/talent-change events (register all; some cores fire only one).
 ev:RegisterEvent("PLAYER_TALENT_UPDATE")
@@ -1348,6 +1365,13 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
 		if Okanvil.RaidFinder_RefreshGear then Okanvil.RaidFinder_RefreshGear() end
 		-- a dual-spec swap changes what "My role" means -> re-filter the list
 		if filter.role == "mine" and Okanvil.RaidFinder_Render then Okanvil.RaidFinder_Render() end
+		return
+	end
+	if event == "UPDATE_INSTANCE_INFO" then
+		if not db then return end
+		relock_all()
+		if page_visible() then Okanvil.RaidFinder_Render() end
+		if Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
 		return
 	end
 	if event == "ADDON_LOADED" and arg1 == "Okanvil" then
@@ -1400,9 +1424,13 @@ end)
 -- doing when frames are tight.
 local tick = CreateFrame("Frame")
 local acc = 0
+-- Getting saved mid-session does not refresh the client's lockout list by itself; it
+-- has to be asked. Once a minute while the list is on screen is plenty.
+local lockAcc = 0
 tick:SetScript("OnUpdate", function(_, elapsed)
 	acc = acc + elapsed
 	if acc < 5 then return end
+	lockAcc = lockAcc + acc
 	acc = 0
 	if not (db and module_on()) then return end
 
@@ -1411,6 +1439,11 @@ tick:SetScript("OnUpdate", function(_, elapsed)
 	-- Nothing visible and not scanning in the background -> nothing can have changed
 	-- and nobody could see it if it had.
 	if not (onPage or onMini or db.background) then return end
+
+	if lockAcc >= 60 and (onPage or onMini) then
+		lockAcc = 0
+		RequestRaidInfo()   -- answers with UPDATE_INSTANCE_INFO -> relock_all
+	end
 
 	-- prune() already re-renders when it actually dropped a listing, so only render
 	-- here when it did NOT -- otherwise every tick rendered the list twice.

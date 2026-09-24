@@ -11,6 +11,7 @@
 --   {spell:64205}                inline icon
 --   {item:36892}                inline icon for an ITEM (healthstone)
 --   {skull} {star} ...           raid target icons
+--   {room:The Spire}             the room(s) this note runs in; never drawn
 -- ============================================================
 
 local P = {}
@@ -434,6 +435,8 @@ function P.Render(text)
 	-- Notes copied out of MRT carry escaped pipes (||cff...), which a FontString
 	-- prints literally instead of colouring. Unescape first.
 	text = text:gsub("||", "|")
+	-- Where the note runs, not something to read (Notes.lua reads it).
+	text = text:gsub("{room:[^}]*}", "")
 	text = P.FillSlots(text)
 	text = text:gsub("{spell:(%d+):?%d*}", function(id)
 		return "|T" .. P.SpellIcon(id) .. S
@@ -570,7 +573,11 @@ function P.Parse(note)
 	local body = (note:gsub("\r?\n$", "")) .. "\n"
 	for line in body:gmatch("([^\r\n]*)\r?\n") do
 		local secs, opts, rest = parseTime(line)
-		if secs then
+		-- A line that only says which room the note runs in is not a row: left in,
+		-- it would draw as a blank gap at the top of every note that uses it.
+		if line:find("{room:", 1, true) and not line:gsub("{room:[^}]*}", ""):match("%S") then
+			-- skipped
+		elseif secs then
 			out[#out + 1] = {
 				time    = secs,
 				anchor  = parseAnchor(opts),

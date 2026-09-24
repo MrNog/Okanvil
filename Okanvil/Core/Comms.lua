@@ -18,9 +18,17 @@
 -- than one message and rebuilds it on the far side. Messages are still
 -- fire-and-forget: pair a PUSH with a FETCH/ACK.
 --
+-- ENCODING, also RCLootCouncil's: every message is compressed with LibDeflate
+-- and sent through EncodeForPrint. Compression is what makes a raid note or the
+-- priority list a handful of messages instead of dozens; EncodeForPrint is
+-- needed because deflate output is binary, and an addon message cannot carry
+-- every byte (a \0 ends it).
+--
 -- WIRE FORMAT (versioned so mismatched clients ignore what they don't know):
---     OKV1|<TYPE>|<arg1>|<arg2>|...
---   Fields are '|'-separated; a leading "OKV1" gates the protocol version.
+--     OKV2|<TYPE>|<arg1>|<arg2>|...
+--   Fields are '|'-separated; a leading "OKV2" gates the protocol version.
+--   OKV1 was the same format sent uncompressed: the two cannot read each other,
+--   so an OKV1 client shows up as "no reply" in the version check.
 --   Unknown TYPEs are dropped silently (forward-compatible).
 --
 -- TRUST MODEL (the user's hard rule -- anti-ninja): messages are trusted by the
@@ -35,7 +43,7 @@ local C = {}
 Okanvil.Comms = C
 
 local PREFIX  = "OKANVIL"   -- addon-message prefix (shared by every feature)
-local VERSION = "OKV1"      -- payload version tag; bump only on a breaking change
+local VERSION = "OKV2"      -- payload version tag; bump only on a breaking change
 local SEP     = "|"
 
 -- registered message handlers: TYPE -> fn(sender, ...args). Modules add theirs
@@ -47,11 +55,49 @@ local handlers = {}
 -- mixin names (SendCommMessage, RegisterComm...) never collide with ours.
 local AceComm = LibStub and LibStub("AceComm-3.0", true)
 local endpoint = AceComm and AceComm:Embed({}) or nil
+local Deflate = LibStub and LibStub("LibDeflate", true)
+
+local function encode(text)
+	if not Deflate then return text end
+	local packed = Deflate:CompressDeflate(text)
+	return packed and Deflate:EncodeForPrint(packed) or text
+end
+
+-- Anything that does not decode is handed back unchanged: the raw pings, and an
+-- OKV1 client's uncompressed text (which then simply fails the version gate).
+local function decode(msg)
+	if not Deflate then return msg end
+	local packed = Deflate:DecodeForPrint(msg)
+	local text = packed and Deflate:DecompressDeflate(packed)
+	return text or msg
+end
+
+-- Every message in and out goes into the always-on trace (Okanvil:Trace). The
+-- preview is the plain text before compression, cut short, with control bytes
+-- (the field escape, the notes' record marks) shown as '~' so a line stays one
+-- readable line in the saved file.
+local TRACE_PREVIEW = 120
+local function preview(text)
+	return (tostring(text or ""):sub(1, TRACE_PREVIEW):gsub("%c", "~"))
+end
+
+local function msgTypeOf(text)
+	return tostring(text or ""):match("^[^|]*|([^|]*)") or "?"
+end
+
+local function trace(line)
+	if Okanvil.Trace then Okanvil:Trace("COMMS", line) end
+end
 
 -- Put one Okanvil string on the wire. prio is ChatThrottleLib's: "ALERT",
 -- "NORMAL" (default) or "BULK" -- bulk transfers use BULK so a question or an
--- answer is never stuck in the queue behind twenty chunks of a list.
+-- answer is never stuck in the queue behind the parts of a list.
+-- Returns the encoded length, which is what the wire actually carries.
 local function wire(text, chan, target, prio)
+	local plain = text
+	text = encode(text)
+	trace(("-> %s%s %s %db/%db %s"):format(chan, target and (" " .. target) or "",
+		msgTypeOf(plain), #plain, #text, preview(plain)))
 	if endpoint then
 		endpoint:SendCommMessage(PREFIX, text, chan, target, prio or "NORMAL")
 	elseif target then
@@ -59,22 +105,24 @@ local function wire(text, chan, target, prio)
 	else
 		SendAddonMessage(PREFIX, text, chan)
 	end
+	return #text
 end
 
 -- ------------------------------------------------------------
--- Encode / decode. We escape the separator inside args so a name or payload that
--- happens to contain '|' can't split a field (belt-and-suspenders: player names
--- can't contain '|', but future payloads might).
+-- Field escaping. '|' is our separator, and raid notes and item links are full
+-- of it, so inside a field it travels as \031 and is put back on arrival. A
+-- control character rather than a printable one: the old '/' stand-in turned
+-- every real '/' in a note ("Okanor/Zhong") into '|' on the far side. The
+-- whole message is encoded before it reaches the wire, so \031 never does.
 -- ------------------------------------------------------------
+local FIELD_ESC = "\031"
+
 local function encField(s)
-	return (tostring(s == nil and "" or s):gsub("|", "/"))   -- '|' -> '/' (names never contain either meaningfully)
+	return (tostring(s == nil and "" or s):gsub("|", FIELD_ESC))
 end
 
--- The other half. Needed since big payloads carry raid notes, which are full of
--- '|' in their colour codes -- without putting them back the text arrives
--- mangled, or split across fields that were never meant to be separate.
 local function decField(s)
-	return (tostring(s or ""):gsub("/", "|"))
+	return (tostring(s or ""):gsub(FIELD_ESC, "|"))
 end
 
 local function pack(msgType, ...)
@@ -147,27 +195,72 @@ end
 -- default; it is a firehose in a raid.
 C.debug = false
 _G.SLASH_OKCOMMS1 = "/okcomms"
-_G.SlashCmdList["OKCOMMS"] = function()
+-- Chat treats '|' as the start of a colour or link code, so a raw payload
+-- printed as-is can come out garbled or not at all. "||" prints one '|'.
+local function shown(s)
+	return (tostring(s or ""):gsub("|", "||"))
+end
+
+-- /okcomms ping -- the wire itself, with nothing of ours in between. Sends two
+-- raw messages straight to SendAddonMessage, one with a '|' in it and one
+-- without, and a raw listener below reports every one that comes back. Your own
+-- group messages echo back to you, so this works with one person: whichever
+-- form does not come back is the one the server drops.
+local pingSeq = 0
+local function ping()
+	local chan = groupChannel()
+	if not chan then Okanvil:Print("Ping: you're not in a party or raid."); return end
+	pingSeq = pingSeq + 1
+	SendAddonMessage(PREFIX, "PING:plain:" .. pingSeq, chan)
+	SendAddonMessage(PREFIX, "PING|pipe|" .. pingSeq, chan)
+	Okanvil:Print(("Ping %d sent on %s -- expect two lines back: |cff7cfc8aplain|r and |cff7cfc8apipe|r."):format(pingSeq, chan))
+end
+
+do
+	local raw = CreateFrame("Frame")
+	raw:RegisterEvent("CHAT_MSG_ADDON")
+	raw:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
+		if prefix ~= PREFIX or type(message) ~= "string" or message:sub(1, 4) ~= "PING" then return end
+		local kind = message:sub(5, 5) == "|" and "pipe" or "plain"
+		Okanvil:Print(("|cff7cfc8aPing back:|r %s from %s [%s] %s"):format(
+			kind, tostring(sender), tostring(channel), shown(message)))
+	end)
+end
+
+_G.SlashCmdList["OKCOMMS"] = function(msg)
+	if (msg or ""):lower():match("^%s*ping") then ping(); return end
 	C.debug = not C.debug
 	Okanvil:Print("Comms debug " .. (C.debug and "|cff7cfc8aON|r" or "|cffff5555OFF|r"))
 end
 
 local function onMessage(prefix, message, channel, sender)
 	if prefix ~= PREFIX or not message then return end
+	local wireLen = #message
+	message = decode(message)
+	trace(("<- %s %s %s %db/%db %s"):format(tostring(sender), tostring(channel),
+		msgTypeOf(message), #message, wireLen, preview(message)))
 	if C.debug then
 		Okanvil:Print(("|cff6f7176<- %s [%s] %s|r"):format(
-			tostring(sender), tostring(channel), tostring(message):sub(1, 60)))
+			tostring(sender), tostring(channel), shown(tostring(message):sub(1, 60))))
 	end
 	-- split on SEP
 	local fields = {}
 	for f in (message .. SEP):gmatch("(.-)" .. "%" .. SEP) do fields[#fields + 1] = f end
-	if fields[1] ~= VERSION then return end          -- other/older protocol -> ignore
+	if fields[1] ~= VERSION then                     -- other/older protocol -> ignore
+		trace(("-- dropped: %s speaks %s, we speak %s"):format(tostring(sender),
+			tostring(fields[1]):sub(1, 8), VERSION))
+		return
+	end
 	local msgType = fields[2]
 	local fn = msgType and handlers[msgType]
-	if not fn then return end                         -- unknown type -> forward-compatible drop
+	if not fn then                                    -- unknown type -> forward-compatible drop
+		trace("-- dropped: no handler for " .. tostring(msgType))
+		return
+	end
 	-- normalise the sender ("Name-Realm" -> "Name" for same-realm compares)
 	local who = sender and sender:gsub("%-.*$", "") or ""
 	-- hand the remaining fields (3..n) to the handler as varargs
+	for i = 3, #fields do fields[i] = decField(fields[i]) end
 	fn(who, unpack(fields, 3))
 end
 
@@ -213,94 +306,45 @@ end)
 ev:Hide()   -- OnUpdate only runs while timers are pending
 
 -- ------------------------------------------------------------
--- BIG PAYLOADS (chunked send/receive)
+-- BIG PAYLOADS
 --
--- One addon message caps out around 255 bytes and shares the player's chat
--- throttle, so anything larger goes out as a numbered series and is rebuilt on
--- the far side. The loot priority list is ~4KB, about 20 messages.
+-- A payload of any size goes out as ONE Okanvil message:
 --
---   BIG|<tag>|<id>|<seq>|<total>|<chunk>
+--   BIG|<tag>|<text>
 --
--- `id` distinguishes two transfers of the same tag crossing over. A partial
--- transfer is dropped after BIG_TIMEOUT rather than kept forever: the sender may
--- have logged out mid-send, and half a priority list is worse than none.
+-- The text is compressed whole, then AceComm splits the result into as many
+-- addon messages as it needs and rebuilds it on the far side, in order. A raid
+-- note or the ~4KB priority list compresses to a fraction of its size, so it
+-- costs a handful of messages. BULK priority keeps it behind any council
+-- question or answer sent at the same time.
 -- Whatever arrives is still only DATA -- the receiving handler decides whether
 -- the sender was allowed to send it.
 -- ------------------------------------------------------------
-local BIG_CHUNK   = 180        -- payload bytes per message, well under the cap
-local BIG_TIMEOUT = 60         -- give up on a half-finished transfer after this
-local bigIn  = {}              -- sender.."\0"..tag -> { id, total, parts, at }
 local bigHandlers = {}         -- tag -> fn(sender, text)
-local bigSeq = 0
 
--- Register the handler for a chunked payload. fn(sender, wholeText) runs once the
--- series is complete.
+-- Register the handler for a big payload. fn(sender, wholeText).
 function C.OnBig(tag, fn) bigHandlers[tag] = fn end
 
--- Send a large string as a numbered series. Returns the number of chunks, or
--- false when there is nobody to send to.
+-- Send a large string. Returns how many addon messages it took, or false when
+-- there is nobody to send to. Needs AceComm: without it only one addon message
+-- of ~250 bytes could go out, and a cut-off note is worse than none.
 function C.SendBig(tag, text, chan, target)
 	text = tostring(text or "")
-	if text == "" then return false end
+	if text == "" or not endpoint then return false end
 	if not chan then
-		if GetNumRaidMembers and GetNumRaidMembers() > 0 then chan = "RAID"
-		elseif GetNumPartyMembers and GetNumPartyMembers() > 0 then chan = "PARTY"
-		else return false end
+		chan = groupChannel()
+		if not chan then return false end
 	end
-	bigSeq = bigSeq + 1
-	local id = tostring((time and time() or 0) % 100000) .. "-" .. bigSeq
-	local total = math.ceil(#text / BIG_CHUNK)
-	for i = 1, total do
-		local part = text:sub((i - 1) * BIG_CHUNK + 1, i * BIG_CHUNK)
-		-- The PART is escaped too, not just the tag and id. A raid note is full of
-		-- '|' -- every colour code is |cff......|r -- and the receiver splits on
-		-- exactly that character, so a raw part shatters into fragments.
-		--
-		-- All chunks are queued at once: ChatThrottleLib paces them out in order,
-		-- at BULK priority so they never hold up a council question.
-		local body = table.concat({ VERSION, "BIG", encField(tag), encField(id), i, total, encField(part) }, SEP)
-		wire(body, chan, target, "BULK")
-	end
-	return total
+	local len = wire(pack("BIG", tag, text), chan, target, "BULK")
+	return math.max(1, math.ceil(len / 250))
 end
 
-C.On("BIG", function(sender, tag, id, seq, total, part)
-	if not tag or not id then return end
-	seq, total = tonumber(seq), tonumber(total)
-	if not seq or not total or seq < 1 or total < 1 then return end
-	local key = (sender or "") .. "\0" .. tag
-	local slot = bigIn[key]
-	-- a different id for the same tag means a newer transfer: start over rather
-	-- than interleaving two lists into one corrupt blob
-	if not slot or slot.id ~= id then
-		slot = { id = id, total = total, parts = {}, at = GetTime() or 0 }
-		bigIn[key] = slot
-	end
-	slot.parts[seq] = decField(part or "")
-	slot.at = GetTime() or 0
-	for i = 1, total do if slot.parts[i] == nil then return end end   -- still incomplete
-	bigIn[key] = nil
-	local fn = bigHandlers[tag]
+C.On("BIG", function(sender, tag, text)
+	local fn = tag and bigHandlers[tag]
 	if not fn then return end
-	local ok, err = pcall(fn, sender, table.concat(slot.parts))
+	local ok, err = pcall(fn, sender, text or "")
 	if not ok and Okanvil.Err then Okanvil:Err("Comms.OnBig " .. tostring(tag), err) end
 end)
-
--- Sweep abandoned transfers so a sender who logged out mid-series cannot pin
--- their partial payload in memory for the rest of the session.
-do
-	local sweep = CreateFrame("Frame")
-	local acc = 0
-	sweep:SetScript("OnUpdate", function(_, e)
-		acc = acc + e
-		if acc < 10 then return end
-		acc = 0
-		local now = GetTime() or 0
-		for k, v in pairs(bigIn) do
-			if now - (v.at or 0) > BIG_TIMEOUT then bigIn[k] = nil end
-		end
-	end)
-end
 
 -- ------------------------------------------------------------
 -- VERSION CHECK (RCLootCouncil-style). Ask the group OR the guild which Okanvil

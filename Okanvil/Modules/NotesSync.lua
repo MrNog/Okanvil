@@ -659,6 +659,17 @@ if Comms then
 			Okanvil:Print(("Notes updated from |cffffd200%s|r (%d %s)."):format(
 				who, n, n == 1 and "note" or "notes"))
 		end
+		-- Confirm, so the sender's "Waiting for N to confirm" is answered by the
+		-- addon itself. On the group channel, where the sender's tally listens.
+		Comms.Send("NOTEACK", tostring(N.Stamp()), tostring(n))
+	end)
+
+	-- The leader's "everyone report" button. Answer with what we hold; no
+	-- trust check, since the reply only states a fact about us.
+	Comms.On("NOTEWHO", function(who)
+		if Okanvil.ModuleActive and not Okanvil:ModuleActive("Okanvil-Notes") then return end
+		if who == (UnitName("player") or "") then return end
+		Comms.Send("NOTEACK", tostring(N.Stamp()), "0")
 	end)
 
 	-- Announce when the group changes: an officer joining is exactly when the

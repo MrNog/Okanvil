@@ -235,6 +235,20 @@ local function equippedFor(link)
 	return bestID, bestIlvl
 end
 
+-- Our Enchanting skill, or nil. Sent with every reply so the master looter's
+-- Disenchant list can put the raid's enchanters on top, highest skill first, the
+-- way RCLootCouncil's does. The skill line is matched by the localised name of
+-- the Enchanting spell, so it works on any client language.
+local ENCHANTING = GetSpellInfo and GetSpellInfo(7411)
+local function enchantSkill()
+	if not (ENCHANTING and GetNumSkillLines and GetSkillLineInfo) then return nil end
+	for i = 1, GetNumSkillLines() do
+		local name, header, _, rank = GetSkillLineInfo(i)
+		if not header and name == ENCHANTING then return rank end
+	end
+	return nil
+end
+
 local function buildReply()
 	if not current then return "" end
 	local parts = {}
@@ -250,6 +264,9 @@ local function buildReply()
 			-- distinction (its WAIT response, "candidate is selecting").
 			it.idx, it.answer or "wait", eqID or "", tostring(diff))
 	end
+	-- "E=<skill>": not an item, so a client that does not know it skips it.
+	local ench = enchantSkill()
+	if ench then parts[#parts + 1] = "E=" .. ench end
 	return table.concat(parts, SEP_ANS)
 end
 
@@ -285,6 +302,7 @@ local function sendReply()
 	-- Persist after every click, not just at the end: a raider who answers two
 	-- items and then disconnects has still told the council about those two.
 	saveRound()
+	C_.RememberRound(current.round, current.asker, body)
 end
 
 -- ------------------------------------------------------------
@@ -306,6 +324,32 @@ end
 -- meant a reload well after the raid restored a question about an item that had
 -- long since been handed out.
 local ROUND_TTL = 900
+
+-- ROUNDS THIS CLIENT HAS ALREADY ANSWERED, with the last reply sent for each.
+-- The asker re-broadcasts a round several times in case a packet was dropped.
+-- Once the frame has closed (everything answered) or a newer question replaced
+-- it, `current` no longer names that round -- so without this list the repeat
+-- looked like a brand-new question: the frame popped back open and "deciding..."
+-- went out for every item, wiping the answers off every board.
+--
+-- Stored in the account db so a /reload between the answer and the repeat
+-- does not forget it either.
+function C_.RememberRound(round, asker, body)
+	if not round then return end
+	local d = db()
+	d.pastRounds = d.pastRounds or {}
+	local now = time()
+	for r, p in pairs(d.pastRounds) do
+		if (now - (p.at or 0)) > ROUND_TTL then d.pastRounds[r] = nil end
+	end
+	d.pastRounds[round] = { asker = asker, body = body, at = now }
+end
+
+local function pastRound(round)
+	local p = round and db().pastRounds and db().pastRounds[round]
+	if p and (time() - (p.at or 0)) <= ROUND_TTL then return p end
+	return nil
+end
 
 -- Defined here but forward-declared above, so sendReply (which runs on every
 -- click, further up the file) calls THIS function and not a nil global. The same
@@ -769,7 +813,21 @@ if C then
 		-- Rebuilding would throw away answers already clicked and restart the
 		-- timer, so the repeat is answered from what we have and ignored.
 		if current and current.round == round then
+			-- A repeat of a round restored after a login is proof it is still open.
+			if current.restored then C_.ShowRestored(round) end
 			sendReply()
+			if C_.ResendVotes then C_.ResendVotes(round) end
+			return nil
+		end
+		-- A repeat of a round this client already answered and closed, or one a
+		-- newer question has replaced: send the same answers again and stay shut.
+		-- Treating it as new is what re-opened the frame and put "deciding..."
+		-- back over answers the council already had.
+		local past = pastRound(round)
+		if past then
+			if not C.Send("ANS", TOPIC, round, past.body) then
+				C.Reply(past.asker or sender, TOPIC, round, past.body)
+			end
 			if C_.ResendVotes then C_.ResendVotes(round) end
 			return nil
 		end
@@ -816,10 +874,13 @@ local COL_VOTE = 700     -- council votes: count, two names, the Vote button
 local BOARD_W  = 980
 
 -- "<idx>=<response>/<equippedID>/<diff>", with the two gear fields optional so an
--- older client (or one that could not read its own slot) still parses.
+-- older client (or one that could not read its own slot) still parses. An
+-- "E=<skill>" part is the raider's Enchanting skill, kept as out.ench.
 local function parseReply(payload)
 	local out = {}
 	for pair in tostring(payload or ""):gmatch("[^" .. SEP_ANS .. "]+") do
+		local ench = pair:match("^E=(%d+)$")
+		if ench then out.ench = tonumber(ench) end
 		local idx, body = pair:match("^(%d+)=(.+)$")
 		if idx then
 			local key, eq, diff = body:match("^([^/]+)/([^/]*)/([^/]*)$")
@@ -832,6 +893,19 @@ local function parseReply(payload)
 		end
 	end
 	return out
+end
+
+-- A "wait" never overwrites a real answer already on the board. Raiders cannot
+-- take an answer back (there is no button for it), so a later "deciding..." for
+-- an item they already answered is a stale or restarted client, not news.
+local function mergeReply(old, new)
+	if old then
+		for idx, a in pairs(new) do
+			local o = type(idx) == "number" and old[idx]
+			if o and a.key == "wait" and o.key ~= "wait" then new[idx] = o end
+		end
+	end
+	return new
 end
 
 -- ------------------------------------------------------------
@@ -957,6 +1031,46 @@ if C then
 end
 
 -- ------------------------------------------------------------
+-- IS THIS ROUND STILL OPEN?  Asked by a raider who logged back in with a saved
+-- round, before it puts the frame back on screen.
+--
+-- Wire: CQ <round> (raider -> asker, whisper), CQA <round> (asker -> raider).
+-- Only a live answer opens the frame; silence drops the saved round.
+-- ------------------------------------------------------------
+function C_.RoundIsLive(round)
+	local rec = round and C_.rounds[round]
+	return (rec and not rec.closed and rec == C_.current) and true or false
+end
+
+function C_.ShowRestored(round)
+	if not (current and current.round == round) then return end
+	current.restored = nil
+	local fr = ensureFrame()
+	fr._scrollTop = 1
+	C_.Repaint()
+	fr:Show()
+	Okanvil:Print("|cffe0b860Loot council:|r restored an open round from before the reload.")
+end
+
+-- The saved round was not confirmed in time: forget it without a word.
+function C_.DropRestored(round)
+	if not (current and current.round == round and current.restored) then return end
+	current = nil
+	db().openRound = nil
+end
+
+if C then
+	C.On("CQ", function(sender, round)
+		if sender and C_.RoundIsLive(round) then C.Whisper("CQA", sender, round) end
+	end)
+	C.On("CQA", function(sender, round)
+		if current and current.round == round and sender == current.asker then
+			C_.ShowRestored(round)
+		end
+	end)
+end
+
+-- ------------------------------------------------------------
 -- THE BOARD ON EVERY COUNCIL MEMBER.
 --
 -- The answers already go to the whole group, but only the client that asked had
@@ -990,7 +1104,7 @@ function C_.MirrorRound(asker, payload, round)
 	C.Adopt(TOPIC, round, {
 		timeout = 1800,
 		onReply = function(sender, body)
-			rec.replies[sender] = parseReply(body)
+			rec.replies[sender] = mergeReply(rec.replies[sender], parseReply(body))
 			if rec == C_.current then C_.RepaintBoard() end
 			C_.SaveAsk()
 		end,
@@ -1021,11 +1135,9 @@ function C_.Ask(links, boss)
 		return false
 	end
 
-	-- ITEM IDS, NOT LINKS. A full link is ~70 bytes, so three items blew past
-	-- C.Send's 240-byte cap and the round was refused -- which is why this used to
-	-- say "2 at a time". The id is all the receiver needs: it rebuilds the link
-	-- locally with WarmItem + GetItemInfo, exactly as the loot module already does
-	-- for its own drops. Twenty items now fit in one message.
+	-- ITEM IDS, NOT LINKS. A full link is ~70 bytes and the id is all the receiver
+	-- needs: it rebuilds the link locally with WarmItem + GetItemInfo, exactly as the
+	-- loot module already does for its own drops. The round stays one short message.
 	local ids = {}
 	for _, l in ipairs(links) do
 		local id = Okanvil.U.itemIDFromLink(l) or tonumber(l)
@@ -1063,7 +1175,7 @@ function C_.Ask(links, boss)
 		-- more, so this is only a backstop against a round nobody ever closes.
 		timeout = 1800,
 		onReply = function(sender, body)
-			rec.replies[sender] = parseReply(body)
+			rec.replies[sender] = mergeReply(rec.replies[sender], parseReply(body))
 			if C_.onReply then C_.onReply(rec) end
 			-- Repaint rather than print: the board IS the status, and a chat line
 			-- per click is unreadable once a real raid is answering.
@@ -1096,11 +1208,15 @@ function C_.Ask(links, boss)
 	-- not cost a raider their say. Answers carry the round id, so a re-send to
 	-- someone who already answered changes nothing -- their reply lands on the
 	-- same slot.
+	--
+	-- Only while this is still the round on the board. A raider holds ONE round
+	-- at a time, so re-asking a round the officer has already moved on from pops
+	-- that older question back over the newer one.
 	local function resend(n)
 		if n > 4 then return end
 		C.After(15 * n, function()
 			local r = C_.rounds[round]
-			if not r or r.closed then return end
+			if not r or r.closed or r ~= C_.current then return end
 			C.ReAsk(round, payload)
 			resend(n + 1)
 		end)
@@ -1256,34 +1372,133 @@ local function ensureBoard()
 		local ansRec = rec.replies[f._pick]
 		local ans = ansRec and ansRec[boardItem] and ansRec[boardItem].key
 
-		-- TEST MODE NEVER TOUCHES REAL LOOT. No master-loot give, no history
-		-- entry, no export -- it prints what it WOULD have done. This is the one
-		-- guard that matters: a real raid left in test mode must not silently
-		-- fail to hand loot out, and a test must not give an item away.
+		local pick, item = f._pick, boardItem
+		-- Remember it locally so the tab turns green and the board stops offering
+		-- the same item again.
+		local function given()
+			rec.awarded = rec.awarded or {}
+			rec.awarded[item] = pick
+			C_.RepaintBoard()
+		end
+
+		-- TEST MODE NEVER GIVES REAL LOOT. No master-loot give and nothing said in
+		-- chat -- a real raid left in test mode must not silently fail to hand
+		-- loot out, and a test must not give an item away. The test DROP is marked
+		-- as received, so the mini roll shows the result exactly as a real award
+		-- would; test drops are deleted when the test ends.
 		if C_.testMode then
 			Okanvil:Print(("|cffe0b860[TEST]|r would give %s to |cffffd200%s|r%s "
 				.. "-- |cff8a8d93nothing was given.|r"):format(
-				tostring(link), tostring(f._pick),
+				tostring(link), tostring(pick),
 				ans and (" (" .. ans .. ")") or ""))
-			rec.awarded = rec.awarded or {}
-			rec.awarded[boardItem] = f._pick
-			C_.RepaintBoard()
+			if L.NoteCouncilAward then L.NoteCouncilAward(id, pick, ans) end
+			if L.MarkWinner then L.MarkWinner(id, pick) end
+			if L.onLoot then L.onLoot() end
+			given()
 			return
 		end
 
 		-- Record HOW it was decided before the give, so the history and the site
 		-- export can tell "won a roll" from "the council gave it to them, and they
 		-- had answered BIS". AwardWinner writes receivedBy; this writes the reason.
-		if L.NoteCouncilAward then L.NoteCouncilAward(id, f._pick, ans) end
+		if L.NoteCouncilAward then L.NoteCouncilAward(id, pick, ans) end
 
-		L.AwardWinner(id, f._pick)
-		-- Remember it locally so the tab turns green and the board stops offering
-		-- the same item again.
-		rec.awarded = rec.awarded or {}
-		rec.awarded[boardItem] = f._pick
-		C_.RepaintBoard()
+		-- Marked only once the officer confirms: a Cancel on the confirm left the
+		-- board saying "given to" for an item nobody got.
+		L.AwardWinner(id, pick, nil, nil, nil, given)
 	end)
 	f.give = give
+
+	-- ---- Disenchant ------------------------------------------------------
+	-- Gives the item on screen to someone to disenchant: the history records it
+	-- as DE, not as a win, so it never counts against anyone's loot priority.
+	-- The list is the raid, enchanters first by skill (from their replies), then
+	-- everyone else -- the enchanter may be running no Okanvil at all.
+	local function inGroup()
+		local out = {}
+		if GetNumRaidMembers and GetNumRaidMembers() > 0 then
+			for i = 1, GetNumRaidMembers() do
+				local n = GetRaidRosterInfo(i)
+				if n then out[#out + 1] = n end
+			end
+		else
+			out[1] = UnitName("player")
+			for i = 1, (GetNumPartyMembers and GetNumPartyMembers() or 0) do
+				local n = UnitName("party" .. i)
+				if n then out[#out + 1] = n end
+			end
+		end
+		return out
+	end
+
+	local de = W.Button(f, "Disenchant")
+	de:SetSize(120, 26)
+	de:SetPoint("LEFT", give, "RIGHT", 8, 0)
+	de.listFn = function()
+		local rec = C_.current
+		local L = Okanvil.Loot
+		local function shown(n) return L and L.ClassColorName and L.ClassColorName(n) or n end
+		local ench, isEnch = {}, {}
+		for name, answers in pairs(rec and rec.replies or {}) do
+			if answers.ench then
+				ench[#ench + 1] = { name = name, skill = answers.ench }
+				isEnch[name] = true
+			end
+		end
+		table.sort(ench, function(a, b) return a.skill > b.skill end)
+		local items = {}
+		for _, e in ipairs(ench) do
+			items[#items + 1] = { text = shown(e.name) .. " |cff8a8d93" .. e.skill .. "|r", value = e.name }
+		end
+		if #ench == 0 then
+			items[#items + 1] = { text = "|cff8a8d93no enchanter answered|r", value = false }
+		end
+		local rest = {}
+		for _, n in ipairs(inGroup()) do
+			if not isEnch[n] then rest[#rest + 1] = n end
+		end
+		table.sort(rest)
+		if #rest > 0 then
+			items[#items + 1] = { text = "|cff8a8d93-- others --|r", value = false }
+			for _, n in ipairs(rest) do items[#items + 1] = { text = shown(n), value = n } end
+		end
+		return items
+	end
+	de.setFn = function(name)
+		if not name then return end
+		local rec = C_.current
+		if not rec then return end
+		local link = rec.items[boardItem]
+		local id = Okanvil.U.itemIDFromLink(link)
+		if not id or id == 0 then
+			Okanvil:Print("|cffff5555Council:|r cannot resolve that item.")
+			return
+		end
+		local item = boardItem
+		local function given()
+			rec.awarded = rec.awarded or {}
+			rec.awarded[item] = name .. " (DE)"
+			C_.RepaintBoard()
+		end
+		local L = Okanvil.Loot
+		if C_.testMode then
+			Okanvil:Print(("|cffe0b860[TEST]|r would give %s to |cffffd200%s|r to disenchant "
+				.. "-- |cff8a8d93nothing was given.|r"):format(tostring(link), name))
+			if L and L.MarkWinner then L.MarkWinner(id, name, true) end
+			if L and L.onLoot then L.onLoot() end
+			given()
+			return
+		end
+		if not (L and L.AwardWinner) then
+			Okanvil:Print("|cffff5555Council:|r the Loot module is not loaded.")
+			return
+		end
+		if L.NoteCouncilAward then L.NoteCouncilAward(id, name, nil) end
+		Okanvil:Trace("COUNCIL", ("disenchant %d -> %s (round %s)"):format(id, name, tostring(rec.round)))
+		L.AwardWinner(id, name, nil, nil, true, given)
+	end
+	de:SetScript("OnClick", function(s) if W.OpenMenu then W.OpenMenu(s) end end)
+	f.de = de
 
 	-- In place of Give on a board that cannot hand the item out.
 	local giveNote = W.Text(f, "Only the master looter gives the item. Your vote is a suggestion.",
@@ -1876,6 +2091,7 @@ function C_.RepaintBoard()
 	if canGive then f.give:Show(); f.giveNote:Hide() else f.give:Hide(); f.giveNote:Show() end
 
 	local awardedTo = rec.awarded and rec.awarded[boardItem]
+	if canGive and not awardedTo then f.de:Show() else f.de:Hide() end
 	if not canGive then
 		f._armed = false
 	elseif awardedTo then
@@ -2467,21 +2683,22 @@ local askNightF
 local function askCouncilNight(becomeML)
 	if not askNightF then
 		local f = CreateFrame("Frame", nil, UIParent)
-		f:SetSize(300, 110)
-		-- Under the Logs prompt (it sits at -120) so both fit when a raid
-		-- zone-in fires the two of them together.
-		f:SetPoint("TOP", 0, -210)
+		f:SetSize(320, 120)
+		-- The middle of the screen, clear of the Logs prompt at the top: a raid
+		-- zone-in fires both, and stacked there they read as one muddled box.
+		f:SetPoint("CENTER", 0, 60)
 		f:SetFrameStrata("FULLSCREEN_DIALOG")
 		f:SetToplevel(true)
 		Okanvil:Skin(f)
 
 		f.txt = W.Text(f, "", "body")
-		f.txt:SetPoint("TOPLEFT", 12, -12)
-		f.txt:SetPoint("TOPRIGHT", -12, -12)
+		f.txt:SetPoint("TOPLEFT", 14, -16)
+		f.txt:SetPoint("TOPRIGHT", -14, -16)
 		f.txt:SetJustifyH("CENTER")
+		if f.txt.SetSpacing then f.txt:SetSpacing(5) end
 
 		local yes = W.Button(f, "Yes", "primary")
-		yes:SetSize(132, 24); yes:SetPoint("BOTTOMLEFT", 12, 12)
+		yes:SetSize(140, 24); yes:SetPoint("BOTTOMLEFT", 14, 14)
 		yes:SetScript("OnClick", function()
 			f:Hide()
 			if f.becomeML then
@@ -2500,7 +2717,7 @@ local function askCouncilNight(becomeML)
 		end)
 
 		local no = W.Button(f, "No")
-		no:SetSize(132, 24); no:SetPoint("BOTTOMRIGHT", -12, 12)
+		no:SetSize(140, 24); no:SetPoint("BOTTOMRIGHT", -14, 14)
 		no:SetScript("OnClick", function()
 			f:Hide()
 			if f.becomeML then declinedLeadZone = currentZone() end
@@ -2513,6 +2730,9 @@ local function askCouncilNight(becomeML)
 		and ("No master looter yet.\nBecome |cff7cfc8amaster looter|r and run |cffe0b860loot council|r?")
 		or  ("You are the master looter.\nUse |cffe0b860loot council|r tonight?\n"
 			.. "|cff8a8d93Rolls keep working either way.|r"))
+	-- Tall enough for the text it was just given, plus the buttons under it.
+	local th = askNightF.txt:GetStringHeight() or 40
+	askNightF:SetHeight(16 + th + 18 + 24 + 14)
 	if PlaySound then PlaySound("igMainMenuOpen") end
 	askNightF:Show()
 end
@@ -2770,11 +2990,6 @@ do
 				return
 			end
 
-			-- Whatever was left on the clock when we went down, less the time we
-			-- were away -- so a reload cannot buy a raider another full timer.
-			local left = (saved.left or 0) - age
-			if left < 8 then left = 8 end
-
 			local items = {}
 			for i, it in ipairs(saved.items or {}) do
 				Okanvil:WarmItem(it.link)
@@ -2786,6 +3001,7 @@ do
 			current = {
 				round = saved.round, asker = saved.asker, boss = saved.boss,
 				items = items, na = saved.na,
+				restored = true,        -- hidden until the asker confirms (below)
 			}
 
 			-- Unanswered items still need an answer -> put the frame back. If the
@@ -2800,10 +3016,18 @@ do
 			end
 			if not pending then current = nil; d.openRound = nil; return end
 
-			local fr = ensureFrame()
-			C_.Repaint()
-			fr:Show()
-			Okanvil:Print("|cffe0b860Loot council:|r restored an open round from before the reload.")
+			-- ASK THE ASKER FIRST. While we were gone the officer may have awarded
+			-- the item, moved on to another round or reloaded out of it; the saved
+			-- round cannot tell. So the frame stays hidden until the asker confirms
+			-- the round is still the one on their board, and a round nobody
+			-- confirms is dropped instead of popping up on its own.
+			local round = saved.round
+			if saved.asker == me then
+				if C_.RoundIsLive(round) then C_.ShowRestored(round) else C_.DropRestored(round) end
+				return
+			end
+			C.Whisper("CQ", saved.asker, round)
+			C.After(6, function() C_.DropRestored(round) end)
 		end)
 	end)
 end
@@ -2871,7 +3095,7 @@ function C_.RestoreAsk()
 		C.Adopt(TOPIC, s.round, {
 			timeout = 1800,
 			onReply = function(sender, body)
-				rec.replies[sender] = parseReply(body)
+				rec.replies[sender] = mergeReply(rec.replies[sender], parseReply(body))
 				C_.RepaintBoard()
 				C_.SaveAsk()
 			end,

@@ -45,7 +45,7 @@ function Okanvil:BuildSettings()
 			  height = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) and 470 or 320,
 			  build = function(pg) Okanvil:Loot_BuildSettings(pg) end },
 			-- Two columns: the ready-check popup and the marks bar side by side.
-			{ key = "raid",    label = "Raid",       height = 300,
+			{ key = "raid",    label = "Raid",       height = 400,
 			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
 			-- Keyword auto-invite: three switches and a keyword list, set once --
 			-- configuration, not a page of its own.
@@ -308,9 +308,30 @@ function Okanvil:Settings_RaidTools(p)
 		step(24)
 	end
 
-	-- No COMBAT LOG block. Logging starts by itself at the first pull and the REC
-	-- timer on screen says when it is running, so the only switch here was one that
-	-- asked a question you always answered the same way -- it is off for good now.
+	-- The Combat Logs module has no page of its own, so its switches live here or
+	-- nowhere. Without them a saved "ask on entering" from an older version could
+	-- never be turned off, and nothing could stop the first pull starting a log.
+	local LDB = OkanvilLogs and OkanvilLogs.DB and OkanvilLogs.DB()
+	if LDB then
+		col = 2
+		step(14)
+		head("COMBAT LOG")
+		chk("Ask when entering a raid",
+			function() return LDB.askOnEnter and true or false end,
+			function(v) LDB.askOnEnter = v and true or false end)
+		hint("a Start log / No prompt on the raid zone-in; No = no log this raid")
+		chk("Start logging at the first pull",
+			function() return LDB.autoOnPull ~= false end,
+			function(v) LDB.autoOnPull = v and true or false end)
+		hint("off: the log only starts when you press Start (REC)")
+		chk("Lock the REC timer",
+			function() return LDB.recLocked and true or false end,
+			function(v)
+				LDB.recLocked = v and true or false
+				if OkanvilLogs.ApplyRecLock then OkanvilLogs.ApplyRecLock() end
+			end)
+		hint("click-through, so a mid-fight drag cannot move it")
+	end
 end
 
 -- ---- Version checker popup (RCLootCouncil-style) -------------------------

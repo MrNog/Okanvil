@@ -93,7 +93,8 @@ local RAIDS = {
 		"Blood Council", "Queen Lana'thel", "Valithria Dreamwalker",
 		"Sindragosa", "The Lich King",
 	} },
-	{ key = "toc", label = "ToC", zone = "Trial of the Crusader", bosses = {
+	{ key = "toc", label = "ToC", zone = "Trial of the Crusader",
+		altZone = "Trial of the Grand Crusader", bosses = {
 		"Northrend Beasts", "Lord Jaraxxus", "Faction Champions",
 		"Val'kyr Twins", "Anub'arak",
 	} },
@@ -472,6 +473,13 @@ function N.Current()
 			:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
 	end
 
+	-- {room:} says where the note runs; the aura has no use for it. The line it
+	-- sat on goes too, or the aura would count an empty first row.
+	if text:find("{room:", 1, true) then
+		text = ("\n" .. text):gsub("\n[ \t]*{room:[^}]*}[ \t]*\r?\n", "\n"):sub(2)
+		text = text:gsub("{room:[^}]*}", "")
+	end
+
 	return text
 end
 
@@ -526,10 +534,30 @@ function N.InNoteRoom()
 	-- with no room to vouch for it, the raid around it is the only thing left.
 	-- ONE_ROOM_RAIDS is keyed by zone name, so being in that zone is already
 	-- established by the time we get here.
+	--
+	-- The choice only counts in the raid it was written for. Vault of Archavon is
+	-- one room too, and a ToC note still selected from last night is not a plan
+	-- for Toravon: it has to belong to a raid whose zone this is.
 	if N.IsOneRoomRaid and N.IsOneRoomRaid() then
-		return (db and db.selected) ~= nil
+		local raid = db and db.selected and N.RaidOfBoss(N.BossOf(db.selected))
+		return raid ~= nil and N.InRaidZone(raid)
 	end
 	return false
+end
+
+-- The raid tab a boss is listed under, or nil for a note of your own.
+function N.RaidOfBoss(boss)
+	for _, raid in ipairs(RAIDS) do
+		for _, b in ipairs(raid.bosses) do
+			if b == boss then return raid end
+		end
+	end
+	return nil
+end
+
+function N.InRaidZone(raid)
+	local zone = GetZoneText()
+	return zone ~= nil and (zone == raid.zone or zone == raid.altZone)
 end
 
 -- Fired when the live note changes -- a different boss, or an edit to the one
@@ -558,9 +586,8 @@ end
 -- Which raid tab the page is on. Follows the zone until you press a tab.
 function N.ViewRaid()
 	if db and db.viewRaid then return db.viewRaid end
-	local zone = GetZoneText()
 	for _, raid in ipairs(RAIDS) do
-		if zone == raid.zone then return raid.key end
+		if N.InRaidZone(raid) then return raid.key end
 	end
 	return RAIDS[1].key
 end
@@ -634,15 +661,66 @@ local ONE_ROOM_RAIDS = {
 	["The Eye of Eternity"] = true,
 }
 
+-- ------------------------------------------------------------
+-- Rooms named in the note itself: {room:The Spire}
+--
+-- ZONE_NOTE ships with the addon, so correcting it meant sending every raider a
+-- new build. A room written into the note travels with the note, and notes
+-- already reach the raid through Send.
+--
+-- A boss whose note names any room uses ONLY the rooms it names: the shipped
+-- entries for that boss are dropped, which is how a room is taken away (the
+-- whole lower spire reads "The Spire" on some cores, so Marrowgar's note fired
+-- at the entrance). A room named by a note also outranks the shipped table's
+-- claim on it for another boss.
+--
+-- Rebuilt at most once a second: the aura asks InNoteRoom constantly, and a note
+-- edit a second late costs nothing.
+-- ------------------------------------------------------------
+local roomCache, roomCacheAt = nil, -1
+
+local function customRooms()
+	local now = GetTime()
+	if roomCache and now - roomCacheAt < 1 then return roomCache end
+	local rooms, owned = {}, {}
+	for key, text in pairs((db and db.notes) or {}) do
+		if type(text) == "string" and text:find("{room:", 1, true) then
+			local boss = N.BossOf(key)
+			for list in text:gmatch("{room:([^}]*)}") do
+				for room in list:gmatch("[^,]+") do
+					room = room:match("^%s*(.-)%s*$")
+					if room ~= "" then
+						rooms[room] = boss
+						owned[boss] = true
+					end
+				end
+			end
+		end
+	end
+	roomCache = { rooms = rooms, owned = owned }
+	roomCacheAt = now
+	return roomCache
+end
+
+-- The note a room belongs to: the note's own {room:} first, then the shipped table.
+local function noteForRoom(name)
+	if not name or name == "" then return nil end
+	local c = customRooms()
+	if c.rooms[name] then return c.rooms[name] end
+	local boss = ZONE_NOTE[name]
+	if boss and not c.owned[boss] then return boss end
+	return nil
+end
+
 -- The note for the room you are standing in, or nil outside a boss room.
 function N.NoteForHere()
-	local sub = GetSubZoneText()
 	-- Sized on the way out, so walking into a room on a 10 picks the 10-man note
 	-- and the same step on a 25 picks the 25. One lookup, one place.
-	if sub and sub ~= "" and ZONE_NOTE[sub] then return N.SizedName(ZONE_NOTE[sub]) end
+	local bySub = noteForRoom(GetSubZoneText())
+	if bySub then return N.SizedName(bySub) end
 	-- Halion's own zone reads through GetZoneText, not a subzone
-	local zone = GetZoneText()
-	if zone and ZONE_NOTE[zone] then return N.SizedName(ZONE_NOTE[zone]) end
+	local byZone = noteForRoom(GetZoneText())
+	if byZone then return N.SizedName(byZone) end
 	-- No subzone to ask: let the target answer instead.
 	local byTarget = N.NoteForTarget()
 	if byTarget then return N.SizedName(byTarget) end
@@ -802,6 +880,10 @@ local HELP_ROWS = {
 	{ "",               "star, circle, diamond, triangle" },
 	{ "",               "A line with no {time:} is plain text: markers," },
 	{ "",               "reminders, headers." },
+	{ "{room:The Spire}", "the room this note runs in (never shown)." },
+	{ "",               "Comma for several; replaces the built-in rooms" },
+	{ "",               "for this boss. {room:none} = no room at all." },
+	{ "",               "The room you stand in shows at the top." },
 }
 
 local HELP_EXAMPLE = "{time:0:58}Bone Storm 1 - Okanor {spell:64205}"

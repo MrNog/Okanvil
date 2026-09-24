@@ -65,7 +65,7 @@ function Okanvil:Settings_Modules(panel)
 	wrap.rows = {}
 	local function rebuild()
 		for _, r in ipairs(wrap.rows) do r:Hide() end
-		local items = Okanvil:ModuleItems()
+		local items = Okanvil:ModuleItems(true)
 		if wrap.empty then wrap.empty:SetText("") end
 
 		-- Starts at 0: the hint is outside the scroll frame now, so the rows no
@@ -113,11 +113,22 @@ function Okanvil:Settings_Modules(panel)
 				if r.toggle._paint then r.toggle._paint(false) end
 			end
 			paintToggle()
+			-- A module with no on/off (Invite) shows the Shortcut switch alone.
+			-- Rows are reused, so the button is re-anchored either way.
+			r.sc:ClearAllPoints()
+			if it.shortcutOnly then
+				r.toggle:Hide()
+				r.sc:SetPoint("RIGHT", -8, 0)
+			else
+				r.toggle:Show()
+				r.sc:SetPoint("RIGHT", r.toggle, "LEFT", -5, 0)
+			end
 
 			-- Only for a module that HAS a page on the strip. Guild draws no nav row
 			-- at all and Combat Logs lives inside Settings, so a Shortcut switch on
 			-- those rows was a button with nothing to show or hide.
-			local hasPanel = (Okanvil.PANEL_TITLE and Okanvil.PANEL_TITLE[name]) ~= nil
+			local hasPanel = it.shortcutOnly
+				or (Okanvil.PANEL_TITLE and Okanvil.PANEL_TITLE[name]) ~= nil
 			r.sc:SetShown(hasPanel)
 
 			local function paintSc()

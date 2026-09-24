@@ -20,6 +20,7 @@ local defaults = {
 	-- answer. (Kept as a field, not deleted: old saved variables still carry it.)
 	askOnEnter = false,
 	autoLog = false, -- legacy: silently auto-log on raid entry (used only if askOnEnter is off)
+	autoOnPull = true, -- start logging at the first raid pull (Settings > Raid)
 	recLocked = false, -- lock the REC timer (click-through, no drag)
 	rec = { point = "TOP", x = 0, y = -140 },
 	sessions = {}, -- persisted history of logging sessions (zone, start, stop, bosses)
@@ -219,10 +220,6 @@ end
 -- Modules/Bosses-Data.lua (loaded first via the .toc), so Logs and Loot agree on what
 -- a boss is and there is one place to add one.
 --
--- This replaced a hand-written local BOSS_IDS that was mis-keyed across ICC: it called
--- 37813 "Deathbringer Saurfang", but that id is the Alliance Gunship (real Saurfang is
--- 37215, which the list lacked). Kills still registered only because the NAME table
--- below caught them. Ids are now correct, and dungeon bosses are covered too.
 local BOSS_IDS = {}   -- [creatureID] = true
 local BOSSES   = {}   -- [name]       = true  (fallback when the GUID gives no id)
 do
@@ -243,9 +240,7 @@ local function npcID(guid)
 end
 
 -- Multi-NPC encounters: collapse their members into one line (by id or name).
--- Shared with Loot.lua via Modules/Bosses-Data.lua. The old local copy here also had
--- the ICC ids wrong (it put 37973 -- Lana'thel -- in the Blood Prince Council and left
--- Keleseth's 37955 out entirely).
+-- Shared with Loot.lua via Modules/Bosses-Data.lua.
 local GROUP = OkanvilBossGroups or {}
 
 -- add a boss to the current session (deduped). Shared by the combat-log death
@@ -324,6 +319,9 @@ local function askToLog(zone)
 		no:SetPoint("BOTTOMRIGHT", -12, 12)
 		no:SetScript("OnClick", function()
 			askLogF:Hide()
+			-- No means this raid, pulls included: without this the first pull's
+			-- safety net started the log you had just declined.
+			OkanvilLogs._suppressAuto = true
 		end)
 	end
 	askLogF.txt:SetText("Log this instance?\n|cffaaaaaa" .. (zone or "") .. "|r")
@@ -823,7 +821,8 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 				if not LoggingCombat() then LoggingCombat(true) end -- keep an open session truly ON
 			else
 				local inInstance, itype = IsInInstance()
-				if inInstance and itype == "raid" and not OkanvilLogs._suppressAuto then
+				if inInstance and itype == "raid" and not OkanvilLogs._suppressAuto
+					and db.autoOnPull ~= false then
 					OkanvilLogs.SetLogging(true) -- safety net: never miss a raid boss again
 				end
 			end

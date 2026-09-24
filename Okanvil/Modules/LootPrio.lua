@@ -25,6 +25,7 @@ local function db()
 	if not migrated then
 		migrated = true
 		if P.Migrate then P.Migrate(d) end
+		d.testChannel = nil      -- a removed "post to /say" test switch
 	end
 	return d
 end
@@ -307,18 +308,9 @@ function P.Announce(link, itemName)
 	return true
 end
 
--- Where Send posts. OFFICER in normal use; SAY while testing, so the format can be
--- checked without putting a dozen test lines in front of the other officers.
+-- Where Send posts: officer chat, always. The prio is officer business.
 function P.Channel()
-	return db().testChannel and "SAY" or "OFFICER"
-end
-
-function P.ToggleTest()
-	local d = db()
-	d.testChannel = (not d.testChannel) or nil
-	Okanvil:Print("Loot priority: Send now posts to |cffffd200"
-		.. (d.testChannel and "SAY (testing)" or "OFFICER") .. "|r.")
-	return d.testChannel and true or false
+	return "OFFICER"
 end
 
 -- ------------------------------------------------------------

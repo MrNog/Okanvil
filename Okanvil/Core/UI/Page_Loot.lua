@@ -251,13 +251,29 @@ local function buildMessages(p, y0)
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
 		local eb = W.EditBox(p, function(t) setFn(t) end)
 		eb:SetSize(360, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(getFn())
+		return eb
 	end
 	-- MS and OS only. The Free button is gone from the mini roll (four buttons in
 	-- a 270px row were unreadable), so a box to word a message nothing sends was
 	-- a setting for a feature that no longer exists. The "free" mode itself stays
 	-- as StartRoll's fallback, and its default wording with it.
 	row("MS",      y0 - 40, function() return L.RollMsg("ms") end,   function(t) L.SetRollMsg("ms", t) end)
-	row("OS",      y0 - 70, function() return L.RollMsg("os") end,   function(t) L.SetRollMsg("os", t) end)
+	local osBox = row("OS", y0 - 70, function() return L.RollMsg("os") end, function(t) L.SetRollMsg("os", t) end)
+	-- ROLL TIMER: seconds before an MS/OS roll ends itself. Beside the templates
+	-- it applies to; the loot council has no clock and is not affected.
+	if L.RollTimer then
+		local tl = W.Text(p, "Timer", "label")
+		tl:SetPoint("LEFT", osBox, "RIGHT", 14, 0)
+		local tb = W.EditBox(p, function(t)
+			L.SetRollTimer(t)
+			if p._timerBox then p._timerBox.edit:SetText(tostring(L.RollTimer())) end
+		end)
+		tb:SetSize(40, 24); tb:SetPoint("LEFT", tl, "RIGHT", 6, 0)
+		tb.edit:SetText(tostring(L.RollTimer()))
+		p._timerBox = tb
+		local tn = W.Text(p, "s  (0 = off)", "note", "dim")
+		tn:SetPoint("LEFT", tb, "RIGHT", 6, 0)
+	end
 	-- ON AWARD: the switch and the message it sends, as one control. They used to
 	-- be on separate pages -- the toggle under Collectors, the text here -- so
 	-- neither half said anything about the other, and the box sat empty with the

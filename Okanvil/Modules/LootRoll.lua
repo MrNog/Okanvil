@@ -1128,8 +1128,16 @@ function RM.Refresh()
 				local mlName = L.MasterLooterName and L.MasterLooterName()
 				-- heldBy is set when the ML picks an item up to hand out later; the
 				-- receivedBy test stays for rows captured before that field existed.
-				local heldByML = (d.heldBy ~= nil and d.heldBy ~= "")
-					or (mlName ~= nil and d.receivedBy == mlName)
+				-- An item AWARDED to the ML (won by him, or given to him to
+				-- disenchant) is his, not one he is still holding for someone.
+				--
+				-- Only the ML's own hold is blank. Anyone else holding it was handed it
+				-- off the corpse, and on a raider's client that give arrives as nothing
+				-- more than "X receives loot" -- the award confirm is the ML's alone -- so
+				-- hiding the holder left every handed-out item looking unclaimed.
+				local holder = (not d.awarded) and d.heldBy ~= nil and d.heldBy ~= "" and d.heldBy or nil
+				local heldByML = not d.awarded and ((holder ~= nil and holder == mlName)
+					or (mlName ~= nil and d.receivedBy == mlName))
 
 				-- "passed" only ever means NOBODY has it, so a known owner outranks it:
 				-- an item everyone passed on can still be handed out by the master
@@ -1137,13 +1145,18 @@ function RM.Refresh()
 				local owned = d.receivedBy and d.receivedBy ~= "" and not heldByML
 
 				local sub
-				if pendId and pendId == d.id and pendWho and not d.receivedBy then
+				if d.de then
+					sub = "|cff8a5ad9Disenchanted|r"
+						.. (owned and (" |cff8a8d93by " .. d.receivedBy .. "|r") or "")
+				elseif pendId and pendId == d.id and pendWho and not d.receivedBy then
 					sub = "|cff5e6166" .. pendWho .. " (giving...)|r"
 				elseif wn then
 					sub = classColorCode(wn.player) .. wn.player .. "|r"
 						.. " |cff8a8d93" .. (wn.roll or 0) .. (wn.kind == "os" and " os" or "") .. "|r"
 				elseif owned then
 					sub = classColorCode(d.receivedBy) .. d.receivedBy .. "|r"
+				elseif holder and not heldByML then
+					sub = classColorCode(holder) .. holder .. "|r"
 				elseif d.passed then
 					sub = "|cff8a8d93passed|r"
 				else

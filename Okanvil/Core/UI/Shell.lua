@@ -345,7 +345,11 @@ Okanvil.NATIVE = {
 	-- own on/off on the Invite tab of Settings (off by default), and the rest is
 	-- the engine the snapshot Invite buttons send through. `core` keeps it out of
 	-- the Modules list and the first-run setup; noNav keeps it out of the menu.
+	-- `shortcut` = no on/off switch, but it has an icon on the marks bar, so the
+	-- Modules list still shows a row for it with the Shortcut button alone.
 	{ key = "__invite", title = "Invite", icon = Okanvil.ICONS.invite, noNav = true, core = true,
+	  shortcut = true,
+	  scDesc = "Mass invite, saved lists and comp import. Always on; its switches are in Settings > Invite.",
 	  desc = "Auto-invite on a keyword, plus the login toast. Off = neither fires. "
 	      .. "The inv buttons on Home stay either way -- those are manual invites." },
 	-- `core` = not a module you switch: the guild roster IS Home, and turning it
@@ -372,11 +376,17 @@ Okanvil.NATIVE = {
 -- item = { key, title, icon, desc } -- the key is what IsModuleEnabled and the
 -- nav use. `core` modules have no switch: they are part of a page rather than a
 -- feature you turn on, and listing them only offers a way to break it.
-function Okanvil:ModuleItems()
+-- withShortcuts: also list the `core` modules that own a marks-bar icon, flagged
+-- shortcutOnly -- the Modules page offers them the Shortcut switch and nothing
+-- else. The first-run setup leaves it off: there is nothing there to enable.
+function Okanvil:ModuleItems(withShortcuts)
 	local items = {}
 	for _, m in ipairs(self.NATIVE) do
 		if not m.core then
 			items[#items + 1] = { key = m.key, title = m.title, icon = m.icon, desc = m.desc }
+		elseif withShortcuts and m.shortcut then
+			items[#items + 1] = { key = m.key, title = m.title, icon = m.icon,
+				desc = m.scDesc or m.desc, shortcutOnly = true }
 		end
 	end
 	local names = {}
