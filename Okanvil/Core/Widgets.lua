@@ -216,6 +216,15 @@ function W.Size(size)
 	return size
 end
 
+-- Text that sits in a fixed-size box (a chip, a badge, a dropdown): it keeps
+-- its size when Settings > Text size grows the page text, like button labels.
+function W.FixedText(parent, text, size, role)
+	local fs = W.Text(parent, text, size, role)
+	fs._okFixed = true
+	if fs._okSize then fs:SetFont(Okanvil:Font(), fs._okSize) end
+	return fs
+end
+
 function W.Text(parent, text, size, role)
 	local fs = Okanvil:NewText(parent, "OVERLAY")
 	size = W.Size(size)
@@ -788,7 +797,7 @@ function W.DropDown(parent, listFn, getFn, setFn, preview)
 	Okanvil:Skin(dd, "input")
 	-- fixed size (12): the dropdown box is a fixed height, so its text must not
 	-- scale with the global body-font slider (it would clip / overflow).
-	local txt = W.Text(dd, nil, "body")
+	local txt = W.FixedText(dd, nil, "body")
 	txt:SetPoint("LEFT", 6, 0); txt:SetPoint("RIGHT", -16, 0); txt:SetJustifyH("LEFT")
 	dd.textFS = txt
 	-- WoW's small menu arrow turned to point down (8-point SetTexCoord -- 3.3.5a

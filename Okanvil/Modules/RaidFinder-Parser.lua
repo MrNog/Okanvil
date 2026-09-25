@@ -364,7 +364,8 @@ end
 --   Returns the roles found + message with role words -> T_ROLE.
 -- ------------------------------------------------------------
 local role_words = {
-	tank   = { "%f[%w]tanks?%f[%W]", "%f[%w][mo]t%f[%W]", "%f[%w]bear%f[%W]", "prot%f[%W]", "protection" },
+	tank   = { "%f[%w]tanks?%f[%W]", "%f[%w][mo]t%f[%W]", "%f[%w]bear%f[%W]", "prot%f[%W]", "protection",
+	           "%f[%w]ppal%a*" },                                  -- ppal/ppala/ppally = prot paladin
 	healer = { "%f[%w]heals?%f[%W]", "%f[%w]healers?%f[%W]",
 	           "%f[%w]hpal%a*", "%f[%w]hpaly?%a*", "holy%s?pala",   -- hpala/hpaladin/hpally
 	           "%f[%w]rdru?id%f[%W]", "%f[%w]rsham%f[%W]", "%f[%w]tree%f[%W]",
@@ -412,12 +413,25 @@ local function roleOfWord(w)
 	return nil
 end
 
+-- Spec and class words that arrive glued to a count ("1ppal", "2hpal", "1rsham").
+-- Matched as a prefix of the glued word, so plurals and spellings follow.
+local GLUED_SPECS = { "ppal", "hpal", "ptal", "prot", "rsham", "rdru", "disc", "hpriest",
+	"spri", "boom", "bdk", "ret", "fury", "feral", "mage", "lock", "hunt", "rog", "ele",
+	"tree", "bear", "kitty" }
+local function gluedSpec(w)
+	w = w:lower()
+	for _, pre in ipairs(GLUED_SPECS) do
+		if w:sub(1, #pre) == pre then return true end
+	end
+	return false
+end
+
 local function lex_roles(msg)
-	-- A count glued to the role -- "3heals", "7dps", "2tanks" -- has no word
-	-- boundary between the digit and the letter, so the role patterns below never
-	-- saw it. Split only those: "5k" is a gearscore and stays as it is.
+	-- A count glued to the role or spec -- "3heals", "7dps", "1ppal" -- has no word
+	-- boundary between the digit and the letter, so the patterns below never saw
+	-- it. Split only those: "5k" is a gearscore and "25hc" a raid, and both stay.
 	msg = msg:gsub("(%d+)(%a+)", function(n, w)
-		if roleOfWord(w) then return n .. " " .. w end
+		if roleOfWord(w) or gluedSpec(w) then return n .. " " .. w end
 	end)
 
 	-- Roles the message says are already FULL. Strip the phrase so the role word
@@ -484,7 +498,7 @@ local class_specs = {
 	{ role="dps", class="WARRIOR",label="Fury Warrior",  pats={ "%f[%w]fury%a*" } },
 	{ role="dps", class="DRUID",  label="Feral Cat",     pats={ "%f[%w]kitty%f[%W]", "%f[%w]feral%a*" } },
 	-- tank specs
-	{ role="tank", class="PALADIN",    label="Prot Paladin", pats={ "prot%s?pala%a*", "%f[%w]ptal%a*" } },
+	{ role="tank", class="PALADIN",    label="Prot Paladin", pats={ "prot%s?pala%a*", "%f[%w]ptal%a*", "%f[%w]ppal%a*", "%dppal%a*" } },
 	{ role="tank", class="WARRIOR",    label="Prot Warrior", pats={ "prot%s?war%a*" } },
 	{ role="tank", class="DRUID",      label="Bear Tank",    pats={ "%f[%w]bear%a*", "feral%s?tank" } },
 	{ role="tank", class="DEATHKNIGHT",label="Blood DK",     pats={ "blood%s?dk", "%f[%w]bdk%f[%W]" } },

@@ -69,9 +69,9 @@ function Okanvil:BuildSettings()
 	local bIcon = badge:CreateTexture(nil, "ARTWORK")
 	bIcon:SetSize(30, 30); bIcon:SetPoint("LEFT", 12, 0)
 	bIcon:SetTexture(Okanvil.BRAND_ICON); bIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local bName = W.Text(badge, "Okanvil", "head", "accent"); bName:SetPoint("LEFT", bIcon, "RIGHT", 10, 8); bName:Color(1, 0.82, 0)
-	local bVer = W.Text(badge, "v" .. (self.version or "1.0"), "note", "dim"); bVer:SetPoint("LEFT", bName, "RIGHT", 5, 0)
-	local bBy = W.Text(badge, "forged by |cffe0b860Okanor|r", "note", "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
+	local bName = W.FixedText(badge, "Okanvil", "head", "accent"); bName:SetPoint("LEFT", bIcon, "RIGHT", 10, 8); bName:Color(1, 0.82, 0)
+	local bVer = W.FixedText(badge, "v" .. (self.version or "1.0"), "note", "dim"); bVer:SetPoint("LEFT", bName, "RIGHT", 5, 0)
+	local bBy = W.FixedText(badge, "forged by |cffe0b860Okanor|r", "note", "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
 	-- size the badge to fit its contents (icon + the wider of the two text rows)
 	local wName = (bName:GetStringWidth() or 60) + (bVer:GetStringWidth() or 20) + 5
 	local wBy = bBy:GetStringWidth() or 80
@@ -143,7 +143,7 @@ function Okanvil:Settings_General(p)
 
 	-- Text only; buttons keep their size. Applied on release.
 	y1 = y1 - SLIDER_TOP
-	W.Slider(p, "Text size", 0.85, 1.3, 0.05, function() return db.textScale or 1 end,
+	W.Slider(p, "Text size", 0.85, 1.5, 0.05, function() return db.textScale or 1 end,
 		function(v) db.textScale = v; Okanvil:ApplyFonts() end, true):SetPoint("TOPLEFT", C1, y1)
 	y1 = y1 - 22
 	hint("page text only -- some lists fit best after a /reload", 1)

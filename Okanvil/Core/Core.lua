@@ -231,7 +231,7 @@ end
 -- label can never outgrow the box it sits in.
 function Okanvil:TextScale()
 	local v = self.db and tonumber(self.db.textScale) or 1
-	return math.max(0.8, math.min(1.4, v))
+	return math.max(0.8, math.min(1.5, v))
 end
 function Okanvil:Font()
 	local db = self.db
