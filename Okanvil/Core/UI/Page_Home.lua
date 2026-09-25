@@ -1005,8 +1005,16 @@ function Okanvil:BuildHome()
 		end
 	end)
 
+	local onShow
 	wrap:SetScript("OnShow", function()
+		local ok, err = pcall(onShow)
+		if not ok then Okanvil:Err("Home OnShow", err); Okanvil:Trace("UI", "Home OnShow failed: " .. tostring(err)) end
+	end)
+	onShow = function()
 		if GuildRoster then GuildRoster() end   -- async; GUILD_ROSTER_UPDATE fires when ready
+		-- Width before anything is laid out: the page starts 10px wide, and building
+		-- the rows against that gave them negative widths.
+		wrap.relayout()
 		-- The page takes the VIEW's height, never a fixed minimum. It used to floor
 		-- at 640, which is taller than the window: the guild card is anchored to this
 		-- frame's BOTTOM, so it stretched past the view and its own scrollbar range
@@ -1027,7 +1035,7 @@ function Okanvil:BuildHome()
 		end
 		if wrap.rebuildSnaps and scard:IsShown() then wrap.rebuildSnaps() end
 		wrap.relayout()
-	end)
+	end
 	return wrap
 end
 

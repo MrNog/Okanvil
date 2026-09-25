@@ -788,7 +788,13 @@ local function newScrollPanel()
 	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 24) end)
 
 	local function relayout()
-		child:SetWidth(sf:GetWidth())
+		-- Right after the window opens the scrollframe can still measure 0 wide.
+		-- Sizing the child to that clipped the whole page (a blank Home until a
+		-- second click) and gave every row anchored to its right edge a negative
+		-- width, so fall back to the wrap's own width and never go below 1.
+		local w = sf:GetWidth() or 0
+		if w < 50 then w = (wrap:GetWidth() or 0) - 12 end
+		if w >= 1 then child:SetWidth(w) end
 		local maxS = math.max(0, child:GetHeight() - sf:GetHeight())
 		sb:SetMinMaxValues(0, maxS)
 		sb:SetShown(maxS > 0)
@@ -826,7 +832,10 @@ function Okanvil:ShowPanel(key)
 
 	local entry = self.panels[key]
 	if not entry then
-		if key == HOME then entry = self:BuildHome()
+		self:Trace("UI", "build " .. tostring(key))
+		if key == HOME then
+			local ok, res = pcall(self.BuildHome, self)
+			if ok then entry = res else self:Err("BuildHome", res); self:Trace("UI", "BuildHome failed: " .. tostring(res)) end
 		elseif key == LOOT then entry = self:BuildLoot()
 		elseif key == SETTINGS then entry = self:BuildSettings()
 		elseif key == MODULES then entry = self:BuildModules()
@@ -846,25 +855,55 @@ function Okanvil:ShowPanel(key)
 	end
 
 	for _, e in pairs(self.panels) do if e.Hide then e:Hide() end end
+	-- Current BEFORE the page shows: its OnShow can invalidate it (Home's roster
+	-- request), and InvalidatePanel only rebuilds the page that is current -- set
+	-- after, the page was hidden and never rebuilt, leaving a blank window.
+	self._current = key
 	if entry then
 		entry:Show()
 		if entry.relayout then entry.relayout() end
+		local sf, ch = entry.scroll, entry.child
+		self:Trace("UI", ("page %s win %dx%d wrap %d sf %d child %dx%d"):format(tostring(key),
+			self.win and self.win:GetWidth() or -1, self.win and self.win:GetHeight() or -1,
+			entry:GetWidth() or -1, sf and sf:GetWidth() or -1,
+			ch and ch:GetWidth() or -1, ch and ch:GetHeight() or -1))
 		local plug = self.entries[key]
 		if plug and plug.refresh then plug.refresh() end
 	end
-	self._current = key
 end
 
 -- Drop a built page so the next ShowPanel rebuilds it. Pages are built once and
 -- cached, which is right for a layout but wrong when what the page may SHOW has
 -- changed underneath it.
+--
+-- The rebuild waits for the next frame. Home's OnShow asks for the guild roster,
+-- the client answers at once with GUILD_ROSTER_UPDATE, and the prio watcher
+-- below invalidates Home -- so a rebuild done on the spot tore the page down in
+-- the middle of its own Show: several Homes built inside each other, the one
+-- left on screen already cut loose (a blank page), and the client's Show walk
+-- left holding a frame taken out of the window (ERROR #132 in
+-- Okanvil_Window:Show). The old page is only hidden, never re-parented, for the
+-- same reason.
+local rebuildFrame = CreateFrame("Frame")
+rebuildFrame:Hide()
+rebuildFrame:SetScript("OnUpdate", function(self)
+	self:Hide()
+	local key = self.key
+	self.key = nil
+	if key and Okanvil._current == key and Okanvil.win and Okanvil.win:IsShown() then
+		Okanvil:ShowPanel(key)
+	end
+end)
+
 function Okanvil:InvalidatePanel(key)
 	local e = self.panels[key]
 	if not e then return end
 	if e.Hide then e:Hide() end
-	if e.SetParent then e:SetParent(nil) end
 	self.panels[key] = nil
-	if self._current == key then self:ShowPanel(key) end
+	if self._current == key then
+		rebuildFrame.key = key
+		rebuildFrame:Show()
+	end
 end
 
 -- The guild roster arrives asynchronously, and the first GuildRoster() after
@@ -876,7 +915,26 @@ do
 	local gr = CreateFrame("Frame")
 	gr:RegisterEvent("GUILD_ROSTER_UPDATE")
 	gr:RegisterEvent("PLAYER_GUILD_UPDATE")
-	gr:SetScript("OnEvent", Okanvil:CombatSafe("shell.prioGate", function()
+	-- The answer has to HOLD before pages are rebuilt. Home asks for the full
+	-- roster every time it opens, and while that roster is still arriving the rank
+	-- check reads "not an officer" and then "officer" again -- acting on each
+	-- flicker threw Home away on every visit.
+	local SETTLE = 2
+	local settle = CreateFrame("Frame")
+	settle:Hide()
+	local check
+	settle:SetScript("OnUpdate", function(self, el)
+		self.t = (self.t or 0) + el
+		if self.t < SETTLE then return end
+		self:Hide()
+		check()
+	end)
+	gr:SetScript("OnEvent", function()
+		if Okanvil.rosterBusy then return end   -- our own roster walk, not news
+		settle.t = 0
+		settle:Show()
+	end)
+	check = Okanvil:CombatSafe("shell.prioGate", function()
 		if not Okanvil.U or not Okanvil.U.canSeePrio then return end
 		local now = Okanvil.U.canSeePrio() and true or false
 		-- First answer: nothing built yet, except the nav -- drawn at login before
@@ -895,7 +953,7 @@ do
 			Okanvil:InvalidatePanel(HOME)                             -- officer-only exports
 			if Okanvil.RefreshNav then Okanvil:RefreshNav() end   -- council page follows rank
 		end
-	end))
+	end)
 end
 
 -- ------------------------------------------------------------

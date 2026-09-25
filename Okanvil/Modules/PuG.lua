@@ -48,6 +48,8 @@ local defaults = {
 	                         -- board. Persisted so a /reload mid-forming keeps the comp.
 	assignSpec = {},         -- [name] = the spec they had when you placed them, so a
 	                         -- respec can expire the placement instead of outliving it
+	assignOver = {},         -- [name] = true: placed by hand while their spec was known,
+	                         -- so it stands even where the spec says another role
 	autoGroup = true,        -- seat joiners who land outside the raid's groups
 	wantRole = "tank",       -- which role's classes the Want row is showing right now
 	classRun = false,        -- VoA-style "one of each class" instead of role targets
@@ -237,12 +239,17 @@ function M.Assign(name, role)
 	if not name then return end
 	db.assign[name] = role
 	db.assignSpec = db.assignSpec or {}
+	db.assignOver = db.assignOver or {}
 	if role == nil then
 		db.assignSpec[name] = nil
+		db.assignOver[name] = nil
 	else
 		local I = Okanvil.Inspect
 		local spec = I and I.Get and select(1, I.Get(name))
 		db.assignSpec[name] = spec or ""   -- "" = placed before we knew a spec
+		-- Placed with the spec in front of you: a holy priest dragged to Ranged is
+		-- going shadow on their second spec, not a guess for the inspect to correct.
+		db.assignOver[name] = spec and true or nil
 	end
 end
 
@@ -254,9 +261,13 @@ function M.AssignedRole(name)
 	if not role then return nil end
 
 	db.assignSpec = db.assignSpec or {}
+	db.assignOver = db.assignOver or {}
 	local placedAt = db.assignSpec[name]
 	local I = Okanvil.Inspect
 	local now = I and I.Get and select(1, I.Get(name))
+
+	-- A move made knowing this very spec is the leader's call: keep it.
+	if db.assignOver[name] and now and now == placedAt then return role end
 
 	-- No remembered spec: the placement was made before this player had been
 	-- inspected. Adopting the spec blindly kept the placement even when the read
@@ -282,6 +293,7 @@ function M.AssignedRole(name)
 		if role ~= inspectRole then
 			db.assign[name] = nil
 			db.assignSpec[name] = nil
+			db.assignOver[name] = nil
 			return nil
 		end
 	elseif inspectRole == "dps" then
@@ -292,6 +304,7 @@ function M.AssignedRole(name)
 		if role == "tank" or role == "healer" then
 			db.assign[name] = nil
 			db.assignSpec[name] = nil
+			db.assignOver[name] = nil
 			return nil
 		end
 	end
@@ -306,6 +319,7 @@ function M.AssignedRole(name)
 		-- They respecced. Forget the placement and let the spec speak.
 		db.assign[name] = nil
 		db.assignSpec[name] = nil
+		db.assignOver[name] = nil
 		return nil
 	end
 	return role
@@ -744,6 +758,17 @@ end
 -- Migration: wantClasses used to be one flat set shared by every role. An old
 -- profile is recognised by having class tokens at the top level, and is moved
 -- under whichever role was selected at the time.
+-- What each role column offers under "Ask for": only what can fill that role,
+-- and the SPEC where the class alone would say too little (a holy paladin, not
+-- any paladin, for a heal spot). The line reads the same list, so a pick saved
+-- under a chip the column no longer offers is never said out loud.
+M.ASKS = {
+	tank   = { "DEATHKNIGHT_TANK", "WARRIOR_PROT", "PALADIN_PROT", "DRUID_BEAR" },
+	healer = { "PALADIN_HOLY", "PRIEST_DISC", "PRIEST_HOLY", "SHAMAN_RESTO", "DRUID_RESTO" },
+	melee  = { "DEATHKNIGHT", "WARRIOR", "ROGUE", "PALADIN", "SHAMAN_ENH", "DRUID" },
+	ranged = { "MAGE", "WARLOCK", "HUNTER", "PRIEST", "SHAMAN_ELE", "DRUID_BALANCE" },
+}
+
 local function rolePicks(role)
 	role = (role and role ~= "" and role) or "tank"
 	db.wantClasses = db.wantClasses or {}
@@ -769,12 +794,18 @@ M.RolePicks = rolePicks
 -- first is how it gets said out loud.
 local function wantText(role)
 	local picks = rolePicks(role)
+	local offered
+	if M.ASKS[role] then
+		offered = {}
+		for _, tok in ipairs(M.ASKS[role]) do offered[tok] = true end
+	end
+	local function asked(tok) return picks[tok] and (not offered or offered[tok]) end
 	local want = {}
 	for _, s in ipairs(OkanvilClassSpecs or {}) do
-		if picks[s.token] then want[#want + 1] = s.short end
+		if asked(s.token) then want[#want + 1] = s.short end
 	end
 	for _, c in ipairs(OkanvilClasses or {}) do
-		if picks[c.token] then want[#want + 1] = c.short end
+		if asked(c.token) then want[#want + 1] = c.short end
 	end
 	return table.concat(want, "/")
 end

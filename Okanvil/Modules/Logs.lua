@@ -325,8 +325,35 @@ local function askToLog(zone)
 		end)
 	end
 	askLogF.txt:SetText("Log this instance?\n|cffaaaaaa" .. (zone or "") .. "|r")
+	-- The box grows with the text: at a larger Text size two lines no longer fit
+	-- 76px and the zone name ran under the buttons.
+	askLogF:SetHeight(math.max(76, 12 + (askLogF.txt:GetStringHeight() or 30) + 10 + 24 + 12))
 	PlaySound("UI_BnetToast")
 	askLogF:Show()
+end
+
+-- Right after a loading screen IsInInstance() can still describe the zone you
+-- just left, so leaving a raid for Dalaran asked to log Dalaran. The question
+-- waits until the zone has settled, and asks only if we are still in a raid.
+local ASK_SETTLE = 2
+local askWait = CreateFrame("Frame")
+askWait:Hide()
+askWait:SetScript("OnUpdate", function(self, el)
+	self.t = (self.t or 0) + el
+	if self.t < ASK_SETTLE then return end
+	self:Hide()
+	local inInstance, itype = IsInInstance()
+	if not (inInstance and itype == "raid") or LoggingCombat() or db._cur then return end
+	local zone = GetRealZoneText()
+	if not zone or zone == "" then zone = GetZoneText() end
+	if zone ~= askedZone then
+		askedZone = zone
+		askToLog(zone)
+	end
+end)
+local function askSoon()
+	askWait.t = 0
+	askWait:Show()
 end
 
 -- ------------------------------------------------------------
@@ -799,18 +826,14 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 			-- No active session and we just entered a RAID: ask once per zone. We only
 			-- prompt for raids -- 5-man dungeon combat logs are rarely wanted, so they
 			-- never nag (start those by hand with the Combat Logs page if needed).
-			local zone = GetRealZoneText()
-			if not zone or zone == "" then
-				zone = GetZoneText()
-			end
-			if db.askOnEnter and zone ~= askedZone then
-				askedZone = zone
-				askToLog(zone)
+			if db.askOnEnter then
+				askSoon()
 			elseif db.autoLog then
 				OkanvilLogs.SetLogging(true) -- legacy silent auto-log (askOnEnter off)
 			end
 		elseif not inInstance then
 			askedZone = nil -- left the instance -> allow asking again on next entry
+			if askLogF then askLogF:Hide() end -- a question about the raid we just left
 			OkanvilLogs._suppressAuto = nil -- left the raid -> auto-log may kick in again next time
 		end
 	elseif event == "PLAYER_REGEN_DISABLED" then

@@ -202,12 +202,7 @@ local COLS = { "tank", "healer", "melee", "ranged" }
 -- and the SPEC where the class alone would say too little (a holy paladin, not
 -- any paladin, for a heal spot). Tokens are OkanvilClassSpecs / OkanvilClasses
 -- tokens, so the picks feed the "(bdk/prot warr)" part of the line unchanged.
-local ASKS = {
-	tank   = { "DEATHKNIGHT_TANK", "WARRIOR_PROT", "PALADIN_PROT", "DRUID_BEAR" },
-	healer = { "PALADIN_HOLY", "PRIEST_DISC", "PRIEST_HOLY", "SHAMAN_RESTO", "DRUID_RESTO" },
-	melee  = { "DEATHKNIGHT", "WARRIOR", "ROGUE", "PALADIN", "SHAMAN_ENH", "DRUID" },
-	ranged = { "MAGE", "WARLOCK", "HUNTER", "PRIEST", "SHAMAN_ELE", "DRUID_BALANCE" },
-}
+local ASKS = M.ASKS
 
 -- token -> { short, name, class } from the shipped class and spec tables
 local function askInfo(token)
@@ -620,7 +615,8 @@ local function buildReserveStrip(p)
 
 	-- Width per label, not one fixed size: "Fragments" needs ~72px while "Key"
 	-- needs 46, and a single width either clipped the long ones or wasted the row.
-	local x = 56
+	-- The chips start after the MEASURED label: Text size grows it past any fixed x.
+	local x = math.max(56, 6 + math.ceil(lbl:GetStringWidth() or 0) + 10)
 	for _, c in ipairs(M.ReserveCats) do
 		local b = W.Button(p, c.label, nil):Size(46, 20)
 		b:SetPoint("LEFT", x, 0)
