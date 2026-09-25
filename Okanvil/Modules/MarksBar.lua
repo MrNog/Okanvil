@@ -39,7 +39,7 @@ local SHORTCUTS = {
 		-- particular tool; this one opens the window they all live in, so it does
 		-- not need a gate -- there is nothing to switch it off.
 		key  = "okanvil",
-		icon = "Interface\\Icons\\Trade_BlackSmithing",   -- the anvil, same as the minimap
+		icon = Okanvil.BRAND_ICON,   -- the addon icon, same as the minimap
 		run  = function() Okanvil:Toggle() end,
 	},
 	{
@@ -546,7 +546,10 @@ ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
 -- "no guild, no ranks", and an officer (or an officer's alt) had no prio button
 -- until something raid-related happened to refresh it.
 ev:RegisterEvent("GUILD_ROSTER_UPDATE")
-ev:SetScript("OnEvent", function(_, event)
+-- Roster changes wait out combat (Okanvil:CombatSafe): the relayout walks the
+-- guild roster for the prio gate. PLAYER_LOGIN is never in combat, so it is
+-- unaffected.
+ev:SetScript("OnEvent", Okanvil:CombatSafe("marksbar.roster", function(_, event)
 	if event == "PLAYER_LOGIN" then
 		build()
 		MB:Refresh()
@@ -556,4 +559,5 @@ ev:SetScript("OnEvent", function(_, event)
 		return
 	end
 	MB:Refresh()
-end)
+end))
+

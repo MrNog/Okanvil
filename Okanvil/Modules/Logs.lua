@@ -66,7 +66,7 @@ end
 -- A full-width settings card: title (+ optional sub) on the left, an ON/OFF pill
 -- right-aligned INSIDE the card. Nothing can overlap regardless of label width.
 local function cardToggle(parent, title, sub, getFn, setFn)
-	local card = Okanvil.W.Frame(parent, "panel")
+	local card = Okanvil.W.Frame(parent, "soft")
 	card:SetHeight(sub and 42 or 30)
 
 	local t = newText(card, "OVERLAY")
@@ -459,6 +459,7 @@ function OkanvilLogs.BuildUI(host)
 	-- header carries the title + a REC status readout.
 	local dash = W.Dashboard(host, {
 		title = "Combat Logs",
+		subtitle = "Logs every raid from the first pull",
 		icon = Okanvil.ICONS and Okanvil.ICONS.logs or "Interface\\Icons\\INV_Scroll_03",
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -480,7 +481,7 @@ function OkanvilLogs.BuildUI(host)
 	parent._toggle = toggle
 
 	-- status card: shows REC state + elapsed while a session is open
-	local status = W.Frame(parent, "dark")
+	local status = W.Frame(parent, "soft")
 	status:SetPoint("TOPLEFT", toggle, "TOPRIGHT", 10, 0)
 	status:SetPoint("RIGHT", parent, "RIGHT", -14, 0)
 	status:SetHeight(46)
@@ -583,7 +584,7 @@ function OkanvilLogs.RebuildHistory()
 	for i, s in ipairs(sessions) do
 		local r = p._histRows[i]
 		if not r then
-			r = W.Frame(child, "input")
+			r = W.Frame(child, "row")
 			r.title = newText(r, "OVERLAY"); r.title:SetPoint("TOPLEFT", 8, -5)
 			r.sub = newText(r, "OVERLAY", 10); r.sub:SetPoint("BOTTOMLEFT", 8, 5)
 			r.del = W.Button(r, "X", "danger")

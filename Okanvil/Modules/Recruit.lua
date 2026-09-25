@@ -774,14 +774,18 @@ local function makeScrollBox(parent, name, x, y, rightMargin, h)
 	return e
 end
 
--- checkbox bound to a db key; W.Check reads/writes via getFn/setFn. onChange(v)
--- runs after a toggle. Returns a frame with SetChecked/GetChecked shims so the
--- existing Rec_RefreshUI (which calls :SetChecked) keeps working.
+-- A setting bound to a db key, drawn as the forge look's row (label, hairline,
+-- ON / OFF on the right -- see W.ToggleRow), kept at the old checkbox's height so
+-- every layout below still steps by the same amounts. onChange(v) runs after a
+-- toggle. SetChecked/GetChecked shims keep Rec_RefreshUI working.
 local function makeCheck(parent, key, label, x, y, onChange)
-	local c = W.Check(parent, label,
+	local c = W.ToggleRow(parent, label, nil,
 		function() return db[key] end,
 		function(v) db[key] = v and true or false; if onChange then onChange(v) end end)
+	c:SetHeight(32)
+	c.btn:SetSize(48, 20)
 	c:SetPoint("TOPLEFT", x, y)
+	c:SetPoint("RIGHT", parent, "RIGHT", -12, 0)
 	c.SetChecked = function(_, v) db[key] = v and true or false; c.refresh() end
 	c.GetChecked = function() return db[key] end
 	return c
@@ -941,6 +945,7 @@ function Rec_BuildUI(parent)
 
 	local dash = W.Dashboard(f, {
 		title = "Recruit",
+		subtitle = "Recruitment ads with auto-reply",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.recruit) or "Interface\\Icons\\Ability_Warrior_BattleShout",
 		pills = true,
 		drawerWidth = 0,
@@ -983,9 +988,9 @@ function Rec_BuildUI(parent)
 				:format(state, invited, replied, blocked)
 		end,
 		tabs = {
-			{ key = "message",  label = "Message",  height = 340, build = function(p) Rec_BuildMessage(p) end },
+			{ key = "message",  label = "Message",  height = 400, build = function(p) Rec_BuildMessage(p) end },
 			{ key = "inbox",    label = "Inbox",    height = 200, build = function(p) Rec_BuildInbox(p) end },
-			{ key = "setup",    label = "Setup",    height = 640, build = function(p) Rec_BuildSetup(p) end },
+			{ key = "setup",    label = "Setup",    height = 800, build = function(p) Rec_BuildSetup(p) end },
 		},
 	})
 	f.dash = dash
@@ -1003,7 +1008,8 @@ end
 local X = 4
 
 local function secHead(p, text, y)
-	local fs = W.Text(p, text, "head", "accent")
+	y = y - 10
+	local fs = W.Text(p, text, "note", "dim")
 	fs:SetPoint("TOPLEFT", X, y)
 	local line = p:CreateTexture(nil, "ARTWORK")
 	line:SetTexture(FLAT)
@@ -1012,13 +1018,13 @@ local function secHead(p, text, y)
 	line:SetPoint("RIGHT", p, "RIGHT", -12, 0)
 	local c = Okanvil.Colors.border
 	line:SetVertexColor(c[1], c[2], c[3], 1)
-	return y - 24
+	return y - 26
 end
 
 local function fieldLabel(p, text, y)
 	local fs = W.Text(p, text, "label", "dim")
 	fs:SetPoint("TOPLEFT", X, y)
-	return y - 18
+	return y - 22
 end
 
 -- ---------- PILL 1: Message ----------
@@ -1047,9 +1053,9 @@ function Rec_BuildMessage(p)
 	y = y - 20
 
 	f.cNeedActive = makeCheck(p, "repliesNeedActive", "Only reply while Advertising is ON", X, y)
-	y = y - 26
+	y = y - 34
 	f.cSkipGroup = makeCheck(p, "repliesSkipGroup", "Never reply to someone in my group or raid", X, y)
-	y = y - 28
+	y = y - 36
 
 	f.ruleHost = CreateFrame("Frame", nil, p)
 	f.ruleHost:SetPoint("TOPLEFT", X, y)
@@ -1149,7 +1155,7 @@ function Rec_BuildSetup(p)
 	-- ---- invite ----
 	y = secHead(p, "WHO GETS AN INVITE", y)
 	f.cInvite = makeCheck(p, "autoInvite", "Auto-invite people who whisper a keyword", X, y)
-	y = y - 30
+	y = y - 38
 	y = fieldLabel(p, "Whispers that trigger a guild invite", y)
 	f.keywords = makeScrollBox(p, "keywords", X, y, 12, 44)
 	strHook(f.keywords, "keywords")
@@ -1170,14 +1176,14 @@ function Rec_BuildSetup(p)
 
 	-- ---- who to skip ----
 	y = secHead(p, "DON'T BOTHER", y)
-	f.fGuild = makeCheck(p, "filterGuild", "Skip guild members", X, y); y = y - 26
-	f.fGroup = makeCheck(p, "filterGroup", "Skip people in my party or raid", X, y); y = y - 26
-	f.fFriends = makeCheck(p, "filterFriends", "Skip my friends list", X, y); y = y - 34
+	f.fGuild = makeCheck(p, "filterGuild", "Skip guild members", X, y); y = y - 34
+	f.fGroup = makeCheck(p, "filterGroup", "Skip people in my party or raid", X, y); y = y - 34
+	f.fFriends = makeCheck(p, "filterFriends", "Skip my friends list", X, y); y = y - 42
 
 	-- ---- toast ----
 	y = secHead(p, "TOAST", y)
-	f.cToast = makeCheck(p, "toastOnJoin", "Pop a toast when someone joins the guild", X, y); y = y - 26
-	f.cToastActive = makeCheck(p, "toastOnlyActive", "...only while advertising is ON", X + 18, y); y = y - 26
+	f.cToast = makeCheck(p, "toastOnJoin", "Pop a toast when someone joins the guild", X, y); y = y - 34
+	f.cToastActive = makeCheck(p, "toastOnlyActive", "...only while advertising is ON", X + 18, y); y = y - 34
 	f.cToastMove = makeCheck(p, "toastMove", "Move it (drag it, untick to lock)", X, y,
 		function(v) Rec_SetToastMove(v) end)
 	y = y - 40
@@ -1204,7 +1210,7 @@ function Rec_RenderRules()
 	local f = RecruitFrame
 	if not (f and f.ruleHost) then return end
 	local p = f.msgPage
-	local ROW_H, GAP = 40, 4
+	local ROW_H, GAP = 42, 8
 	-- The open editor's height, used both to size it and to push the rows under
 	-- it down -- two numbers for one height is how the editor ended up drawn over
 	-- the next reply and the Add button.
@@ -1527,7 +1533,7 @@ local function inboxRow(p, i)
 	local f = RecruitFrame
 	local r = f.inboxRows[i]
 	if r then return r end
-	r = W.Frame(p, "input")
+	r = W.Frame(p, "row")
 	r:EnableMouse(true)
 
 	r.dot = r:CreateTexture(nil, "OVERLAY")

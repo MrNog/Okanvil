@@ -240,13 +240,13 @@ local function build()
 	end)
 
 	-- dark well holding the list
-	local well = W.Frame(f, "dark")
+	local well = W.Frame(f, "well")
 	well:SetPoint("TOPLEFT", 6, -44)
 	well:SetPoint("TOPRIGHT", -6, -44)
 	well:SetPoint("BOTTOM", f, "BOTTOM", 0, 8)
 
 	-- column header strip (with clickable sort headers)
-	local hdr = W.Frame(well, "input")
+	local hdr = W.Frame(well, "row")
 	hdr:SetPoint("TOPLEFT", 2, -2); hdr:SetPoint("TOPRIGHT", -2, 0); hdr:SetHeight(16)
 	local function colhC(x, w, t)
 		local fsx = W.Text(hdr, t, "label", "accent"); fsx:SetJustifyH("CENTER")

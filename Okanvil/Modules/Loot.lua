@@ -534,7 +534,9 @@ end
 -- ONE session = ONE run (see runKey below). Bosses are PAGES within, via
 -- DropsByBoss() -- never a session per boss.
 -- ------------------------------------------------------------
-local MAX_SESSIONS = 20
+-- Newest 10 runs; older ones are pushed out. Officers export to the website
+-- before they go.
+local MAX_SESSIONS = 10
 local lastLootAt   = 0   -- so para info; nao decide sessoes
 
 -- db() returns the ACCOUNT-WIDE loot block (CONFIG only: collectors, rollMsg). NEVER
@@ -561,6 +563,8 @@ end
 local function sessions()
 	local cdb = charDB()
 	cdb.lootSessions = cdb.lootSessions or {}
+	-- Trims history saved under an older, larger cap too, not only on a new run.
+	while #cdb.lootSessions > MAX_SESSIONS do table.remove(cdb.lootSessions) end
 	return cdb.lootSessions
 end
 -- Once per login, two repairs to the saved history:
@@ -2441,6 +2445,7 @@ function L.SetMeAsMasterLooter()
 	if not SetLootMethod then return "noapi" end
 	if not inGroup() then return "nogroup" end
 	if not L.CanSetLootMethod() then return "notleader" end
+	Okanvil:Trace("LOOT", "setting master loot to me")
 	SetLootMethod("master", UnitName("player"))
 	return true
 end

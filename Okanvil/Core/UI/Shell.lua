@@ -121,8 +121,12 @@ function Okanvil:BuildShell()
 	f:SetScript("OnMouseDown", function() Okanvil:ClearAllFocus() end)
 
 	-- header (drag)
-	local hdr = W.Frame(f, "raise")
+	-- Header, nav and content are text on the forge art: no fills, hairlines only.
+	local hdr = W.Frame(f, "bare")
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(HEADER_H)
+	local hdrRule = hdr:CreateTexture(nil, "ARTWORK")
+	hdrRule:SetTexture(FLAT); hdrRule:SetVertexColor(u3(C.border))
+	hdrRule:SetHeight(1); hdrRule:SetPoint("BOTTOMLEFT"); hdrRule:SetPoint("BOTTOMRIGHT")
 	hdr:EnableMouse(true); hdr:RegisterForDrag("LeftButton")
 	hdr:SetScript("OnMouseDown", function() Okanvil:ClearAllFocus() end)  -- click header = stop typing
 	hdr:SetScript("OnDragStart", function() f:StartMoving() end)
@@ -138,7 +142,7 @@ function Okanvil:BuildShell()
 	-- children of the HEADER (not the window) so they draw ABOVE its raised backdrop.
 	local logo = hdr:CreateTexture(nil, "OVERLAY")
 	logo:SetSize(18, 18); logo:SetPoint("LEFT", 9, 0)
-	logo:SetTexture("Interface\\Icons\\Trade_BlackSmithing")   -- the anvil
+	logo:SetTexture(Okanvil.BRAND_ICON)
 	logo:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	local title = W.Text(hdr, "Okanvil", "title", "accent")
 	title:SetPoint("LEFT", logo, "RIGHT", 7, 0); title:Color(1, 0.82, 0)
@@ -168,11 +172,89 @@ function Okanvil:BuildShell()
 	local collapse = W.Button(hdr, "_"); collapse:SetSize(24, 20); collapse:SetPoint("RIGHT", close, "LEFT", -3, 0)
 	collapse:SetScript("OnClick", function() Okanvil:Collapse(true) end)
 
+	-- ---- what is running, on every page ----
+	-- A chip in the title bar for each thing that keeps going while you look at
+	-- another page: recruit ads, PuG spam, council night, a farm timer, combat
+	-- logging. Click one to jump to where it is switched off.
+	local STATUS = {
+		{ label = "Recruit ads",   mod = "Okanvil-Recruit",
+		  on = function() return RecruitDB and RecruitDB.active end,
+		  open = function() Okanvil:ShowPanel("Okanvil-Recruit") end },
+		{ label = "PuG spam",      mod = "Okanvil-PuG",
+		  on = function() return OkanvilPuGDB and OkanvilPuGDB.active end,
+		  open = function() Okanvil:ShowPanel("Okanvil-PuG") end },
+		{ label = "Council night", mod = "__council",
+		  on = function() return Okanvil.Council and Okanvil.Council.active end,
+		  open = function() Okanvil:ShowPanel("__council") end },
+		{ label = "Farming",       mod = "Okanvil-Farm",
+		  on = function() return Okanvil.Farm and Okanvil.Farm.IsRunning and Okanvil.Farm.IsRunning() end,
+		  open = function() Okanvil:ShowPanel("Okanvil-Farm") end },
+		{ label = "Logging",       mod = "Okanvil-Logs",
+		  on = function() return LoggingCombat and LoggingCombat() end,
+		  open = function() Okanvil:OpenSettingsTab("raid") end },
+	}
+	for _, st in ipairs(STATUS) do
+		local c = CreateFrame("Button", nil, hdr)
+		c:SetHeight(18)
+		c:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1,
+			insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+		c:SetBackdropColor(C.ok[1], C.ok[2], C.ok[3], 0.10)
+		c:SetBackdropBorderColor(C.ok[1], C.ok[2], C.ok[3], 0.45)
+		local dot = c:CreateTexture(nil, "OVERLAY")
+		dot:SetTexture(FLAT); dot:SetVertexColor(u3(C.ok)); dot:SetSize(5, 5)
+		dot:SetPoint("LEFT", 7, 0)
+		c.text = W.Text(c, st.label, "note")
+		c.text:SetTextColor(u3(C.ok))
+		c.text:SetPoint("LEFT", dot, "RIGHT", 5, 0)
+		c:SetWidth((c.text:GetStringWidth() or 40) + 24)
+		c:SetScript("OnClick", st.open)
+		c:SetScript("OnEnter", function(self)
+			self:SetBackdropColor(C.ok[1], C.ok[2], C.ok[3], 0.20)
+			GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+			GameTooltip:AddLine(st.label .. " is ON", 1, 1, 1)
+			GameTooltip:AddLine("Click to open where it is switched off.", 0.6, 0.6, 0.6)
+			GameTooltip:Show()
+		end)
+		c:SetScript("OnLeave", function(self)
+			self:SetBackdropColor(C.ok[1], C.ok[2], C.ok[3], 0.10)
+			GameTooltip:Hide()
+		end)
+		c:Hide()
+		st.chip = c
+	end
+	local function paintStatus()
+		local anchor = collapse
+		for i = #STATUS, 1, -1 do
+			local st = STATUS[i]
+			local live = Okanvil:IsModuleEnabled(st.mod) and st.on() and true or false
+			if live then
+				st.chip:ClearAllPoints()
+				st.chip:SetPoint("RIGHT", anchor, "LEFT", -6, 0)
+				st.chip:Show()
+				anchor = st.chip
+			else
+				st.chip:Hide()
+			end
+		end
+	end
+	self.PaintStatus = paintStatus
+	-- Polled while the window is open: none of these five announce their changes,
+	-- and a once-a-second read of five flags costs nothing.
+	hdr:SetScript("OnUpdate", function(_, el)
+		hdr._stT = (hdr._stT or 1) + el
+		if hdr._stT < 1 then return end
+		hdr._stT = 0
+		paintStatus()
+	end)
+
 	-- left nav
-	local nav = W.Frame(f, "dark")
+	local nav = W.Frame(f, "bare")
 	nav:SetPoint("TOPLEFT", 6, -(HEADER_H + 6))
 	nav:SetPoint("BOTTOMLEFT", 6, FOOTER_H + 4)
 	nav:SetWidth(NAV_W)
+	local navRule = nav:CreateTexture(nil, "ARTWORK")
+	navRule:SetTexture(FLAT); navRule:SetVertexColor(u3(C.border))
+	navRule:SetWidth(1); navRule:SetPoint("TOPRIGHT"); navRule:SetPoint("BOTTOMRIGHT")
 	local navHdr = W.Text(nav, "NAVIGATION", "note", "dim"); navHdr:SetPoint("TOPLEFT", 10, -8)
 	local navSF = CreateFrame("ScrollFrame", "Okanvil_NavSF", nav)
 	navSF:SetPoint("TOPLEFT", 4, -24); navSF:SetPoint("BOTTOMRIGHT", -6, 4)
@@ -188,12 +270,16 @@ function Okanvil:BuildShell()
 	self.navChild = navChild
 
 	-- content well
-	local content = W.Frame(f, "dark")
+	local content = W.Frame(f, "bare")
 	content:SetPoint("TOPLEFT", nav, "TOPRIGHT", 6, 0)
 	content:SetPoint("BOTTOMRIGHT", -6, FOOTER_H + 4)
 	self.content = content
-	-- ONE shared rat behind every page (single mount; see MountPageRat).
+	-- The forge art behind the whole window (see MountPageRat).
 	self:MountPageRat()
+	local footRule = f:CreateTexture(nil, "ARTWORK")
+	footRule:SetTexture(FLAT); footRule:SetVertexColor(u3(C.border))
+	footRule:SetHeight(1)
+	footRule:SetPoint("BOTTOMLEFT", 1, FOOTER_H + 2); footRule:SetPoint("BOTTOMRIGHT", -1, FOOTER_H + 2)
 
 	-- footer: fixed author credit (Okanvil is by Okanor) + a flavor line
 	local footer = W.Text(f, "|cffe0b860Okanvil by Okanor|r  |cff55575b--  the void in your stack trace|r", "note", "dim")
@@ -260,7 +346,7 @@ function Okanvil:BuildPuck()
 	p:SetBackdropColor(u3(C.panelHi)); p:SetBackdropBorderColor(u3(C.accent))
 	local ic = p:CreateTexture(nil, "ARTWORK")
 	ic:SetPoint("TOPLEFT", 4, -4); ic:SetPoint("BOTTOMRIGHT", -4, 4)
-	ic:SetTexture("Interface\\Icons\\Trade_BlackSmithing"); ic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	ic:SetTexture(Okanvil.BRAND_ICON); ic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	p:SetMovable(true); p:EnableMouse(true); p:RegisterForDrag("LeftButton")
 	p:SetScript("OnDragStart", p.StartMoving)
 	p:SetScript("OnDragStop", function(s)
@@ -366,7 +452,7 @@ Okanvil.NATIVE = {
 	-- The raider only ever sees a popup; the officer board is its own window. The
 	-- PAGE is where the council is configured and where a round is started by hand
 	-- -- the settings a master looter wants before the pull, not during it.
-	{ key = "__council", title = "Loot Council", icon = Okanvil.ICONS.council,
+	{ key = "__council", title = "Loot Council", icon = Okanvil.ICONS.council, officerOnly = true,
 	  desc = "Ask the raid what an item is worth to them, then award it. Off = no popups, "
 	      .. "no comms handlers, and the proficiency tables are released." },
 }
@@ -470,7 +556,11 @@ function Okanvil:RefreshNav()
 		-- owns no page. Its settings live elsewhere (Settings, Home, the marks bar).
 		-- Without this the only way to hide a page was to DISABLE the module, which
 		-- also stops its engine -- auto-invite would quietly stop working.
-		if self:IsModuleEnabled(m.key) and not m.noNav then
+		-- `officerOnly` = the module runs for everyone, but its PAGE is officer
+		-- work (the council's Round and Priority tabs). Raiders keep the popup.
+		local officerOk = not m.officerOnly
+			or (self.U and self.U.canSeePrio and self.U.canSeePrio())
+		if self:IsModuleEnabled(m.key) and not m.noNav and officerOk then
 			pool[m.title] = { key = m.key, title = m.title, icon = m.icon }
 		end
 	end
@@ -599,17 +689,15 @@ end
 --                       pages (Home, Settings).
 -- Both expose `.child` (draw target) and `.relayout()`.
 -- ------------------------------------------------------------
--- Shared "rat art" watermark -- ONE faded image in the content's bottom-right
--- corner, shown on every page. WoW 3.3.5a draws only BLP (DXT5) shipped in the
--- addon -> Media\rat1.blp (the Okanor blacksmith). db.ratArt "off" hides it.
--- Mounted once on Okanvil.content's ARTWORK layer (see MountPageRat), behind the
--- transparent "page" panels, so it is ALWAYS visible -- independent of panel
--- opacity, via its own db.ratAlpha slider -- and never duplicated.
+-- The forge wallpaper -- ONE image behind the whole window, on every page, the
+-- way the first-run setup looks. WoW 3.3.5a draws only BLP (DXT5) shipped in the
+-- addon -> Media\window-bg.blp, a 1024x512 cut of the setup art made for this
+-- window: close to one image pixel per screen pixel, not a stretched 512 square.
+-- A dark fade from the left keeps the nav and the
+-- page text readable; the art shows through on the right. db.ratArt "off" hides
+-- it, db.ratAlpha sets its strength (Settings).
 -- ------------------------------------------------------------
-local RAT_TEX = "Interface\\AddOns\\Okanvil\\Media\\rat1"
-local function applyRatTex(tex)
-	tex:SetTexture(RAT_TEX); tex:SetTexCoord(0, 1, 0, 1)
-end
+local WALL_TEX = "Interface\\AddOns\\Okanvil\\Media\\window-bg"
 
 -- ONE rat, once, on the shared content well -- NOT per panel.
 --
@@ -624,26 +712,36 @@ end
 -- even at full panel opacity.
 function Okanvil:MountPageRat()
 	if self._pageRat then return self._pageRat end
-	local host = self.content
+	local host = self.win
 	if not host then return end
-	-- Single texture on the content well's ARTWORK layer -- ABOVE content's own
-	-- dark BACKGROUND fill, but BELOW the page panels (which are now transparent,
-	-- see the "page" skin) so it reads as a true background behind the content.
-	-- One draw, fixed corner, never duplicated. Intensity = db.ratAlpha (its own
-	-- Settings slider, independent of the panel opacity slider).
-	local art = host:CreateTexture(nil, "ARTWORK")
-	art:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -10, 10)
+	-- On the window's BORDER layer: above its own backdrop, below every child
+	-- frame, so it is the background of the header, the nav and every page.
+	local art = host:CreateTexture(nil, "BORDER")
+	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
+	art:SetTexture(WALL_TEX)
+	-- The texture is 2:1 and the window a little narrower: trim the LEFT edge
+	-- (dark stone under the fade anyway) and keep the smith on the right whole.
+	local w, h = host:GetWidth() or 1100, host:GetHeight() or 660
+	local uspan = math.min(1, (w / h) / 2)
+	art:SetTexCoord(1 - uspan, 1, 0, 1)
+	-- Readability fade, in two steps like the mock: near-solid dark over the nav
+	-- and the first third, easing off across the page, clear on the right where
+	-- the smith is. Text always sits on calm dark; the art lives at the edge.
+	local d = C.panelD
+	local fadeL = host:CreateTexture(nil, "ARTWORK")   -- above the art (BORDER); same layer = random order
+	fadeL:SetPoint("TOPLEFT", 1, -1); fadeL:SetPoint("BOTTOMLEFT", 1, 1)
+	fadeL:SetWidth(math.floor(w * 0.36))
+	fadeL:SetTexture(FLAT)
+	fadeL:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.96, d[1], d[2], d[3], 0.86)
+	local fadeR = host:CreateTexture(nil, "ARTWORK")
+	fadeR:SetPoint("TOPLEFT", fadeL, "TOPRIGHT"); fadeR:SetPoint("BOTTOMRIGHT", -1, 1)
+	fadeR:SetTexture(FLAT)
+	fadeR:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.86, d[1], d[2], d[3], 0.30)
 	local function refresh()
-		if (Okanvil.db.ratArt or "on") == "off" then art:Hide(); return end
-		applyRatTex(art)
-		art:SetAlpha(Okanvil.db.ratAlpha or 0.30)
-		local vw, vh = host:GetWidth() or 700, host:GetHeight() or 500
-		local s = math.max(220, math.min(vh * 0.62, vw * 0.46))
-		art:SetSize(s, s); art:Show()
+		if (Okanvil.db.ratArt or "on") == "off" then art:Hide(); fadeL:Hide(); fadeR:Hide(); return end
+		art:SetAlpha(Okanvil.db.ratAlpha or 0.45); art:Show(); fadeL:Show(); fadeR:Show()
 	end
 	art.refresh = refresh
-	host:HookScript("OnSizeChanged", refresh)
-	host:HookScript("OnShow", refresh)
 	refresh()
 	self._pageRat = art
 	return art
@@ -717,8 +815,13 @@ function Okanvil:ShowPanel(key)
 	self:ClearAllFocus()          -- switching pages releases any text-box focus
 	for _, b in ipairs(self._navButtons) do
 		b._active = (b._key == key)
-		if b._active then b.hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.10); b.bar:Show()
-		else b.hl:SetVertexColor(0, 0, 0, 0); b.bar:Hide() end
+		if b._active then
+			b.hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.12); b.bar:Show()
+			b.text:SetTextColor(u3(C.accentText))
+		else
+			b.hl:SetVertexColor(0, 0, 0, 0); b.bar:Hide()
+			b.text:SetTextColor(u3(C.text))
+		end
 	end
 
 	local entry = self.panels[key]
@@ -773,15 +876,26 @@ do
 	local gr = CreateFrame("Frame")
 	gr:RegisterEvent("GUILD_ROSTER_UPDATE")
 	gr:RegisterEvent("PLAYER_GUILD_UPDATE")
-	gr:SetScript("OnEvent", function()
+	gr:SetScript("OnEvent", Okanvil:CombatSafe("shell.prioGate", function()
 		if not Okanvil.U or not Okanvil.U.canSeePrio then return end
 		local now = Okanvil.U.canSeePrio() and true or false
-		if was == nil then was = now; return end     -- first answer: nothing built yet
+		-- First answer: nothing built yet, except the nav -- drawn at login before
+		-- the roster arrived, so an officer's Loot Council row appears only now.
+		if was == nil then
+			was = now
+			if now then
+				if Okanvil.RefreshNav then Okanvil:RefreshNav() end
+				Okanvil:InvalidatePanel(HOME)                         -- officer-only exports
+			end
+			return
+		end
 		if now ~= was then
 			was = now
 			Okanvil:InvalidatePanel(LOOT)
+			Okanvil:InvalidatePanel(HOME)                             -- officer-only exports
+			if Okanvil.RefreshNav then Okanvil:RefreshNav() end   -- council page follows rank
 		end
-	end)
+	end))
 end
 
 -- ------------------------------------------------------------
@@ -843,9 +957,35 @@ Okanvil.UI.FIELD_H  = 46   -- vertical stride of one labelled control
 -- ------------------------------------------------------------
 Okanvil.UI.RECORD_ROW_H = 52
 
+-- Row buttons that only show while the mouse is over the row, so a list reads
+-- as names, not as a column of buttons. `b._allowed = false` keeps a button
+-- hidden even on hover (not an officer, your own name...); set it, then call
+-- row._revealUpdate() to apply.
+--   Okanvil.UI.HoverReveal(row, { row.inv, row.export })
+function Okanvil.UI.HoverReveal(row, buttons)
+	row._reveal = buttons
+	local function update()
+		local over = MouseIsOver and MouseIsOver(row)
+		for _, b in ipairs(row._reveal) do
+			if over and b._allowed ~= false then b:Show() else b:Hide() end
+		end
+	end
+	row._revealUpdate = update
+	row:EnableMouse(true)
+	row:HookScript("OnEnter", update)
+	row:HookScript("OnLeave", update)
+	-- Leaving through a button (which sits on top of the row) must hide too.
+	for _, b in ipairs(buttons) do b:HookScript("OnLeave", update) end
+	update()
+end
+
 function Okanvil.UI.RecordRow(parent, onToggle)
-	local r = W.Frame(parent, "input")
+	-- A flat row on the page art: no box, a hairline under it, a hover wash.
+	local r = W.Frame(parent, "bare")
 	r:EnableMouse(true)
+	local rule = r:CreateTexture(nil, "ARTWORK")
+	rule:SetTexture(FLAT); rule:SetVertexColor(1, 1, 1, 0.06)
+	rule:SetHeight(1); rule:SetPoint("BOTTOMLEFT"); rule:SetPoint("BOTTOMRIGHT")
 	local hl = r:CreateTexture(nil, "HIGHLIGHT")
 	hl:SetAllPoints(); hl:SetTexture(FLAT)
 	hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.05)
@@ -857,7 +997,7 @@ function Okanvil.UI.RecordRow(parent, onToggle)
 
 	-- Wide enough that HEROIC sits inside the box with room either side, and
 	-- tall enough that the size and the mode are two lines, not one squeezed one.
-	local badge = W.Frame(r, "dark")
+	local badge = W.Frame(r, "bare")
 	badge:SetSize(64, 44)
 	badge:SetPoint("LEFT", 5, 0)
 	r.badge = badge
@@ -888,10 +1028,10 @@ function Okanvil.UI.PaintRecordRow(r, o)
 		r.bsize:SetText("--")
 		r.bmode:SetText("")
 	end
-	-- Open = a gold rim on the badge, so the row that owns the cards below it is
-	-- the one that stands out.
-	local rim = o.open and C.accent or C.border
-	r.badge:SetBackdropBorderColor(rim[1], rim[2], rim[3], 1)
+	-- Open = the title turns gold, so the row that owns the cards below it is the
+	-- one that stands out.
+	local tc = o.open and C.accentText or C.text
+	r.title:SetTextColor(tc[1], tc[2], tc[3])
 	r.title:SetText(o.title or "")
 	r.sub:SetText(o.sub or "")
 end
@@ -972,7 +1112,7 @@ function Okanvil:BuildMinimap()
 	local overlay = b:CreateTexture(nil, "OVERLAY")
 	overlay:SetSize(53, 53); overlay:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder"); overlay:SetPoint("TOPLEFT")
 	local icon = b:CreateTexture(nil, "BACKGROUND")
-	icon:SetSize(20, 20); icon:SetTexture("Interface\\Icons\\Trade_BlackSmithing")   -- anvil
+	icon:SetSize(20, 20); icon:SetTexture(Okanvil.BRAND_ICON)
 	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92); icon:SetPoint("CENTER", 1, 1)
 
 	local function pos()

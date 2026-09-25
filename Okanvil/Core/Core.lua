@@ -60,6 +60,9 @@ Okanvil.LSM = LSM
 
 Okanvil.version = GetAddOnMetadata and GetAddOnMetadata("Okanvil", "Version") or "1.0"
 Okanvil.entries = {}          -- name -> plugin table (registered)
+-- The addon's icon, in one place: title bar, minimap button, collapsed puck,
+-- marks bar, setup, Mini Roll, Settings badge. The game's own anvil.
+Okanvil.BRAND_ICON = "Interface\\Icons\\Trade_BlackSmithing"
 Okanvil._fontStrings = {}     -- font strings to restyle when the font changes
 
 -- ------------------------------------------------------------
@@ -197,8 +200,8 @@ local defaults = {
 	recordDungeon = true, -- capture attendance/loot in 5-man dungeons (party instances)
 	recordRaid = true,    -- capture attendance/loot in raids
 	closeOnPull = true,    -- DBM pull -> close all Okanvil windows (get out of the way on engage)
-	ratArt = "on",         -- faded rat blacksmith art in the page corner: "on" | "off"
-	ratAlpha = 0.30,       -- rat watermark intensity (own slider; independent of bgAlpha)
+	ratArt = "on",         -- forge wallpaper behind the whole window: "on" | "off"
+	ratAlpha = 0.45,       -- wallpaper strength (own slider; independent of bgAlpha)
 	devMode = false,       -- dev output -> dedicated "Okanvil" chat tab (off for raiders)
 }
 
@@ -609,6 +612,59 @@ function Okanvil:ModuleActive(name)
 	return self:IsModuleEnabled(name)
 end
 
+-- ------------------------------------------------------------
+-- QUIET IN COMBAT. During a fight Okanvil runs only what the fight needs (notes,
+-- combat logging, boss detection, the loot council). Background bookkeeping --
+-- roster walks, sync announces, page refreshes -- waits for combat to end. What
+-- the user switched on by hand (Recruit / PuG advertising) is never held back. A raid fires
+-- roster events in bursts, and each one used to walk the whole guild roster in
+-- several modules at once: that is frames lost mid-pull, only in raids.
+--
+--   Okanvil:InCombat()            -> true while in combat
+--   Okanvil:CombatSafe(key, fn)   -> a wrapper for an event handler: runs fn now
+--                                    out of combat; in combat it queues ONE call
+--                                    under `key` (the last args win) and runs it
+--                                    when combat ends. Twenty roster events in a
+--                                    pull become one run afterwards.
+-- ------------------------------------------------------------
+function Okanvil:InCombat()
+	return InCombatLockdown() and true or false
+end
+
+-- Inside a raid instance, passive background work (Raid Finder reading chat for
+-- other groups' LFMs) stays off the whole time, not just per pull: between pulls
+-- is when the council runs, and trash pulls overlap it.
+function Okanvil:InRaidInstance()
+	local inside, kind = IsInInstance()
+	return (inside and kind == "raid") and true or false
+end
+
+local afterCombat, afterOrder = {}, {}
+function Okanvil:CombatSafe(key, fn)
+	return function(...)
+		if not InCombatLockdown() then return fn(...) end
+		if not afterCombat[key] then afterOrder[#afterOrder + 1] = key end
+		afterCombat[key] = { fn = fn, n = select("#", ...), args = { ... } }
+	end
+end
+
+do
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("PLAYER_REGEN_ENABLED")
+	f:SetScript("OnEvent", function()
+		local order = afterOrder
+		afterOrder = {}
+		for _, key in ipairs(order) do
+			local job = afterCombat[key]
+			afterCombat[key] = nil
+			if job then
+				local ok, err = pcall(job.fn, unpack(job.args, 1, job.n))
+				if not ok and Okanvil.Err then Okanvil:Err("CombatSafe " .. key, err) end
+			end
+		end
+	end)
+end
+
 -- Is this page on the Raid Check shortcut strip?
 --
 -- Separate from whether the module is ENABLED: a module can be on and still not
@@ -706,6 +762,12 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		Okanvil_DB = Okanvil_DB or {}
 		applyDefaults(Okanvil_DB, defaults)
 		if fresh then Okanvil_DB.setupPending = true end
+		-- The corner rat became a full-window wallpaper, which needs more strength
+		-- to read. Lift the old default once; a value the user picked is kept.
+		if not Okanvil_DB.wallpaperV1 then
+			if Okanvil_DB.ratAlpha == 0.30 then Okanvil_DB.ratAlpha = 0.45 end
+			Okanvil_DB.wallpaperV1 = true
+		end
 		Okanvil.db = Okanvil_DB
 		-- PER-CHARACTER state (which modules THIS toon shows). Content settings
 		-- (brand, fonts, recruit messages, item DB...) stay account-wide in db;

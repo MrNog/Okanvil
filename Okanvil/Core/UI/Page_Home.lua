@@ -35,28 +35,36 @@ function Okanvil:BuildHome()
 	end
 	local sub = W.Text(p, "v" .. (self.version or "1.0") .. "  --  raid & guild toolkit by Okanor", "label", "dim")
 	sub:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -6)
+	local hrule = p:CreateTexture(nil, "ARTWORK")
+	hrule:SetTexture("Interface\Buttons\WHITE8x8")
+	local bc = Okanvil.Colors.border
+	hrule:SetVertexColor(bc[1], bc[2], bc[3], 1)
+	hrule:SetHeight(1)
+	hrule:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -10)
+	hrule:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 
 	-- stat tiles: online / raiders / sewers / your rank. Anchored to the header's
 	-- (the `sub` line) so a 2- or 3-line header never overlaps them.
 	-- Three identical tiles in one row. All values share the SAME font size and
 	-- baseline so numbers and the rank name read as one aligned row (a big "20pt
 	-- number" next to a "Warchief Rat" name looked like uneven steps before).
-	local TILE_W, TILE_H, VAL_SZ = 132, 48, 17
+	local TILE_W, TILE_H, VAL_SZ = 120, 48, 22
 	-- the rank tile holds a NAME, not a number, so it gets the room a name needs
 	local RANK_W = 190
 	local tiles = {}
 	local function tile(i, label)
-		local t = W.Frame(p, "input")
+		-- No box: a big gold value over a small label, straight on the page art.
+		local t = W.Frame(p, "bare")
 		-- the rank tile holds a NAME, not a number, so it gets the width one needs
 		t:SetSize((label == "YOUR RANK") and RANK_W or TILE_W, TILE_H)
 		if i == 1 then
-			t:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -12)
+			t:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -18)
 		else
 			t:SetPoint("TOPLEFT", tiles["_t" .. (i - 1)], "TOPRIGHT", 8, 0)
 		end
 		-- label pinned near the bottom; the value sits just above it, so all three
 		-- values line up on the same baseline regardless of number vs name.
-		t.lbl = W.Text(t, label, "note", "dim"); t.lbl:SetPoint("BOTTOMLEFT", 12, 8)
+		t.lbl = W.Text(t, label, "note", "dim"); t.lbl:SetPoint("BOTTOMLEFT", 0, 6)
 		t.num = W.Text(t, "--", VAL_SZ, "accent")
 		t.num:SetPoint("BOTTOMLEFT", t.lbl, "TOPLEFT", 0, 5); t.num:SetPoint("RIGHT", t, "RIGHT", -10, 0); t.num:SetJustifyH("LEFT")
 		if t.num.SetWordWrap then t.num:SetWordWrap(false) end
@@ -84,12 +92,12 @@ function Okanvil:BuildHome()
 	-- button and this snapshot list; both are guild data, and this is where you
 	-- already come to look at guild data, so they live here instead of behind
 	-- their own nav row.
-	local tabOnline = W.Button(p, "Online", "primary")
-	tabOnline:SetSize(88, 22)
+	local tabOnline = W.Button(p, "Online", "tabOn")
+	tabOnline:SetSize(72, 22)
 	tabOnline:SetPoint("TOPLEFT", tiles._t1, "BOTTOMLEFT", 0, -10)
-	local tabSnaps = W.Button(p, "Snapshots")
-	tabSnaps:SetSize(96, 22)
-	tabSnaps:SetPoint("LEFT", tabOnline, "RIGHT", 6, 0)
+	local tabSnaps = W.Button(p, "Snapshots", "tab")
+	tabSnaps:SetSize(92, 22)
+	tabSnaps:SetPoint("LEFT", tabOnline, "RIGHT", 10, 0)
 	-- Snapshots and the roster export ARE the Guild module -- switching it off in
 	-- Modules should take them with it. It did not: the module had a switch that
 	-- changed nothing on the one page its features live on.
@@ -99,7 +107,8 @@ function Okanvil:BuildHome()
 	exportBtn:SetSize(110, 22)
 	exportBtn:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 	exportBtn:SetPoint("TOP", tabOnline, "TOP", 0, 0)
-	exportBtn:SetShown(guildOn)
+	-- Exports feed the website, which is officer work: no button for anyone else.
+	exportBtn:SetShown(guildOn and Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() and true or false)
 	exportBtn:Tooltip("Build the roster JSON the web hub imports.")
 	exportBtn:SetScript("OnClick", function()
 		local G = Okanvil.Guild
@@ -109,12 +118,12 @@ function Okanvil:BuildHome()
 		G.ExportRoster(function(json) Okanvil:ShowExport(json, "Guild roster") end)
 	end)
 
-	local gcard = W.Frame(p, "input")
+	local gcard = W.Frame(p, "bare")
 	gcard:SetPoint("TOPLEFT", tabOnline, "BOTTOMLEFT", 0, -10)
 	gcard:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 	gcard:SetPoint("BOTTOM", p, "BOTTOM", 0, 12)
 	gcard:SetHeight(180)   -- fallback min; the BOTTOM anchor stretches it taller
-	local gh = W.Text(gcard, "GUILD ONLINE", "note", "dim"); gh:SetPoint("TOPLEFT", 10, -8)
+	local gh = W.Text(gcard, "GUILD ONLINE", "note", "dim"); gh:SetPoint("TOPLEFT", 0, -8)
 	-- flat scroll (no Blizzard template): plain ScrollFrame + our own slider
 	local gsf = CreateFrame("ScrollFrame", nil, gcard)
 	gsf:SetPoint("TOPLEFT", 8, -24); gsf:SetPoint("BOTTOMRIGHT", -12, 6)
@@ -141,9 +150,9 @@ function Okanvil:BuildHome()
 
 	-- ---- SNAPSHOTS card: same space as the online list, shown by the tab ----
 	-- One row per snapshot; View expands it in place into group cards below.
-	local scard = W.Frame(p, "input")
+	local scard = W.Frame(p, "bare")
 	scard:SetAllPoints(gcard)
-	local sh = W.Text(scard, "SAVED SNAPSHOTS", "note", "dim"); sh:SetPoint("TOPLEFT", 10, -8)
+	local sh = W.Text(scard, "SAVED SNAPSHOTS", "note", "dim"); sh:SetPoint("TOPLEFT", 0, -8)
 	local ssf = CreateFrame("ScrollFrame", nil, scard)
 	ssf:SetPoint("TOPLEFT", 8, -28); ssf:SetPoint("BOTTOMRIGHT", -12, 6)
 	local schild = CreateFrame("Frame", nil, ssf); schild:SetSize(10, 1)
@@ -260,7 +269,7 @@ function Okanvil:BuildHome()
 			end
 			local card = wrap.snapCards[idx]
 			if not card then
-				card = W.Frame(schild, "raise")
+				card = W.Frame(schild, "soft")
 				card.head = W.Text(card, "", "note", "dim")
 				card.head:SetPoint("TOPLEFT", 10, -8)
 				wrap.snapCards[idx] = card
@@ -315,6 +324,7 @@ function Okanvil:BuildHome()
 				r.export = W.Button(r, "Export"); r.export:SetSize(72, 22); r.export:SetPoint("RIGHT", r.del, "LEFT", -6, 0)
 				r.inv = W.Button(r, "Invite", "primary"); r.inv:SetSize(60, 22)
 				r.inv:SetPoint("RIGHT", r.export, "LEFT", -6, 0)
+				Okanvil.UI.HoverReveal(r, { r.inv, r.export, r.del })
 				wrap.snapRows[i] = r
 			end
 			r._snap = snap
@@ -337,6 +347,12 @@ function Okanvil:BuildHome()
 			r.export:SetScript("OnClick", function()
 				Okanvil:ShowExport(G.SnapshotJSON(snap), "Attendance -- " .. dateStr)
 			end)
+			-- Exports feed the website, which is officer work: no button for anyone else.
+			local canExport = Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()
+			r.export._allowed = canExport and true or false
+			r._revealUpdate()
+			r.inv:ClearAllPoints()
+			r.inv:SetPoint("RIGHT", canExport and r.export or r.del, "LEFT", -6, 0)
 			r.inv:Tooltip("Invite everyone from this snapshot (" .. (snap.count or 0) .. " players).\nAlready in the group, or offline, are skipped.")
 			r.inv:SetScript("OnClick", function()
 				local sent, total = G.InviteSnapshot(snap)
@@ -377,8 +393,8 @@ function Okanvil:BuildHome()
 		scard:SetShown(snaps)
 		-- not "snaps and nil or primary": that can never be nil, so the Online tab
 		-- stayed gold while Snapshots was showing
-		if snaps then tabOnline:SetKind(nil) else tabOnline:SetKind("primary") end
-		tabSnaps:SetKind(snaps and "primary" or nil)
+		tabOnline:SetKind(snaps and "tab" or "tabOn")
+		tabSnaps:SetKind(snaps and "tabOn" or "tab")
 		if snaps then rebuildSnaps() end
 	end
 	tabOnline:SetScript("OnClick", function() showTab("online") end)
@@ -579,29 +595,13 @@ function Okanvil:BuildHome()
 				-- is clicked, so the row you are about to invite must be obvious.
 				row.sep = row:CreateTexture(nil, "BACKGROUND")
 				row.sep:SetTexture("Interface\\Buttons\\WHITE8x8")
-				row.sep:SetVertexColor(1, 1, 1, 0.13)
+				row.sep:SetVertexColor(1, 1, 1, 0.06)
 				row.sep:SetHeight(1)
 				row.sep:SetPoint("BOTTOMLEFT", 6, 0)
 				row.sep:SetPoint("BOTTOMRIGHT", -6, 0)
-				-- Alternating shade, the same trick the hub's lists use
-				-- (.row:nth-child(odd)): the eye tracks a row across to the zone
-				-- column without drifting onto the next one.
-				row.zebra = row:CreateTexture(nil, "BACKGROUND")
-				row.zebra:SetTexture("Interface\\Buttons\\WHITE8x8")
-				row.zebra:SetVertexColor(1, 1, 1, 0.022)
-				row.zebra:SetPoint("TOPLEFT", 2, 0)
-				row.zebra:SetPoint("BOTTOMRIGHT", -2, 1)
-				-- ...and the rank's own colour down the left edge, like the hub's
-				-- tier border, so a rank is recognisable before it is read.
-				row.edge = row:CreateTexture(nil, "ARTWORK")
-				row.edge:SetTexture("Interface\\Buttons\\WHITE8x8")
-				row.edge:SetWidth(2)
-				row.edge:SetPoint("TOPLEFT", 2, -2)
-				row.edge:SetPoint("BOTTOMLEFT", 2, 3)
-
 				row.hl = row:CreateTexture(nil, "BACKGROUND")
 				row.hl:SetTexture("Interface\\Buttons\\WHITE8x8")
-				row.hl:SetVertexColor(1, 1, 1, 0.10)
+				row.hl:SetVertexColor(1, 1, 1, 0.05)
 				row.hl:SetPoint("TOPLEFT", 2, 0)
 				row.hl:SetPoint("BOTTOMRIGHT", -2, 1)
 				row.hl:Hide()
@@ -633,6 +633,7 @@ function Okanvil:BuildHome()
 				row.btn:SetSize(38, math.max(15, gfs + 5))
 				row.btn:SetPoint("RIGHT", row.wbtn, "LEFT", -4, 0)
 				row.btn:Tooltip("Invite to your group/raid")
+				Okanvil.UI.HoverReveal(row, { row.btn, row.wbtn })
 				-- zone column: current location, right-aligned just left of the inv
 				-- button (like the default Blizzard guild list's location column).
 				row.zone = row:CreateFontString(nil, "OVERLAY")
@@ -668,17 +669,6 @@ function Okanvil:BuildHome()
 			-- its own colour in the rank column, so the name column stays clean.
 			-- crop the shared class sheet to this class; unknown class -> hide rather
 			-- than show the whole sheet squashed into one square
-			-- shade every other row, and carry the rank colour down the left edge
-			row.zebra:SetShown(k % 2 == 1)
-			-- m.col is the same "aarrggbb" rankColor() feeds to |c, so the edge and
-			-- the rank text can never disagree about what colour a rank is
-			local er, eg, eb = 1, 1, 1
-			if m.col and #m.col == 8 then
-				er = (tonumber(m.col:sub(3, 4), 16) or 255) / 255
-				eg = (tonumber(m.col:sub(5, 6), 16) or 255) / 255
-				eb = (tonumber(m.col:sub(7, 8), 16) or 255) / 255
-			end
-			row.edge:SetVertexColor(er, eg, eb, 0.85)
 
 			row.cls:SetSize(ICON_SZ, ICON_SZ)
 			local tok = m.classTok
@@ -704,7 +694,7 @@ function Okanvil:BuildHome()
 			row.btn:SetScript("OnClick", function()
 				if InviteUnit then InviteUnit(who) else GuildInvite(who) end
 			end)
-			row.btn:SetShown(who ~= myName)
+			row.btn._allowed = (who ~= myName)
 
 			-- Open the chat box addressed to them rather than sending anything: a
 			-- button that fired a message off on one click would be a button you
@@ -723,7 +713,8 @@ function Okanvil:BuildHome()
 					Okanvil:Print("|cffff5555Could not open a whisper window.|r")
 				end
 			end)
-			row.wbtn:SetShown(who ~= myName)
+			row.wbtn._allowed = (who ~= myName)
+			row._revealUpdate()
 		end
 		local h = math.max(1, #onlineList * ROWH)
 		wrap.gchild:SetHeight(h); wrap.gchild:SetWidth(wrap.gsf:GetWidth())

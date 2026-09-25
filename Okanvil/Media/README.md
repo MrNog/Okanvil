@@ -11,12 +11,17 @@ the `.blp` for editing; only the `.blp` is actually loaded in-game.)
 
 | file       | used by                        | referenced path                          |
 |------------|--------------------------------|------------------------------------------|
-| `rat1.blp` | faded blacksmith bg art (corner) | `Interface\AddOns\Okanvil\Media\rat1`   |
+| `setup-bg.blp` | faded wallpaper behind the first-run setup (optional) | `Interface\AddOns\Okanvil\Media\setup-bg` |
+| `window-bg.blp` | the wallpaper behind the main window (1024x512) | `Interface\AddOns\Okanvil\Media\window-bg` |
 
-The code references it **without** the extension (`...\Media\rat1`) — that's correct,
-WoW appends `.blp` itself. If the file is missing the texture just draws nothing
-(guarded), so the UI never errors. Toggle it in **Settings → Background art → Show rat
-art on pages** (`Okanvil.db.ratArt` = `"on"` / `"off"`).
+The code references them **without** the extension (`...\Media\window-bg`) -- that's
+correct, WoW appends `.blp` itself. A missing file just draws nothing, so the UI never
+errors. The wallpaper is switched in **Settings -> General -> Forge wallpaper**, with its
+strength on the slider below (`Okanvil.db.ratArt` = `"on"` / `"off"`, `db.ratAlpha`).
+
+Sources: `setup-bg.jpg` (2508px, the art every wallpaper `.blp` is built from),
+`rat1.png`, `anvil.png`, `okanor.png` (README images). Source images are stripped from
+the release zip.
 
 ## The BLP format that actually works on 3.3.5a
 
@@ -30,7 +35,7 @@ corruption). What works is **BLP2 DXT5**, exactly like DBM/MRT ship:
 **Encoder** (no external tool): Pillow can export DDS DXT5
 (`img.save(buf, format="DDS", pixel_format="DXT5")`); strip the 128-byte DDS header and
 repack the raw block stream into a BLP2 with mip offsets/sizes. Pad tiny mips up to 4×4.
-(The session script was `png2blp_dxt5.py`.)
+Script: `scripts/png2blp_dxt5.py <in.png> <out.blp> [size]` (repo root; default 512).
 
 ## Client texture cache
 

@@ -24,3 +24,6 @@ agent/
 # are one player's own data (guild roster, loot history, notes) and megabytes of
 # it -- useful locally, never part of the addon.
 _svbackup-*/
+
+# Python bytecode from the helper scripts
+__pycache__/

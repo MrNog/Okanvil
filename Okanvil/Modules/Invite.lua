@@ -193,9 +193,39 @@ local function inviteOne(name)
 	p.t = GetTime and GetTime() or 0
 	p.tries = (p.tries or 0) + 1
 	pending[name] = p
+	Okanvil:Trace("INVITE", "invited " .. name)
 	return true
 end
 I.InviteOne = inviteOne
+
+-- Seats left in the raid for an automatic invite. The raid's size comes from its
+-- difficulty: 10 on a 10-man, 25 otherwise. An invite sent in the last minute and
+-- not yet accepted holds a seat, or three "inv"s in the same second would take a
+-- raid of 9 to 12.
+local PENDING_SEAT_SECS = 60
+local function seatsLeft()
+	local d = GetRaidDifficulty and GetRaidDifficulty()
+	local cap = (d == 1 or d == 3) and 10 or 25
+	local size = groupSize()
+	if size == 0 then size = 1 end          -- solo: the seat is mine
+	local now = GetTime and GetTime() or 0
+	local out = 0
+	for name, p in pairs(pending) do
+		if (now - (p.t or 0)) < PENDING_SEAT_SECS and not inMyGroup(name) then out = out + 1 end
+	end
+	return cap - size - out, cap
+end
+
+-- inviteOne for the invites nobody clicked for (keyword, login lists): stops at a
+-- full raid. The manual buttons stay on inviteOne -- a full raid is the user's call there.
+local function autoInvite(name, why)
+	local left, cap = seatsLeft()
+	if left <= 0 then
+		Okanvil:Trace("INVITE", ("not inviting %s (%s): raid full at %d"):format(tostring(name), why, cap))
+		return false, "full", cap
+	end
+	return inviteOne(name)
+end
 
 -- Invite a plain list of names. Returns how many invites were sent.
 function I.InviteNames(names)
@@ -530,9 +560,12 @@ local function keywordInvite(msg, sender, where)
 	if #list == 0 then return end
 	if not msgHasKeyword(msg, list) then return end
 	local clean = (sender:gsub("%-.*$", ""))
-	if inviteOne(clean) then
+	local ok, why, cap = autoInvite(clean, (where or "chat") .. " keyword")
+	if ok then
 		Print("Invited " .. clean .. " (" .. (where or "chat") .. " keyword).")
 		if I.onChange then I.onChange() end
+	elseif why == "full" then
+		Print(("Raid full (%d) -- did not invite %s."):format(cap, clean))
 	end
 end
 
@@ -587,7 +620,7 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 				if l then
 					for _, n in ipairs(l) do
 						if n == who then
-							if inviteOne(who) then Print("Auto-invited " .. who .. " (just logged in).") end
+							if autoInvite(who, "logged in") then Print("Auto-invited " .. who .. " (just logged in).") end
 							break
 						end
 					end
@@ -636,7 +669,8 @@ end)
 local wasOnline = {}
 local gev = CreateFrame("Frame")
 gev:RegisterEvent("GUILD_ROSTER_UPDATE")
-gev:SetScript("OnEvent", function()
+-- Waits out combat (see Okanvil:CombatSafe): a full guild walk per roster event.
+gev:SetScript("OnEvent", Okanvil:CombatSafe("invite.guildRoster", function()
 	if not module_on() then return end
 	local iv = Okanvil.db and Okanvil.db.invite
 	if not iv then return end
@@ -672,10 +706,10 @@ gev:SetScript("OnEvent", function()
 		local n = m.name
 		local now = online[n]
 		if now and prevOnline[n] == false then   -- just flipped offline->online
-			if inviteOne(n) then Print("Auto-invited " .. n .. " (came online).") end
+			if autoInvite(n, "came online") then Print("Auto-invited " .. n .. " (came online).") end
 		end
 	end
-end)
+end))
 
 -- Auto-assign to comp group as people accept: when the raid roster changes and a
 -- comp is loaded (via InviteList/LoadComp), move any raider we have a group for.

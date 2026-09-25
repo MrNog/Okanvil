@@ -98,13 +98,36 @@ function Okanvil:Skin(frame, kind)
 	local fill = C.panel
 	if kind == "dark" or kind == "input" then fill = C.panelD
 	elseif kind == "raise" then fill = C.panelHi end
-	if kind == "page" then
+	if kind == "page" or kind == "well" then
 		-- Fully invisible container: transparent body AND transparent border. The
 		-- outer `content` well already frames the page; drawing this panel's own
-		-- 1px border created a seam line that cut across the rat where main/drawer
-		-- meet. No fill, no edge => the single content rat reads as one clean
+		-- 1px border created a seam line that cut across the art where main/drawer
+		-- meet. No fill, no edge => the window's wallpaper reads as one clean
 		-- background behind the page. NOT registered for the opacity slider.
 		frame:SetBackdrop(nil)
+		return frame
+	end
+	-- The forge look inside pages (see the first-run setup):
+	--   "row"   a list row on the art -- no fill, a hairline under it
+	--   "soft"  a group that still needs grouping (a reading card, a column) --
+	--           a faint dark wash, no border
+	if kind == "row" then
+		frame:SetBackdrop(nil)
+		if not frame._okRule then
+			local rule = frame:CreateTexture(nil, "BORDER")
+			rule:SetTexture(FLAT); rule:SetVertexColor(1, 1, 1, 0.06)
+			rule:SetHeight(1); rule:SetPoint("BOTTOMLEFT"); rule:SetPoint("BOTTOMRIGHT")
+			frame._okRule = rule
+		end
+		return frame
+	end
+	if kind == "soft" then
+		-- A faint hairline edge too: on the wallpaper the wash alone was too weak
+		-- to separate side-by-side groups (the PuG columns vanished into the art).
+		frame:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1,
+			insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+		frame:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.55)
+		frame:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 0.9)
 		return frame
 	end
 	local a = self.db and self.db.bgAlpha or 0.95
@@ -286,8 +309,25 @@ function W.Button(parent, text, kind)
 	b.text = t
 	b._kind = kind
 
+	-- "tab" / "tabOn": the forge look's tabs -- no box, dim label, and the picked
+	-- one in gold with a gold underline (see the first-run setup / the mock).
+	local under
 	local function paint(hover)
-		if primary then
+		local isTab = (kind == "tab" or kind == "tabOn")
+		if under then under:SetShown(kind == "tabOn") end
+		if isTab then
+			if not under then
+				under = b:CreateTexture(nil, "ARTWORK")
+				under:SetTexture(FLAT); under:SetVertexColor(unpack3(C.accent))
+				under:SetHeight(2); under:SetPoint("BOTTOMLEFT", 2, 0); under:SetPoint("BOTTOMRIGHT", -2, 0)
+				under:SetShown(kind == "tabOn")
+			end
+			b:SetBackdropColor(0, 0, 0, 0)
+			b:SetBackdropBorderColor(0, 0, 0, 0)
+			if kind == "tabOn" then t:SetTextColor(unpack3(C.accentText))
+			elseif hover then t:SetTextColor(unpack3(C.accentHi))
+			else t:SetTextColor(0.74, 0.75, 0.77) end
+		elseif primary then
 			local f = hover and C.accentHi or C.accent
 			b:SetBackdropColor(f[1], f[2], f[3], 1)
 			b:SetBackdropBorderColor(unpack3(C.accentHi))
@@ -351,6 +391,61 @@ function W.Check(parent, label, getFn, setFn)
 	b:SetScript("OnLeave", function() box:SetBackdropBorderColor(unpack3(C.border)); tipLeave() end)
 	b.refresh = refresh
 	return Mod(b)
+end
+
+-- ------------------------------------------------------------
+-- ToggleRow -- the forge look's setting: a title, a dim line under it saying
+-- what it does, an ON / OFF button on the right, a hairline below. Replaces a
+-- checkbox wherever a setting deserves its one-line reason.
+--   local r = W.ToggleRow(parent, "Title", "what it does", getFn, setFn)
+--   r:SetPoint("TOPLEFT", x, y); r:SetPoint("RIGHT", parent, "RIGHT", -x, 0)
+--   y = y - r:GetHeight()
+-- r.refresh() repaints from getFn; r:Tooltip(text) works like on a button.
+-- ------------------------------------------------------------
+function W.ToggleRow(parent, title, desc, getFn, setFn)
+	local r = CreateFrame("Frame", nil, parent)
+	r:SetHeight((desc and desc ~= "") and 44 or 32)
+	r:EnableMouse(true)
+	local rule = r:CreateTexture(nil, "BORDER")
+	rule:SetTexture(FLAT); rule:SetVertexColor(1, 1, 1, 0.06)
+	rule:SetHeight(1); rule:SetPoint("BOTTOMLEFT"); rule:SetPoint("BOTTOMRIGHT")
+
+	local btn = W.Button(r, "")
+	btn:SetSize(52, 22); btn:SetPoint("RIGHT", 0, 0)
+	r.btn = btn
+
+	local t = W.Text(r, title, "body")
+	t:SetJustifyH("LEFT")
+	r.text = t
+	if desc and desc ~= "" then
+		t:SetPoint("TOPLEFT", 0, -6)
+		local d = W.Text(r, desc, "note", "dim")
+		d:SetPoint("TOPLEFT", t, "BOTTOMLEFT", 0, -3)
+		d:SetPoint("RIGHT", btn, "LEFT", -12, 0); d:SetJustifyH("LEFT")
+		if d.SetWordWrap then d:SetWordWrap(false) end
+		r.desc = d
+	else
+		t:SetPoint("LEFT", 0, 0)
+	end
+	t:SetPoint("RIGHT", btn, "LEFT", -12, 0)
+
+	local function refresh()
+		local on = getFn and getFn() or false
+		btn:SetKind(on and "primary" or nil)
+		btn.text:SetText(on and "ON" or "OFF")
+	end
+	btn:SetScript("OnClick", function()
+		if setFn then setFn(not (getFn and getFn())) end
+		refresh()
+	end)
+	r.refresh = refresh
+	refresh()
+	Mod(r)
+	-- the tooltip hangs off the whole row, the button included
+	r:SetScript("OnEnter", tipEnter); r:SetScript("OnLeave", tipLeave)
+	btn:HookScript("OnEnter", function() if r._tip then tipEnter(r) end end)
+	btn:HookScript("OnLeave", tipLeave)
+	return r
 end
 
 -- ------------------------------------------------------------
@@ -548,6 +643,10 @@ local function ensureMenu()
 	m:SetClampedToScreen(true)
 	m:SetToplevel(true)
 	Okanvil:Skin(m, "input")
+	-- Opaque whatever the window opacity is (a list over the game must be read),
+	-- with a gold-tinted edge so it reads as "open" against the page.
+	m:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.98)
+	m:SetBackdropBorderColor(unpack3(C.borderHi))
 	m:Hide()
 
 	local sf = CreateFrame("ScrollFrame", nil, m)
@@ -608,22 +707,31 @@ local function openMenu(owner)
 	local items = owner.listFn()
 	local cur = owner.getFn and owner.getFn()
 	local font = Okanvil:Font()
-	local rowH = owner.preview == "statusbar" and 20 or 18
+	local rowH = 22
 	local y = 0
 	for _, r in ipairs(m.rows) do r:Hide() end
 	for i, it in ipairs(items) do
-		local val = type(it) == "table" and it.value or it
-		local label = type(it) == "table" and it.text or it
+		-- An explicit if, not `and/or`: a label row's value is false, and
+		-- `t and t.value or t` would turn that false back into the table.
+		local val, label
+		if type(it) == "table" then val, label = it.value, it.text else val, label = it, it end
 		local r = m.rows[i]
 		if not r then
 			r = CreateFrame("Button", nil, m.child)
 			r.tex = r:CreateTexture(nil, "ARTWORK")
 			r.tex:SetPoint("TOPLEFT", 1, -1); r.tex:SetPoint("BOTTOMRIGHT", -1, 1); r.tex:Hide()
 			r.t = r:CreateFontString(nil, "OVERLAY")
-			r.t:SetPoint("LEFT", 6, 0); r.t:SetJustifyH("LEFT")
+			r.t:SetPoint("LEFT", 10, 0); r.t:SetJustifyH("LEFT")
 			r.t:SetShadowColor(0, 0, 0, 1); r.t:SetShadowOffset(1, -1)
+			-- the current choice: a faint gold wash and a gold bar on its left
+			r.sel = r:CreateTexture(nil, "BACKGROUND")
+			r.sel:SetAllPoints(); r.sel:SetTexture(FLAT)
+			r.sel:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.10)
+			r.bar = r:CreateTexture(nil, "ARTWORK")
+			r.bar:SetTexture(FLAT); r.bar:SetVertexColor(unpack3(C.accent))
+			r.bar:SetWidth(2); r.bar:SetPoint("TOPLEFT", 0, -3); r.bar:SetPoint("BOTTOMLEFT", 0, 3)
 			local hl = r:CreateTexture(nil, "HIGHLIGHT")
-			hl:SetAllPoints(); hl:SetTexture(FLAT); hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.18)
+			hl:SetAllPoints(); hl:SetTexture(FLAT); hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.14)
 			m.rows[i] = r
 		end
 		r:SetHeight(rowH); r:SetWidth(m:GetWidth() - 12)
@@ -639,10 +747,14 @@ local function openMenu(owner)
 			r.tex:SetTexture(tp or FLAT); r.tex:SetVertexColor(1, 1, 1, 1); r.tex:Show()
 		elseif r.tex then r.tex:Hide() end
 		r.t:SetText(label)
-		if val == cur then r.t:SetTextColor(unpack3(C.accent))
+		local isCur = (val ~= false and val == cur)
+		r.sel:SetShown(isCur); r.bar:SetShown(isCur)
+		if val == false then r.t:SetTextColor(unpack3(C.textDim))   -- a label, not a choice
+		elseif isCur then r.t:SetTextColor(unpack3(C.accentText))
 		elseif owner.preview == "statusbar" then r.t:SetTextColor(1, 1, 1)
 		else r.t:SetTextColor(unpack3(C.text)) end
 		r:SetScript("OnClick", function()
+			if val == false then return end     -- label rows do nothing when clicked
 			owner.setFn(val)
 			if owner.refreshText then owner:refreshText() end
 			m:Hide()
@@ -672,8 +784,15 @@ function W.DropDown(parent, listFn, getFn, setFn, preview)
 	local txt = W.Text(dd, nil, "body")
 	txt:SetPoint("LEFT", 6, 0); txt:SetPoint("RIGHT", -16, 0); txt:SetJustifyH("LEFT")
 	dd.textFS = txt
-	local arrow = W.Text(dd, "v", "body", "dim")
-	arrow:SetPoint("RIGHT", -6, 0)
+	-- WoW's small menu arrow turned to point down (8-point SetTexCoord -- 3.3.5a
+	-- textures cannot rotate), desaturated so it takes the palette's colours.
+	local arrow = dd:CreateTexture(nil, "OVERLAY")
+	arrow:SetTexture("Interface\\ChatFrame\\ChatFrameExpandArrow")
+	arrow:SetSize(12, 12); arrow:SetPoint("RIGHT", -5, 0)
+	arrow:SetTexCoord(0, 1, 1, 1, 0, 0, 1, 0)
+	if arrow.SetDesaturated then arrow:SetDesaturated(true) end
+	local function tint(c) arrow:SetVertexColor(unpack3(c)) end
+	tint(C.textDim)
 	dd.listFn, dd.getFn, dd.setFn, dd.preview = listFn, getFn, setFn, preview
 	function dd:refreshText()
 		local v = getFn() or ""
@@ -684,8 +803,8 @@ function W.DropDown(parent, listFn, getFn, setFn, preview)
 		end
 	end
 	dd:refreshText()
-	dd:SetScript("OnEnter", function(s) s:SetBackdropBorderColor(unpack3(C.borderHi)) end)
-	dd:SetScript("OnLeave", function(s) s:SetBackdropBorderColor(unpack3(C.border)) end)
+	dd:SetScript("OnEnter", function(s) s:SetBackdropBorderColor(unpack3(C.borderHi)); tint(C.accentHi) end)
+	dd:SetScript("OnLeave", function(s) s:SetBackdropBorderColor(unpack3(C.border)); tint(C.textDim) end)
 	dd:SetScript("OnClick", function(s) openMenu(s) end)
 	return Mod(dd)
 end
@@ -731,20 +850,34 @@ function W.Dashboard(parent, cfg)
 	-- pages whose tabs really are separate screens on top of a landing page.
 	local pillMode = cfg.pills and true or false
 
-	local header = W.Frame(parent, "raise")
-	header:SetPoint("TOPLEFT", 0, 0); header:SetPoint("TOPRIGHT", 0, 0); header:SetHeight(30)
+	-- The setup's header: icon, gold title, a hairline under it. No filled strip:
+	-- the page sits on the window's art like every other part of the shell.
+	local header = W.Frame(parent, "bare")
+	header:SetPoint("TOPLEFT", 0, 0); header:SetPoint("TOPRIGHT", 0, 0)
+	header:SetHeight(cfg.subtitle and 48 or 40)
 	D.header = header
+	local hrule = header:CreateTexture(nil, "ARTWORK")
+	hrule:SetTexture(FLAT); hrule:SetVertexColor(unpack3(C.border))
+	hrule:SetHeight(1)
+	hrule:SetPoint("BOTTOMLEFT", 10, 0); hrule:SetPoint("BOTTOMRIGHT", -10, 0)
 
 	local ix = 10
 	if cfg.icon then
 		local ic = header:CreateTexture(nil, "OVERLAY")
-		ic:SetSize(18, 18); ic:SetPoint("LEFT", 10, 0)
+		ic:SetSize(26, 26); ic:SetPoint("LEFT", 10, 0)
 		ic:SetTexture(cfg.icon); ic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-		ix = 32
+		ix = 46
 	end
-	local htitle = W.Text(header, cfg.title, nil, "accent")
-	htitle:SetPoint("LEFT", ix, 0)
+	local htitle = W.Text(header, cfg.title, "title", "accent")
+	-- subtitle = one short grey line under the title saying what the page is for
+	local tdy = cfg.subtitle and 7 or 0
+	htitle:SetPoint("LEFT", ix, tdy)
 	D.htitle = htitle
+	if cfg.subtitle then
+		local hsub = W.Text(header, cfg.subtitle, "note", "dim")
+		hsub:SetPoint("TOPLEFT", htitle, "BOTTOMLEFT", 0, -3)
+		D.hsub = hsub
+	end
 
 	-- Filters beside the title, for a page whose controls choose WHAT the page
 	-- is showing rather than acting on it.
@@ -806,7 +939,7 @@ function W.Dashboard(parent, cfg)
 	elseif cta2 then status:SetPoint("RIGHT", cta2, "LEFT", -10, 0)
 	elseif cta then status:SetPoint("RIGHT", cta, "LEFT", -10, 0)
 	else status:SetPoint("RIGHT", -8, 0) end
-	status:SetPoint("LEFT", htitle, "RIGHT", 10, 0)
+	status:SetPoint("LEFT", htitle, "RIGHT", 10, -tdy)
 	D.statusFS = status
 
 	-- horizontal breathing room so tab buttons / Back aren't glued to the edges
@@ -872,16 +1005,22 @@ function W.Dashboard(parent, cfg)
 	-- ---- footer strip (optional; footerHeight = 0 removes it) ----
 	local footer
 	if footerH > 0 then
-		footer = W.Frame(parent, "dark")
+		footer = W.Frame(parent, "bare")
 		footer:SetPoint("BOTTOMLEFT", 0, 0); footer:SetPoint("BOTTOMRIGHT", 0, 0)
 		footer:SetHeight(footerH)
+		local frule = footer:CreateTexture(nil, "ARTWORK")
+		frule:SetTexture(FLAT); frule:SetVertexColor(unpack3(C.border))
+		frule:SetHeight(1)
+		frule:SetPoint("TOPLEFT", 10, 0); frule:SetPoint("TOPRIGHT", -10, 0)
 	end
 	D.footer = footer
 
 	-- ---- page host. In overlay mode it covers everything below the header and the
 	-- toolbar goes with it; in pill mode it starts BELOW the toolbar, because the
 	-- pills stay on screen as the switch between pages.
-	local overlay = W.Frame(parent, "dark")
+	-- Transparent: the body it replaces is hidden while it shows, so the page art
+	-- carries through instead of a dark slab.
+	local overlay = W.Frame(parent, "bare")
 	if pillMode then
 		overlay:SetPoint("TOPLEFT", toolbar, "BOTTOMLEFT", -PAD, -4)
 		overlay:SetPoint("TOPRIGHT", toolbar, "BOTTOMRIGHT", PAD, -4)
@@ -903,7 +1042,7 @@ function W.Dashboard(parent, cfg)
 		-- an empty body with every pill unlit.
 		if pillMode then return end
 		overlay:Hide(); toolbar:Show(); body:Show(); if footer then footer:Show() end
-		for _, b in pairs(D.tabBtns) do b._active = false; b._paint(false) end
+		for _, b in pairs(D.tabBtns) do b._active = false; b:SetKind("tab") end
 	end
 	back:SetScript("OnClick", closeOverlay)
 	D.CloseOverlay = closeOverlay
@@ -969,7 +1108,7 @@ function W.Dashboard(parent, cfg)
 			-- Pills read as a segmented switch, so the picked one takes the solid
 			-- gold fill the Home page uses for Online/Snapshots. Gold TEXT alone was
 			-- too quiet to say "you are here" when the pills never go away.
-			if pillMode and b.SetKind then b:SetKind(b._active and "primary" or "secondary") end
+			if b.SetKind then b:SetKind(b._active and "tabOn" or "tab") end
 			b._paint(false)
 		end
 	end
@@ -979,10 +1118,10 @@ function W.Dashboard(parent, cfg)
 	-- label (min 60) so longer labels like "Appearance"/"Collectors" never clip.
 	local prev
 	for _, t in ipairs(cfg.tabs or {}) do
-		local b = W.Button(toolbar, t.label, "secondary")
+		local b = W.Button(toolbar, t.label, "tab")
 		local tw = (b.text and b.text:GetStringWidth() or 60) + 22
 		b:SetSize(math.max(60, tw), 20); b._key = t.key
-		if prev then b:SetPoint("LEFT", prev, "RIGHT", 4, 0)
+		if prev then b:SetPoint("LEFT", prev, "RIGHT", 10, 0)
 		else b:SetPoint("LEFT", 0, 0) end
 		b:SetScript("OnClick", function() openPage(t.key) end)
 		D.tabBtns[t.key] = b
@@ -1075,6 +1214,57 @@ end
 
 function Okanvil:SetPopup(f) openPopup = f end
 
+-- ------------------------------------------------------------
+-- Forge look helpers for floating windows (the first-run setup's chrome).
+--   W.Hairline(frame, "BOTTOM"|"TOP", inset)  a 1px border-coloured rule
+--   W.ForgeArt(frame, alpha)  the smith at the anvil behind the window, cropped
+--     to the frame's shape (keeping the right side, where he stands), with a
+--     dark fade from the left so text stays readable. Follows db.ratArt.
+-- ------------------------------------------------------------
+function W.Hairline(frame, side, inset)
+	inset = inset or 0
+	local r = frame:CreateTexture(nil, "ARTWORK")
+	r:SetTexture(FLAT); r:SetVertexColor(unpack3(C.border)); r:SetHeight(1)
+	local s = side or "BOTTOM"
+	r:SetPoint(s .. "LEFT", inset, 0); r:SetPoint(s .. "RIGHT", -inset, 0)
+	return r
+end
+
+local FORGE_ART = "Interface\\AddOns\\Okanvil\\Media\\setup-bg"
+function W.ForgeArt(f, alpha)
+	-- BACKGROUND for the art, BORDER for the fade: separate layers, so the fade
+	-- is always on top (one layer = undefined order). The backdrop sits below both.
+	local art = f:CreateTexture(nil, "BACKGROUND")
+	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
+	art:SetTexture(FORGE_ART)
+	local fade = f:CreateTexture(nil, "BORDER")
+	fade:SetPoint("TOPLEFT", 1, -1); fade:SetPoint("BOTTOMRIGHT", -1, 1)
+	fade:SetTexture(FLAT)
+	local d = C.panelD
+	fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.92, d[1], d[2], d[3], 0.40)
+	local function crop()
+		local w, h = f:GetWidth() or 0, f:GetHeight() or 0
+		if w <= 0 or h <= 0 then return end
+		if w >= h then
+			local span = h / w
+			local top = math.max(0, math.min(1 - span, 0.55 - span / 2))
+			art:SetTexCoord(0, 1, top, top + span)
+		else
+			local span = w / h
+			art:SetTexCoord(1 - span, 1, 0, 1)
+		end
+	end
+	local function refresh()
+		local off = Okanvil.db and (Okanvil.db.ratArt or "on") == "off"
+		if off then art:Hide(); fade:Hide(); return end
+		art:SetAlpha(alpha or 0.22); art:Show(); fade:Show(); crop()
+	end
+	f:HookScript("OnSizeChanged", crop)
+	f:HookScript("OnShow", refresh)
+	refresh()
+	return art, fade
+end
+
 function Okanvil:Popup(title)
 	self:ClosePopup()
 	local f = CreateFrame("Frame", nil, UIParent)
@@ -1092,14 +1282,15 @@ function Okanvil:Popup(title)
 	local C = Okanvil.Colors
 	f:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.97)
 	f:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
-	local hdr = W.Frame(f, "raise")
-	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(24)
+	W.ForgeArt(f, 0.22)
+	-- The setup's header: no raised strip, a gold title, a hairline under it.
+	local hdr = W.Frame(f, "bare")
+	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(26)
 	hdr:EnableMouse(true); hdr:RegisterForDrag("LeftButton")
 	hdr:SetScript("OnDragStart", function() f:StartMoving() end)
 	hdr:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
-	-- title must be a child of the HEADER bar (not the window) or the bar's
-	-- raised backdrop draws over it -> dark/invisible title (same fix as the shell).
-	local t = W.Text(hdr, title, nil, "accent"); t:SetPoint("LEFT", 8, 0)
+	W.Hairline(hdr, "BOTTOM", 8)
+	local t = W.Text(hdr, title, "head", "accent"); t:SetPoint("LEFT", 10, 0)
 	local close = W.Button(hdr, "X"); close:SetSize(20, 18); close:SetPoint("RIGHT", -2, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 	f.header, f.title = hdr, t

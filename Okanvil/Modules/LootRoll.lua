@@ -289,12 +289,14 @@ local function buildWindow()
 	end)
 	f:SetClampedToScreen(true)
 
-	-- header
-	local hdr = W.Frame(f, "raise")
+	W.ForgeArt(f, 0.22)
+	-- header: the setup's -- no raised strip, a hairline under it
+	local hdr = W.Frame(f, "bare")
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(26)
+	W.Hairline(hdr, "BOTTOM", 8)
 	local ico = hdr:CreateTexture(nil, "OVERLAY")
 	ico:SetSize(16, 16); ico:SetPoint("LEFT", 8, 0)
-	ico:SetTexture("Interface\\Icons\\Trade_BlackSmithing")   -- anvil, like the shell
+	ico:SetTexture(Okanvil.BRAND_ICON)   -- the addon icon, like the shell
 	ico:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	local title = W.Text(hdr, "", "body", "accent"); title:SetPoint("LEFT", ico, "RIGHT", 6, 0); title:Color(1, 0.82, 0)
 	f.title = title
@@ -487,7 +489,7 @@ function RM.Rebuild()
 	-- (fitList below), so three drops give a three-row window instead of a tall empty
 	-- panel. LIST_H here is only the starting height; Refresh has the real content.
 	local LIST_H = LIST_ROWS * ROW_H
-	local ibox = keep(W.Frame(body, "dark")); ibox:SetPoint("TOPLEFT", M, y); ibox:SetSize(INNER, LIST_H + 6)
+	local ibox = keep(W.Frame(body, "soft")); ibox:SetPoint("TOPLEFT", M, y); ibox:SetSize(INNER, LIST_H + 6)
 	f.ibox = ibox
 	f.listH = LIST_H
 	-- Everything below the list is anchored under it, so shrinking the box has to move

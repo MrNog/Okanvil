@@ -165,15 +165,34 @@ function U.rankName(idx)
 	return names[idx] or ("Rank " .. idx)
 end
 
+-- Rank and notes per member, read from the roster in ONE walk and remembered
+-- until the roster changes. The officer / alt checks used to walk the whole
+-- guild for every question, several times per raid roster event.
+local rosterCache
+local function roster()
+	if rosterCache then return rosterCache end
+	rosterCache = {}
+	for i = 1, (GetNumGuildMembers and GetNumGuildMembers() or 0) do
+		local n, _, rankIndex, _, _, _, publicnote, officernote = GetGuildRosterInfo(i)
+		if n then
+			rosterCache[(n:gsub("%-.*$", ""))] =
+				{ rank = rankIndex, pub = publicnote, off = officernote }
+		end
+	end
+	return rosterCache
+end
+do
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("GUILD_ROSTER_UPDATE")
+	f:RegisterEvent("PLAYER_GUILD_UPDATE")
+	f:SetScript("OnEvent", function() rosterCache = nil end)   -- re-read on next ask
+end
+
 -- rankIndex for a guild member by name, or nil when not in the guild / not found.
 function U.guildRankOf(name)
 	if not name or name == "" or not IsInGuild or not IsInGuild() then return nil end
-	name = name:gsub("%-.*$", "")
-	for i = 1, (GetNumGuildMembers and GetNumGuildMembers() or 0) do
-		local n, _, rankIndex = GetGuildRosterInfo(i)
-		if n and n:gsub("%-.*$", "") == name then return rankIndex end
-	end
-	return nil
+	local m = roster()[(name:gsub("%-.*$", ""))]
+	return m and m.rank
 end
 
 -- Is this name an officer (GM included)? Used both to gate the UI and to decide
@@ -188,17 +207,12 @@ end
 -- (The Home page reads alts the same way; this is the shared copy.)
 function U.mainOf(name)
 	if not (name and name ~= "" and IsInGuild and IsInGuild()) then return nil end
-	name = name:gsub("%-.*$", "")
-	for i = 1, (GetNumGuildMembers and GetNumGuildMembers() or 0) do
-		local n, _, _, _, _, _, publicnote, officernote = GetGuildRosterInfo(i)
-		if n and n:gsub("%-.*$", "") == name then
-			for _, note in ipairs({ officernote, publicnote }) do
-				if note and note ~= "" then
-					local m = note:match("^(.-)%s+[Aa][Ll][Tt]%f[%A]")
-					if m and m ~= "" then return (m:gsub("^%s+", ""):gsub("%s+$", "")) end
-				end
-			end
-			return nil
+	local mem = roster()[(name:gsub("%-.*$", ""))]
+	if not mem then return nil end
+	for _, note in ipairs({ mem.off, mem.pub }) do
+		if note and note ~= "" then
+			local m = note:match("^(.-)%s+[Aa][Ll][Tt]%f[%A]")
+			if m and m ~= "" then return (m:gsub("^%s+", ""):gsub("%s+$", "")) end
 		end
 	end
 	return nil

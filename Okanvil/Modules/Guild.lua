@@ -193,8 +193,20 @@ local function snapshotRaid(trigger, bossName)
 	}
 end
 
--- persist a snapshot into the guild DB (keeps the last N)
-local MAX_SNAPSHOTS = 20
+-- persist a snapshot into the guild DB (keeps the newest 10; older ones are
+-- pushed out -- officers export to the website before they go)
+local MAX_SNAPSHOTS = 10
+
+-- Snapshots saved under an older, larger cap are trimmed once at login.
+do
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("PLAYER_LOGIN")
+	f:SetScript("OnEvent", function()
+		local list = Okanvil.db and Okanvil.db.guild and Okanvil.db.guild.snapshots
+		if not list then return end
+		while #list > MAX_SNAPSHOTS do table.remove(list) end
+	end)
+end
 function G.SaveSnapshot(trigger, bossName)
 	local snap, err = snapshotRaid(trigger, bossName)
 	if not snap then return nil, err end
@@ -407,7 +419,7 @@ function G.ShowSnapshot(snap)
 		f.meta = W.Text(f, "", "label", "dim"); f.meta:SetPoint("TOPLEFT", 12, -30)
 		f.meta:SetPoint("RIGHT", f, "RIGHT", -12, 0); f.meta:SetJustifyH("LEFT")
 
-		local box = Okanvil.W.Frame(f, "input")
+		local box = Okanvil.W.Frame(f, "soft")
 		box:SetPoint("TOPLEFT", 8, -64); box:SetPoint("BOTTOMRIGHT", -8, 8)
 		local sf = CreateFrame("ScrollFrame", nil, box)
 		sf:SetPoint("TOPLEFT", 4, -4); sf:SetPoint("BOTTOMRIGHT", -10, 4)

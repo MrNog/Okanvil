@@ -4,10 +4,10 @@
 
 # ⚒️ Okanvil
 
-### *"OK... Anvil."* — the guild toolkit that got hammered into shape.
+### *"OK... Anvil."* — where all the tools are forged.
 
-**A raid & guild toolkit for WoW 3.3.5a / Warmane — one addon.**
-Invites, loot tracking, combat logs, recruitment and an ID finder — all forged on one anvil. 🔨
+**The RATS raid & guild toolkit for WoW 3.3.5a / Warmane — one addon.**
+Loot council, raid notes, loot tracking, a PuG builder, recruitment and more — all forged on one anvil. 🔨
 
 <br>
 
@@ -22,7 +22,7 @@ Invites, loot tracking, combat logs, recruitment and an ID finder — all forged
 <br>
 
 <div align="center">
-<img src="Okanvil/Media/anvil.png" alt="The Okanvil forge" width="70%">
+<img src="Okanvil/Media/setup-bg.jpg" alt="The Okanvil forge" width="70%">
 <br><em>Where the tools are hammered out — one rat, one anvil, no sleep. 🔥</em>
 </div>
 
@@ -32,14 +32,14 @@ Invites, loot tracking, combat logs, recruitment and an ID finder — all forged
 
 Okanvil (yes, say it out loud — *"OK Anvil"* — you're welcome) started as one rat's private
 workshop and grew into a **toolkit for the whole guild**. It's a single window with a left nav;
-each tool is a **module you toggle on or off**. Officers get the raid gear; everyone else grabs the
-ID finder to build their WeakAuras. Nobody's forced to carry what they don't use.
+each tool is a **module you switch on or off**. Raiders keep the two essentials, officers get the
+raid-leading gear, and nobody carries what they don't use.
 
 This isn't a reskin of anything — it's a **fresh rat**, built from scratch for 3.3.5a. 🐀
 
-**One addon, everything inside.** No plugin zoo to manage — install `Okanvil`, and every tool is a
-built-in module. Turn what you want on or off **per character**, while each tool's settings stay
-**shared across your toons**: set up your recruit macros once, they follow you to every alt. 🧀
+**One addon, everything inside.** Install `Okanvil` and every tool is a built-in module. Modules
+are switched **per character**, while each tool's settings stay **shared across your toons**: write
+your recruit message once, it follows you to every alt. 🧀
 
 > *Named after its blacksmith, **Okanor** — the paladin who kept bashing on it until it stopped
 > throwing errors (older rats may know him as **Okanata**). The anvil is both the logo and the
@@ -49,18 +49,45 @@ built-in module. Turn what you want on or off **per character**, while each tool
 
 ## 🧰 On the anvil
 
-A gold-themed **Home** dashboard (guild online roster, tiles, web-hub card) is always there. The seven
-tools below are modules you toggle in **Settings → Modules**:
+A **Home** page is always there: who's online in the guild (invite or whisper from the row), the
+guild's rank counts, and the last raids you were in.
+
+### Essentials — every raider
 
 | | Module | What it hammers out |
 |:--:|:--|:--|
-| ⚔️ | **Invite** | Mass-invite: whole guild online, by rank, or from saved lists. Keyword whisper invites and auto-invite on login. Imports a Raid-Helper comp and auto-assigns raid groups. |
-| 🐀 | **Guild** | Guild dashboard — online roster with rank colors, per-row invite, and a JSON roster export for the web hub. |
-| 🎁 | **Loot** | Per-boss loot tracking with de-dupe and emblem/gem filtering. Inline session viewer, fair-loot priority, and a **Mini Roll Manager** (with a compact mode) for running MS/OS roll-offs under master loot. |
-| 📜 | **Combat Logs** | One-click `/combatlog` with a movable REC timer, "log this instance?" prompt, and a session history that names the bosses you killed. |
-| 🔎 | **ID Finder** | Find a spell/item **ID by name** for WeakAuras — offline spell library + item harvester. A reusable lookup API (`Okanvil.IDs`) other addons can call. |
-| 📣 | **Recruit** | Recruitment advertiser with auto-reply and auto-invite, for officers & pug leaders. |
-| 🔍 | **Raid Finder** | Reads the LFM spam in chat and decodes it — reserved-loot lingo (`B`/`O`/`P`/`Frags`), roles and gear score — so you can spot the run you want. |
+| 🏆 | **Loot Council** | When an officer puts items up, you get a popup: **BIS · Upgrade · Small · OS · Pass**. Officers see every answer on one board, next to the guild's loot priority, and award from there. Without the addon the council can't see you. |
+| 📜 | **Notes** | Boss notes in MRT format that switch on as you walk into each room. Officers send them to the raid; guild WeakAuras read your assignment straight from them. |
+
+### Extras — switch on what you use
+
+| | Module | What it hammers out |
+|:--:|:--|:--|
+| 🎁 | **Loot history** | Every drop per boss and who got it, plus the **Mini Roll Manager** for MS/OS roll-offs and a speed-run master-loot sweep. |
+| 📸 | **Raid snapshots** | Who was in each raid, one click to re-invite the lot. Feeds attendance on the guild website. |
+| 🔍 | **Raid Finder** | Reads the LFM spam in chat and decodes it — reserved-loot lingo (`B`/`O`/`P`/`Frags`), roles, gear score — so you spot the run you want. |
+| 👥 | **PuG** | Build a raid: pick the instance, set the roles, ask each role for the classes or specs you want, and spam a line that builds itself as people join. |
+| 📣 | **Recruit** | Recruitment ads with auto-reply and auto-invite. |
+| 📼 | **Combat Logs** | Starts combat logging at the first pull, with a REC timer so you know it's running. |
+| 🔎 | **ID Finder** | Find a spell or item **ID by name** for WeakAuras. |
+| 💰 | **Farm** | Gold per hour while you farm, and a log of past runs. |
+
+**Officer tools show up on their own** for officers: the Loot Council setup, the website exports,
+and the master-loot tools. Raiders never see them.
+
+<br>
+
+## ✨ Built for raid night
+
+- **Quiet in combat.** Background work (roster bookkeeping, sync, chat scanning for other raids)
+  waits until the pull is over. What you switched on yourself keeps going: the council keeps
+  collecting votes through trash, and your PuG or recruit spam keeps posting.
+- **See what's running.** Green chips in the title bar show anything still going in the background
+  — recruit ads, PuG spam, council night, a farm timer, combat logging. Click one to jump to it.
+- **Who has it?** *Settings → Version check* lists who in the group or guild runs Okanvil, and
+  whispers a download link to everyone who doesn't.
+- **A short setup on first login.** It reads your guild rank, keeps the essentials on and asks
+  which extras you want.
 
 <br>
 
@@ -69,18 +96,17 @@ tools below are modules you toggle in **Settings → Modules**:
 1. Grab **`Okanvil.zip`** from the **[Latest release](../../releases/latest)**.
 2. Unzip it into `World of Warcraft\Interface\AddOns\` (you should end up with an `Okanvil` folder).
 3. **Fully restart the game** — a brand-new addon won't show after just `/reload`.
-4. Type **`/okanvil`** (or click the anvil on your minimap) and start forging.
-
-One folder, everything inside. Toggle the tools you want in **Settings → Modules**.
+4. A short setup opens on first login. After that, type **`/okanvil`** or click the anvil on your minimap.
 
 <br>
 
 ## 🎨 Make it yours
 
-Okanvil is the **product** (forged by Okanor); your **guild skin** is yours to set. In
-**Settings → Branding**, drop your guild's name and it shows up next to the anvil in the header and
-on the Home page. Point the web-hub button at your own site while you're there. The name *Okanvil*
-stays — the swarm underneath it is whatever you make it. 🧀
+Okanvil is the **product** (forged by Okanor); your **guild skin** is yours to set. Type
+**`/okanvil brand <name>`** and your guild's name shows up next to the anvil; **`/okanvil hub <url>`**
+points the web-hub link at your own site. Don't like the forge art behind the window? Switch it off
+or tone it down in *Settings → General*. The name *Okanvil* stays — the swarm underneath it is
+whatever you make it. 🧀
 
 <br>
 
@@ -90,8 +116,9 @@ Everything lives in one addon: `Okanvil/Core/` (the shell) and `Okanvil/Modules/
 
 **Releases are automatic.** Every push to `main` makes a GitHub Action bump the version, tag it,
 build a clean install-ready **`Okanvil.zip`** (dev files stripped), publish the release and announce
-it. The version is derived from the last tag — **never hand-edit `## Version:` in the `.toc`**; the
-Action stamps it at build time. Steer the bump with a keyword anywhere in the commit message:
+it on Discord. The version is derived from the last tag — **never hand-edit `## Version:` in the
+`.toc`**; the Action stamps it at build time. Steer the bump with a keyword anywhere in the commit
+message:
 
 | commit message | `1.2.1` becomes | use for |
 |:--|:--|:--|
@@ -100,16 +127,18 @@ Action stamps it at build time. Steer the bump with a keyword anywhere in the co
 | `… [major]` | `2.0.0` | breaking change (e.g. wipes SavedVariables) |
 | `… [skip]` | *no release* | docs / CI-only push |
 
-In-game, clients gossip their version over the addon channel: run an older build next to someone on
-a newer one and Okanvil tells you an update is out. (A 3.3.5a addon can't make HTTP requests, so it
-learns this from your group, not from GitHub — and it wants two independent reports before it
-believes anyone, so nobody can troll the raid into "updating".)
+A 3.3.5a addon can't make HTTP requests, so it can't check GitHub for updates. The version check
+asks your group or guild over the addon channel instead, on demand.
+
+Custom art has to be **BLP2 DXT5** (square or power-of-two, up to 1024) to load in this client;
+`scripts/png2blp_dxt5.py` converts a PNG/JPG. See [`Okanvil/Media/README.md`](Okanvil/Media/README.md).
 
 **Reference reading**
 
 - Working notes — conventions, 3.3.5a traps, the map to everything → **[`docs/NOTES.md`](docs/NOTES.md)**
 - Slash commands → **[`docs/SLASH_COMMANDS.md`](docs/SLASH_COMMANDS.md)**
 - SavedVariables layout (account-wide vs per-character — read before wiping/debugging saved data) → **[`docs/STORAGE.md`](docs/STORAGE.md)**
+- How the loot council works → **[`docs/LOOT_COUNCIL.md`](docs/LOOT_COUNCIL.md)**
 
 <br>
 

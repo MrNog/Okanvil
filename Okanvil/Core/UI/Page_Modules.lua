@@ -22,6 +22,7 @@ function Okanvil:BuildModules()
 
 	local dash = W.Dashboard(host, {
 		title = "Modules",
+		subtitle = "What this character uses",
 		icon = Okanvil.ICONS.modules or "Interface\\Icons\\INV_Misc_Gear_01",
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -35,7 +36,7 @@ end
 function Okanvil:Settings_Modules(panel)
 	local X = 4
 
-	local hint = W.Text(panel, "Turn modules on/off for THIS character (off = hidden from the menu). Each module's settings stay shared across your toons.", "label", "dim")
+	local hint = W.Text(panel, "For this character. Off = hidden from the menu; each module's settings stay shared across your toons.", "label", "dim")
 	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", panel, "RIGHT", -X, 0); hint:SetJustifyH("LEFT")
 
 	-- SCROLLED. Twelve modules is taller than the page, so the last few were cut
@@ -63,19 +64,36 @@ function Okanvil:Settings_Modules(panel)
 	local wrap = { relayout = function() end }
 
 	wrap.rows = {}
+	-- Two groups, as in the first-run setup: what every raider keeps on, then the
+	-- optional rest. Section labels are built once and placed on every rebuild.
+	local ESSENTIAL = { ["__council"] = true, ["Okanvil-Notes"] = true }
+	local secEss = W.Text(p, "ESSENTIALS", "note", "dim")
+	local secExt = W.Text(p, "EXTRAS", "note", "dim")
 	local function rebuild()
 		for _, r in ipairs(wrap.rows) do r:Hide() end
-		local items = Okanvil:ModuleItems(true)
+		local all = Okanvil:ModuleItems(true)
+		local items = {}
+		for _, it in ipairs(all) do if ESSENTIAL[it.key] then items[#items + 1] = it end end
+		local nEss = #items
+		for _, it in ipairs(all) do if not ESSENTIAL[it.key] then items[#items + 1] = it end end
 		if wrap.empty then wrap.empty:SetText("") end
 
 		-- Starts at 0: the hint is outside the scroll frame now, so the rows no
 		-- longer need to leave room for it.
 		local y = 0
 		for i, it in ipairs(items) do
+			if i == 1 and nEss > 0 then
+				secEss:ClearAllPoints(); secEss:SetPoint("TOPLEFT", X, -y - 4)
+				y = y + 20
+			end
+			if i == nEss + 1 then
+				secExt:ClearAllPoints(); secExt:SetPoint("TOPLEFT", X, -y - 10)
+				y = y + 26
+			end
 			local name = it.key
 			local r = wrap.rows[i]
 			if not r then
-				r = W.Frame(p, "input")
+				r = W.Frame(p, "row")
 				r.icon = r:CreateTexture(nil, "ARTWORK")
 				r.icon:SetSize(24, 24); r.icon:SetPoint("LEFT", 8, 0)
 				r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
@@ -84,8 +102,9 @@ function Okanvil:Settings_Modules(panel)
 				r.desc:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 10, -15)
 				-- Clear of BOTH buttons now, not just the enable one.
 				r.desc:SetPoint("RIGHT", r, "RIGHT", -190, 0); r.desc:SetJustifyH("LEFT")
+				-- ON / OFF, the setup's switch: gold when on.
 				r.toggle = W.Button(r, "")
-				r.toggle:SetSize(88, 24)
+				r.toggle:SetSize(52, 22)
 				r.toggle:SetPoint("RIGHT", -8, 0)
 
 				-- Second switch: is this page on the Raid Check strip?
@@ -94,7 +113,7 @@ function Okanvil:Settings_Modules(panel)
 				-- over a grid you read mid-pull is more than anyone wants, and which
 				-- of them earn the space is one guild's answer, not the addon's.
 				r.sc = W.Button(r, "")
-				r.sc:SetSize(74, 24)
+				r.sc:SetSize(74, 22)
 				r.sc:SetPoint("RIGHT", r.toggle, "LEFT", -5, 0)
 				r.sc:Tooltip("Show this page on the Raid Check shortcut strip.")
 				wrap.rows[i] = r
@@ -108,9 +127,8 @@ function Okanvil:Settings_Modules(panel)
 
 			local function paintToggle()
 				local on = Okanvil:IsModuleEnabled(name)
-				r.toggle.text:SetText(on and "|cff7cfc8aEnabled|r" or "|cff8a8d93Disabled|r")
-				r.toggle._active = on
-				if r.toggle._paint then r.toggle._paint(false) end
+				r.toggle:SetKind(on and "primary" or nil)
+				r.toggle.text:SetText(on and "ON" or "OFF")
 			end
 			paintToggle()
 			-- A module with no on/off (Invite) shows the Shortcut switch alone.
@@ -163,7 +181,7 @@ function Okanvil:Settings_Modules(panel)
 				if Okanvil.InvalidatePanel then Okanvil:InvalidatePanel("__home") end
 			end)
 			r:Show()
-			y = y + 50
+			y = y + 46
 		end
 		p:SetHeight(math.max(y + 10, 200))
 	end

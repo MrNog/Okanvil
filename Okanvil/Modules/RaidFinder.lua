@@ -40,8 +40,11 @@ local listings = {}
 local ui = {}
 
 -- forward decl: is the Raid Finder panel the one currently shown?
+-- _current only says which page was picked last; closing the window does not clear
+-- it, so the window itself has to be checked or a closed page renders every tick.
 local function page_visible()
 	return Okanvil._current == ADDON and ui.count ~= nil
+		and Okanvil.win ~= nil and Okanvil.win:IsShown() and true or false
 end
 
 -- Modulo ligado? Um modulo DESLIGADO nos Modules deve ser como se nao existisse --
@@ -60,7 +63,15 @@ local function should_scan()
 	if not (db and module_on()) then return false end
 	-- the floating Mini Raid Browser scans on its own while it is open
 	if Okanvil.RaidFinder_MiniWantsScan then return true end
-	return page_visible() or db.background
+	if page_visible() then return true end
+	return db.background and not Okanvil.RaidFinder_Quiet()
+end
+
+-- Background scanning stays off in combat and inside a raid instance: nobody shops
+-- for a pug mid-raid, and a busy Global channel parsed line by line is frames lost
+-- while the raid and the loot council are running.
+function Okanvil.RaidFinder_Quiet()
+	return InCombatLockdown() or Okanvil:InRaidInstance()
 end
 
 -- active filters (nil = All)
@@ -1172,6 +1183,7 @@ local function buildUI(panel)
 	ui = {}
 	local dash = W.Dashboard(panel, {
 		title = "Raid Finder",
+		subtitle = "LFM raids read from chat -- paused inside raids",
 		icon = ICON,
 		drawerWidth = 0,   -- single-panel page
 		footerHeight = 0,  -- no footer -> the list uses the full height (no dead strip)
@@ -1212,47 +1224,68 @@ local function buildUI(panel)
 		function(v) filter.instance = (v ~= "All") and v or nil; Okanvil.RaidFinder_Render() end)
 	ui.ddRaid:SetPoint("LEFT", 34, 0); ui.ddRaid:SetWidth(150)
 
-	-- Size (10/25 only; old 40/20 raids still show under "All")
-	ui.ddSize = W.DropDown(bar,
-		function() return { "All", "10", "25" } end,
-		function() return filter.size and tostring(filter.size) or "All" end,
-		function(v) filter.size = (v ~= "All") and tonumber(v) or nil; Okanvil.RaidFinder_Render() end)
-	ui.ddSize:SetPoint("LEFT", ui.ddRaid, "RIGHT", 8, 0); ui.ddSize:SetWidth(60)
+	-- Size, role and weekly: short fixed choices, so they are toggles you click
+	-- once (the forge look's tabs), not dropdowns you open. Only the raid, with its
+	-- long list, stays a dropdown.
+	local segPaints = {}
+	local anchor, gap = ui.ddRaid, 18
+	local function seg(title, opts, get, set)
+		-- a thin divider, then the group's name in small caps: three groups that
+		-- read as three groups, not one long run of grey words
+		local div = bar:CreateTexture(nil, "ARTWORK")
+		div:SetTexture("Interface\\Buttons\\WHITE8x8"); div:SetVertexColor(1, 1, 1, 0.12)
+		div:SetSize(1, 16); div:SetPoint("LEFT", anchor, "RIGHT", gap / 2, 0)
+		local lb = W.Text(bar, title:upper(), "note", "dim")
+		lb:SetPoint("LEFT", anchor, "RIGHT", gap, 0)
+		local prev, btns = lb, {}
+		for i, o in ipairs(opts) do
+			local b = W.Button(bar, o[1], "tab")
+			local tw = (b.text and b.text:GetStringWidth() or 30) + 12
+			b:SetSize(math.max(26, tw), 22)
+			b:SetPoint("LEFT", prev, "RIGHT", (i == 1) and 8 or 2, 0)
+			b:SetScript("OnClick", function() set(o[2]); for _, pnt in ipairs(segPaints) do pnt() end; Okanvil.RaidFinder_Render() end)
+			if o[3] then b:Tooltip(o[3]) end
+			btns[#btns + 1] = { b = b, v = o[2] }
+			prev = b
+		end
+		segPaints[#segPaints + 1] = function()
+			local cur = get()
+			for _, x in ipairs(btns) do x.b:SetKind((x.v == cur) and "tabOn" or "tab") end
+		end
+		anchor, gap = prev, 18
+	end
 
-	-- Role
-	-- "My role" is opt-in and sticky (db.roleMine): a rogue picks it once and stops seeing
-	-- the tank/healer LFMs he can never fill.
-	ui.ddRole = W.DropDown(bar,
-		function() return { "All", "My role", "Tank", "Heal", "DPS" } end,
-		function()
-			if filter.role == "mine" then return "My role" end
-			if filter.role == "tank" then return "Tank" end
-			if filter.role == "healer" then return "Heal" end
-			if filter.role == "dps" then return "DPS" end
-			return "All"
-		end,
-		function(v)
-			filter.role = (v == "My role" and "mine") or (v == "Tank" and "tank")
-				or (v == "Heal" and "healer") or (v == "DPS" and "dps") or nil
-			db.roleMine = (filter.role == "mine") or nil   -- remember the opt-in across sessions
-			Okanvil.RaidFinder_Render()
-		end)
-	ui.ddRole:SetPoint("LEFT", ui.ddSize, "RIGHT", 8, 0); ui.ddRole:SetWidth(80)
+	-- Size (10/25 only; old 40/20 raids still show under All)
+	seg("Size", { { "All", false }, { "10", 10 }, { "25", 25 } },
+		function() return filter.size or false end,
+		function(v) filter.size = v or nil end)
+
+	-- Role. "Mine" is opt-in and sticky (db.roleMine): a rogue picks it once and
+	-- stops seeing the tank/healer LFMs he can never fill.
 	if db.roleMine then filter.role = "mine" end
+	seg("Role", { { "All", false }, { "Mine", "mine", "Only raids asking for the role you play now." },
+		{ "Tank", "tank" }, { "Heal", "healer" }, { "DPS", "dps" } },
+		function() return filter.role or false end,
+		function(v)
+			filter.role = v or nil
+			db.roleMine = (filter.role == "mine") or nil   -- remember the opt-in across sessions
+		end)
 
 	-- Weekly
-	ui.ddWeekly = W.DropDown(bar,
-		function() return { "All", "Weekly only", "Non-weekly" } end,
+	seg("Type", { { "All", false }, { "Weekly", true, "Only the weekly raid quest runs." },
+		{ "Other", "no", "Everything except weekly runs." } },
 		function()
-			if filter.weekly == true then return "Weekly only" end
-			if filter.weekly == false then return "Non-weekly" end
-			return "All"
+			if filter.weekly == true then return true end
+			if filter.weekly == false then return "no" end
+			return false
 		end,
 		function(v)
-			filter.weekly = (v == "Weekly only" and true) or (v == "Non-weekly" and false) or nil
-			Okanvil.RaidFinder_Render()
+			if v == true then filter.weekly = true
+			elseif v == "no" then filter.weekly = false
+			else filter.weekly = nil end
 		end)
-	ui.ddWeekly:SetPoint("LEFT", ui.ddRole, "RIGHT", 8, 0); ui.ddWeekly:SetWidth(100)
+	ui.paintFilters = function() for _, pnt in ipairs(segPaints) do pnt() end end
+	ui.paintFilters()
 
 	-- Reset: filters back to All AND the list emptied. With the filters already on
 	-- All, clearing them alone changed nothing on screen; a fresh start is what the
@@ -1261,7 +1294,7 @@ local function buildUI(panel)
 	reset:SetPoint("RIGHT", 0, 0); reset:SetSize(70, 22)
 	reset:SetScript("OnClick", function()
 		filter.instance, filter.size, filter.role, filter.weekly = nil, nil, nil, nil
-		ui.ddRaid:refreshText(); ui.ddSize:refreshText(); ui.ddRole:refreshText(); ui.ddWeekly:refreshText()
+		ui.ddRaid:refreshText(); db.roleMine = nil; ui.paintFilters()
 		for name in pairs(listings) do listings[name] = nil end
 		RequestRaidInfo()
 		Okanvil.RaidFinder_Render()
@@ -1273,12 +1306,12 @@ local function buildUI(panel)
 	ui.count:SetPoint("TOPLEFT", bar, "BOTTOMLEFT", 0, -10)
 
 	-- opaque list well (dark panel) so the game world never shows through
-	local well = W.Frame(main, "dark")
+	local well = W.Frame(main, "well")
 	well:SetPoint("TOPLEFT", ui.count, "BOTTOMLEFT", 0, -6)
 	well:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", -8, 8)
 
 	-- column header row (inside the well, opaque strip)
-	local hdr = W.Frame(well, "input")
+	local hdr = W.Frame(well, "row")
 	hdr:SetPoint("TOPLEFT", 2, -2); hdr:SetPoint("TOPRIGHT", -2, 0); hdr:SetHeight(18)
 	local function colh(x, t) local fs = W.Text(hdr, t, "label", "accent"); fs:SetPoint("LEFT", x + 4, 0) end
 	-- centered header (over a fixed-width cell): x = cell left, w = cell width
@@ -1438,7 +1471,7 @@ tick:SetScript("OnUpdate", function(_, elapsed)
 	local onMini = Okanvil.RaidFinder_MiniWantsScan and true or false
 	-- Nothing visible and not scanning in the background -> nothing can have changed
 	-- and nobody could see it if it had.
-	if not (onPage or onMini or db.background) then return end
+	if not (onPage or onMini or (db.background and not Okanvil.RaidFinder_Quiet())) then return end
 
 	if lockAcc >= 60 and (onPage or onMini) then
 		lockAcc = 0

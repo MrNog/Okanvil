@@ -110,7 +110,7 @@ jobs:
           ( cd "staging/$name" && \
             rm -f PLAN.md CHANGELOG.md .editorconfig && \
             rm -f Media/README.md && \
-            rm -f Media/*.png && \
+            rm -f Media/*.png Media/*.jpg && \
             find . -name '*.bak' -delete && \
             find . -name '*.logic-bak' -delete && \
             find . -name '*~' -delete )

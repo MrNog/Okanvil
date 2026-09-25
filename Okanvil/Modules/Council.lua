@@ -497,7 +497,7 @@ local function ensureRow(i)
 
 	-- A recessed well behind each row, so two items read as two blocks rather
 	-- than one wall of text. "dark" is the palette's recessed fill (panelD).
-	Okanvil:Skin(row, "dark")
+	Okanvil:Skin(row, "soft")
 
 	local icon = row:CreateTexture(nil, "ARTWORK")
 	icon:SetSize(ICON_S, ICON_S)
@@ -2337,6 +2337,7 @@ function C_.BuildPage(p)
 	dash = W.Dashboard(p, {
 		icon  = (Okanvil.ICONS and Okanvil.ICONS.council) or "Interface\\Icons\\INV_Misc_Tournaments_Banner_Orc",
 		title = "Loot Council",
+		subtitle = "Officers only -- raiders just see the popup",
 		drawerWidth = 0,      -- no side list: this page is one column of settings
 		footerHeight = 0,
 		-- COUNCIL NIGHT lives in the header, the way PuG's spam switch does: it is
@@ -2448,21 +2449,25 @@ function C_.BuildRunTab(body)
 	local y = -14 - (BH + 6) - 16
 	y = W.Section(body, "OPTIONS", 14, y) - 8
 
-	local function opt(label, tip, getFn, setFn)
-		local c = W.Check(body, label, getFn, setFn)
+	-- One setting per row: title, what it does, ON / OFF (see W.ToggleRow).
+	local function opt(label, desc, tip, getFn, setFn)
+		local c = W.ToggleRow(body, label, desc, getFn, setFn)
 		c:SetPoint("TOPLEFT", 14, y)
+		c:SetPoint("RIGHT", body, "RIGHT", -14, 0)
 		c:Tooltip(tip)
-		y = y - 26
+		y = y - c:GetHeight()
 		return c
 	end
 
 	opt("Ask when I become master looter",
+		"Offers council night at the start of a raid",
 		"When the master looter becomes you, or you zone into a raid as leader with no "
 			.. "master looter set (Yes makes you ML). Say no and rolls carry on as they are.",
 		function() return db().askOnML ~= false end,
 		function(v) db().askOnML = v end)
 
 	opt("Ask automatically when a corpse opens",
+		"On a council night, every epic goes to the raid as one question",
 		"Only on a council night, and only for epics.",
 		function() return db().autoAsk end,
 		function(v) db().autoAsk = v end)
@@ -2471,12 +2476,14 @@ function C_.BuildRunTab(body)
 	-- for it.
 	if Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() then
 		opt("Hide the priority ladder on the board",
-			"For a council that decides without the website's order.",
+			"For a council that decides without the website's order",
+			"The ladder is only ever shown to officers.",
 			function() return db().hidePrio end,
 			function(v) db().hidePrio = v; C_.RepaintBoard() end)
 	end
 
 	opt("Whisper the winner when it cannot be given",
+		"Auto loot or item already in bags: they trade you",
 		"Under auto loot the item is in your bags -- the winner is told to trade you.",
 		function() return db().whisperWinner ~= false end,
 		function(v) db().whisperWinner = v end)
@@ -2701,6 +2708,7 @@ local function askCouncilNight(becomeML)
 		yes:SetSize(140, 24); yes:SetPoint("BOTTOMLEFT", 14, 14)
 		yes:SetScript("OnClick", function()
 			f:Hide()
+			Okanvil:Trace("COUNCIL", f.becomeML and "Yes to become ML + council" or "Yes to council tonight")
 			if f.becomeML then
 				local L = Okanvil.Loot
 				local r = L and L.SetMeAsMasterLooter and L.SetMeAsMasterLooter()
@@ -2720,6 +2728,7 @@ local function askCouncilNight(becomeML)
 		no:SetSize(140, 24); no:SetPoint("BOTTOMRIGHT", -14, 14)
 		no:SetScript("OnClick", function()
 			f:Hide()
+			Okanvil:Trace("COUNCIL", f.becomeML and "No to become ML" or "No to council tonight")
 			if f.becomeML then declinedLeadZone = currentZone() end
 			C_.SetActive(false)
 		end)
@@ -2734,6 +2743,7 @@ local function askCouncilNight(becomeML)
 	local th = askNightF.txt:GetStringHeight() or 40
 	askNightF:SetHeight(16 + th + 18 + 24 + 14)
 	if PlaySound then PlaySound("igMainMenuOpen") end
+	Okanvil:Trace("COUNCIL", becomeML and "asking: become ML + council?" or "asking: council tonight?")
 	askNightF:Show()
 end
 
@@ -2781,6 +2791,14 @@ do
 	ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
 	ev:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
 	ev:SetScript("OnEvent", function(_, event)
+		-- Every loot-method change, whoever made it: another addon flipping the
+		-- group to master loot otherwise looks exactly like Okanvil doing it.
+		if event == "PARTY_LOOT_METHOD_CHANGED" and GetLootMethod then
+			local method = GetLootMethod()
+			local L = Okanvil.Loot
+			local ml = L and L.MasterLooterName and L.MasterLooterName()
+			Okanvil:Trace("LOOT", ("loot method now %s (ML %s)"):format(tostring(method), tostring(ml or "none")))
+		end
 		-- Coalesced: a roster update storm schedules one check, not fifty.
 		if not mlQueued then
 			mlQueued = true

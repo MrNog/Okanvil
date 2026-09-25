@@ -25,6 +25,7 @@ function Okanvil:BuildSettings()
 	-- tab, and W.Dashboard gives every tab its own internal scroll for free.
 	local dash = W.Dashboard(host, {
 		title = "Settings",
+		subtitle = "Shared by all your characters",
 		icon = Okanvil.ICONS.settings,
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -62,12 +63,12 @@ function Okanvil:BuildSettings()
 	-- app credit -- a small badge in the bottom-right corner (anvil + wordmark),
 	-- nicer than a bare line of text. Anchored to the PAGE, not dash.main: in pill
 	-- mode the body it used to hang off is hidden, which took the badge with it.
-	local badge = W.Frame(host, "panel")
+	local badge = W.Frame(host, "soft")
 	badge:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", -12, 12)
 	badge:SetHeight(48)
 	local bIcon = badge:CreateTexture(nil, "ARTWORK")
 	bIcon:SetSize(30, 30); bIcon:SetPoint("LEFT", 12, 0)
-	bIcon:SetTexture("Interface\\Icons\\Trade_BlackSmithing"); bIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	bIcon:SetTexture(Okanvil.BRAND_ICON); bIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	local bName = W.Text(badge, "Okanvil", "head", "accent"); bName:SetPoint("LEFT", bIcon, "RIGHT", 10, 8); bName:Color(1, 0.82, 0)
 	local bVer = W.Text(badge, "v" .. (self.version or "1.0"), "note", "dim"); bVer:SetPoint("LEFT", bName, "RIGHT", 5, 0)
 	local bBy = W.Text(badge, "forged by |cffe0b860Okanor|r", "note", "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
@@ -132,27 +133,35 @@ function Okanvil:Settings_General(p)
 	y1 = y1 - 22
 	hint("text, icons and spacing together", 1)
 
+	-- How solid the window is. With the panels inside it see-through, this is
+	-- what stands between the page and the game behind it.
+	y1 = y1 - SLIDER_TOP
+	W.Slider(p, "Window opacity", 0.3, 1.0, 0.05, function() return db.bgAlpha or 0.95 end,
+		function(v) db.bgAlpha = v; Okanvil:ReskinAll(v) end):SetPoint("TOPLEFT", C1, y1)
+	y1 = y1 - 22
+	hint("1 = solid, lower = see the game through it", 1)
+
 	-- RIGHT: the art, its toggle and its opacity as one block. The slider does
 	-- nothing while the toggle is off, so they have to be read together.
-	local showChk = W.Check(p, "Background art",
+	local showChk = W.ToggleRow(p, "Forge wallpaper", nil,
 		function() return (db.ratArt or "on") ~= "off" end,
 		function(v) db.ratArt = v and "on" or "off"; Okanvil:RefreshRatArt() end)
+	showChk:SetHeight(26); showChk.btn:SetSize(46, 18); showChk:SetWidth(260)
 	showChk:SetPoint("TOPLEFT", C2, y2)
 	y2 = y2 - 24 - SLIDER_TOP
-	W.Slider(p, "Art opacity", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
+	W.Slider(p, "Wallpaper strength", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
 		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", C2, y2)
 	y2 = y2 - 22
 
 	head("BEHAVIOUR")
-	local pullChk = W.Check(p, "Close all windows on a DBM pull",
+	local pullChk = W.ToggleRow(p, "Close all windows on a DBM pull", nil,
 		function() return db.closeOnPull ~= false end,
 		function(v) db.closeOnPull = v end)
+	pullChk:SetHeight(26); pullChk.btn:SetSize(46, 18); pullChk:SetWidth(300)
 	pullChk:SetPoint("TOPLEFT", C1, y1); y1 = y1 - 26
 
-	-- Background opacity and Bar texture used to be here. Both are set once and
-	-- never touched again -- and the addon has almost no status bars for a texture
-	-- to apply to. db.bgAlpha and db.statusbar still drive the panels and
-	-- Okanvil:Texture(); they are just no longer worth a row each.
+	-- db.statusbar still drives Okanvil:Texture(); the addon has almost no status
+	-- bars for a texture to apply to, so it has no row of its own.
 	head("FONT")
 	W.DropDown(p, function() return (LSM and LSM:List("font")) or { db.font } end,
 		function() return db.font end, function(v) db.font = v; Okanvil:ApplyFonts() end, "font")
@@ -214,8 +223,10 @@ function Okanvil:Settings_RaidTools(p)
 		local reach = (col == 1) and (C2 - C1 - 100) or nil
 		setY((W.Section(p, text, cx(), cy(), reach)))
 	end
+	-- A setting row (label, ON / OFF, hairline -- W.ToggleRow), one column wide.
 	local function chk(label, getFn, setFn, tip)
-		local c = W.Check(p, label, getFn, setFn)
+		local c = W.ToggleRow(p, label, nil, getFn, setFn)
+		c:SetHeight(26); c.btn:SetSize(46, 18); c:SetWidth(COL_W - 20)
 		c:SetPoint("TOPLEFT", cx(), cy()); step(28)
 		if tip then c:Tooltip(tip) end
 		return c
@@ -338,6 +349,7 @@ end
 -- Its own window, so it can stay open while replies trickle in and the Settings
 -- page can be closed. One shared frame, rebuilt rows on every repaint.
 local verDlg
+local DOWNLOAD_URL = "github.com/MrNog/Okanvil/releases/latest"
 function Okanvil:ShowVersionChecker()
 	local f = verDlg
 	if not f then
@@ -357,8 +369,15 @@ function Okanvil:ShowVersionChecker()
 		f.status = status
 
 		-- results list inside a clipped scroll (long guild rosters must not spill)
-		local box = W.Frame(f, "dark")
-		box:SetPoint("TOPLEFT", 10, -62); box:SetPoint("BOTTOMRIGHT", -10, 10)
+		local box = W.Frame(f, "soft")
+		box:SetPoint("TOPLEFT", 10, -62); box:SetPoint("BOTTOMRIGHT", -10, 44)
+
+		-- Whispers the download link to everyone who did not reply. Only shown once
+		-- the check has finished: while it runs, "no reply" still means "not yet".
+		local bLink = W.Button(f, "Whisper download link")
+		bLink:SetSize(260, 26); bLink:SetPoint("BOTTOMLEFT", 12, 10)
+		bLink:Hide()
+		f.bLink = bLink
 		local scroll = CreateFrame("ScrollFrame", nil, box)
 		scroll:SetPoint("TOPLEFT", 6, -6); scroll:SetPoint("BOTTOMRIGHT", -6, 6)
 		Okanvil.Clip(scroll)
@@ -391,10 +410,12 @@ function Okanvil:ShowVersionChecker()
 			local mine = tostring(Okanvil.version or "?")
 			local waiting = Comms.VersionCheckRunning and Comms.VersionCheckRunning()
 			local lines, ok, old, none = {}, 0, 0, 0
+			local missing = {}
 			for _, name in ipairs(roster) do
 				local v = replies[name]
 				if not v then
 					none = none + 1
+					missing[#missing + 1] = name
 					lines[#lines + 1] = "|cff8a8d93" .. name .. "|r  "
 						.. (waiting and "|cff8a8d93waiting...|r" or "|cffff5555no reply|r")
 				elseif v == mine then
@@ -413,6 +434,13 @@ function Okanvil:ShowVersionChecker()
 			f.status:SetText("|cff7cfc8a" .. ok .. "|r / |cffffd200" .. old
 				.. "|r / |cffff5555" .. none .. "|r"
 				.. (waiting and "  |cff8a8d93asking...|r" or ""))
+			f._missing = missing
+			if not waiting and #missing > 0 then
+				f.bLink.text:SetText(("Whisper download link (%d)"):format(#missing))
+				f.bLink:Show()
+			else
+				f.bLink:Hide()
+			end
 			-- size the scroll child to the text so the wheel range is right
 			local w = f.scroll:GetWidth() or 0
 			if w < 10 then w = 288 end            -- first paint runs before layout
@@ -439,6 +467,21 @@ function Okanvil:ShowVersionChecker()
 			end
 			paint()
 		end
+		-- Spaced out so a long guild list does not trip the server's chat throttle.
+		bLink:SetScript("OnClick", function()
+			local list = f._missing or {}
+			if #list == 0 then return end
+			local msg = "[Okanvil] You don't seem to have Okanvil (the RATS raid addon). "
+				.. "Download: " .. DOWNLOAD_URL .. " -- unzip into Interface\\AddOns and restart WoW."
+			for i, name in ipairs(list) do
+				Okanvil.Comms.After((i - 1) * 0.4, function()
+					SendChatMessage(msg, "WHISPER", nil, name)
+				end)
+			end
+			Okanvil:Print(("Whispered the download link to %d player(s)."):format(#list))
+			f._missing = {}
+			bLink:Hide()
+		end)
 		bGroup:SetScript("OnClick", function() ask("group") end)
 		bGuild:SetScript("OnClick", function() ask("guild") end)
 

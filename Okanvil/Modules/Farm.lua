@@ -429,10 +429,13 @@ ev:SetScript("OnEvent", function(_, event, ...)
 		-- 3.3.5a layout, which has no raid-flag fields:
 		--   1 timestamp, 2 sub-event, 3 sourceGUID, 4 sourceName, 5 sourceFlags,
 		--   6 destGUID, 7 destName, 8 destFlags
-		-- This read destGUID from 5, which is sourceFlags -- a NUMBER. Every kill
-		-- threw, and none was ever counted.
-		if select(2, ...) == "UNIT_DIED" then
-			if Okanvil.U.guidIsNPC(select(6, ...)) then S.kills = S.kills + 1 end
+		-- YOUR kills only: PARTY_KILL names who landed the killing blow. UNIT_DIED
+		-- fires for every NPC dying in range, so anyone else's kills nearby (a
+		-- Wintergrasp battle while you fish) were counted as yours.
+		local _, sub, srcGUID, _, _, dstGUID = ...
+		if sub == "PARTY_KILL" and Okanvil.U.guidIsNPC(dstGUID)
+			and (srcGUID == UnitGUID("player") or (UnitExists("pet") and srcGUID == UnitGUID("pet"))) then
+			S.kills = S.kills + 1
 		end
 	end
 end)

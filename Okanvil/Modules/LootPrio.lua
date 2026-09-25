@@ -596,7 +596,7 @@ function P.BuildTab(p)
 
 	-- list ---------------------------------------------------------------
 	local listTop = 28 + 22 + 8
-	local well = W.Frame(p, "dark")
+	local well = W.Frame(p, "well")
 	well:SetPoint("TOPLEFT", 8, -listTop)
 	well:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", -8, 8)
 
@@ -939,7 +939,10 @@ if Comms then
 		if not syncAllowed() or not senderTrusted(who) then return end
 		if who == (UnitName("player") or "") then return end
 		if not stamp or stamp == "" then return end
-		if stamp <= P.Stamp() then return end       -- ours is same or newer: nothing to do
+		-- Ours is newer: say so, so they ask us. Only whoever JOINS announces, so
+		-- without this answer a newcomer holding an old list would keep it.
+		if stamp < P.Stamp() then P.Announce_Sync(); return end
+		if stamp == P.Stamp() then return end
 		Comms.Whisper("PRIOQ", who)
 	end)
 
@@ -964,15 +967,20 @@ if Comms then
 		if P.RefreshTab then P.RefreshTab() end
 	end)
 
-	-- Announce when the raid changes. A new officer joining is exactly the moment
-	-- the two copies should meet.
+	-- Announce once, when WE join a group. Whoever joins announces, and anyone
+	-- holding a newer list answers (PRIOV above) -- so the copies still meet
+	-- without every roster change in the raid re-announcing.
 	local sev = CreateFrame("Frame")
+	local wasGrouped = false
 	sev:RegisterEvent("RAID_ROSTER_UPDATE")
 	sev:RegisterEvent("PARTY_MEMBERS_CHANGED")
-	sev:SetScript("OnEvent", function()
-		if not syncAllowed() then return end
+	sev:SetScript("OnEvent", Okanvil:CombatSafe("lootprio.announce", function()
+		local grouped = (GetNumRaidMembers() > 0) or (GetNumPartyMembers() > 0)
+		local joined = grouped and not wasGrouped
+		wasGrouped = grouped
+		if not joined or not syncAllowed() then return end
 		-- settle first: a raid forming fires these in a burst, and the roster we
 		-- need to check ranks against may not have caught up yet
 		Comms.After(3, function() P.Announce_Sync() end)
-	end)
+	end))
 end

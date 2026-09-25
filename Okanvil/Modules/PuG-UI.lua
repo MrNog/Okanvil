@@ -138,29 +138,14 @@ local function buildTopStrip(p)
 	F.gsBox = W.EditBox(p):Size(56, 22):Point("TOPLEFT", 398, -4)
 	F.gsBox.edit:SetScript("OnTextChanged", function(s) d.gs = s:GetText() or ""; M.RefreshPreview() end)
 
-	-- A free-text tail, back on the strip.
-	--
-	-- It was taken off on the grounds that every ask has its own control. That
-	-- was wrong for the things no control covers -- "Gbid DC", "link achieve",
-	-- "no dc" -- and the only way left to say them was hand-editing the line,
-	-- which Rebuild then threw away along with the edit.
-	--
-	-- Living in db.note means the builder appends it to every generated line, so
-	-- Rebuild keeps it and Send carries it.
-	local noteLbl = W.Text(p, "say", "label", "dim")
-	noteLbl:SetPoint("TOPLEFT", 462, -9)
-	F.noteBox = W.EditBox(p):Size(120, 22):Point("TOPLEFT", 486, -4)
-	F.noteBox.edit:SetScript("OnTextChanged", function(s)
-		d.note = s:GetText() or ""
-		M.RefreshPreview()
-	end)
-	F.noteBox:Tooltip("Tacked onto the end of every line -- \"Gbid DC\", \"link achieve\".\nSurvives Rebuild, unlike editing the line by hand.")
+	-- No free-text box here: extra words go straight into the line at the bottom,
+	-- which is editable.
 
 	-- Read everyone's actual spec instead of guessing from class. Without this the
 	-- board files every paladin the same way and the leader sorts 25 people by hand,
 	-- remembering who heals. Explicit button, not automatic: inspecting the whole
 	-- raid is a burst of server traffic and should happen when asked for.
-	F.scanBtn = W.Button(p, "Read specs", nil):Size(96, 22):Point("TOPLEFT", 616, -4)
+	F.scanBtn = W.Button(p, "Read specs", nil):Size(96, 22):Point("TOPLEFT", 470, -4)
 	F.scanBtn:OnClick(function()
 		local I = Okanvil.Inspect
 		if not (I and I.ScanGroup) then
@@ -212,6 +197,27 @@ end
 -- catching: the board is about the raid you HAVE, and who wants in is a
 -- conversation that belongs in the chat frame.
 local COLS = { "tank", "healer", "melee", "ranged" }
+
+-- What each role column offers under "Ask for": only what can fill that role,
+-- and the SPEC where the class alone would say too little (a holy paladin, not
+-- any paladin, for a heal spot). Tokens are OkanvilClassSpecs / OkanvilClasses
+-- tokens, so the picks feed the "(bdk/prot warr)" part of the line unchanged.
+local ASKS = {
+	tank   = { "DEATHKNIGHT_TANK", "WARRIOR_PROT", "PALADIN_PROT", "DRUID_BEAR" },
+	healer = { "PALADIN_HOLY", "PRIEST_DISC", "PRIEST_HOLY", "SHAMAN_RESTO", "DRUID_RESTO" },
+	melee  = { "DEATHKNIGHT", "WARRIOR", "ROGUE", "PALADIN", "SHAMAN_ENH", "DRUID" },
+	ranged = { "MAGE", "WARLOCK", "HUNTER", "PRIEST", "SHAMAN_ELE", "DRUID_BALANCE" },
+}
+
+-- token -> { short, name, class } from the shipped class and spec tables
+local function askInfo(token)
+	for _, sp in ipairs(OkanvilClassSpecs or {}) do
+		if sp.token == token then return sp.short, sp.name, sp.class end
+	end
+	for _, c in ipairs(OkanvilClasses or {}) do
+		if c.token == token then return c.short, c.name, c.token end
+	end
+end
 local COL_TITLE = {
 	tank = "Tank", healer = "Healer", melee = "Melee", ranged = "Ranged",
 }
@@ -303,7 +309,7 @@ local function buildBoard(p)
 	-- columns are laid out proportionally so the board fills whatever width the
 	-- host panel has, rather than assuming a fixed window size
 	for i, key in ipairs(COLS) do
-		local col = W.Frame(p, "dark")
+		local col = W.Frame(p, "soft")
 		col:SetPoint("TOPLEFT", p, "TOPLEFT", 0, 0)
 		col:SetPoint("BOTTOMLEFT", p, "BOTTOMLEFT", 0, 0)
 		col._idx = i
@@ -313,7 +319,7 @@ local function buildBoard(p)
 		-- There used to be a second strip above the board saying "Melee 1/8 need 7"
 		-- while the column below it said "Melee 1" -- the same fact twice, costing
 		-- 50px of the board it was describing.
-		local head = W.Frame(col, "raise")
+		local head = W.Frame(col, "row")
 		head:SetPoint("TOPLEFT", 1, -1)
 		head:SetPoint("TOPRIGHT", -1, -1)
 		head:SetHeight(24)
@@ -347,18 +353,83 @@ local function buildBoard(p)
 			end)
 		end
 
+		-- "Ask for": the classes this role wants, right under its count. Picks are
+		-- kept per role, so each column says its own "(bdk/prot warr)" in the line.
+		local ask = CreateFrame("Frame", nil, col)
+		ask:SetPoint("TOPLEFT", head, "BOTTOMLEFT", 0, 0)
+		ask:SetPoint("TOPRIGHT", head, "BOTTOMRIGHT", 0, 0)
+		ask:SetHeight(44)
+		local albl = W.Text(ask, "ASK FOR", "note", "dim"); albl:SetPoint("TOPLEFT", 6, -5)
+		local arule = ask:CreateTexture(nil, "BORDER")
+		arule:SetTexture(FLAT); arule:SetVertexColor(1, 1, 1, 0.06); arule:SetHeight(1)
+		arule:SetPoint("BOTTOMLEFT"); arule:SetPoint("BOTTOMRIGHT")
+		local chips = {}
+		for _, token in ipairs(ASKS[key] or {}) do
+			local short, name, class = askInfo(token)
+			if short then
+				local b = CreateFrame("Button", nil, ask)
+				b:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1,
+					insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+				b.text = W.Text(b, short, "note"); b.text:SetPoint("CENTER", 0, 0)
+				b:SetSize((b.text:GetStringWidth() or 30) + 12, 18)
+				local cc = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+				b._rgb = cc and { cc.r, cc.g, cc.b } or { 1, 1, 1 }
+				b._token = token
+				local role = key
+				b:SetScript("OnClick", function()
+					pickTakesOver()
+					local picks = M.RolePicks(role)
+					picks[token] = (not picks[token]) or nil
+					M.RefreshUI()
+				end)
+				b:SetScript("OnEnter", function(self)
+					GameTooltip:SetOwner(self, "ANCHOR_TOP")
+					GameTooltip:AddLine(name, 1, 1, 1)
+					GameTooltip:AddLine('Adds "' .. short .. '" to this role in the line.', 0.6, 0.6, 0.6)
+					GameTooltip:Show()
+				end)
+				b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+				chips[#chips + 1] = b
+			end
+		end
+		-- Picked = the class colour, filled; not picked = a faint outline.
+		local function paintChip(b, on)
+			local r, g, bl = b._rgb[1], b._rgb[2], b._rgb[3]
+			if on then
+				b:SetBackdropColor(r, g, bl, 0.18); b:SetBackdropBorderColor(r, g, bl, 1)
+				b.text:SetTextColor(r, g, bl)
+			else
+				b:SetBackdropColor(0, 0, 0, 0); b:SetBackdropBorderColor(r, g, bl, 0.25)
+				b.text:SetTextColor(r * 0.55 + 0.1, g * 0.55 + 0.1, bl * 0.55 + 0.1)
+			end
+		end
+		-- Chips wrap to the column's width; the list below starts under them.
+		local function reflow()
+			local w = ask:GetWidth() or 0
+			if w < 20 then return end
+			local x, y = 6, -20
+			for _, b in ipairs(chips) do
+				local bw = b:GetWidth()
+				if x + bw > w - 6 and x > 6 then x = 6; y = y - 22 end
+				b:ClearAllPoints(); b:SetPoint("TOPLEFT", x, y)
+				x = x + bw + 4
+			end
+			ask:SetHeight(-y + 24)
+		end
+		ask:SetScript("OnSizeChanged", reflow)
+
 		-- Each column scrolls. A pug fills the Applicants column with everyone who
 		-- answered -- twenty-one of them in one ToGC -- and a fixed ten slots either
 		-- hid the rest behind "+11 more" or drew them past the bottom edge.
 		local csf = CreateFrame("ScrollFrame", nil, col)
-		csf:SetPoint("TOPLEFT", 1, -26)
+		csf:SetPoint("TOPLEFT", ask, "BOTTOMLEFT", 1, -3)
 		csf:SetPoint("BOTTOMRIGHT", -5, 3)
 		local cchild = CreateFrame("Frame", nil, csf)
 		cchild:SetSize(10, 1); csf:SetScrollChild(cchild)
 		Okanvil.Clip(csf)
 
 		local csb = CreateFrame("Slider", nil, col)
-		csb:SetPoint("TOPRIGHT", -2, -26); csb:SetPoint("BOTTOMRIGHT", -2, 3); csb:SetWidth(3)
+		csb:SetPoint("TOPRIGHT", ask, "BOTTOMRIGHT", -2, -3); csb:SetPoint("BOTTOMRIGHT", -2, 3); csb:SetWidth(3)
 		csb:SetOrientation("VERTICAL"); csb:SetValueStep(1); csb:SetMinMaxValues(0, 0)
 		local cth = csb:CreateTexture(nil, "OVERLAY"); cth:SetTexture(FLAT); cth:SetSize(3, 26)
 		do local a = C.accent; cth:SetVertexColor(a[1], a[2], a[3], 1) end
@@ -449,7 +520,8 @@ local function buildBoard(p)
 		more:SetPoint("BOTTOMLEFT", 6, 5)
 
 		F.cols[key] = { frame = col, rows = rows, count = cnt, more = more,
-		                sf = csf, child = cchild, sb = csb }
+		                sf = csf, child = cchild, sb = csb,
+		                chips = chips, paintChip = paintChip, reflow = reflow }
 	end
 
 	-- width them once the panel has a real size
@@ -469,79 +541,6 @@ local function buildBoard(p)
 	F.layoutBoard()
 end
 
--- ------------------------------------------------------------
--- Class row (main page): "specifically looking for"
--- ------------------------------------------------------------
--- Want row: pick a ROLE first, then only the classes that can fill it.
---
--- All nine classes were offered for everything, which made the leader do the
--- filtering -- "which of these can even tank?" -- every time. Picking Tank now
--- leaves DK / Warr / Druid / Pala on screen and nothing else.
-local function buildClassRow(p)
-	local d = db()
-	F.classBtns = {}
-	F.roleBtns = {}
-
-	local lbl = W.Text(p, "|cff8a8d93Want|r", "label", "dim")
-	lbl:SetPoint("LEFT", 4, 0)
-
-	-- role filter
-	local x = 40
-	-- No "Any": a class pick is always FOR a role ("a druid... to do what?"), and
-	-- with picks stored per role there is nothing for an "any" bucket to hold.
-	local ROLE_PICKS = {
-		{ key = "tank",   label = "Tank" },
-		{ key = "healer", label = "Heal" },
-		{ key = "melee",  label = "Melee" },
-		{ key = "ranged", label = "Range" },
-	}
-	for _, r in ipairs(ROLE_PICKS) do
-		local b = W.Button(p, r.label, nil):Size(48, 20)
-		b:SetPoint("LEFT", x, 0)
-		b:OnClick(function()
-			-- Same as the class and spec buttons: touching a pick means the line is
-			-- being built from the picks again. Without this the role button was the
-			-- one control that left a hand-edited line frozen, so switching from
-			-- Range to Tank changed the buttons and nothing else.
-			pickTakesOver()
-			-- Only changes WHICH role's picks the row is showing. Each role keeps
-			-- its own, so switching from Tank to Ranged no longer throws the tank
-			-- classes away -- the line can name both.
-			d.wantRole = r.key
-			M.RefreshUI()
-		end)
-		b:Tooltip(r.key == "" and "Show every class."
-			or ("Only classes that can " .. r.label:lower() .. "."))
-		F.roleBtns[r.key] = b
-		x = x + 50
-	end
-
-	-- separator, then the class buttons themselves
-	local sep = p:CreateTexture(nil, "ARTWORK")
-	sep:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
-	sep:SetSize(1, 16); sep:SetPoint("LEFT", x + 2, 0)
-	sep:SetVertexColor(1, 1, 1, 0.12)
-	x = x + 10
-
-	-- Every class button is built once and simply hidden when the picked role
-	-- cannot use it: rebuilding the row on each click would drop the buttons'
-	-- handlers and leak frames, which WoW never reclaims.
-	F.classX0 = x
-	for _, c in ipairs(OkanvilClasses or {}) do
-		local b = W.Button(p, c.short, nil):Size(50, 20)
-		b:SetPoint("LEFT", x, 0)
-		local tw = (b.text and b.text:GetStringWidth()) or 0
-		b:SetWidth(math.max(50, tw + 16))
-		b:OnClick(function()
-			pickTakesOver()
-			local picks = M.RolePicks(d.wantRole)
-			picks[c.token] = (not picks[c.token]) or nil
-			M.RefreshUI()
-		end)
-		b:Tooltip(c.name .. "\nAdds it to the \"(DK/Rogue)\" part of the line.")
-		F.classBtns[c.token] = b
-	end
-end
 -- ------------------------------------------------------------
 -- Bottom: the outgoing line + applicants
 -- ------------------------------------------------------------
@@ -753,7 +752,7 @@ local LOOT_TEXT_X = 5 + LOOT_ICON + 8
 -- One scrolling list: returns the scroll child to draw rows into, plus a
 -- relayout() to call once the content height is known.
 local function makeList(parent, x, w, top, bottom)
-	local card = W.Frame(parent, "input")
+	local card = W.Frame(parent, "soft")
 	card:SetPoint("TOPLEFT", x, top)
 	card:SetWidth(w)
 	card:SetPoint("BOTTOM", parent, "BOTTOM", 0, bottom)
@@ -1070,7 +1069,6 @@ function M.RefreshUI()
 		F.diffBtn:SetKind((canHC and d.hc) and "primary" or nil)
 	end
 	if F.gsBox and not F.gsBox.edit:HasFocus() then F.gsBox.edit:SetText(d.gs or "") end
-	if F.noteBox and not F.noteBox.edit:HasFocus() then F.noteBox.edit:SetText(d.note or "") end
 
 	-- ---- roster + board ----
 	local list = M.RosterList()
@@ -1229,33 +1227,12 @@ function M.RefreshUI()
 			F.classRunTag:SetText("")
 		end
 	end
-	if F.roleBtns then
-		for key, b in pairs(F.roleBtns) do
-			b:SetKind((d.wantRole or "") == key and "primary" or nil)
-		end
-	end
-	if F.classBtns then
-		-- Show only what the picked role can be, and re-flow so the visible
-		-- buttons sit shoulder to shoulder instead of leaving gaps where the
-		-- hidden ones used to be.
-		local allowed = {}
-		for _, c in ipairs(M.ClassesForRole(d.wantRole ~= "" and d.wantRole or "tank")) do
-			allowed[c.token] = true
-		end
-		local x = F.classX0 or 54
-		for _, c in ipairs(OkanvilClasses or {}) do
-			local b = F.classBtns[c.token]
-			if b then
-				if allowed[c.token] then
-					b:ClearAllPoints()
-					b:SetPoint("LEFT", x, 0)
-					b:SetKind(M.RolePicks(d.wantRole)[c.token] and "primary" or nil)
-					b:Show()
-					x = x + b:GetWidth() + 4
-				else
-					b:Hide()
-				end
-			end
+	-- the Ask-for chips in each column
+	for key, c in pairs(F.cols or {}) do
+		if c.chips then
+			local picks = M.RolePicks(key)
+			for _, b in ipairs(c.chips) do c.paintChip(b, picks[b._token] and true or false) end
+			if c.reflow then c.reflow() end
 		end
 	end
 	-- (the spec row, the channel box, auto-reply and the presets lived on the
@@ -1278,6 +1255,7 @@ function M.BuildUI(parent)
 
 	local dash = W.Dashboard(parent, {
 		title = "PuG",
+		subtitle = "Build a raid and spam the LFM line",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.pug) or "Interface\\Icons\\Ability_Warrior_RallyingCry",
 		drawerWidth = 0,          -- one full-width page; the board needs the room
 		footerHeight = 0,
@@ -1311,7 +1289,7 @@ function M.BuildUI(parent)
 	-- art is drawn on the content well above its own fill, so anything transparent
 	-- lets the art through and the text sits on top of a picture. Solid strips keep
 	-- the rat where it belongs -- behind the page, visible only in empty space.
-	local top = W.Frame(main, "dark")
+	local top = W.Frame(main, "well")
 	top:SetPoint("TOPLEFT", 0, 0); top:SetPoint("TOPRIGHT", 0, 0)
 	top:SetHeight(32)
 	buildTopStrip(top)
@@ -1324,18 +1302,15 @@ function M.BuildUI(parent)
 	-- ask and burying it behind a tab made it slower, not cleaner. The SPEC row is
 	-- the one that goes -- asking for a HOLY paladin specifically is rare, and
 	-- twelve more buttons was what made this strip unreadable.
-	local classRow = W.Frame(main, "dark")
-	classRow:SetPoint("BOTTOMLEFT", 0, 0); classRow:SetPoint("BOTTOMRIGHT", 0, 0)
-	classRow:SetHeight(26)
-	buildClassRow(classRow)
-
-	local resStrip = W.Frame(main, "dark")
-	resStrip:SetPoint("BOTTOMLEFT", classRow, "TOPLEFT", 0, 3)
-	resStrip:SetPoint("BOTTOMRIGHT", classRow, "TOPRIGHT", 0, 3)
+	-- The class asks live in the columns now (see ASKS), so the reserves strip is
+	-- the page's last row and the board gets the height the Want row took.
+	local resStrip = W.Frame(main, "well")
+	resStrip:SetPoint("BOTTOMLEFT", 0, 0)
+	resStrip:SetPoint("BOTTOMRIGHT", 0, 0)
 	resStrip:SetHeight(26)
 	buildReserveStrip(resStrip)
 
-	local bottom = W.Frame(main, "dark")
+	local bottom = W.Frame(main, "well")
 	bottom:SetPoint("BOTTOMLEFT", resStrip, "TOPLEFT", 0, 3)
 	bottom:SetPoint("BOTTOMRIGHT", resStrip, "TOPRIGHT", 0, 3)
 	bottom:SetHeight(74)
@@ -1356,6 +1331,6 @@ end
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("RAID_ROSTER_UPDATE")
 ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
-ev:SetScript("OnEvent", function()
+ev:SetScript("OnEvent", Okanvil:CombatSafe("pug.board", function()
 	if F then M.RefreshUI() end
-end)
+end))

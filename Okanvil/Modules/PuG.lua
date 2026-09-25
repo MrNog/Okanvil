@@ -867,8 +867,14 @@ local function buildMessage()
 	-- A class run asks by class, not by role, so its picks go at the end rather
 	-- than beside a role count that does not apply.
 	if db.classRun then
-		local w = wantText(db.wantRole)
-		if w ~= "" then parts[#parts + 1] = "(" .. w .. ")" end
+		local seen, all = {}, {}
+		for _, r in ipairs(ROLES) do
+			local w = wantText(r)
+			for bit in w:gmatch("[^/]+") do
+				if not seen[bit] then seen[bit] = true; all[#all + 1] = bit end
+			end
+		end
+		if #all > 0 then parts[#parts + 1] = "(" .. table.concat(all, "/") .. ")" end
 	end
 
 	if db.gs ~= "" then parts[#parts + 1] = db.gs .. "+ gs" end
@@ -878,7 +884,7 @@ local function buildMessage()
 	local res = reserveText(#table.concat(parts, " "))
 	if res ~= "" then parts[#parts + 1] = res end
 
-	if db.note ~= "" then parts[#parts + 1] = db.note end
+	-- (no free-text tail: the line itself is editable at the bottom of the page)
 
 	return table.concat(parts, " ")
 end
@@ -1183,31 +1189,24 @@ core:SetScript("OnUpdate", function(self, e)
 	-- custom channel and guild chat. Public output, from a module the user
 	-- believes is off.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
-	local msg = outgoing()
-	if msg == "" then return end
 
-	for _, name in ipairs(SPAM_CHANNELS) do
-		chElapsed[name] = (chElapsed[name] or 0) + e
-		if chElapsed[name] >= SPAM_EVERY then
-			chElapsed[name] = 0
-			sendTo(name, msg)
-		end
+	-- Build the line only when a channel is due. Building it walks the raid
+	-- roster and makes a table per member, and doing that every frame for a post
+	-- once a minute was the cost -- in a raid it ran thousands of times a second.
+	-- Posting itself is never held back: a leader pugging one spot mid-raid
+	-- switched this on and it must keep going, trash pulls included.
+	local msg
+	local function post(key, target)
+		chElapsed[key] = (chElapsed[key] or 0) + e
+		if chElapsed[key] < SPAM_EVERY then return end
+		chElapsed[key] = 0
+		if msg == nil then msg = outgoing() end
+		if msg ~= "" then sendTo(target, msg) end
 	end
+	for _, name in ipairs(SPAM_CHANNELS) do post(name, name) end
 	-- optional extras, set in the More tab
-	if db.customChannel ~= "" then
-		chElapsed.__custom = (chElapsed.__custom or 0) + e
-		if chElapsed.__custom >= SPAM_EVERY then
-			chElapsed.__custom = 0
-			sendTo(db.customChannel, msg)
-		end
-	end
-	if db.toGuild then
-		chElapsed.__guild = (chElapsed.__guild or 0) + e
-		if chElapsed.__guild >= SPAM_EVERY then
-			chElapsed.__guild = 0
-			sendTo("GUILD", msg)
-		end
-	end
+	if db.customChannel ~= "" then post("__custom", db.customChannel) end
+	if db.toGuild then post("__guild", "GUILD") end
 end)
 
 function M.Start()
@@ -1517,7 +1516,7 @@ end
 local seenInRaid = {}
 local aev = CreateFrame("Frame")
 aev:RegisterEvent("RAID_ROSTER_UPDATE")
-aev:SetScript("OnEvent", function()
+aev:SetScript("OnEvent", Okanvil:CombatSafe("pug.autoGroup", function()
 	if not db or not db.autoGroup then return end
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 	if not canArrange() then return end
@@ -1537,7 +1536,7 @@ aev:SetScript("OnEvent", function()
 	for rn in pairs(seenInRaid) do
 		if not present[rn] then seenInRaid[rn] = nil end
 	end
-end)
+end))
 
 -- ------------------------------------------------------------
 -- Slash

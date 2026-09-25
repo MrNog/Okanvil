@@ -37,6 +37,7 @@ function Okanvil:BuildLoot()
 	-- drawer and no footer -- so a page gets the window's full width.
 	local dash = W.Dashboard(host, {
 		title = "Loot",
+		subtitle = "What dropped, per boss, and who got it",
 		icon = Okanvil.ICONS.loot,
 		-- No COLLECTED drawer. It was a per-person tally of what the speed-run had
 		-- handed out, in a column beside the page with a Show/Hide button on the
@@ -98,6 +99,20 @@ function Okanvil:BuildLoot()
 	top:SetHeight(128)
 	Okanvil:Loot_BuildCollectors(top)
 
+	-- The speed-run master-loot block is for officers, and for whoever is master
+	-- looter right now (a pug leader sweeping loot). Everyone else sees only the
+	-- history, which moves up to take the space.
+	local function applyTop()
+		local show = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio())
+			or (L.IsMasterLooter and L.IsMasterLooter())
+		local on = L.CollectorsEnabled and L.CollectorsEnabled()
+		if top.fields then if on then top.fields:Show() else top.fields:Hide() end end
+		if show then top:Show(); top:SetHeight(on and 148 or 50) else top:Hide(); top:SetHeight(1) end
+	end
+	applyTop()
+	fill.applyTop = applyTop
+	top.onToggle = applyTop
+
 	local hist = W.Frame(main, "page")
 	hist:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
 	hist:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", 0, 0)
@@ -105,6 +120,7 @@ function Okanvil:BuildLoot()
 
 	-- refresh when loot changes / the page shows / loot method changes
 	local function refreshAll()
+		applyTop()
 		dash:Refresh()
 		if fill._rebuildHistory then fill._rebuildHistory() end
 	end
@@ -116,7 +132,12 @@ function Okanvil:BuildLoot()
 		fill._mlEv:RegisterEvent("RAID_ROSTER_UPDATE")
 		fill._mlEv:RegisterEvent("PARTY_LEADER_CHANGED")
 		fill._mlEv:RegisterEvent("PARTY_MEMBERS_CHANGED")
-		fill._mlEv:SetScript("OnEvent", function() if fill:IsShown() then dash:Refresh() end end)
+		fill._mlEv:SetScript("OnEvent", function()
+			if fill:IsShown() then
+				if fill.applyTop then fill.applyTop() end
+				dash:Refresh()
+			end
+		end)
 	end
 	fill:SetScript("OnShow", refreshAll)
 	Okanvil._lootFill = fill
@@ -134,7 +155,7 @@ end
 --      loot council. Every drop is still recorded and broadcast to the raid.
 --
 -- Arming the toggle silently ships every BoP drop to one player, so the page has
--- to say so -- but on the (?) beside the switch and in the greyed placeholder of
+-- to say so -- but in the row's tooltip and in the greyed placeholder of
 -- an empty field, not in four paragraphs stacked above the controls.
 function Okanvil:Loot_BuildCollectors(p)
 	local L = Okanvil.Loot
@@ -151,48 +172,34 @@ function Okanvil:Loot_BuildCollectors(p)
 		.. "normally -- nothing is ever swept to anyone you did not name.\n"
 		.. "Every drop is recorded in the history and shown to the raid either way."
 
-	local en = W.Check(p, "Speed-run auto master-loot",
+	-- One setting row; the three name fields only appear while it is ON, so a
+	-- page with speed-run off is just the history.
+	local en = W.ToggleRow(p, "Speed-run auto master-loot",
+		"Sweeps each boss into one bag -- only while you are master looter",
 		function() return L.CollectorsEnabled() end,
-		function(v) L.SetCollectorsEnabled(v) end)
-	en:SetPoint("TOPLEFT", X + 2, -10)
+		function(v) L.SetCollectorsEnabled(v); if p.onToggle then p.onToggle() end end)
+	en:SetPoint("TOPLEFT", X, -2)
+	en:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 	en:Tooltip(TIP)
-
-	-- The whole explanation now hangs off this one mark. The header already says
-	-- whether you are the Master Looter, so the state line that used to sit here
-	-- was saying it a second time.
-	local qual = W.Text(p, "|cff8a8d93-- only when you are ML|r  |cffe0b860(?)|r", "note", "dim")
-	-- anchored to the checkbox's LABEL, not the checkbox: W.Check's frame is the
-	-- 18px box alone and its text hangs outside it, so "RIGHT of en" lands on top
-	-- of that text instead of after it
-	qual:SetPoint("LEFT", en.text, "RIGHT", 10, 0)
-	local qhit = CreateFrame("Frame", nil, p)
-	qhit:SetPoint("TOPLEFT", qual, "TOPLEFT", -2, 2)
-	qhit:SetPoint("BOTTOMRIGHT", qual, "BOTTOMRIGHT", 2, -2)
-	qhit:EnableMouse(true)
-	qhit:SetScript("OnEnter", function(s)
-		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-		for line in (TIP .. "\n"):gmatch("(.-)\n") do
-			if line == "" then GameTooltip:AddLine(" ")
-			else GameTooltip:AddLine(line, 1, 1, 1, true) end
-		end
-		GameTooltip:Show()
-	end)
-	qhit:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	-- the fields hang off one host, so hiding it hides all three rows
+	local fields = CreateFrame("Frame", nil, p)
+	fields:SetAllPoints(p)
+	p.fields = fields
 
 	local col = L.Collectors()
 	-- The three buttons sit at the RIGHT edge and the field stretches to meet them,
 	-- so the name has room and the row reads as one control instead of a short box
 	-- adrift in empty space.
 	local function row(bucket, label, y, emptyNote)
-		local lb = W.Text(p, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(112); lb:SetJustifyH("LEFT")
+		local lb = W.Text(fields, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(112); lb:SetJustifyH("LEFT")
 		if lb.SetWordWrap then lb:SetWordWrap(false) end
 
-		local cl = W.Button(p, "Clear", "danger"); cl:SetSize(48, 24)
+		local cl = W.Button(fields, "Clear", "danger"); cl:SetSize(48, 24)
 		cl:SetPoint("TOPRIGHT", p, "TOPRIGHT", -X, y)
-		local tg = W.Button(p, "Target"); tg:SetSize(56, 24); tg:SetPoint("RIGHT", cl, "LEFT", -6, 0)
-		local sf = W.Button(p, "Self"); sf:SetSize(48, 24); sf:SetPoint("RIGHT", tg, "LEFT", -4, 0)
+		local tg = W.Button(fields, "Target"); tg:SetSize(56, 24); tg:SetPoint("RIGHT", cl, "LEFT", -6, 0)
+		local sf = W.Button(fields, "Self"); sf:SetSize(48, 24); sf:SetPoint("RIGHT", tg, "LEFT", -4, 0)
 
-		local eb = W.EditBox(p, function(t) L.SetCollector(bucket, t) end)
+		local eb = W.EditBox(fields, function(t) L.SetCollector(bucket, t) end)
 		eb:SetHeight(24)
 		eb:SetPoint("LEFT", lb, "RIGHT", 8, 0)
 		eb:SetPoint("RIGHT", sf, "LEFT", -6, 0)
@@ -201,7 +208,7 @@ function Okanvil:Loot_BuildCollectors(p)
 		-- An empty field says what an empty field DOES, inside the field itself --
 		-- greyed, and gone the moment there is a real name in it. That sentence used
 		-- to live in a paragraph above the rows, which is where nobody read it.
-		local ph = W.Text(p, "|cff6f7176" .. emptyNote .. "|r", "note", "dim")
+		local ph = W.Text(fields, "|cff6f7176" .. emptyNote .. "|r", "note", "dim")
 		ph:SetPoint("LEFT", eb, "LEFT", 8, 0)
 		local function paintPH()
 			local v = eb.edit:GetText() or ""
@@ -225,9 +232,9 @@ function Okanvil:Loot_BuildCollectors(p)
 		cl:SetScript("OnClick", function() eb.edit:SetText(""); L.SetCollector(bucket, ""); paintPH() end)
 		paintPH()
 	end
-	row("main", "Main loot (BoP)", -44, "-- stays on the corpse --")
-	row("frag", "Fragments",       -76, "-- stays on the corpse --")
-	row("boe",  "BoE / orbs",      -108, "-- falls back to Main loot --")
+	row("main", "Main loot (BoP)", -52, "-- stays on the corpse --")
+	row("frag", "Fragments",       -84, "-- stays on the corpse --")
+	row("boe",  "BoE / orbs",      -116, "-- falls back to Main loot --")
 
 	-- The "whisper the winner" toggle used to sit here, with the message it sends
 	-- on a different page entirely -- so neither half said anything about the
@@ -480,7 +487,7 @@ function Okanvil:Loot_BuildHistory(main)
 			col = col - 1
 			local card = cards[idx]
 			if not card then
-				card = W.Frame(p, "raise")
+				card = W.Frame(p, "soft")
 				card.head = W.Text(card, "", "note", "accent")
 				card.head:SetPoint("TOPLEFT", 10, -7)
 				card.count = W.Text(card, "", "note", "dim")
@@ -516,7 +523,12 @@ function Okanvil:Loot_BuildHistory(main)
 	local function rebuild()
 		for _, r in ipairs(rows) do r:Hide() end
 		for _, c in ipairs(cards) do c:Hide() end
-		local sessions = (L.Sessions and L.Sessions()) or {}
+		-- Runs that never dropped anything (walking through open world, a zone
+		-- visited and left) are not listed; a raid shows up with its first drop.
+		local sessions = {}
+		for _, sess in ipairs((L.Sessions and L.Sessions()) or {}) do
+			if sess.drops and #sess.drops > 0 then sessions[#sessions + 1] = sess end
+		end
 		local RH = Okanvil.UI.RECORD_ROW_H
 		if #sessions == 0 then
 			p._empty = p._empty or W.Text(p, "", "body", "dim")
@@ -553,6 +565,7 @@ function Okanvil:Loot_BuildHistory(main)
 				end
 				r.more = W.Text(r, "", "note", "dim")
 				r.more:SetPoint("RIGHT", r.mosaic[MOSAIC_N], "LEFT", -6, 0)
+				Okanvil.UI.HoverReveal(r, { r.export, r.del })
 				rows[i] = r
 			end
 			r._s = s
@@ -583,6 +596,9 @@ function Okanvil:Loot_BuildHistory(main)
 			end
 			r.more:SetText(#pics > MOSAIC_N and ("+" .. (#pics - MOSAIC_N)) or "")
 			r.export:SetScript("OnClick", function() Okanvil:ShowExport(L.SessionJSON(s), "Loot -- " .. (s.day or where)) end)
+			-- Exports feed the website, which is officer work: no button for anyone else.
+			r.export._allowed = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) and true or false
+			r._revealUpdate()
 			r.del:SetScript("OnClick", function() if expanded == s then expanded = nil end; L.DeleteSession(s) end)
 			r:Show()
 			y = y + RH + 6

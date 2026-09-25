@@ -520,9 +520,27 @@ end
 -- point: a stamp equal to ours means they are current, lower means stale, and
 -- no reply means no addon -- the case you most need to catch before a pull.
 -- ------------------------------------------------------------
-local acks = {}          -- name -> { stamp = n, at = GetTime() }
+local acks = {}          -- name -> { stamp = n, at = GetTime(), wa = N.TimersWA() or nil }
 
 function N.Acks() return acks end
+
+-- The Okanvil Timers pack: the Logic aura reads the note and runs the timers,
+-- the Icons aura draws them, and a raider needs both to see anything. Found by
+-- aura name in WeakAurasSaved, the way MRT's WA checker finds one. The pack's
+-- group is left out: an import renames it when the name is already taken.
+local TIMERS_WA = { "Okanvil Timers Logic", "Okanvil Timers Icons" }
+
+-- "ok" the whole pack, "part" some of it, "none" none of it, "nowa" no WeakAuras.
+function N.TimersWA()
+	local saved = WeakAurasSaved and WeakAurasSaved.displays
+	if not saved then return "nowa" end
+	local have = 0
+	for _, id in ipairs(TIMERS_WA) do
+		if saved[id] then have = have + 1 end
+	end
+	if have == #TIMERS_WA then return "ok" end
+	return have > 0 and "part" or "none"
+end
 
 -- Ask the raid to report. The replies arrive over the next second or two, so
 -- the caller gets a callback rather than a return value.
@@ -539,11 +557,24 @@ function N.AuditRaid(onDone, timeout)
 	return true
 end
 
+-- What a raider's missing piece is called in the audit.
+local WA_GAP = {
+	part = "half the pack",
+	none = "no pack",
+	nowa = "no WeakAuras",
+}
+
 -- The raid, split three ways against our own stamp. Anyone in the roster who
--- never answered is listed as missing -- that is the real finding.
+-- never answered is listed as missing -- that is the real finding. The fourth
+-- list is everyone who answered without the whole Timers pack, as
+-- "Name (what is missing)"; an Okanvil too old to say is listed as such.
 function N.AuditResult()
 	local mine = N.Stamp()
-	local ok, stale, missing = {}, {}, {}
+	local ok, stale, missing, noWA = {}, {}, {}, {}
+	local function checkWA(who, wa)
+		if wa == "ok" then return end
+		noWA[#noWA + 1] = ("%s (%s)"):format(who, WA_GAP[wa] or "old Okanvil, can't tell")
+	end
 	local me = UnitName("player") or ""
 	local n = (GetNumRaidMembers() or 0)
 	local roster = {}
@@ -562,27 +593,33 @@ function N.AuditResult()
 	for _, who in ipairs(roster) do
 		if who == me then
 			ok[#ok + 1] = who                          -- we are the source
+			checkWA(who, N.TimersWA())
 		else
 			local a = acks[who]
 			if not a then missing[#missing + 1] = who
-			elseif a.stamp >= mine then ok[#ok + 1] = who
-			else stale[#stale + 1] = who end
+			else
+				if a.stamp >= mine then ok[#ok + 1] = who
+				else stale[#stale + 1] = who end
+				checkWA(who, a.wa)
+			end
 		end
 	end
-	table.sort(ok); table.sort(stale); table.sort(missing)
-	return ok, stale, missing
+	table.sort(ok); table.sort(stale); table.sort(missing); table.sort(noWA)
+	return ok, stale, missing, noWA
 end
 
 if Comms then
 	-- A raider's aura reports what it holds. Recorded whoever they are: this is
 	-- information about them, it changes nothing here.
-	Comms.On("NOTEACK", function(who, stamp, applied)
+	Comms.On("NOTEACK", function(who, stamp, applied, wa)
 		if not who or who == "" then return end
 		-- The aura replies on the group channel now, which means our own client
 		-- hears it too. We are the source; confirming to ourselves would make
 		-- an empty raid read as "1 confirmed".
 		if who == (UnitName("player") or "") then return end
-		acks[who] = { stamp = tonumber(stamp) or 0, at = GetTime() or 0 }
+		-- `wa` is the raider's N.TimersWA(); an Okanvil from before it sends none.
+		acks[who] = { stamp = tonumber(stamp) or 0, at = GetTime() or 0,
+			wa = (wa and wa ~= "") and wa or nil }
 
 		-- Tally against the last Send rather than printing a line each: in a
 		-- 25-man that would be 24 lines of chat for one button press. The
@@ -633,7 +670,10 @@ if Comms then
 		if not (syncAllowed() and senderTrusted(who)) then return end
 		if who == (UnitName("player") or "") then return end
 		stamp = tonumber(stamp) or 0
-		if stamp <= N.Stamp() then return end
+		-- Ours is newer: say so, so they ask us. Only whoever JOINS announces, so
+		-- without this answer a newcomer holding old notes would keep them.
+		if stamp < N.Stamp() then N.AnnounceSync(); return end
+		if stamp == N.Stamp() then return end
 		Comms.Whisper("NOTEQ", who)
 	end)
 
@@ -661,7 +701,7 @@ if Comms then
 		end
 		-- Confirm, so the sender's "Waiting for N to confirm" is answered by the
 		-- addon itself. On the group channel, where the sender's tally listens.
-		Comms.Send("NOTEACK", tostring(N.Stamp()), tostring(n))
+		Comms.Send("NOTEACK", tostring(N.Stamp()), tostring(n), N.TimersWA())
 	end)
 
 	-- The leader's "everyone report" button. Answer with what we hold; no
@@ -669,17 +709,21 @@ if Comms then
 	Comms.On("NOTEWHO", function(who)
 		if Okanvil.ModuleActive and not Okanvil:ModuleActive("Okanvil-Notes") then return end
 		if who == (UnitName("player") or "") then return end
-		Comms.Send("NOTEACK", tostring(N.Stamp()), "0")
+		Comms.Send("NOTEACK", tostring(N.Stamp()), "0", N.TimersWA())
 	end)
 
-	-- Announce when the group changes: an officer joining is exactly when the
-	-- two copies should meet. Settle first -- a raid forming fires these in a
-	-- burst and the guild roster may not have caught up.
+	-- Announce once, when WE join a group. Whoever joins announces, and anyone
+	-- holding newer notes answers (NOTEV above). Settle first -- the guild roster
+	-- may not have caught up with a raid that is still forming.
 	local ev = CreateFrame("Frame")
+	local wasGrouped = false
 	ev:RegisterEvent("RAID_ROSTER_UPDATE")
 	ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
-	ev:SetScript("OnEvent", function()
-		if not syncAllowed() then return end
+	ev:SetScript("OnEvent", Okanvil:CombatSafe("notes.announce", function()
+		local grouped = (GetNumRaidMembers() > 0) or (GetNumPartyMembers() > 0)
+		local joined = grouped and not wasGrouped
+		wasGrouped = grouped
+		if not joined or not syncAllowed() then return end
 		Comms.After(3, function() N.AnnounceSync() end)
-	end)
+	end))
 end

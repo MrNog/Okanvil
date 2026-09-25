@@ -1256,16 +1256,37 @@ local function listRow(i)
 	-- The credit used to be a word squeezed against the right edge, which cost
 	-- the name the room it needed -- "Deathbringer Sa..." -- and said "edited"
 	-- without saying by whom. Underneath it fits, and it can say the name.
+	-- The forge look's row: the boss, the note's first line under it, and a
+	-- status chip on the right (LIVE / READY / EMPTY). Who last edited it is in
+	-- the row's tooltip.
+	r.chip = CreateFrame("Frame", nil, r)
+	r.chip:SetHeight(16); r.chip:SetPoint("RIGHT", -6, 0)
+	r.chip:SetBackdrop({ edgeFile = FLAT, edgeSize = 1 })
+	r.chip.text = W.Text(r.chip, "", "note")
+	r.chip.text:SetPoint("CENTER", 0, 0)
+
 	r.name = W.Text(r, "", "body")
 	r.name:SetPoint("TOPLEFT", 7, -4)
-	r.name:SetPoint("RIGHT", -7, 0)
+	r.name:SetPoint("RIGHT", r.chip, "LEFT", -6, 0)
 	r.name:SetJustifyH("LEFT")
 	if r.name.SetWordWrap then r.name:SetWordWrap(false) end
 
 	r.dot = W.Text(r, "", "note", "dim")
 	r.dot:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -1)
-	r.dot:SetPoint("RIGHT", -7, 0)
+	r.dot:SetPoint("RIGHT", r.chip, "LEFT", -6, 0)
 	r.dot:SetJustifyH("LEFT")
+	if r.dot.SetWordWrap then r.dot:SetWordWrap(false) end
+
+	local rule = r:CreateTexture(nil, "BORDER")
+	rule:SetTexture(FLAT); rule:SetVertexColor(1, 1, 1, 0.06)
+	rule:SetHeight(1); rule:SetPoint("BOTTOMLEFT"); rule:SetPoint("BOTTOMRIGHT")
+	r:SetScript("OnEnter", function(self)
+		if not self._tipText then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine(self._tipText, 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	r:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 	r:EnableMouse(true)
 	r:SetScript("OnMouseUp", function(self)
@@ -1381,6 +1402,7 @@ local function build(panel)
 
 	local dash = W.Dashboard(panel, {
 		title = "Notes",
+		subtitle = "Switch on as you walk into each room",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.notes) or "Interface\\Icons\\INV_Scroll_03",
 		pills = true,
 		drawerWidth = 0,
@@ -1520,58 +1542,42 @@ function N.BuildPage(p)
 	-- boss name's row on the right, so nothing sits above this -- a strip left
 	-- clear for them cost both columns a row and showed nothing.
 	local TAB_Y = -8
-	local ROW_H, ROW_GAP = 26, 4
-	-- Where BOTH cards start: under the two filter rows on the left, under the
-	-- boss name and its Normal/Heroic pills on the right. One number, so the two
-	-- columns cannot drift apart again.
-	local CARD_Y = TAB_Y - (ROW_H * 2 + ROW_GAP) - 6
+	-- ONE tab row, raid and size together (ICC 10, ICC 25, ToC 10 ...), across the
+	-- top of the page -- the forge look's tabs. Two stacked rows of big buttons
+	-- asked the same question twice; one tab names the exact plan list you get.
+	-- The note's own buttons (ids, ?, Edit, Clear) share this row on the right.
+	local TABROW_H = 24
+	-- Where both cards start: under the tab row. One number, so the list and the
+	-- note cannot drift apart.
+	local CARD_Y = TAB_Y - TABROW_H - 12
+	F.comboTabs = {}
 	do
-		local GAP = 4
-
-		-- ---- row 1: 10 / 25, half the list each ----
-		-- 10 first: it is the size this guild actually runs.
-		F.sizeTabs = {}
-		do
-			local n = 2
-			local w = (LIST_W - GAP * (n - 1)) / n
-			local x = 6
+		local x = 6
+		for _, raid in ipairs(N.Raids()) do
 			for _, size in ipairs({ 10, 25 }) do
-				local b = W.Button(p, tostring(size) .. " man", "secondary")
-				b:SetSize(w, ROW_H)
+				local b = W.Button(p, raid.label .. " " .. size, "tab")
+				local tw = (b.text and b.text:GetStringWidth() or 50) + 18
+				b:SetSize(math.max(54, tw), TABROW_H)
 				b:SetPoint("TOPLEFT", x, TAB_Y)
-				b._size = size
-				b:Tooltip(size .. " man")
-				b:SetScript("OnClick", function() N.SetViewSize(size) end)
-				F.sizeTabs[#F.sizeTabs + 1] = b
-				x = x + w + GAP
-			end
-		end
-
-		-- ---- row 2: the raids, an equal share each ----
-		-- Widths come from how many raids Raids() returns, not from a hardcoded
-		-- three, so adding a fourth raid to Notes-Data re-divides the row instead
-		-- of running it off the end of the list.
-		F.raidTabs = {}
-		do
-			local raids = N.Raids()
-			local n = math.max(#raids, 1)
-			local w = (LIST_W - GAP * (n - 1)) / n
-			local x = 6
-			local y = TAB_Y - ROW_H - ROW_GAP
-			for _, raid in ipairs(raids) do
-				local b = W.Button(p, raid.label, "secondary")
-				b:SetSize(w, ROW_H)
-				b:SetPoint("TOPLEFT", x, y)
-				b._raid = raid.key
-				b:Tooltip(raid.zone)
-				b:SetScript("OnClick", function() N.SetViewRaid(raid.key) end)
-				F.raidTabs[#F.raidTabs + 1] = b
-				x = x + w + GAP
+				b._raid, b._size = raid.key, size
+				b:Tooltip(raid.zone .. " -- " .. size .. " man")
+				b:SetScript("OnClick", function()
+					N.SetViewRaid(raid.key)
+					N.SetViewSize(size)
+				end)
+				F.comboTabs[#F.comboTabs + 1] = b
+				x = x + b:GetWidth() + 6
 			end
 		end
 	end
+	local tabRule = p:CreateTexture(nil, "ARTWORK")
+	tabRule:SetTexture(FLAT)
+	do local bc = Okanvil.Colors.border; tabRule:SetVertexColor(bc[1], bc[2], bc[3], 1) end
+	tabRule:SetHeight(1)
+	tabRule:SetPoint("TOPLEFT", 6, TAB_Y - TABROW_H - 1)
+	tabRule:SetPoint("TOPRIGHT", -6, TAB_Y - TABROW_H - 1)
 
-	local lcard = W.Frame(p, "dark")
+	local lcard = W.Frame(p, "soft")
 	-- Below BOTH filter rows now, measured from them rather than by a constant:
 	-- the band is two rows of ROW_H plus the gap between them.
 	-- The buttons hang BELOW the card, so the card has to stop high enough to
@@ -1617,7 +1623,7 @@ function N.BuildPage(p)
 	-- note's own buttons make one header row across the top of the right
 	-- column, level with the first row of filters on the left. Centred, it sat
 	-- between the two filter rows and read as a caption for neither.
-	F.title:SetPoint("TOPLEFT", RX, TAB_Y - 4)
+	F.title:SetPoint("TOPLEFT", RX, CARD_Y - 2)
 
 	-- Normal / Heroic, on the NOTE rather than on the page.
 	--
@@ -1700,17 +1706,22 @@ function N.BuildPage(p)
 	end)
 
 	-- ---- read view: the note as timed lines ----
-	F.readCard = W.Frame(p, "dark")
+	F.readCard = W.Frame(p, "soft")
 	-- CARD_Y, not -40: the note card and the list card are two halves of one
 	-- view and have to start on the same line. The filter band grew to two rows
 	-- and the left card moved down with it, leaving the right one floating a
 	-- row and a half higher with a strip of bare panel beside its heading.
-	F.readCard:SetPoint("TOPLEFT", RX, CARD_Y)
+	F.readCard:SetPoint("TOPLEFT", RX, CARD_Y - 28)
 	-- 30: the foot is ONE row again. Follow the room moved up to the toolbar,
 	-- so the card takes back the 22px its second row was holding.
 	-- -6: the same margin the list card keeps on the left, so the two halves
 	-- sit symmetrically in the page instead of the note stopping short of the edge.
 	F.readCard:SetPoint("BOTTOMRIGHT", -6, 30)
+
+	local rbar = F.readCard:CreateTexture(nil, "ARTWORK")
+	rbar:SetTexture(FLAT)
+	do local a = Okanvil.Colors.accent; rbar:SetVertexColor(a[1], a[2], a[3], 1) end
+	rbar:SetWidth(2); rbar:SetPoint("TOPLEFT"); rbar:SetPoint("BOTTOMLEFT")
 
 	local rsf = CreateFrame("ScrollFrame", nil, F.readCard)
 	-- -8 at the top: a line starting 4px under the border touched it.
@@ -1741,7 +1752,7 @@ function N.BuildPage(p)
 
 	F.edit = W.MultiEdit(p)
 	F.edit:SetTextSize(14)      -- a note is read as much as typed in
-	F.edit:SetPoint("TOPLEFT", RX, CARD_Y)
+	F.edit:SetPoint("TOPLEFT", RX, CARD_Y - 28)
 	-- Same foot as the read card: the two are one card in two modes, and a
 	-- different bottom made the note jump as you switched between them.
 	F.edit:SetPoint("BOTTOMRIGHT", -6, 30)
@@ -1885,11 +1896,11 @@ end
 -- ------------------------------------------------------------
 local auditPanel
 
-local function showAudit(ok, stale, missing)
+local function showAudit(ok, stale, missing, noWA)
 	local f = auditPanel
 	if not f then
 		f = Okanvil:Popup("Who has the notes")
-		f:SetSize(360, 300)
+		f:SetSize(360, 380)
 		f.body = W.Text(f, "", "note")
 		f.body:SetPoint("TOPLEFT", 14, -34)
 		f.body:SetPoint("BOTTOMRIGHT", -14, 14)
@@ -1908,7 +1919,8 @@ local function showAudit(ok, stale, missing)
 	end
 	section("ff7cfc8a", "Up to date", ok)
 	section("ffe0b860", "On an older copy -- press Send to raid", stale)
-	section("ffff5555", "Not answering -- no aura installed", missing)
+	section("ffff5555", "Not answering -- no Okanvil", missing)
+	section("ffff8c42", "Without the Okanvil Timers WA -- the note stays hidden for them", noWA or {})
 	f.body:SetText(table.concat(out, "\n"))
 	f:Show()
 	f:Raise()
@@ -1920,18 +1932,20 @@ function N.RunAudit()
 	if F and F.dash then F.dash:Refresh() end
 
 	local started = N.AuditRaid(function()
-		local ok, stale, missing = N.AuditResult()
+		local ok, stale, missing, noWA = N.AuditResult()
 		-- The header carries the verdict at a glance; anything wrong is worth a
 		-- colour, and all-clear is worth saying plainly.
 		if #missing > 0 then
-			N.auditLine = ("|cffff5555%d without the aura|r"):format(#missing)
+			N.auditLine = ("|cffff5555%d without Okanvil|r"):format(#missing)
+		elseif #noWA > 0 then
+			N.auditLine = ("|cffff8c42%d without the Timers WA|r"):format(#noWA)
 		elseif #stale > 0 then
 			N.auditLine = ("|cffe0b860%d on an older copy|r"):format(#stale)
 		else
 			N.auditLine = ("|cff7cfc8aAll %d up to date|r"):format(#ok)
 		end
 		if F and F.dash then F.dash:Refresh() end
-		showAudit(ok, stale, missing)
+		showAudit(ok, stale, missing, noWA)
 	end)
 
 	if not started then
@@ -1969,23 +1983,17 @@ function N.Refresh()
 		F.here:SetText(z ~= "" and ("|cff6f7176" .. z .. "|r") or "")
 	end
 
-	-- which size tab is live
-	if F.raidTabs then
-		local vr = N.ViewRaid()
-		for _, b in ipairs(F.raidTabs) do
-			b:SetKind(b._raid == vr and "primary" or "secondary")
-		end
-	end
-	if F.sizeTabs then
-		local vs = N.ViewSize()
-		for _, b in ipairs(F.sizeTabs) do
-			b:SetKind(b._size == vs and "primary" or "secondary")
+	-- which raid + size tab is live
+	if F.comboTabs then
+		local vr, vs = N.ViewRaid(), N.ViewSize()
+		for _, b in ipairs(F.comboTabs) do
+			b:SetKind((b._raid == vr and b._size == vs) and "tabOn" or "tab")
 		end
 	end
 	if F.diffTabs then
 		local vh = N.ViewHeroic()
 		for _, b in ipairs(F.diffTabs) do
-			b:SetKind(b._hc == vh and "primary" or "secondary")
+			b:SetKind(b._hc == vh and "tabOn" or "tab")
 		end
 	end
 
@@ -2012,12 +2020,37 @@ function N.Refresh()
 			local stamp = db.stamps and db.stamps[name]
 			local when = stamp and date("%d %b", stamp) or nil
 			local col = own and "|cff7cfc8a" or "|cff8a8d93"
-			r.dot:SetText(when
-				and ("|cff6f7176last edit|r %s%s|r |cff6f7176%s|r"):format(col, by, when)
-				or ("|cff6f7176last edit|r %s%s|r"):format(col, by))
+			r._tipText = when
+				and ("|cff8a8d93last edit|r %s%s|r |cff8a8d93%s|r"):format(col, by, when)
+				or ("|cff8a8d93last edit|r %s%s|r"):format(col, by)
 		else
-			r.dot:SetText("")
+			r._tipText = nil
 		end
+		-- Preview: the note's first real line, markup stripped (timers, spell
+		-- tags, colour codes), so the row says what the plan is at a glance.
+		local first = ""
+		if has then
+			for line in (text .. "\n"):gmatch("(.-)\n") do
+				local t = line:gsub("%b{}", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+				t = t:gsub("^%s+", ""):gsub("%s+$", "")
+				if t ~= "" then first = t; break end
+			end
+		end
+		r.dot:SetText(first)
+		-- LIVE = the note the raid is on (sent to their WeakAuras); READY = has a
+		-- plan; EMPTY = nothing written yet.
+		local cc, label
+		if name == db.selected and has then
+			cc, label = Okanvil.Colors.ok, "LIVE"
+		elseif has then
+			cc, label = Okanvil.Colors.textDim, "READY"
+		else
+			cc, label = { 0.37, 0.38, 0.40 }, "EMPTY"
+		end
+		r.chip.text:SetText(label)
+		r.chip.text:SetTextColor(cc[1], cc[2], cc[3])
+		r.chip:SetBackdropBorderColor(cc[1], cc[2], cc[3], 0.6)
+		r.chip:SetWidth((r.chip.text:GetStringWidth() or 30) + 12)
 		r.sel:SetShown(name == db.selected)
 		r:Show()
 	end

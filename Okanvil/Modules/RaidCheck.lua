@@ -154,6 +154,27 @@ local READY_TEX = {
 local readyState   -- [playerName] = "ready" | "notready"; nil = still waiting
 local readyActive  -- true while a ready check is running
 
+-- Fill readyState from the game's own answer for every group member. Needed for
+-- the player who STARTED the check: they are ready by definition and the game
+-- never sends READY_CHECK_CONFIRM for them, so they sat on "?" forever and the
+-- toast could never reach all-clear.
+local function seedReady()
+	if not GetReadyCheckStatus then return end
+	readyState = readyState or {}
+	local units = {}
+	local nRaid = GetNumRaidMembers() or 0
+	if nRaid > 0 then
+		for i = 1, nRaid do units[#units + 1] = "raid" .. i end
+	else
+		units[1] = "player"
+		for i = 1, (GetNumPartyMembers() or 0) do units[#units + 1] = "party" .. i end
+	end
+	for _, u in ipairs(units) do
+		local st, nm = GetReadyCheckStatus(u), UnitName(u)
+		if nm and (st == "ready" or st == "notready") then readyState[nm] = st end
+	end
+end
+
 local buffNames   -- [groupIndex] = { name = true, ... }
 
 local function resolveBuffNames()
@@ -1086,8 +1107,23 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 	end
 
 	if event == "READY_CHECK_FINISHED" then
-		-- Keep the answers on screen -- the toast is still up and the whole point is
-		-- to see who never replied. Cleared when the NEXT check starts.
+		-- The check is over. Whoever never answered timed out, which the game
+		-- counts as NOT ready -- show the red cross, not an hourglass that never
+		-- ends. The answers stay on screen for a while (the point is to see who
+		-- was missing), then the toast closes on its own.
+		seedReady()
+		readyState = readyState or {}
+		for _, p in ipairs(RC:Scan()) do
+			if p.online and not readyState[p.name] then readyState[p.name] = "notready" end
+		end
+		if toast and toast:IsShown() then
+			RC:RenderToast()
+			RC:CloseIfAllClear()
+			local mine = toast._token or 0
+			Okanvil.Comms.After(20, function()
+				if toast and toast:IsShown() and (toast._token or 0) == mine then RC:HideToast() end
+			end)
+		end
 		return
 	end
 
@@ -1122,6 +1158,9 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2)
 		-- ready from the previous pull.
 		readyState  = {}
 		readyActive = true
+		-- arg1 = who started it: ready by definition, and never confirmed by the game.
+		if arg1 and arg1 ~= "" then readyState[(arg1:gsub("%-.*$", ""))] = "ready" end
+		seedReady()
 		if not RC:ToastEnabled() then return end
 		-- Show it IMMEDIATELY -- do not delay. UnitAura is a local read with no server
 		-- round-trip, so everyone's buffs are already known the moment READY_CHECK fires.

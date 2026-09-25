@@ -440,6 +440,7 @@ local function buildUI(host)
 	local W = Okanvil.W
 	local dash = W.Dashboard(host, {
 		title = "ID Finder",
+		subtitle = "Spell and item IDs for WeakAuras",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.ids) or "Interface\\Icons\\INV_Misc_Spyglass_02",
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -498,7 +499,7 @@ local function buildUI(host)
 	local COL_GAP, TOP_Y, BOTTOM_Y = 10, -78, 10
 	local function makeColumn(side, header, key)
 		local col = { results = {} }
-		local card = W.Frame(parent, "dark")
+		local card = W.Frame(parent, "soft")
 		card:SetPoint("TOP", parent, "TOP", 0, TOP_Y)
 		card:SetPoint("BOTTOM", parent, "BOTTOM", 0, BOTTOM_Y)
 		if side == "left" then

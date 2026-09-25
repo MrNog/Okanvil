@@ -57,9 +57,11 @@ local function build()
 	else f:SetPoint("CENTER", UIParent, "CENTER", 300, 0) end
 	f:SetScale((d.scale or 100) / 100)
 
-	-- ---- header ----
-	local hdr = W.Frame(f, "raise")
+	W.ForgeArt(f, 0.22)
+	-- ---- header: the setup's -- no raised strip, a hairline under it ----
+	local hdr = W.Frame(f, "bare")
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(22)
+	W.Hairline(hdr, "BOTTOM", 6)
 	local ico = hdr:CreateTexture(nil, "OVERLAY")
 	ico:SetSize(14, 14); ico:SetPoint("LEFT", 6, 0)
 	ico:SetTexture((Okanvil.ICONS and Okanvil.ICONS.farm) or "Interface\\Icons\\INV_Misc_Bag_10")
@@ -303,6 +305,7 @@ function Okanvil:BuildFarm(host)
 	local fill = Okanvil.UI.newFillPanel()
 	local dash = W.Dashboard(host, {
 		title = "Farm",
+		subtitle = "Gold per hour while you farm",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.farm) or "Interface\\Icons\\INV_Misc_Bag_10",
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -393,7 +396,7 @@ function Okanvil:BuildFarm(host)
 		for i, e in ipairs(h) do
 			local r = wrap.rows[i]
 			if not r then
-				r = W.Frame(p, "input"); r:SetHeight(36)
+				r = W.Frame(p, "row"); r:SetHeight(36)
 				r.top = W.Text(r, "", "label"); r.top:SetPoint("TOPLEFT", 10, -6)
 				r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("TOPLEFT", 10, -21)
 				-- The rate is the number you compare between runs, so it is the

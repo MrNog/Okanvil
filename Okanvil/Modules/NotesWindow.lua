@@ -420,6 +420,13 @@ function WIN.ApplyVisibility()
 	end
 	if not db() then return end
 
+	-- The fight window is for raiders running the Okanvil Timers pack. Without
+	-- the whole pack it stays away, wherever they stand (N.TimersWA, NotesSync).
+	if N.TimersWA and N.TimersWA() ~= "ok" then
+		if win and win:IsShown() then win:Hide() end
+		return
+	end
+
 	-- Does the window belong on screen here? InNoteRoom may not exist yet: this
 	-- file and Notes.lua load in .toc order and a zone event can arrive between
 	-- them, so treat a missing room check as "cannot tell" and show nothing
