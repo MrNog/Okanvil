@@ -33,6 +33,17 @@ local function cfg()
 	return d.window
 end
 
+-- The window's own text size on one row. The size is per-window (cfg().size),
+-- so the row opts out of the addon-wide font refresh (_okFixed, with _okSize set
+-- to this size) -- otherwise a font or Text size change reset it to 13.
+local function styleRow(r, size, flag)
+	local font = Okanvil:Font()
+	for _, fs in ipairs({ r.t, r.txt }) do
+		fs._okFixed, fs._okSize = true, size
+		fs:SetFont(font, size, flag)
+	end
+end
+
 -- ------------------------------------------------------------
 -- Build
 -- ------------------------------------------------------------
@@ -71,8 +82,7 @@ local function applyLook()
 		r:SetHeight(ROW_H)
 		r:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
 		r:SetPoint("TOPRIGHT", 0, -(i - 1) * ROW_H)
-		r.t:SetFont(font, size, flag)
-		r.txt:SetFont(font, size, flag)
+		styleRow(r, size, flag)
 	end
 	if win._entries then
 		win:SetHeight(18 + (#win._entries * ROW_H) + 6)
@@ -125,6 +135,11 @@ local function row(i)
 	r.txt:SetPoint("RIGHT", -4, 0)
 	r.txt:SetJustifyH("LEFT")
 	if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
+
+	-- A row made after the window was styled (a longer note, the first note after
+	-- a login) takes the saved size now, not the default 13.
+	local c = cfg()
+	styleRow(r, c.size or 13, ((c.alpha or 0.6) < 0.35) and "OUTLINE" or nil)
 
 	win.rows[i] = r
 	return r
