@@ -185,6 +185,7 @@ local defaults = {
 	scale = 1.0,
 	font = "Friz Quadrata TT", -- LSM font name
 	fontSize = 12,
+	textScale = 1.0,       -- Settings > Text size: page text only, button labels stay fixed
 	fontFlag = "", -- "", "OUTLINE", "THICKOUTLINE"
 	statusbar = "Blizzard", -- LSM statusbar (for plugins that draw bars)
 	bgAlpha = 0.95,
@@ -223,15 +224,20 @@ end
 -- ------------------------------------------------------------
 -- Media (shared look -- plugins use these so everything matches)
 -- ------------------------------------------------------------
--- The size here is only the fallback for a font string created without one --
--- the type scale (Okanvil.W.F) is what every call site actually names. There is
--- no font slider any more: the window's Scale does the zooming, text and icons
--- and spacing together, and a second control that stretched only text inside
--- boxes that stayed put was never the thing people wanted.
+-- The size here is the body size, and the fallback for a font string created
+-- without one -- the type scale (Okanvil.W.F) is what every call site names.
+-- Two size controls: the window's Scale zooms everything together; Text size
+-- (db.textScale) grows page text only. Button labels opt out (_okFixed), so a
+-- label can never outgrow the box it sits in.
+function Okanvil:TextScale()
+	local v = self.db and tonumber(self.db.textScale) or 1
+	return math.max(0.8, math.min(1.4, v))
+end
 function Okanvil:Font()
 	local db = self.db
 	local path = LSM and LSM:Fetch("font", db.font, true)
-	local size = (Okanvil.W and Okanvil.W.F and Okanvil.W.F.body) or db.fontSize or 12
+	local base = (Okanvil.W and Okanvil.W.F and Okanvil.W.F.body) or db.fontSize or 12
+	local size = math.floor(base * self:TextScale() + 0.5)
 	return path or STANDARD_TEXT_FONT, size, db.fontFlag
 end
 
@@ -251,8 +257,13 @@ function Okanvil:ApplyFonts()
 	local font, size, flag = self:Font()
 	for fs in pairs(self._fontStrings) do
 		if fs.SetFont then
-			-- keep per-string size if it was bumped (store a .sizeMul); default to global size
-			fs:SetFont(font, fs._okSize or size, flag)
+			-- _okSize is the unscaled role size; Text size applies on top, except to
+			-- button labels (_okFixed)
+			local sz = size
+			if fs._okSize then
+				sz = fs._okFixed and fs._okSize or math.floor(fs._okSize * self:TextScale() + 0.5)
+			end
+			fs:SetFont(font, sz, flag)
 		end
 	end
 end

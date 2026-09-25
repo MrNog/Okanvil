@@ -110,7 +110,10 @@ function Okanvil:ShowSetup()
 
 	-- ---- who is this: rank decides the defaults ----
 	local me = UnitName("player") or ""
-	local officer = U and U.canSeePrio and U.canSeePrio(me) or false
+	-- No guild = a pugger: the guild tools (council, notes, snapshots, recruiting)
+	-- have nothing to talk to, so they start off.
+	local guilded = IsInGuild and IsInGuild() and true or false
+	local officer = guilded and U and U.canSeePrio and U.canSeePrio(me) or false
 	local rankIdx = U and U.guildRankOf and U.guildRankOf(me)
 	local rankName = rankIdx and U.rankName and U.rankName(rankIdx) or nil
 
@@ -127,11 +130,19 @@ function Okanvil:ShowSetup()
 
 	-- First run: fill the draft from the rank. A re-run keeps what is set now.
 	if self.db.setupPending then
-		for _, e in ipairs(ESSENTIALS) do want[e.key] = true end
-		for _, e in ipairs(EXTRAS) do
-			want[e.key] = e.all or (officer and e.officer) or false
+		if guilded then
+			for _, e in ipairs(ESSENTIALS) do want[e.key] = true end
+			for _, e in ipairs(EXTRAS) do
+				want[e.key] = e.all or (officer and e.officer) or false
+			end
+			wantBar = officer
+		else
+			-- Pug setup: find raids and build them, nothing else.
+			for key in pairs(want) do want[key] = false end
+			want["Okanvil-RaidFinder"] = byKey["Okanvil-RaidFinder"] and true or nil
+			want["Okanvil-PuG"] = byKey["Okanvil-PuG"] and true or nil
+			wantBar = false
 		end
-		wantBar = officer
 	end
 
 	-- ---- chrome: step icon + title, close, footer ----
@@ -191,9 +202,17 @@ function Okanvil:ShowSetup()
 			name = "Your rank", icon = I.guild,
 			build = function(host)
 				local who = W.Text(host, GOLD .. me .. "|r  --  "
-					.. (rankName or (officer and "officer" or "raider")), "head")
+					.. (not guilded and "no guild" or rankName or (officer and "officer" or "raider")), "head")
 				who:SetPoint("TOPLEFT", 0, 0)
 				local y = -26
+				if not guilded then
+					y = para(host, "You are not in a guild, so you get the pug setup: Raid Finder "
+						.. "to find raids and PuG to build your own. The guild tools (loot council, "
+						.. "notes, raid snapshots, recruiting) start off -- they need a guild to "
+						.. "talk to.", 0, y, CW, "body", "dim")
+					para(host, "Joined a guild later? Run /okanvil setup again.", 0, y - 6, CW, "note", "dim")
+					return
+				end
 				if officer then
 					y = para(host, "You are an officer, so these show up for you automatically:",
 						0, y, CW, "body", "dim")
@@ -218,7 +237,9 @@ function Okanvil:ShowSetup()
 		{
 			name = "Essentials", icon = I.council,
 			build = function(host)
-				local y = para(host, "Every raider should keep these two on.", 0, 0, CW, "body", "dim") - 4
+				local y = para(host, guilded and "Every raider should keep these two on."
+					or "These two are for raiding with a guild, so they start off. Turn them on "
+					.. "if your group uses them.", 0, 0, CW, "body", "dim") - 4
 				local paints = {}
 				for _, e in ipairs(ESSENTIALS) do
 					local it = byKey[e.key]

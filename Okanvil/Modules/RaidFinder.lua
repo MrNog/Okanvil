@@ -288,6 +288,18 @@ local RAID_LABEL = {
 }
 local function raid_label(info) return RAID_LABEL[info.raid] or info.raid end
 
+-- The leader's name as shown in the list: a guildmate in guild-chat green with a
+-- "guild" tag, so a guildie's pug stands out and you know who could use a hand.
+-- Reads the cached roster (Util.guildRankOf), so it costs nothing per row.
+local function leader_text(name, plainColor)
+	name = name or "?"
+	local U = Okanvil.U
+	if IsInGuild and IsInGuild() and U and U.guildRankOf and U.guildRankOf(name) then
+		return "|cff40ff40" .. name .. "|r |cff2e8b2eguild|r"
+	end
+	return plainColor and (plainColor .. name .. "|r") or name
+end
+
 -- short instance-key (drop size/difficulty) for tier lookups
 local function raid_tier(raidId) return (raidId:gsub("%d.*$", "")) end
 
@@ -1068,7 +1080,7 @@ function Okanvil.RaidFinder_Render()
 		r.join._info = info
 
 		-- Leader
-		r.leader:SetText(info.sender or "?")
+		r.leader:SetText(leader_text(info.sender))
 
 		-- Age (off lastSeen; updates in place, never reorders)
 		r.age:SetText("|cff8a8d93" .. age_text(info) .. "|r")
@@ -1494,6 +1506,7 @@ end)
 --   can run while the Dashboard page is closed.
 -- ------------------------------------------------------------
 Okanvil.RaidFinder_Shared = {
+	leader_text      = leader_text,       -- (name, plainColor) -> guildmates highlighted
 	get_view         = get_view,          -- () -> filtered+sorted listings (respects filters)
 	raid_label       = raid_label,        -- (info) -> "ICC25 HC"
 	roles_text       = roles_text,        -- (roles) -> colored "Tank DPS Heal"

@@ -141,6 +141,13 @@ function Okanvil:Settings_General(p)
 	y1 = y1 - 22
 	hint("1 = solid, lower = see the game through it", 1)
 
+	-- Text only; buttons keep their size. Applied on release.
+	y1 = y1 - SLIDER_TOP
+	W.Slider(p, "Text size", 0.85, 1.3, 0.05, function() return db.textScale or 1 end,
+		function(v) db.textScale = v; Okanvil:ApplyFonts() end, true):SetPoint("TOPLEFT", C1, y1)
+	y1 = y1 - 22
+	hint("page text only -- some lists fit best after a /reload", 1)
+
 	-- RIGHT: the art, its toggle and its opacity as one block. The slider does
 	-- nothing while the toggle is off, so they have to be read together.
 	local showChk = W.ToggleRow(p, "Forge wallpaper", nil,

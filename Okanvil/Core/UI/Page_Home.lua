@@ -405,15 +405,266 @@ function Okanvil:BuildHome()
 
 	-- (rat art is one shared overlay on Okanvil.content -- nothing to build here.)
 
+	-- ---- no guild: pug mode ----
+	-- Guild counts and a guild roster mean nothing without a guild, so instead of
+	-- four "--" tiles the page says what Okanvil is for right now and offers the
+	-- two pug tools.
+	local pug = CreateFrame("Frame", nil, p)
+	pug:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -26)
+	pug:SetPoint("RIGHT", p, "RIGHT", -X, 0)
+	pug:SetHeight(160)
+	pug:Hide()
+	local pugHead = W.Text(pug, "No guild -- pug mode", "head", "accent")
+	pugHead:SetPoint("TOPLEFT", 0, 0)
+	local pugText = W.Text(pug, "Find a raid in chat, or build your own and spam the LFM line. "
+		.. "Joined a guild? Run |cff00ff00/okanvil setup|r again to turn on the guild tools.", "body", "dim")
+	pugText:SetPoint("TOPLEFT", pugHead, "BOTTOMLEFT", 0, -8)
+	pugText:SetPoint("RIGHT", pug, "RIGHT", 0, 0)
+	pugText:SetJustifyH("LEFT")
+	local bRF = W.Button(pug, "Raid Finder", "primary"); bRF:SetSize(130, 26)
+	bRF:SetPoint("TOPLEFT", pugText, "BOTTOMLEFT", 0, -14)
+	bRF:SetScript("OnClick", function() Okanvil:ShowPanel("Okanvil-RaidFinder") end)
+	local bPug = W.Button(pug, "PuG"); bPug:SetSize(110, 26)
+	bPug:SetPoint("LEFT", bRF, "RIGHT", 8, 0)
+	bPug:SetScript("OnClick", function() Okanvil:ShowPanel("Okanvil-PuG") end)
+
+	-- Two columns under the buttons: raids asking for people right now (what Raid
+	-- Finder has read in chat), and what this character is saved to -- the two
+	-- things a pugger checks before whispering anyone.
+	pug:SetHeight(470)
+	local function colHead(text, anchorX)
+		local t = W.Text(pug, text, "note", "dim")
+		t:SetPoint("TOPLEFT", bRF, "BOTTOMLEFT", anchorX, -26)
+		return t
+	end
+	local lfHead = colHead("LOOKING FOR PEOPLE", 0)
+	local lkHead = W.Text(pug, "YOUR LOCKOUTS", "note", "dim")
+
+	local function makeRows(parent, head, n, rightEdge)
+		local rows = {}
+		for i = 1, n do
+			local r = CreateFrame("Button", nil, parent)
+			r:SetHeight(24)
+			r:SetPoint("TOPLEFT", head, "BOTTOMLEFT", 0, -6 - (i - 1) * 26)
+			r:SetPoint("RIGHT", rightEdge, "RIGHT", 0, 0)
+			local rule = r:CreateTexture(nil, "BORDER")
+			rule:SetTexture("Interface\\Buttons\\WHITE8x8"); rule:SetVertexColor(1, 1, 1, 0.06)
+			rule:SetHeight(1); rule:SetPoint("BOTTOMLEFT"); rule:SetPoint("BOTTOMRIGHT")
+			local hl = r:CreateTexture(nil, "HIGHLIGHT")
+			hl:SetAllPoints(); hl:SetTexture("Interface\\Buttons\\WHITE8x8"); hl:SetVertexColor(1, 1, 1, 0.04)
+			r.l = W.Text(r, "", "body"); r.l:SetPoint("LEFT", 2, 0); r.l:SetJustifyH("LEFT")
+			r.r = W.Text(r, "", "note", "dim"); r.r:SetPoint("RIGHT", -2, 0); r.r:SetJustifyH("RIGHT")
+			r.l:SetPoint("RIGHT", r.r, "LEFT", -8, 0)
+			if r.l.SetWordWrap then r.l:SetWordWrap(false) end
+			r:Hide()
+			rows[i] = r
+		end
+		return rows
+	end
+	-- the left column stops at the page's middle, the right one runs to its edge
+	local mid = CreateFrame("Frame", nil, pug)
+	mid:SetPoint("TOP", pug, "TOP"); mid:SetPoint("BOTTOM", pug, "BOTTOM")
+	mid:SetPoint("RIGHT", pug, "CENTER", -12, 0); mid:SetWidth(1)
+	-- the right column's heading: level with the left one, just past the middle
+	lkHead:SetPoint("TOP", lfHead, "TOP", 0, 0)
+	lkHead:SetPoint("LEFT", mid, "RIGHT", 24, 0)
+	local lfRows = makeRows(pug, lfHead, 5, mid)
+	local lkRows = makeRows(pug, lkHead, 5, pug)
+	local lfEmpty = W.Text(pug, "", "note", "dim")
+	lfEmpty:SetPoint("TOPLEFT", lfHead, "BOTTOMLEFT", 0, -8)
+	lfEmpty:SetPoint("RIGHT", mid, "RIGHT", 0, 0); lfEmpty:SetJustifyH("LEFT")
+	local lkEmpty = W.Text(pug, "", "note", "dim")
+	lkEmpty:SetPoint("TOPLEFT", lkHead, "BOTTOMLEFT", 0, -8)
+	lkEmpty:SetPoint("RIGHT", pug, "RIGHT", 0, 0); lkEmpty:SetJustifyH("LEFT")
+
+	-- ---- GUILDS RECRUITING: recruitment spam caught from chat ----
+	-- Only while you have no guild (it is the one time the spam is useful), never
+	-- in combat. Newest line per sender, kept 20 minutes, at most 20 senders.
+	local grHead = W.Text(pug, "GUILDS RECRUITING", "note", "dim")
+	grHead:SetPoint("TOPLEFT", lfHead, "BOTTOMLEFT", 0, -6 - 5 * 26 - 16)
+	local grRows = makeRows(pug, grHead, 5, pug)
+	for _, r in ipairs(grRows) do
+		r.w = W.Button(r, "Whisper"); r.w:SetSize(70, 20)
+		r.w:SetPoint("RIGHT", -2, 0)
+		r.r:ClearAllPoints(); r.r:SetPoint("RIGHT", r.w, "LEFT", -8, 0)
+	end
+	local grEmpty = W.Text(pug, "", "note", "dim")
+	grEmpty:SetPoint("TOPLEFT", grHead, "BOTTOMLEFT", 0, -8)
+	grEmpty:SetPoint("RIGHT", pug, "RIGHT", 0, 0); grEmpty:SetJustifyH("LEFT")
+
+	Okanvil._recruitSeen = Okanvil._recruitSeen or {}
+	local seen = Okanvil._recruitSeen
+	local function isRecruitSpam(low)
+		-- a player asking for a guild is not a guild recruiting
+		if low:find("lf guild", 1, true) or low:find("looking for guild", 1, true)
+			or low:find("looking for a guild", 1, true) or low:find("lf a guild", 1, true) then
+			return false
+		end
+		if low:find("recruit", 1, true) then return true end
+		if low:find("guild", 1, true) and (low:find("looking for", 1, true)
+			or low:find("lf ", 1, true) or low:find("join", 1, true) or low:find("members", 1, true)) then
+			return true
+		end
+		return false
+	end
+	local function cleanLine(msg)
+		msg = msg:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+		msg = msg:gsub("|H.-|h(.-)|h", "%1")
+		return msg
+	end
+	if not Okanvil._recruitWatch then
+		local ev = CreateFrame("Frame")
+		ev:RegisterEvent("CHAT_MSG_CHANNEL")
+		ev:SetScript("OnEvent", function(_, _, msg, sender)
+			if IsInGuild and IsInGuild() then return end
+			if InCombatLockdown() then return end
+			if not msg or not sender or sender == "" then return end
+			local low = msg:lower()
+			if not isRecruitSpam(low) then return end
+			local name = sender:gsub("%-.*$", "")
+			if name == UnitName("player") then return end
+			seen[name] = { sender = name, guild = msg:match("<([^>]+)>"), text = cleanLine(msg), t = time() }
+		end)
+		Okanvil._recruitWatch = ev
+	end
+	local function whisperTo(who)
+		if ChatFrame_SendTell then ChatFrame_SendTell(who)
+		elseif ChatEdit_ActivateChat and ChatFrame1EditBox then
+			ChatFrame1EditBox:SetAttribute("chatType", "WHISPER")
+			ChatFrame1EditBox:SetAttribute("tellTarget", who)
+			ChatEdit_ActivateChat(ChatFrame1EditBox)
+		end
+	end
+	local function paintRecruit()
+		local now, list = time(), {}
+		for name, e in pairs(seen) do
+			if now - e.t > 1200 then seen[name] = nil else list[#list + 1] = e end
+		end
+		table.sort(list, function(a, b) return a.t > b.t end)
+		while #list > 20 do seen[list[#list].sender] = nil; table.remove(list) end
+		for i, r in ipairs(grRows) do
+			local e = list[i]
+			if e then
+				local head = e.guild and ("|cffe0b860<" .. e.guild .. ">|r ") or ""
+				r.l:SetText(head .. "|cff8a8d93" .. e.text .. "|r")
+				local mins = math.floor((now - e.t) / 60)
+				r.r:SetText(e.sender .. "  " .. (mins < 1 and "now" or (mins .. "m")))
+				local who = e.sender
+				r.w:SetScript("OnClick", function() whisperTo(who) end)
+				r:SetScript("OnClick", function() whisperTo(who) end)
+				r:SetScript("OnEnter", function(self)
+					GameTooltip:SetOwner(self, "ANCHOR_TOP")
+					GameTooltip:AddLine(e.text, 1, 1, 1, true)
+					GameTooltip:Show()
+				end)
+				r:SetScript("OnLeave", function() GameTooltip:Hide() end)
+				r:Show()
+			else
+				r:Hide()
+			end
+		end
+		if #list == 0 then
+			grEmpty:SetText("No recruitment seen yet. Guild ads posted in General, Trade or "
+				.. "Global show up here, newest first, with a button to whisper the recruiter.")
+			grEmpty:Show()
+		else
+			grEmpty:Hide()
+		end
+	end
+
+	local function resetText(secs)
+		if secs <= 0 then return "resetting" end
+		local d = math.floor(secs / 86400); local h = math.floor((secs % 86400) / 3600)
+		if d > 0 then return ("resets in %dd %dh"):format(d, h) end
+		return ("resets in %dh %dm"):format(h, math.floor((secs % 3600) / 60))
+	end
+
+	local function paintPug()
+		-- raids asking for people
+		local RS = Okanvil.RaidFinder_Shared
+		local list = (RS and RS.module_on and RS.module_on() and RS.get_view and RS.get_view()) or {}
+		for i, r in ipairs(lfRows) do
+			local info = list[i]
+			if info then
+				r.l:SetText((RS.raid_label and RS.raid_label(info) or (info.instance or "?")) .. "  "
+					.. (RS.roles_text and RS.roles_text(info.roles) or ""))
+				r.r:SetText((info.sender or "") .. "  " .. (RS.age_text and RS.age_text(info) or ""))
+				r:SetScript("OnClick", function() Okanvil:ShowPanel("Okanvil-RaidFinder") end)
+				r:Show()
+			else
+				r:Hide()
+			end
+		end
+		if #list == 0 then
+			lfEmpty:SetText(Okanvil:IsModuleEnabled("Okanvil-RaidFinder")
+				and "Nothing seen yet. Raid Finder reads LFM lines in chat while its page is open, "
+					.. "or all the time with background scanning on (Raid Finder > Settings)."
+				or "Raid Finder is off -- turn it on in Modules to see raids here.")
+			lfEmpty:Show()
+		else
+			lfEmpty:Hide()
+		end
+
+		-- this character's lockouts
+		local me = UnitName("player")
+		local mine = {}
+		local LK = Okanvil.Lockouts
+		for _, row in ipairs((LK and LK.Get and LK:Get()) or {}) do
+			if row.name == me then mine = row.instances or {} end
+		end
+		local now = time()
+		for i, r in ipairs(lkRows) do
+			local inst = mine[i]
+			if inst then
+				local size = (inst.diff == 2 or inst.diff == 4) and "25" or "10"
+				r.l:SetText(inst.name .. "  |cff8a8d93" .. size .. (inst.heroic and " HC" or "") .. "|r")
+				r.r:SetText(resetText((inst.resets or now) - now))
+				r:SetScript("OnClick", nil)
+				r:Show()
+			else
+				r:Hide()
+			end
+		end
+		if #mine == 0 then
+			lkEmpty:SetText("Not saved to any raid -- free to join anything.")
+			lkEmpty:Show()
+		else
+			lkEmpty:Hide()
+		end
+
+		paintRecruit()
+	end
+	pug:SetScript("OnShow", paintPug)
+	pug:SetScript("OnUpdate", function(self, el)
+		self._t = (self._t or 0) + el
+		if self._t < 5 then return end
+		self._t = 0
+		paintPug()
+	end)
+
+	local guildParts = { tiles._t1, tiles._t2, tiles._t3, tiles._t4, tabOnline, tabSnaps, gcard, scard }
+	local function setPugMode(on)
+		if on then
+			for _, f in ipairs(guildParts) do f:Hide() end
+			exportBtn:Hide()
+			bRF:SetShown(Okanvil:IsModuleEnabled("Okanvil-RaidFinder"))
+			bPug:SetShown(Okanvil:IsModuleEnabled("Okanvil-PuG"))
+			pug:Show()
+		elseif pug:IsShown() then
+			pug:Hide()
+			for i = 1, 4 do tiles["_t" .. i]:Show() end
+			tabOnline:Show()
+			tabSnaps:SetShown(Okanvil:IsModuleEnabled("__guild"))
+			showTab("online")
+		end
+	end
+
 	local function refreshGuild()
 		if not (IsInGuild and IsInGuild()) then
-			tiles.online.num:SetText("--"); tiles.rank.num:SetText("--")
-			tiles.raiders.num:SetText("--"); tiles.sewers.num:SetText("--")
-			for _, r in ipairs(wrap.gRows) do r:Hide() end
-			if wrap.gsb then wrap.gsb:Hide() end
-			wrap.gempty:SetText("|cff888888You are not in a guild.|r")
+			setPugMode(true)
 			return
 		end
+		setPugMode(false)
 		local online, mine, mineIdx = 0, "--", nil
 		local raiders, sewers = 0, 0
 		-- "Raiders" = officers and the rank just below them; everyone deeper is the

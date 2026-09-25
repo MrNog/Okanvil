@@ -152,7 +152,8 @@ function Okanvil.RaidFinderMini_Render()
 		r.gs:SetText(info.gs and (info.gs .. "k") or "|cff8a8d93--|r")
 
 		-- Sender (class-colored via the leader's name? we only have the name -> gold)
-		r.sender:SetText("|cffe0b860" .. (info.sender or "?") .. "|r")
+		r.sender:SetText(S.leader_text and S.leader_text(info.sender, "|cffe0b860")
+			or ("|cffe0b860" .. (info.sender or "?") .. "|r"))
 
 		-- Ress chip
 		if info.reserved == nil then

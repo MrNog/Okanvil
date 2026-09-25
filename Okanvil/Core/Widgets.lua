@@ -219,7 +219,11 @@ end
 function W.Text(parent, text, size, role)
 	local fs = Okanvil:NewText(parent, "OVERLAY")
 	size = W.Size(size)
-	if size then fs._okSize = size; local f = Okanvil:Font(); fs:SetFont(f, size) end
+	if size then
+		fs._okSize = size
+		local f = Okanvil:Font()
+		fs:SetFont(f, math.floor(size * Okanvil:TextScale() + 0.5))
+	end
 	if role == "dim" then fs:SetTextColor(unpack3(C.textDim))
 	elseif role == "accent" then fs:SetTextColor(unpack3(C.accentText))  -- bright gold, readable
 	else fs:SetTextColor(unpack3(C.text)) end
@@ -305,6 +309,9 @@ function W.Button(parent, text, kind)
 	-- Button labels get a FIXED size (12) so the global "Font size" slider can't
 	-- grow them past the button box. The slider is for body text, not chrome.
 	local t = W.Text(b, text, "body")
+	-- fixed: Settings > Text size must not grow a label past its button
+	t._okFixed = true
+	t:SetFont(Okanvil:Font(), t._okSize)
 	t:SetPoint("CENTER")
 	b.text = t
 	b._kind = kind
