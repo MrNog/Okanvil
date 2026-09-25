@@ -294,6 +294,17 @@ function N.SizedName(name)
 	local heroic = N.RaidHeroic()
 	local size = N.RaidSize()
 
+	-- Outside a raid the group has no size, and reading that as "25" sent a solo
+	-- player standing in a note's room to the 25 note while the 10 was the one
+	-- selected -- so the room check said "not here" and nothing ran on a dummy.
+	-- With no raid to decide, the variant already chosen for this boss stands,
+	-- and failing that the size and difficulty the page is showing.
+	if size == nil then
+		local sel = db and db.selected
+		if sel and N.BossOf(sel) == name then return sel end
+		size, heroic = N.ViewSize(), N.ViewHeroic()
+	end
+
 	-- Heroic: exact match or nothing.
 	if heroic then
 		local want = N.KeyFor(name, size, true)

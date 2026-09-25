@@ -1281,7 +1281,18 @@ local function captureCorpse()
 		saveBossCtx(containerBoss)
 	end
 	local looting = containerBoss or deadNPC(lootUnit)
-	if not looting then return end
+	if not looting then
+		-- Said out loud: a loot window this skips is otherwise invisible, and a boss
+		-- page that never appears leaves nothing to explain why.
+		local function who(u)
+			if not (UnitExists and UnitExists(u)) then return "none" end
+			return ("%s %s%s"):format(tostring(UnitName(u)), tostring(UnitGUID(u)),
+				(UnitIsDead and UnitIsDead(u)) and " dead" or "")
+		end
+		Okanvil:Trace("LOOT", ("skipped a loot window: no corpse (target %s, mouseover %s)")
+			:format(who("target"), who("mouseover")))
+		return
+	end
 	fireScan()   -- atualiza o boss atual ANTES de rotular o loot (timing do scanner)
 	-- Only remember a corpse as the "boss" if tryEngage() vetted it as boss-like while
 	-- it was alive (bossCids). It used to accept ANY NPC corpse, so looting a trash mob

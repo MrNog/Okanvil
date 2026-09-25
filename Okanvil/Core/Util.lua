@@ -47,10 +47,13 @@ function U.itemIDFromLink(link)
 	return tonumber(link:match("item:(%d+)")) or tonumber(link) or 0
 end
 
--- Is this GUID a creature rather than a player?
+-- Is this GUID an NPC -- a creature or a vehicle -- rather than a player?
 --
 -- A 3.3.5a GUID is "0xF130..." and the nibble at position 5 carries the unit
--- type; 3 (mod 8) is a creature. The catch is that it does not always arrive as
+-- type: 3 (mod 8) is a creature, 5 a vehicle. Vehicles count because several
+-- bosses are one to the client (Putricide, the Gunship): taking the creature type
+-- alone made a dead Putricide "not an NPC", so opening his corpse recorded
+-- nothing. The catch is that the GUID does not always arrive as
 -- a STRING: some cores hand COMBAT_LOG_EVENT_UNFILTERED a number, and calling
 -- :sub() on that throws "attempt to index local 'destGUID' (a number value)" --
 -- which is exactly what the farm tracker's kill counter did, 42 times in one
@@ -64,7 +67,7 @@ function U.guidIsNPC(guid)
 	if not hex then return false end
 	if #hex < 16 then hex = string.rep("0", 16 - #hex) .. hex end
 	local b = tonumber(hex:sub(3, 3), 16)
-	return b ~= nil and (b % 8) == 3
+	return b ~= nil and ((b % 8) == 3 or (b % 8) == 5)
 end
 
 function U.shortLink(link)
