@@ -571,8 +571,40 @@ end
 --   * winners recorded as the literal word "You" (see buildLootPatterns) are put
 --     back to this character's name -- the history is per character, so "You" in
 --     it can only ever have been whoever owns it;
---   * trash-only items filed under a boss go back to the Trash page.
+--   * a drop filed under the wrong boss goes to the boss its item drops from.
 local youFixed = false
+
+-- The same correction captureDrop applies (see itemBossFix), for drops saved
+-- before it existed or by a path that missed it. Moving a copy onto a page that
+-- already holds that item for the same winner means one drop was recorded twice
+-- -- the Gunship chest re-adding bracers that had been filed under Deathwhisper --
+-- so the moved copy is dropped instead. Two copies with different winners are two
+-- real drops and both stay.
+local function fixDropBosses(sess)
+	local drops = sess.drops
+	if not (OkanvilItemBoss and type(drops) == "table") then return end
+	local function winner(d) return d.receivedBy or d.heldBy end
+	for i = #drops, 1, -1 do
+		local d = drops[i]
+		local real = d.id and OkanvilItemBoss[d.id]
+		if real and d.boss ~= real and (real == "Trash" or not d.boe) then
+			local dup
+			for _, o in ipairs(drops) do
+				if o ~= d and o.id == d.id and o.boss == real
+					and (winner(d) == nil or winner(o) == winner(d)) then
+					dup = o; break
+				end
+			end
+			if dup then
+				dup.receivedBy = dup.receivedBy or d.receivedBy
+				table.remove(drops, i)
+			else
+				d.boss = real
+			end
+		end
+	end
+end
+
 local function fixYouWinners()
 	if youFixed then return end
 	local me = UnitName("player")
@@ -583,11 +615,8 @@ local function fixYouWinners()
 		for _, d in ipairs(sess.drops or {}) do
 			if d.receivedBy == you or d.receivedBy == "You" then d.receivedBy = me end
 			if d.heldBy == you or d.heldBy == "You" then d.heldBy = me end
-			-- A trash-only item filed under the boss fought before it (see itemBossFix).
-			if OkanvilItemBoss and d.id and OkanvilItemBoss[d.id] == "Trash" and d.boss ~= "Trash" then
-				d.boss = "Trash"
-			end
 		end
+		fixDropBosses(sess)
 	end
 end
 
@@ -2071,6 +2100,11 @@ function L.NoteExternalRoll(link, winners)
 				break
 			end
 		end
+		-- ...and let the item overrule that guess, as every captured drop does. A
+		-- raider never sees the Gunship die (it ends in a chest), so the latest boss
+		-- was still Deathwhisper and the Gunship's bracers were filed there -- and
+		-- opening the chest later added them again under the right boss.
+		boss = itemBossFix(boss, id, false)
 
 		dp = {
 			t = time(), boss = boss, id = id,
@@ -2108,8 +2142,18 @@ end
 function L.StartRoll(link, mode)
 	if not link then return end
 	mode = mode or "free"
+	-- A hard-reserved item is never rolled: it already has an owner, and putting
+	-- it up by a misclick is how a raid ends up with two people who "won" it.
+	local SRM = Okanvil.SoftRes
+	if SRM and SRM.IsHard(link) then
+		Okanvil:Print("|cffff5555" .. link .. " is hard-reserved -- no roll started.|r")
+		return
+	end
+	-- A soft-reserved item rolled MS is rolled among its reservers only. OS stays
+	-- open to everyone: that is the master looter putting it up for the raid.
+	local srOnly = mode == "ms" and SRM and SRM.IsReserved(link)
 	activeRoll = { id = itemIDFromLink(link), link = link, name = (GetItemInfo(link)) or "",
-		mode = mode, opened = GetTime(), best = nil, list = {}, seen = {} }
+		mode = mode, opened = GetTime(), best = nil, list = {}, seen = {}, srOnly = srOnly }
 	-- This item is now open for rolls, so chat rolls land on it even after activeRoll's
 	-- own window closes -- a slow roll-off still belongs to the item that was called.
 	do
@@ -2120,7 +2164,7 @@ function L.StartRoll(link, mode)
 	local secs = L.RollTimer()
 	local chan = announceChannel()
 	if chan then
-		local msg = L.RollMsg(mode):gsub("%[item%]", link)
+		local msg = srOnly and SRM.RollCall(link) or L.RollMsg(mode):gsub("%[item%]", link)
 		if secs > 0 then msg = msg .. ("  (%ds)"):format(secs) end
 		SendChatMessage(msg, chan)
 	end
@@ -2185,6 +2229,28 @@ end
 
 local ROLL_PATTERN = (RANDOM_ROLL_RESULT or "%s rolls %d (%d-%d)")
 	:gsub("([%(%)%-])", "%%%1"):gsub("%%s", "(.+)"):gsub("%%d", "(%%d+)")
+-- On a soft-reserved item only the reservers' rolls count. Anyone else's is not
+-- recorded at all, so it can never top the list or be awarded. The raider is
+-- whispered why, once per item, so a roll that "vanished" is not a mystery --
+-- a whisper and not raid chat, which would read out every stray roll to all.
+-- Only the master looter sends it, or every Okanvil in the raid would.
+local srWarned = {}
+local function srRejects(id, who, openRoll, link)
+	local SRM = Okanvil.SoftRes
+	if not (SRM and id and SRM.IsReserved(id)) then return false end
+	if openRoll then return false end
+	if SRM.IsReserver(id, who) then return false end
+	local k = id .. ":" .. who:lower()
+	if not srWarned[k] and L.IsMasterLooter and L.IsMasterLooter() then
+		srWarned[k] = true
+		local item = (link and link ~= "") and link or "that item"
+		SendChatMessage(item .. " is SR -- your roll didn't count, you didn't reserve it.",
+			"WHISPER", nil, who)
+		Okanvil:Print("|cff8a8d93SR: ignored " .. who .. "'s roll (whispered them).|r")
+	end
+	return true
+end
+
 local function captureRoll(msg)
 	local who, roll, _, hi = msg:match(ROLL_PATTERN)
 	if not who then return end
@@ -2217,6 +2283,7 @@ local function captureRoll(msg)
 			dp = L.HandRollDrop()     -- an item the ML explicitly opened for rolls
 		end
 		if not dp then return end     -- nothing is being rolled: the roll is not ours
+		if srRejects(dp.id, key, false, dp.item) then return end
 		dp.rolls = dp.rolls or {}
 		for _, e in ipairs(dp.rolls) do if e.player == key then return end end   -- first roll counts
 		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
@@ -2229,6 +2296,7 @@ local function captureRoll(msg)
 	end
 
 	if (GetTime() - activeRoll.opened) > ROLL_WINDOW then return end
+	if srRejects(activeRoll.id, key, not activeRoll.srOnly, activeRoll.link) then return end
 	if activeRoll.seen[key] then return end
 	activeRoll.seen[key] = true
 	activeRoll.list[#activeRoll.list + 1] = { player = key, roll = roll, spec = spec }

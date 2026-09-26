@@ -1162,7 +1162,16 @@ function RM.Refresh()
 				elseif d.passed then
 					sub = "|cff8a8d93passed|r"
 				else
-					sub = ""          -- unrolled, or simply sitting with the ML
+					-- Unrolled, or simply sitting with the ML. A reserved item says who
+					-- it is reserved for, so the call can be made without looking it up.
+					local SRM = Okanvil.SoftRes
+					if SRM and SRM.IsHard(d.item ~= "" and d.item or d.id) then
+						sub = "|cffff5555HR|r |cff8a8d93hard-reserved, no roll|r"
+					elseif SRM and SRM.IsReserved(d.id) then
+						sub = "|cffc0943aSR|r " .. SRM.Names(d.id)
+					else
+						sub = ""
+					end
 				end
 				r.sub:SetText(sub)
 

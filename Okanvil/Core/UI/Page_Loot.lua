@@ -113,8 +113,15 @@ function Okanvil:BuildLoot()
 	fill.applyTop = applyTop
 	top.onToggle = applyTop
 
+	-- Soft reserves: one line when closed, the paste box when open. Shown to
+	-- everyone -- in a pug the master looter is whoever the leader picked.
+	local srp = W.Frame(main, "page")
+	srp:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
+	srp:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -4)
+	Okanvil:Loot_BuildSoftRes(srp)
+
 	local hist = W.Frame(main, "page")
-	hist:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
+	hist:SetPoint("TOPLEFT", srp, "BOTTOMLEFT", 0, -4)
 	hist:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", 0, 0)
 	Okanvil:Loot_BuildHistory(hist)
 
@@ -239,6 +246,91 @@ function Okanvil:Loot_BuildCollectors(p)
 	-- The "whisper the winner" toggle used to sit here, with the message it sends
 	-- on a different page entirely -- so neither half said anything about the
 	-- other. Both are in Settings > Loot now, as one control.
+end
+
+-- ---- Soft reserves: the softres.it CSV, pasted in ----
+--
+-- Closed, the strip is one line saying what is loaded. Open, it is the paste
+-- box and the wording of the roll call for a reserved item. The list itself is
+-- read by the roll manager (who reserved what, whose rolls count).
+local SR_CLOSED_H, SR_OPEN_H = 32, 196
+function Okanvil:Loot_BuildSoftRes(p)
+	local SR = Okanvil.SoftRes
+	p:SetHeight(SR_CLOSED_H)
+	if not SR then return end
+	local X = 8
+
+	local hd = W.Text(p, "SOFT RESERVES", "note", "dim")
+	hd:SetPoint("TOPLEFT", X, -10)
+	local status = W.Text(p, "", "label")
+	status:SetPoint("LEFT", hd, "RIGHT", 10, 0)
+
+	local clr = W.Button(p, "Clear"); clr:SetSize(60, 22); clr:SetPoint("TOPRIGHT", -8, -5)
+	local tog = W.Button(p, "Paste SR"); tog:SetSize(80, 22); tog:SetPoint("RIGHT", clr, "LEFT", -6, 0)
+
+	local body = CreateFrame("Frame", nil, p)
+	body:SetPoint("TOPLEFT", 0, -SR_CLOSED_H)
+	body:SetPoint("BOTTOMRIGHT", 0, 0)
+	body:Hide()
+
+	local hint = W.Text(body, "softres.it > Export > CSV > Copy to Clipboard, then paste here (Ctrl+V).", "note", "dim")
+	hint:SetPoint("TOPLEFT", X, -2)
+	local box = W.MultiEdit(body)
+	box:SetPoint("TOPLEFT", X, -18)
+	box:SetPoint("TOPRIGHT", -8, -18)
+	box:SetHeight(92)
+
+	local imp = W.Button(body, "Import", "primary"); imp:SetSize(80, 22)
+	imp:SetPoint("TOPRIGHT", box, "BOTTOMRIGHT", 0, -6)
+
+	local ml = W.Text(body, "MS call", "label"); ml:SetPoint("TOPLEFT", X, -148)
+	local msg = W.EditBox(body, function(t) SR.SetMsg(t) end)
+	msg:SetHeight(24)
+	msg:SetPoint("LEFT", ml, "RIGHT", 8, 0)
+	msg:SetPoint("RIGHT", body, "RIGHT", -8, 0)
+	msg.edit:SetText(SR.Msg())
+	local mh = W.Text(body, "|cffffd200[item]|r = the item, |cffffd200[names]|r = who reserved it. Only their rolls count.", "note", "dim")
+	mh:SetPoint("TOPLEFT", X + 66, -174)
+
+	local function paint()
+		local ni, np, at = SR.Summary()
+		if ni then
+			status:SetText(("|cffdcddde%d|r |cff8a8d93items,|r |cffdcddde%d|r |cff8a8d93raiders  -- imported %s|r")
+				:format(ni, np, date("%d/%m %H:%M", at)))
+			clr:Show()
+		else
+			status:SetText("|cff6f7176none loaded -- MS rolls are open to everyone|r")
+			clr:Hide()
+		end
+	end
+
+	local function setOpen(open)
+		p._open = open
+		if open then body:Show(); p:SetHeight(SR_OPEN_H); tog.text:SetText("Close")
+		else body:Hide(); p:SetHeight(SR_CLOSED_H); tog.text:SetText("Paste SR"); box.edit:ClearFocus() end
+	end
+
+	tog:SetScript("OnClick", function() setOpen(not p._open) end)
+	imp:SetScript("OnClick", function()
+		local ni, np = SR.Import(box:GetText())
+		if not ni then Okanvil:Print("|cffff5555" .. tostring(np) .. "|r"); return end
+		Okanvil:Print(("Soft reserves loaded: %d items, %d raiders."):format(ni, np))
+		box:SetText("")
+		setOpen(false)
+	end)
+	clr:SetScript("OnClick", function()
+		Okanvil:Confirm("Clear the soft reserves?\n|cff8a8d93MS rolls go back to being open to everyone.|r",
+			"Clear", function() SR.Clear(); Okanvil:Print("Soft reserves cleared.") end)
+	end)
+	clr:Tooltip("Remove the loaded list, e.g. before the next raid.")
+
+	SR.onChange = function()
+		paint()
+		if Okanvil.RollMgr and Okanvil.RollMgr.Refresh then Okanvil.RollMgr.Refresh() end
+	end
+	p:SetScript("OnShow", paint)
+	paint()
+	setOpen(false)
 end
 
 -- ---- Announce templates: MS/OS/Free/Whisper ([item] placeholder) ----

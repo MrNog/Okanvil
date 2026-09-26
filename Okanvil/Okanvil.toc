@@ -32,6 +32,7 @@ Modules\ItemBoss-Data.lua
 Modules\Proficiency-Data.lua
 Modules\Council.lua
 Modules\LootPrio.lua
+Modules\SoftRes.lua
 Modules\Loot.lua
 Modules\LootRoll.lua
 Modules\Invite.lua
