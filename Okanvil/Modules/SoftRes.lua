@@ -113,10 +113,23 @@ function SR.Import(text)
 		end
 	end
 	if rows == 0 then return nil, "No reserves found. Paste the CSV from softres.it (Export > CSV)." end
+	local ni, np = SR._Store(items, names, time(), nil)
+	-- The master looter or raid leader hands the list to the raid straight
+	-- away, so nobody else has to paste it.
+	if SR.CanShare() then SR.Share() end
+	return ni, np
+end
+
+-- Keep a list, however it arrived. `from` is who sent it, nil for your own paste.
+function SR._Store(items, names, at, from)
 	local d = db()
-	d.items, d.names, d.at = items, names, time()
-	local ni, np = 0, 0
-	for _ in pairs(items) do ni = ni + 1 end
+	d.items, d.names, d.at, d.from = items, names, at, from
+	local ni, players = 0, {}
+	for _, list in pairs(items) do
+		ni = ni + 1
+		for _, e in ipairs(list) do players[e.key] = true end
+	end
+	local np = 0
 	for _ in pairs(players) do np = np + 1 end
 	d.nItems, d.nPlayers = ni, np
 	if SR.onChange then SR.onChange() end
@@ -125,15 +138,133 @@ end
 
 function SR.Clear()
 	local d = db()
-	d.items, d.names, d.at, d.nItems, d.nPlayers = nil, nil, nil, nil, nil
+	d.items, d.names, d.at, d.from, d.nItems, d.nPlayers = nil, nil, nil, nil, nil, nil
 	if SR.onChange then SR.onChange() end
 end
 
--- items, raiders, import time -- or nil when nothing is loaded
+-- items, raiders, import time, who sent it -- or nil when nothing is loaded
 function SR.Summary()
 	local d = db()
 	if not d.items then return nil end
-	return d.nItems or 0, d.nPlayers or 0, d.at
+	return d.nItems or 0, d.nPlayers or 0, d.at, d.from
+end
+
+-- ---- Sharing with the raid ----------------------------------------------
+-- The master looter (or the raid leader) sends the list over addon messages,
+-- and every raider with Okanvil gets the same [SR] tags without pasting.
+-- Trust is by role, checked live on the receiving side: a list is taken only
+-- from whoever is master looter or raid leader right now.
+local function shortName(n) return n and (n:gsub("%-.*$", "")) or n end
+
+local function isLeadOrML(who)
+	who = shortName(who)
+	if not who or who == "" then return false end
+	local L = Okanvil.Loot
+	local ml = L and L.MasterLooterName and L.MasterLooterName()
+	if ml and shortName(ml):lower() == who:lower() then return true end
+	for i = 1, (GetNumRaidMembers and GetNumRaidMembers() or 0) do
+		local name, rank = GetRaidRosterInfo(i)
+		if name and shortName(name):lower() == who:lower() then return rank == 2 end
+	end
+	if (GetNumRaidMembers() or 0) == 0 and (GetNumPartyMembers() or 0) > 0 then
+		-- a party has no roster ranks; its leader is the one who can hand out loot
+		if UnitIsPartyLeader and who:lower() == (UnitName("player") or ""):lower() then
+			return UnitIsPartyLeader("player") and true or false
+		end
+		for i = 1, GetNumPartyMembers() do
+			local u = "party" .. i
+			if (UnitName(u) or ""):lower() == who:lower() then
+				return UnitIsPartyLeader and UnitIsPartyLeader(u) and true or false
+			end
+		end
+	end
+	return false
+end
+
+function SR.CanShare()
+	if not SR.Summary() then return false end
+	local inGroup = (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0
+	return inGroup and isLeadOrML(UnitName("player"))
+end
+
+-- One line per reserver: id, count, name, class, spec, then the item name.
+-- Tabs, not commas or pipes: an item name has commas, and Comms uses pipes.
+local function serialize()
+	local d = db()
+	local out = { "SR1", tostring(d.at or time()) }
+	for id, list in pairs(d.items or {}) do
+		for _, e in ipairs(list) do
+			out[#out + 1] = table.concat({ id, e.count or 1, e.name or "", e.class or "",
+				e.spec or "", (d.names and d.names[id]) or "" }, "\t")
+		end
+	end
+	return table.concat(out, "\n")
+end
+
+local function deserialize(text)
+	local lines = {}
+	for line in (text or ""):gmatch("[^\n]+") do lines[#lines + 1] = line end
+	if lines[1] ~= "SR1" then return nil end
+	local at = tonumber(lines[2]) or time()
+	local items, names = {}, {}
+	for i = 3, #lines do
+		local id, count, name, class, spec, iname = lines[i]:match("^(%d+)\t(%d+)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
+		id = tonumber(id)
+		if id and name ~= "" then
+			local list = items[id] or {}
+			items[id] = list
+			list[#list + 1] = { name = name, key = name:lower(), class = class ~= "" and class or nil,
+				spec = spec, note = "", count = tonumber(count) or 1 }
+			if iname ~= "" then names[id] = iname end
+		end
+	end
+	return items, names, at
+end
+
+function SR.Share()
+	local C = Okanvil.Comms
+	if not (C and C.SendBig) then return false end
+	return C.SendBig("SOFTRES", serialize())
+end
+
+local function sameList(items)
+	local d = db()
+	if not d.items then return false end
+	local function flat(t)
+		local out = {}
+		for id, list in pairs(t) do
+			for _, e in ipairs(list) do out[#out + 1] = id .. ":" .. e.key .. ":" .. (e.count or 1) end
+		end
+		table.sort(out)
+		return table.concat(out, ",")
+	end
+	return flat(d.items) == flat(items)
+end
+
+local function onReceive(sender, text)
+	sender = shortName(sender)
+	if not sender or sender:lower() == (UnitName("player") or ""):lower() then return end
+	if not isLeadOrML(sender) then return end
+	local items, names, at = deserialize(text)
+	if not items or not next(items) then return end
+	if sameList(items) then return end
+	local function take()
+		local ni, np = SR._Store(items, names, at, sender)
+		Okanvil:Print(("Soft reserves from %s: %d items, %d raiders."):format(sender, ni, np))
+	end
+	-- A list you already hold is replaced only if you say so; with none loaded
+	-- there is nothing to lose.
+	if SR.Summary() then
+		Okanvil:Confirm(sender .. " sent the raid's soft reserves.\n|cff8a8d93Replace the list you have loaded?|r",
+			"Replace", take)
+	else
+		take()
+	end
+end
+
+do
+	local C = Okanvil.Comms
+	if C and C.OnBig then C.OnBig("SOFTRES", onReceive) end
 end
 
 local function idOf(item)
@@ -193,6 +324,81 @@ function SR.IsHard(item)
 		if name and trim(vname):lower() == name:lower() then return true end
 	end
 	return false
+end
+
+-- ---- Reserved loot categories --------------------------------------------
+-- The PuG page's Reserve strip keeps whole kinds of loot for the leader:
+-- "(B+O+P res)". A drop of a reserved kind is treated like a hard reserve --
+-- tagged, and never rolled. The ids and names are the ones Loot's collectors
+-- sort by; Primordial Saronite is ICC's "O".
+local ORB_IDS  = { [45087] = true, [47556] = true, [49908] = true }
+local FRAG_IDS = { [45038] = true, [45039] = true, [45896] = true, [49869] = true }
+local ORB_NAMES  = { "runed orb", "crusader orb", "primordial saronite" }
+local FRAG_NAMES = { "fragment of val'anyr", "fragments of val'anyr", "shadowfrost shard" }
+local PATTERN_PREFIX = { "pattern:", "plans:", "recipe:", "schematic:", "formula:", "design:" }
+
+local function hasAny(name, list, prefix)
+	for _, w in ipairs(list) do
+		if prefix then
+			if name:sub(1, #w) == w then return true end
+		elseif name:find(w, 1, true) then return true end
+	end
+	return false
+end
+
+local function nameOf(item)
+	if type(item) == "string" then
+		local n = item:match("%[(.-)%]") or (not item:find("|H", 1, true) and item) or GetItemInfo(item)
+		if n then return n:lower() end
+	elseif type(item) == "number" then
+		local n = GetItemInfo(item)
+		if n then return n:lower() end
+	end
+	return ""
+end
+
+-- "BoE" / "Orb" / "Pattern" / "Frag" when this drop is of a kind the leader
+-- reserved, else nil. `boe` says whether the item binds on equip; the caller
+-- knows (a captured drop carries it), an item link alone does not.
+function SR.ReservedCat(item, boe)
+	local P = Okanvil.PuG
+	local pdb = P and P.DB and P.DB()
+	local r = pdb and pdb.reserve
+	if type(r) ~= "table" or pdb.reserveNone then return nil end
+	local id, name = idOf(item), nameOf(item)
+	if (r.frag or r.shard) and ((id and FRAG_IDS[id]) or hasAny(name, FRAG_NAMES)) then return "Frag" end
+	if r.orb and ((id and ORB_IDS[id]) or hasAny(name, ORB_NAMES)) then return "Orb" end
+	if r.pattern and hasAny(name, PATTERN_PREFIX, true) then return "Pattern" end
+	if r.boe and boe then return "BoE" end
+	return nil
+end
+
+-- Why this item must not be rolled, or nil when it may be.
+function SR.Blocked(item, boe)
+	if SR.IsHard(item) then return "hard-reserved" end
+	local cat = SR.ReservedCat(item, boe)
+	if cat then return "reserved (" .. cat .. ")" end
+	return nil
+end
+
+-- ---- The tag in front of an item name ------------------------------------
+-- What a raider needs from a glance at the list is "may I roll on this?":
+--   [HR] red   -- hard-reserved, nobody rolls
+--   [BoE] [Orb] [Pattern] [Frag] red -- a kind of loot the leader reserved
+--   [SR] gold  -- soft-reserved and you are one of the reservers
+--   [SR] grey  -- soft-reserved by others, an MS roll from you will not count
+-- The master looter is not rolling, so for them any reserved item is gold.
+-- Returns "" for an item that is open to everyone.
+function SR.Tag(item, id, boe)
+	if SR.IsHard(item) then return "|cffff5555[HR]|r " end
+	local cat = SR.ReservedCat(item, boe)
+	if cat then return "|cffff5555[" .. cat .. "]|r " end
+	id = id or idOf(item)
+	if not SR.IsReserved(id) then return "" end
+	local L = Okanvil.Loot
+	local ml = L and L.IsMasterLooter and L.IsMasterLooter()
+	if ml or SR.IsReserver(id, UnitName("player")) then return "|cffe0b860[SR]|r " end
+	return "|cff6f7176[SR]|r "
 end
 
 -- ---- The MS call --------------------------------------------------------

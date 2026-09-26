@@ -105,6 +105,7 @@ local function buildTopStrip(p)
 		function(v)
 			pickTakesOver()
 			d.raid = v
+			if v ~= "voa" then d.classRun = false end
 			-- the new instance may not offer the picked size/difficulty
 			local info
 			for _, r in ipairs(OkanvilRaids or {}) do if r.key == v then info = r end end
@@ -125,8 +126,14 @@ local function buildTopStrip(p)
 
 	F.size10 = W.Button(p, "10", nil):Size(34, 22):Point("TOPLEFT", 196, -4)
 	F.size25 = W.Button(p, "25", nil):Size(34, 22):Point("TOPLEFT", 232, -4)
-	F.size10:OnClick(function() pickTakesOver(); d.size = 10; M.ApplySizeComp(); M.RefreshUI() end)
-	F.size25:OnClick(function() pickTakesOver(); d.size = 25; M.ApplySizeComp(); M.RefreshUI() end)
+	F.size10:OnClick(function() pickTakesOver(); d.classRun = false; d.size = 10; M.ApplySizeComp(); M.RefreshUI() end)
+	F.size25:OnClick(function() pickTakesOver(); d.classRun = false; d.size = 25; M.ApplySizeComp(); M.RefreshUI() end)
+	-- VoA only: the "18" class run, one raider per PvP set (see M.VoABoard). The
+	-- instance is still the 25-man vault; 18 is how many places the run has.
+	F.size18 = W.Button(p, "18", nil):Size(34, 22):Point("TOPLEFT", 268, -4)
+	F.size18:OnClick(function() pickTakesOver(); d.classRun = true; d.size = 25; M.RefreshUI() end)
+	F.size18:Tooltip("VoA 18: one raider per PvP set, plus two tanks.\n"
+		.. "Nobody shares a set, so nobody rolls against anyone.")
 
 	F.diffBtn = W.Button(p, "Normal", nil):Size(70, 22):Point("TOPLEFT", 270, -4)
 	F.diffBtn:OnClick(function() pickTakesOver(); d.hc = not d.hc; M.RefreshUI() end)
@@ -134,7 +141,7 @@ local function buildTopStrip(p)
 
 	-- "min gs" is ~38px at font 12, so the box has to start past 350+38 or the
 	-- label runs into it.
-	label(p, "min gs", 352, -9)
+	F.gsLabel = label(p, "min gs", 352, -9)
 	F.gsBox = W.EditBox(p):Size(56, 22):Point("TOPLEFT", 398, -4)
 	F.gsBox.edit:SetScript("OnTextChanged", function(s) d.gs = s:GetText() or ""; M.RefreshPreview() end)
 
@@ -146,6 +153,11 @@ local function buildTopStrip(p)
 	-- remembering who heals. Explicit button, not automatic: inspecting the whole
 	-- raid is a burst of server traffic and should happen when asked for.
 	F.scanBtn = W.Button(p, "Read specs", nil):Size(96, 22):Point("TOPLEFT", 470, -4)
+	-- A player the scan missed is read later, when they come into range; repaint
+	-- the board then so their row moves to the right column on its own.
+	if Okanvil.Inspect then
+		Okanvil.Inspect.onWatchRead = function() M.RefreshUI() end
+	end
 	F.scanBtn:OnClick(function()
 		local I = Okanvil.Inspect
 		if not (I and I.ScanGroup) then
@@ -181,8 +193,8 @@ local function buildTopStrip(p)
 	end)
 	F.scanBtn:Tooltip("Inspect the group and read each player's real spec,\n"
 		.. "then sort the board by it -- healers to Healer, tanks to Tank.\n\n"
-		.. "Only works on people in range. Cached, so a second scan only\n"
-		.. "checks who is new.")
+		.. "Only works on people in range (~28 yards). Anyone out of range\n"
+		.. "is read by itself when they come close, for the next 10 minutes.")
 end
 -- ------------------------------------------------------------
 -- The board: Unassigned + one column per role.
@@ -519,6 +531,55 @@ local function buildBoard(p)
 		                chips = chips, paintChip = paintChip, reflow = reflow }
 	end
 
+	-- ---- VoA 18: one card per place, drawn over the role columns ----------
+	-- Six across, three down: the places are grouped by class in M.VoASlots, so
+	-- the three druids and the three shamans read as runs of one colour.
+	local grid = W.Frame(p, "bare")
+	grid:SetAllPoints(p)
+	grid:Hide()
+	F.voaGrid = grid
+	F.voaCards = {}
+	local VOA_COLS, VOA_ROWS, UNPLACED_H = 6, 3, 22
+	for i = 1, #(M.VoASlots or {}) do
+		local card = W.Frame(grid, "input")
+		card.title = W.Text(card, "", "note")
+		card.title:SetPoint("TOPLEFT", 7, -6)
+		card.title:SetPoint("RIGHT", -6, 0)
+		card.title:SetJustifyH("LEFT")
+		card.name = W.Text(card, "", "body")
+		card.name:SetPoint("TOPLEFT", card.title, "BOTTOMLEFT", 0, -6)
+		card.name:SetPoint("RIGHT", -6, 0)
+		card.name:SetJustifyH("LEFT")
+		card.sub = W.Text(card, "", "note", "dim")
+		card.sub:SetPoint("TOPLEFT", card.name, "BOTTOMLEFT", 0, -4)
+		card.sub:SetPoint("RIGHT", -6, 0)
+		card.sub:SetJustifyH("LEFT")
+		-- a second raider on the same set, named on the card itself: "+1" alone
+		-- made you hover every card to find out who
+		card.dup = W.Text(card, "", "note")
+		card.dup:SetPoint("TOPLEFT", card.sub, "BOTTOMLEFT", 0, -4)
+		card.dup:SetPoint("RIGHT", -6, 0)
+		card.dup:SetJustifyH("LEFT")
+		for _, fs in ipairs({ card.title, card.name, card.sub, card.dup }) do
+			if fs.SetWordWrap then fs:SetWordWrap(false) end
+		end
+		-- hover lists everyone on the place, so a duplicate can be found by name
+		card:EnableMouse(true)
+		card:SetScript("OnEnter", function(self)
+			if not self._tip then return end
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:AddLine(self._tipTitle or "", 1, 0.82, 0)
+			for _, line in ipairs(self._tip) do GameTooltip:AddLine(line, 1, 1, 1) end
+			GameTooltip:Show()
+		end)
+		card:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		F.voaCards[i] = card
+	end
+	F.voaUnplaced = W.Text(grid, "", "note", "dim")
+	F.voaUnplaced:SetPoint("BOTTOMLEFT", 4, 4)
+	F.voaUnplaced:SetPoint("RIGHT", -4, 0)
+	F.voaUnplaced:SetJustifyH("LEFT")
+
 	-- width them once the panel has a real size
 	F.layoutBoard = function()
 		local total = p:GetWidth()
@@ -530,6 +591,17 @@ local function buildBoard(p)
 			col:SetPoint("TOPLEFT", p, "TOPLEFT", (i - 1) * (w + gap), 0)
 			col:SetPoint("BOTTOMLEFT", p, "BOTTOMLEFT", (i - 1) * (w + gap), 0)
 			col:SetWidth(w)
+		end
+		local th = p:GetHeight() or 0
+		if th > 50 then
+			local cw = (total - gap * (VOA_COLS - 1)) / VOA_COLS
+			local ch = math.min(78, (th - UNPLACED_H - gap * (VOA_ROWS - 1)) / VOA_ROWS)
+			for i, card in ipairs(F.voaCards) do
+				local c, r = (i - 1) % VOA_COLS, math.floor((i - 1) / VOA_COLS)
+				card:ClearAllPoints()
+				card:SetPoint("TOPLEFT", grid, "TOPLEFT", c * (cw + gap), -r * (ch + gap))
+				card:SetSize(cw, ch)
+			end
 		end
 	end
 	p:SetScript("OnSizeChanged", function() if F.layoutBoard then F.layoutBoard() end end)
@@ -1056,8 +1128,21 @@ function M.RefreshUI()
 	local info
 	for _, r in ipairs(OkanvilRaids or {}) do if r.key == d.raid then info = r end end
 	if F.size10 then
-		F.size10:SetKind(d.size == 10 and "primary" or nil)
-		F.size25:SetKind(d.size == 25 and "primary" or nil)
+		local voa = d.raid == "voa"
+		if not voa and d.classRun then d.classRun = false end
+		F.size10:SetKind((d.size == 10 and not d.classRun) and "primary" or nil)
+		F.size25:SetKind((d.size == 25 and not d.classRun) and "primary" or nil)
+		if F.size18 then
+			if voa then F.size18:Show() else F.size18:Hide() end
+			F.size18:SetKind(d.classRun and "primary" or nil)
+		end
+		-- the controls after the size buttons slide right by the 18 button's
+		-- width only while it is there, so no other raid shows a gap
+		local dx = voa and 36 or 0
+		if F.diffBtn then F.diffBtn:ClearAllPoints(); F.diffBtn:SetPoint("TOPLEFT", 270 + dx, -4) end
+		if F.gsLabel then F.gsLabel:ClearAllPoints(); F.gsLabel:SetPoint("TOPLEFT", 352 + dx, -9) end
+		if F.gsBox then F.gsBox:ClearAllPoints(); F.gsBox:SetPoint("TOPLEFT", 398 + dx, -4) end
+		if F.scanBtn then F.scanBtn:ClearAllPoints(); F.scanBtn:SetPoint("TOPLEFT", 470 + dx, -4) end
 	end
 	if F.diffBtn then
 		local canHC = info and info.hc
@@ -1127,7 +1212,10 @@ function M.RefreshUI()
 					-- with "unknown".
 					local sub = M.SubLabel and M.SubLabel(pl.name) or ""
 					if pl.guessed and sub == "" then
-						sub = "|cffe0b860spec not read|r"
+						local I = Okanvil.Inspect
+						sub = (I and I.Watching and I.Watching(pl.name))
+							and "|cffe0b860spec not read -- reads when near|r"
+							or "|cffe0b860spec not read|r"
 					end
 					row.sub:SetText("|cff8a8d93" .. sub .. "|r")
 					-- A pending applicant gets a gold edge: it is the difference between
@@ -1184,6 +1272,77 @@ function M.RefreshUI()
 				col.sb:SetShown(maxs > 4)
 				if col.sb:GetValue() > maxs then col.sb:SetValue(maxs) end
 			end
+		end
+	end
+
+	-- ---- VoA 18 board: replaces the role columns while the run is on ----
+	if F.voaGrid then
+		for _, key in ipairs(COLS) do
+			local fr = F.cols and F.cols[key] and F.cols[key].frame
+			if fr then if d.classRun then fr:Hide() else fr:Show() end end
+		end
+		if d.classRun then
+			F.voaGrid:Show()
+			local places, unplaced = M.VoABoard()
+			for i, card in ipairs(F.voaCards) do
+				local pc = places[i]
+				if pc then
+					local def, who = pc.def, pc.who
+					local cc = def.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[def.class]
+					card.title:SetText(def.tank and "|cff5fa8ffTank|r"
+						or (class_color(def.class) .. def.label .. "|r"))
+					card._tipTitle = def.label
+					card._tip = nil
+					if who then
+						local nm = class_color(who.class) .. who.name .. "|r"
+						if who.guessed then nm = nm .. " |cffe0b860?|r" end
+						card.name:SetText(nm)
+						card.sub:SetText(M.SubLabel and M.SubLabel(who.name) or "")
+						if #pc.dupes > 0 then
+							-- a second raider on the same set rolls against the first:
+							-- name them on the card, with spec and gear when there is
+							-- room for one, names only when there are several
+							local dup
+							if #pc.dupes == 1 then
+								local dp = pc.dupes[1]
+								local ds = M.SubLabel and M.SubLabel(dp.name) or ""
+								dup = class_color(dp.class) .. dp.name .. "|r"
+									.. (ds ~= "" and ("  |cff8a8d93" .. ds .. "|r") or "")
+							else
+								local names = {}
+								for _, dp in ipairs(pc.dupes) do names[#names + 1] = class_color(dp.class) .. dp.name .. "|r" end
+								dup = table.concat(names, "|cff6f7176, |r")
+							end
+							card.dup:SetText("|cffff5555same set:|r " .. dup)
+							card._tip = { who.name }
+							for _, dp in ipairs(pc.dupes) do card._tip[#card._tip + 1] = dp.name end
+						else
+							card.dup:SetText("")
+						end
+						local e = cc or { r = 0.37, g = 0.66, b = 1 }
+						card:SetBackdropBorderColor(e.r, e.g, e.b, #pc.dupes > 0 and 1 or 0.55)
+					else
+						card.name:SetText("|cff5e6166empty|r")
+						card.sub:SetText("")
+						card.dup:SetText("")
+						card:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
+					end
+					card:Show()
+				else
+					card:Hide()
+				end
+			end
+			-- hybrids with no spec read yet: a druid could be any of three places
+			if #unplaced > 0 then
+				local names = {}
+				for _, pl in ipairs(unplaced) do names[#names + 1] = class_color(pl.class) .. pl.name .. "|r" end
+				F.voaUnplaced:SetText("|cffe0b860Spec not read|r |cff8a8d93(Read specs, or reads when near):|r "
+					.. table.concat(names, "|cff6f7176, |r"))
+			else
+				F.voaUnplaced:SetText("")
+			end
+		else
+			F.voaGrid:Hide()
 		end
 	end
 

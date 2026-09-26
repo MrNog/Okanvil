@@ -2445,8 +2445,9 @@ function C_.BuildRunTab(body)
 	if not canSeeBoard() then testB:Hide() end
 
 	-- ---- options ------------------------------------------------------
-	-- One button tall now, not two.
-	local y = -14 - (BH + 6) - 16
+	-- One button tall now, not two. The gap above the heading matches the one
+	-- between its rule and the first row, so OPTIONS does not sit on the text.
+	local y = -14 - (BH + 6) - 30
 	y = W.Section(body, "OPTIONS", 14, y) - 8
 
 	-- One setting per row: title, what it does, ON / OFF (see W.ToggleRow).

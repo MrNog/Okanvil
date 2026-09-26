@@ -870,16 +870,24 @@ end
 -- This must work with the window CLOSED: the manager is built lazily, and it is the
 -- roll starting that opens it. Bailing out on `not win` meant a roll announced before
 -- you ever opened the manager selected nothing at all, so every roll was discarded.
-function RM.SelectItemById(id)
+function RM.SelectItemById(id, exact)
 	if not id then return end
 
-	-- Two passes: first an item still OPEN for rolls (not awarded), so re-rolling a
-	-- fresh drop of an id doesn't land on an old awarded copy; then any copy of the id.
+	-- `exact` is the copy the roll was called on. With two of one item (two tokens off
+	-- one boss) the id alone names both, and picking the first unawarded one selected a
+	-- different copy from the one taking the rolls: you watched "no rolls yet" while
+	-- the rolls landed on its twin.
+	--
+	-- Without it, two passes: first an item still OPEN for rolls (not awarded), so
+	-- re-rolling a fresh drop of an id doesn't land on an old awarded copy; then any copy.
 	local groups = L.DropsByBoss and L.DropsByBoss() or {}
-	local function pick(openOnly)
+	local function pick(mode)
 		for gi, g in ipairs(groups) do
 			for ii, d in ipairs(g.items) do
-				if d.id == id and (not openOnly or not d.receivedBy) then
+				local hit
+				if mode == "exact" then hit = (d == exact)
+				else hit = d.id == id and (mode ~= "open" or not d.receivedBy) end
+				if hit then
 					selected = d                    -- module-scope: survives the window not existing
 					pendingBossIdx = gi             -- applied when the window is (re)built
 
@@ -907,8 +915,9 @@ function RM.SelectItemById(id)
 		end
 		return false
 	end
-	if pick(true) then return end
-	pick(false)
+	if exact and pick("exact") then return end
+	if pick("open") then return end
+	pick("any")
 end
 
 -- The rolls of one item, ranked. ONE roll per player (the Loot module already keeps
@@ -1117,6 +1126,11 @@ function RM.Refresh()
 				-- LINE 1: the item name gets the row to itself, so it no longer has to be
 				-- cut short to leave room for a winner and a timer.
 				local baseTxt = rcode .. (d.name ~= "" and d.name or "?") .. "|r"
+				-- [SR] / [HR] in front of the name: can I roll on this one?
+				local SRM = Okanvil.SoftRes
+				if SRM and SRM.Tag then
+					baseTxt = SRM.Tag(d.item ~= "" and d.item or d.id, d.id, d.boe) .. baseTxt
+				end
 
 				-- LINE 2, left: who owns it. Under master loot every item passes through
 				-- the ML first, so `receivedBy` alone means "the ML is holding it" and
@@ -1165,10 +1179,11 @@ function RM.Refresh()
 					-- Unrolled, or simply sitting with the ML. A reserved item says who
 					-- it is reserved for, so the call can be made without looking it up.
 					local SRM = Okanvil.SoftRes
-					if SRM and SRM.IsHard(d.item ~= "" and d.item or d.id) then
-						sub = "|cffff5555HR|r |cff8a8d93hard-reserved, no roll|r"
+					local why = SRM and SRM.Blocked and SRM.Blocked(d.item ~= "" and d.item or d.id, d.boe)
+					if why then
+						sub = "|cff8a8d93" .. why .. ", no roll|r"
 					elseif SRM and SRM.IsReserved(d.id) then
-						sub = "|cffc0943aSR|r " .. SRM.Names(d.id)
+						sub = SRM.Names(d.id)
 					else
 						sub = ""
 					end
@@ -1520,9 +1535,9 @@ ev:SetScript("OnEvent", function(_, event)
 	L.onLoot = function() if prevLoot then prevLoot() end; if lootOn() then onLoot() end end
 	L.onRoll = function() if lootOn() then RM.OnRollOpen() end end
 	-- a roll just STARTED on an item id -> page to it and select it (no tab hunting)
-	L.onRollStart = function(id)
+	L.onRollStart = function(id, dp)
 		if not lootOn() then return end
-		local ok, err = pcall(RM.SelectItemById, id)
+		local ok, err = pcall(RM.SelectItemById, id, dp)
 		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SelectItemById", err) end
 	end
 	-- fired the instant a loot window opens with items (RaidRoll / RCLootCouncil

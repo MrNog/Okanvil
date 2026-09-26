@@ -121,7 +121,7 @@ function Okanvil:BuildLoot()
 	Okanvil:Loot_BuildSoftRes(srp)
 
 	local hist = W.Frame(main, "page")
-	hist:SetPoint("TOPLEFT", srp, "BOTTOMLEFT", 0, -4)
+	hist:SetPoint("TOPLEFT", srp, "BOTTOMLEFT", 0, -14)
 	hist:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", 0, 0)
 	Okanvil:Loot_BuildHistory(hist)
 
@@ -253,20 +253,35 @@ end
 -- Closed, the strip is one line saying what is loaded. Open, it is the paste
 -- box and the wording of the roll call for a reserved item. The list itself is
 -- read by the roll manager (who reserved what, whose rolls count).
-local SR_CLOSED_H, SR_OPEN_H = 32, 196
+-- The closed strip is laid out like the speed-run row above it: title, status
+-- line under it, buttons on the right edge, a hairline below.
+local SR_CLOSED_H, SR_OPEN_H = 44, 208
 function Okanvil:Loot_BuildSoftRes(p)
 	local SR = Okanvil.SoftRes
 	p:SetHeight(SR_CLOSED_H)
 	if not SR then return end
 	local X = 8
 
-	local hd = W.Text(p, "SOFT RESERVES", "note", "dim")
-	hd:SetPoint("TOPLEFT", X, -10)
-	local status = W.Text(p, "", "label")
-	status:SetPoint("LEFT", hd, "RIGHT", 10, 0)
+	local hd = W.Text(p, "Soft reserves", "body")
+	hd:SetPoint("TOPLEFT", X, -6)
+	local status = W.Text(p, "", "note")
+	status:SetPoint("TOPLEFT", hd, "BOTTOMLEFT", 0, -3)
 
-	local clr = W.Button(p, "Clear"); clr:SetSize(60, 22); clr:SetPoint("TOPRIGHT", -8, -5)
-	local tog = W.Button(p, "Paste SR"); tog:SetSize(80, 22); tog:SetPoint("RIGHT", clr, "LEFT", -6, 0)
+	-- Paste SR owns the right edge; Clear sits to its left and only exists
+	-- while a list is loaded, so the edge never moves.
+	local tog = W.Button(p, "Paste SR"); tog:SetSize(80, 22); tog:SetPoint("TOPRIGHT", -X, -11)
+	local clr = W.Button(p, "Clear"); clr:SetSize(60, 22); clr:SetPoint("RIGHT", tog, "LEFT", -6, 0)
+	-- Send to raid: master looter / raid leader only. The import already sends
+	-- the list once; this is for whoever joins the raid after it.
+	local snd = W.Button(p, "Send to raid"); snd:SetSize(96, 22); snd:SetPoint("RIGHT", clr, "LEFT", -6, 0)
+	snd:Tooltip("Send this list to everyone in the raid who has Okanvil,\n"
+		.. "so their Mini Roll shows the [SR] tags too.")
+	status:SetJustifyH("LEFT")
+
+	local rule = p:CreateTexture(nil, "BORDER")
+	rule:SetTexture(FLAT); rule:SetVertexColor(1, 1, 1, 0.06)
+	rule:SetHeight(1)
+	rule:SetPoint("TOPLEFT", X, -SR_CLOSED_H + 1); rule:SetPoint("TOPRIGHT", -X, -SR_CLOSED_H + 1)
 
 	local body = CreateFrame("Frame", nil, p)
 	body:SetPoint("TOPLEFT", 0, -SR_CLOSED_H)
@@ -293,15 +308,18 @@ function Okanvil:Loot_BuildSoftRes(p)
 	mh:SetPoint("TOPLEFT", X + 66, -174)
 
 	local function paint()
-		local ni, np, at = SR.Summary()
+		local ni, np, at, from = SR.Summary()
 		if ni then
-			status:SetText(("|cffdcddde%d|r |cff8a8d93items,|r |cffdcddde%d|r |cff8a8d93raiders  -- imported %s|r")
-				:format(ni, np, date("%d/%m %H:%M", at)))
+			local src = from and ("received from |cffffd200" .. from .. "|r|cff8a8d93") or "imported"
+			status:SetText(("|cff7cfc8aLoaded|r |cff8a8d93--|r |cffffd200%d|r |cff8a8d93items,|r |cffffd200%d|r |cff8a8d93raiders, %s %s. MS rolls count only the reservers.|r")
+				:format(ni, np, src, date("%d/%m %H:%M", at)))
 			clr:Show()
 		else
-			status:SetText("|cff6f7176none loaded -- MS rolls are open to everyone|r")
+			status:SetText("|cff8a8d93None loaded -- MS rolls are open to everyone. Paste the softres.it CSV to load a list.|r")
 			clr:Hide()
 		end
+		if SR.CanShare() then snd:Show() else snd:Hide() end
+		status:SetPoint("RIGHT", snd:IsShown() and snd or clr, "LEFT", -12, 0)
 	end
 
 	local function setOpen(open)
@@ -314,7 +332,8 @@ function Okanvil:Loot_BuildSoftRes(p)
 	imp:SetScript("OnClick", function()
 		local ni, np = SR.Import(box:GetText())
 		if not ni then Okanvil:Print("|cffff5555" .. tostring(np) .. "|r"); return end
-		Okanvil:Print(("Soft reserves loaded: %d items, %d raiders."):format(ni, np))
+		Okanvil:Print(("Soft reserves loaded: %d items, %d raiders."):format(ni, np)
+			.. (SR.CanShare() and " Sent to the raid." or ""))
 		box:SetText("")
 		setOpen(false)
 	end)
@@ -322,7 +341,11 @@ function Okanvil:Loot_BuildSoftRes(p)
 		Okanvil:Confirm("Clear the soft reserves?\n|cff8a8d93MS rolls go back to being open to everyone.|r",
 			"Clear", function() SR.Clear(); Okanvil:Print("Soft reserves cleared.") end)
 	end)
-	clr:Tooltip("Remove the loaded list, e.g. before the next raid.")
+	clr:Tooltip("Remove the loaded list, e.g. before the next raid.\nImporting a new list also replaces it.")
+	snd:SetScript("OnClick", function()
+		if SR.Share() then Okanvil:Print("Soft reserves sent to the raid.")
+		else Okanvil:Print("|cffff5555Could not send -- are you in a group?|r") end
+	end)
 
 	SR.onChange = function()
 		paint()

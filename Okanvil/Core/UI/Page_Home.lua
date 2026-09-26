@@ -386,19 +386,262 @@ function Okanvil:BuildHome()
 		ssb:SetShown(maxs > 4)
 	end)
 
-	-- tab switching: one card visible at a time, both filling the same space
+	-- ---- Saved raids: every toon's lockouts, the minimap tooltip's grid at page size
+	-- Raids down the side, toons across the top, the sizes each toon is saved to in
+	-- the cells. Each toon's row is only as fresh as its last login (see
+	-- Core/Lockouts.lua), so a toon not seen today says how old its row is.
+	local tabSaved = W.Button(p, "Saved raids", "tab")
+	tabSaved:SetSize(100, 22)
+	local function placeTabs()
+		tabSaved:ClearAllPoints()
+		tabSaved:SetPoint("LEFT", tabSnaps:IsShown() and tabSnaps or tabOnline, "RIGHT", 10, 0)
+	end
+	placeTabs()
+
+	-- Toons DOWN the side, raids ACROSS the top. The minimap tooltip runs the other
+	-- way, which is fine for three toons and useless for a raider with fifteen:
+	-- raids are few, toons are many, so toons get the direction that scrolls.
+	--
+	-- The table sits in its own "soft" box so it reads as one object on the art,
+	-- and every lockout is a small chip in a fixed per-size slot: a 10 always sits
+	-- under the raid's 10 header, so a column can be read straight down.
+	local lcard = W.Frame(p, "bare")
+	lcard:SetAllPoints(gcard)
+	lcard:Hide()
+	local SR_NAME_W, SR_AGE_W, SR_ROW_H, SR_HEAD_H = 190, 110, 32, 46
+	local SR_CHIP_W, SR_CHIP_H, SR_CHIP_GAP = 38, 20, 6
+	local HEROIC = { 1, 0.5, 0 }
+
+	local ltitle = W.Text(lcard, "SAVED RAIDS", "note", "dim"); ltitle:SetPoint("TOPLEFT", 0, -8)
+	-- the one fact every row shares: when it all resets
+	local lreset = W.Text(lcard, "", "label", "accent")
+	lreset:SetPoint("TOPRIGHT", -2, -6)
+
+	local lbox = W.Frame(lcard, "soft")
+	lbox:SetPoint("TOPLEFT", 0, -28)
+	lbox:SetPoint("RIGHT", lcard, "RIGHT", 0, 0)
+	lbox:SetHeight(120)
+	local lnote = W.Text(lcard, "Each toon's row is read when you log that toon in.", "note", "dim")
+	lnote:SetPoint("TOPLEFT", lbox, "BOTTOMLEFT", 2, -8)
+
+	-- header: raid names, and under each the size slots it uses
+	local lhdr = CreateFrame("Frame", nil, lbox)
+	lhdr:SetPoint("TOPLEFT", 1, -1); lhdr:SetPoint("TOPRIGHT", -1, -1)
+	lhdr:SetHeight(SR_HEAD_H)
+	local lhrule = lbox:CreateTexture(nil, "ARTWORK")
+	lhrule:SetTexture("Interface\\Buttons\\WHITE8x8"); lhrule:SetVertexColor(ga[1], ga[2], ga[3], 0.35)
+	lhrule:SetHeight(1)
+	lhrule:SetPoint("TOPLEFT", lhdr, "BOTTOMLEFT", 8, 0); lhrule:SetPoint("TOPRIGHT", lhdr, "BOTTOMRIGHT", -8, 0)
+	local lhName = W.Text(lhdr, "TOON", "note", "dim"); lhName:SetPoint("BOTTOMLEFT", 14, 8)
+
+	local lsf = CreateFrame("ScrollFrame", nil, lbox)
+	lsf:SetPoint("TOPLEFT", lhdr, "BOTTOMLEFT", 0, -2)
+	lsf:SetPoint("BOTTOMRIGHT", -10, 4)
+	local lchild = CreateFrame("Frame", nil, lsf); lchild:SetSize(10, 1)
+	lsf:SetScrollChild(lchild)
+	local lsb = CreateFrame("Slider", nil, lbox)
+	lsb:SetPoint("TOPRIGHT", lsf, "TOPRIGHT", 7, 0); lsb:SetPoint("BOTTOMRIGHT", lsf, "BOTTOMRIGHT", 7, 0)
+	lsb:SetWidth(4); lsb:SetOrientation("VERTICAL"); lsb:SetValueStep(1)
+	local lth = lsb:CreateTexture(nil, "OVERLAY"); lth:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
+	lth:SetSize(4, 30); lth:SetVertexColor(ga[1], ga[2], ga[3], 1)
+	lsb:SetThumbTexture(lth)
+	lsb:SetScript("OnValueChanged", function(_, v) lsf:SetVerticalScroll(v) end)
+	lsf:EnableMouseWheel(true)
+	lsf:SetScript("OnMouseWheel", function(_, d) lsb:SetValue(lsb:GetValue() - d * SR_ROW_H) end)
+
+	-- ---- pools: header labels, rows, chips -- all reused between rebuilds ----
+	local hdrPool, rowPool, chipPool = {}, {}, {}
+	local nHdr, nRow, nChip = 0, 0, 0
+	local function hdrText(text, x, y, style, color)
+		nHdr = nHdr + 1
+		local fs = hdrPool[nHdr]
+		if not fs then fs = W.Text(lhdr, "", style or "body"); hdrPool[nHdr] = fs end
+		fs:SetFont(Okanvil:Font(), style == "note" and 11 or 13)
+		fs:SetText(text or "")
+		fs:SetTextColor(color[1], color[2], color[3])
+		fs:ClearAllPoints(); fs:SetPoint("TOPLEFT", x, y); fs:SetWidth(0)
+		fs:Show()
+		return fs
+	end
+	local function row()
+		nRow = nRow + 1
+		local r = rowPool[nRow]
+		if not r then
+			r = W.Frame(lchild, "row")
+			r:SetHeight(SR_ROW_H)
+			r.hl = r:CreateTexture(nil, "BACKGROUND")
+			r.hl:SetTexture("Interface\\Buttons\\WHITE8x8"); r.hl:SetAllPoints(r)
+			r.hl:SetVertexColor(ga[1], ga[2], ga[3], 0.07); r.hl:Hide()
+			r:EnableMouse(true)
+			r:SetScript("OnEnter", function(self) self.hl:Show() end)
+			r:SetScript("OnLeave", function(self) self.hl:Hide() end)
+			r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(18, 18); r.icon:SetPoint("LEFT", 12, 0)
+			r.name = W.Text(r, "", "body"); r.name:SetPoint("LEFT", r.icon, "RIGHT", 8, 0)
+			r.age = W.Text(r, "", "note", "dim"); r.age:SetPoint("RIGHT", -12, 0)
+			rowPool[nRow] = r
+		end
+		r:Show()
+		return r
+	end
+	local function chip(parent, text, heroic)
+		nChip = nChip + 1
+		local c = chipPool[nChip]
+		if not c then
+			c = W.Frame(lchild, "input")
+			c:SetSize(SR_CHIP_W, SR_CHIP_H)
+			c.t = W.Text(c, "", "label"); c.t:SetPoint("CENTER", 0, 0)
+			chipPool[nChip] = c
+		end
+		c:SetParent(parent)
+		c:SetFrameLevel(parent:GetFrameLevel() + 2)
+		c.t:SetText(text)
+		if heroic then
+			c:SetBackdropBorderColor(HEROIC[1], HEROIC[2], HEROIC[3], 0.9)
+			c.t:SetTextColor(HEROIC[1], HEROIC[2], HEROIC[3])
+		else
+			c:SetBackdropBorderColor(ga[1], ga[2], ga[3], 0.55)
+			c.t:SetTextColor(C.text[1], C.text[2], C.text[3])
+		end
+		c:ClearAllPoints()
+		c:Show()
+		return c
+	end
+
+	local function rebuildSaved()
+		for _, f in ipairs(hdrPool) do f:Hide() end
+		for _, f in ipairs(rowPool) do f:Hide() end
+		for _, f in ipairs(chipPool) do f:Hide() end
+		nHdr, nRow, nChip = 0, 0, 0
+
+		local LO = Okanvil.Lockouts
+		local toons, raids, cell, sizes, soonest
+		if LO and LO.Grid then toons, raids, cell, sizes, soonest = LO:Grid() else toons = {} end
+		local now = time()
+
+		lreset:SetText((soonest and LO.FormatTime) and ("Resets in " .. LO:FormatTime(soonest - now)) or "")
+
+		if #toons == 0 then
+			lhName:Hide(); lhrule:Hide(); lsb:Hide()
+			hdrText("No toon is saved to a raid -- every one is free.", 14, -16, "body", C.textDim)
+			lchild:SetHeight(1)
+			lbox:SetHeight(SR_HEAD_H + 4)
+			return
+		end
+		lhName:Show(); lhrule:Show()
+
+		-- the size slots each raid needs, in the grid's size order
+		local slots = {}
+		for _, raid in ipairs(raids) do
+			local used = {}
+			for _, t in ipairs(toons) do
+				local saved = cell[raid][t.name]
+				if saved then for s in pairs(saved) do used[s] = true end end
+			end
+			local list = {}
+			for _, s in ipairs(sizes) do if used[s] then list[#list + 1] = s end end
+			slots[raid] = list
+		end
+
+		-- raid columns share the width left between the name and the age column.
+		-- With many raids at once (the tier plus a transmog night in Black Temple
+		-- and Karazhan) the chips shrink and the columns pack tight rather than
+		-- running off the right edge.
+		local boxW = lbox:GetWidth() or 600
+		local free = math.max(200, boxW - SR_NAME_W - SR_AGE_W - 20)
+		local chipW, chipGap, colPad = SR_CHIP_W, SR_CHIP_GAP, 16
+		local function needed()
+			local sum = 0
+			for _, raid in ipairs(raids) do sum = sum + #slots[raid] * (chipW + chipGap) + colPad end
+			return sum
+		end
+		if needed() > free then chipW, chipGap, colPad = 30, 3, 10 end
+		if needed() > free then chipW, chipGap, colPad = 26, 2, 6 end
+		local colX, x = {}, SR_NAME_W
+		local even = free / math.max(1, #raids)
+		for _, raid in ipairs(raids) do
+			local need = #slots[raid] * (chipW + chipGap)
+			colX[raid] = x
+			x = x + math.max(need + colPad, (needed() <= free) and even or 0)
+		end
+
+		for _, raid in ipairs(raids) do
+			local short = (Okanvil.U and Okanvil.U.raidShort) and Okanvil.U.raidShort(raid) or raid
+			hdrText(short, colX[raid], -8, "body", C.accent)
+			for i, s in ipairs(slots[raid]) do
+				local fs = hdrText(s, colX[raid] + (i - 1) * (chipW + chipGap), -28, "note",
+					s:find("H") and HEROIC or C.textDim)
+				fs:SetWidth(chipW); fs:SetJustifyH("CENTER")
+			end
+		end
+
+		local w = math.max(40, lsf:GetWidth())
+		lchild:SetWidth(w)
+		local y = 0
+		for _, t in ipairs(toons) do
+			local r = row()
+			r:ClearAllPoints()
+			r:SetPoint("TOPLEFT", lchild, "TOPLEFT", 0, y)
+			r:SetWidth(w)
+			local tc = CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[t.class]
+			if tc then
+				r.icon:SetTexture("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
+				r.icon:SetTexCoord(tc[1], tc[2], tc[3], tc[4]); r.icon:Show()
+			else
+				r.icon:Hide()
+			end
+			local cc = RAID_CLASS_COLORS and RAID_CLASS_COLORS[t.class]
+			r.name:SetText(t.name)
+			if cc then r.name:SetTextColor(cc.r, cc.g, cc.b) else r.name:SetTextColor(C.text[1], C.text[2], C.text[3]) end
+			-- a row from an older login is right about what it shows, but cannot
+			-- know about a raid that toon did since -- so it says how old it is
+			local age = t.updated and (now - t.updated) or 0
+			r.age:SetText((age > 86400 and LO.FormatTime) and ("seen " .. LO:FormatTime(age) .. " ago") or "")
+
+			for _, raid in ipairs(raids) do
+				local saved = cell[raid][t.name]
+				for i, s in ipairs(slots[raid]) do
+					if saved and saved[s] then
+						local c = chip(r, s, s:find("H") ~= nil)
+						c:SetWidth(chipW)
+						c:SetPoint("LEFT", r, "LEFT", colX[raid] + (i - 1) * (chipW + chipGap), 0)
+					end
+				end
+			end
+			y = y - SR_ROW_H
+		end
+
+		-- the box is as tall as its rows, up to the space the page has; past that
+		-- the rows scroll under the fixed header
+		local rowsH = -y
+		lchild:SetHeight(math.max(1, rowsH))
+		local room = (lcard:GetHeight() or 300) - 28 - 30
+		local boxH = math.min(room, SR_HEAD_H + 6 + rowsH)
+		lbox:SetHeight(math.max(SR_HEAD_H + 10, boxH))
+		local maxs = math.max(0, rowsH - (lbox:GetHeight() - SR_HEAD_H - 6))
+		lsb:SetMinMaxValues(0, maxs)
+		if maxs > 4 then lsb:Show() else lsb:Hide() end
+		if lsb:GetValue() > maxs then lsb:SetValue(maxs) end
+	end
+	lcard:SetScript("OnSizeChanged", function(self) if self:IsShown() then rebuildSaved() end end)
+
+	-- tab switching: one card visible at a time, all filling the same space
 	local function showTab(which)
-		local snaps = (which == "snaps")
-		gcard:SetShown(not snaps)
+		local snaps, saved = (which == "snaps"), (which == "saved")
+		gcard:SetShown(not snaps and not saved)
 		scard:SetShown(snaps)
+		lcard:SetShown(saved)
 		-- not "snaps and nil or primary": that can never be nil, so the Online tab
 		-- stayed gold while Snapshots was showing
-		tabOnline:SetKind(snaps and "tab" or "tabOn")
+		tabOnline:SetKind((snaps or saved) and "tab" or "tabOn")
 		tabSnaps:SetKind(snaps and "tabOn" or "tab")
+		tabSaved:SetKind(saved and "tabOn" or "tab")
+		placeTabs()
 		if snaps then rebuildSnaps() end
+		if saved then rebuildSaved() end
 	end
 	tabOnline:SetScript("OnClick", function() showTab("online") end)
 	tabSnaps:SetScript("OnClick", function() showTab("snaps") end)
+	tabSaved:SetScript("OnClick", function() showTab("saved") end)
 
 	-- (The web-hub link now lives in the window FOOTER, WeakAuras-style -- always
 	-- visible, click to copy the URL. No card here anymore.)
@@ -642,7 +885,7 @@ function Okanvil:BuildHome()
 		paintPug()
 	end)
 
-	local guildParts = { tiles._t1, tiles._t2, tiles._t3, tiles._t4, tabOnline, tabSnaps, gcard, scard }
+	local guildParts = { tiles._t1, tiles._t2, tiles._t3, tiles._t4, tabOnline, tabSnaps, tabSaved, gcard, scard, lcard }
 	local function setPugMode(on)
 		if on then
 			for _, f in ipairs(guildParts) do f:Hide() end
@@ -655,6 +898,7 @@ function Okanvil:BuildHome()
 			for i = 1, 4 do tiles["_t" .. i]:Show() end
 			tabOnline:Show()
 			tabSnaps:SetShown(Okanvil:IsModuleEnabled("__guild"))
+			tabSaved:Show()
 			showTab("online")
 		end
 	end

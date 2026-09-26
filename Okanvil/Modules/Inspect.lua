@@ -493,10 +493,98 @@ function M.ScanGroup(force, callback)
 		return true, 0
 	end
 
-	active, onDone = true, callback
+	-- Whoever the scan could not reach (out of range, still flying in) goes on
+	-- the watch list and is read the moment they come close -- see M.Watch.
+	local asked, started = {}, time()
+	for i, n in ipairs(queue) do asked[i] = n end
+	active = true
+	onDone = function(d, t)
+		local missed = {}
+		for _, n in ipairs(asked) do
+			local e = db().specs[n]
+			if not (e and e.spec and (e.at or 0) >= started) then missed[#missed + 1] = n end
+		end
+		if #missed > 0 then M.Watch(missed) end
+		if callback then callback(d, t) end
+	end
 	fireNext()
 	return true, total
 end
+
+-- ------------------------------------------------------------
+-- Watch: read the players a scan missed, as they come into range.
+--
+-- The server only answers an inspect for someone within ~28 yards, so a pug
+-- formed while half the raid is still flying in comes back mostly unread. The
+-- watch keeps those names and, every couple of seconds, inspects the first one
+-- that is now close enough -- one request at a time, through the same queue as
+-- a scan, so it never adds a burst. A name leaves the list once read, once it
+-- leaves the group, or after a few failed tries; the whole watch ends after ten
+-- minutes. It waits out combat (passive work, see the combat-quiet rule) and an
+-- open Inspect window, which an addon inspect would switch to someone else.
+-- ------------------------------------------------------------
+local WATCH_EVERY, WATCH_FOR, WATCH_TRIES = 2, 600, 3
+local watch = {}          -- [name] = { since = time(), tries = n }
+local watchUntil = 0
+local watchAcc = 0
+local watchFrame = CreateFrame("Frame")
+watchFrame:Hide()         -- OnUpdate only runs while there is someone to read
+
+local function readSince(name, t)
+	local e = db().specs[name]
+	return e and e.spec and (e.at or 0) >= t
+end
+
+function M.Watch(names)
+	local now = time()
+	for _, n in ipairs(names or {}) do
+		n = stripRealm(n)
+		if n and n ~= "" and not watch[n] then watch[n] = { since = now, tries = 0 } end
+	end
+	if next(watch) then
+		watchUntil = GetTime() + WATCH_FOR
+		watchFrame:Show()
+	end
+end
+
+function M.Watching(name)
+	return name ~= nil and watch[stripRealm(name)] ~= nil
+end
+
+function M.Unwatch()
+	wipe(watch)
+	watchFrame:Hide()
+end
+
+watchFrame:SetScript("OnUpdate", function(self, elapsed)
+	watchAcc = watchAcc + elapsed
+	if watchAcc < WATCH_EVERY then return end
+	watchAcc = 0
+	if not next(watch) or GetTime() > watchUntil then M.Unwatch(); return end
+	if active then return end
+	if InCombatLockdown and InCombatLockdown() then return end
+	if InspectFrame and InspectFrame:IsShown() then return end
+
+	for name, w in pairs(watch) do
+		local unit = unitFor(name)
+		if not unit or readSince(name, w.since) or w.tries >= WATCH_TRIES then
+			watch[name] = nil
+		elseif UnitIsConnected(unit) and CheckInteractDistance(unit, 1)
+			and (not CanInspect or CanInspect(unit)) then
+			w.tries = w.tries + 1
+			M.ScanOne(name, function()
+				if readSince(name, w.since) then
+					watch[name] = nil
+					if M.onWatchRead then
+						local ok, err = pcall(M.onWatchRead, name)
+						if not ok and Okanvil.Err then Okanvil:Err("Inspect.onWatchRead", err) end
+					end
+				end
+			end)
+			return        -- one request per tick
+		end
+	end
+end)
 
 function M.IsScanning() return active end
 

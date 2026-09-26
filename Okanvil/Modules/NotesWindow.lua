@@ -317,6 +317,8 @@ function WIN.Refresh()
 	-- N.Get, not d.notes: a note you have not edited lives in the shipped pack,
 	-- and reading the table directly showed nothing for eleven of twelve bosses.
 	local note = d and d.selected and N.Get(d.selected)
+	-- One note for two bosses: in a fight, only the fought boss's section.
+	if note and P and P.Section then note = P.Section(d.selected, note) end
 
 	if not note or note == "" then
 		for _, r in ipairs(win.rows) do r:Hide() end
@@ -335,11 +337,29 @@ function WIN.Refresh()
 	-- progress. Say so, rather than showing timers that will never start.
 
 	-- Reparse only when the text changed: this runs five times a second.
-	if win._src ~= note then
+	local onlyMine = cfg().onlyMine == true
+	if win._src ~= note or win._onlyMine ~= onlyMine then
 		win._src = note
-		win._entries = P and P.Parse(note) or {}
+		win._onlyMine = onlyMine
+		local all = P and P.Parse(note) or {}
+		-- "Only my lines": the lines of the character you are on, nothing else.
+		-- (A note that never names you does not open the window at all -- see
+		-- ApplyVisibility. What can still come up empty here is one boss's
+		-- section of a shared note, mid-fight; that gets a line saying so.)
+		if onlyMine then
+			local mine = {}
+			for _, e in ipairs(all) do if e.mine then mine[#mine + 1] = e end end
+			all = mine
+		end
+		win._entries = all
 	end
 	local entries = win._entries or {}
+	if onlyMine and #entries == 0 then
+		for _, r in ipairs(win.rows) do r:Hide() end
+		win.empty:SetText(("|cff6f7176Nothing for %s in this note.|r"):format(UnitName("player") or "you"))
+		win:SetHeight(46)
+		return
+	end
 	local now = GetTime()
 
 	for _, r in ipairs(win.rows) do r:Hide() end
@@ -358,7 +378,11 @@ function WIN.Refresh()
 		else
 			local left = P and P.Remaining(e, now)
 			if not left then
-				r.t:SetText(("|cff6f7176%d:%02d|r"):format(math.floor(e.time / 60), e.time % 60))
+				-- Not counting yet. A line hung off a boss event reads "+0:05" -- five
+				-- seconds AFTER that event -- so it is not taken for five seconds after
+				-- the pull, which is what a bare "0:05" means.
+				r.t:SetText(("|cff6f7176%s%d:%02d|r"):format(e.anchor and "+" or "",
+					math.floor(e.time / 60), e.time % 60))
 				r:SetAlpha(1)
 			elseif left <= 0 then
 				r.t:SetText("")
@@ -455,6 +479,11 @@ function WIN.ApplyVisibility()
 		want = false
 	end
 
+	-- A note that never names the character you are on is not your plan: the
+	-- window stays away. Whether a note that DOES name you shows all of it or
+	-- only your lines is the "Only my lines" setting (WIN.Refresh).
+	if want and not WIN.NamesMe() then want = false end
+
 	-- Built on demand: with no button to open it, the first time the window is
 	-- ever wanted is a zone event, and a nil frame here would mean it never
 	-- appeared at all. Nothing is built for a window that is not wanted.
@@ -497,6 +526,30 @@ function WIN.GetAlpha() return math.floor((cfg().alpha or 0.85) * 100) end
 function WIN.SetAlpha(pct)
 	cfg().alpha = (pct or 85) / 100
 	applyLook()
+end
+
+-- Does the selected note have a line for the character you are on? The whole
+-- note, not a fight's section: this decides whether the window shows at all.
+-- Cached on the text, since every zone event asks.
+local namesCacheSrc, namesCacheHit
+function WIN.NamesMe()
+	local d = db()
+	local note = d and d.selected and N.Get(d.selected)
+	if not note or note == "" then return false end
+	if note == namesCacheSrc then return namesCacheHit end
+	local P = Okanvil.NotesParse
+	local hit = false
+	for _, e in ipairs(P and P.Parse(note) or {}) do
+		if e.mine then hit = true; break end
+	end
+	namesCacheSrc, namesCacheHit = note, hit
+	return hit
+end
+
+function WIN.OnlyMine() return cfg().onlyMine == true end
+function WIN.SetOnlyMine(state)
+	cfg().onlyMine = state and true or false
+	if win and win:IsShown() then WIN.Refresh() end
 end
 
 function WIN.OnlyInRoom() return cfg().onlyInRoom ~= false end
