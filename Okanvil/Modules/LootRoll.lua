@@ -1534,6 +1534,8 @@ ev:SetScript("OnEvent", function(_, event)
 	local prevLoot = L.onLoot
 	L.onLoot = function() if prevLoot then prevLoot() end; if lootOn() then onLoot() end end
 	L.onRoll = function() if lootOn() then RM.OnRollOpen() end end
+	-- the copy open in the manager: a roll called again on it is a re-roll (NoteExternalRoll)
+	L.RollSelected = function() return selected end
 	-- a roll just STARTED on an item id -> page to it and select it (no tab hunting)
 	L.onRollStart = function(id, dp)
 		if not lootOn() then return end

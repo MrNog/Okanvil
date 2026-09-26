@@ -332,7 +332,7 @@ end
 -- tagged, and never rolled. The ids and names are the ones Loot's collectors
 -- sort by; Primordial Saronite is ICC's "O".
 local ORB_IDS  = { [45087] = true, [47556] = true, [49908] = true }
-local FRAG_IDS = { [45038] = true, [45039] = true, [45896] = true, [49869] = true }
+local FRAG_IDS = { [45038] = true, [45039] = true, [45896] = true, [50274] = true }
 local ORB_NAMES  = { "runed orb", "crusader orb", "primordial saronite" }
 local FRAG_NAMES = { "fragment of val'anyr", "fragments of val'anyr", "shadowfrost shard" }
 local PATTERN_PREFIX = { "pattern:", "plans:", "recipe:", "schematic:", "formula:", "design:" }

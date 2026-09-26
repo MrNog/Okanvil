@@ -38,7 +38,7 @@ local ACCEPT_IDS = {
 	[45087] = true, -- Runed Orb
 	[49908] = true, -- Primordial Saronite
 	[43102] = true, -- Frozen Orb (drop do ultimo boss -- a raid rola por ele)
-	[45038] = true, [45039] = true, [45896] = true, [49869] = true, -- fragmentos de lendario
+	[45038] = true, [45039] = true, [45896] = true, [50274] = true, -- fragmentos de lendario
 	[47242] = true, -- Trophy of the Crusade (drop do boss -- a raid rola por ele para upgrade de tier)
 }
 local DENY_IDS = {
@@ -2058,62 +2058,65 @@ function L.NoteExternalRoll(link, winners)
 		local b = s.drops[i].boss
 		if b and b ~= "" and b ~= "Trash" then latestBoss = b; break end
 	end
-	-- Every call is its own roll-off: calling the same item again means the next copy
-	-- is up, and a roll that missed the previous call counts on this one. The only
-	-- exception is a call posted again before anyone rolled -- nothing happened on
-	-- that copy yet, so it is still the one being rolled.
-	local cur = externalRollDrop
-	if cur and cur.id == id and not cur.rollDone then
-		if not (cur.rolls and #cur.rolls > 0) then
-			rollTrace(("call %s again, no rolls yet -> stays on %s"):format(link, dropTag(cur)))
-			externalRollAt = GetTime()
-			if L.onRollStart then L.onRollStart(id, cur) end
-			return
-		end
-		cur.rollDone = true
-		rollTrace("roll-off ended by the next call on " .. dropTag(cur))
+	-- WHICH ROLL-OFF this call is.
+	--
+	-- The copy open in the roll manager is the one being rolled (a call selects the
+	-- copy it lands on, and the ML can open another by hand). Called again before
+	-- anyone announced a winner, it is the same roll-off again: a re-roll, for a tie
+	-- or rolls the ML threw out. Announcing the winner ("X wins", onRollAnnounce)
+	-- ends that roll-off, so the next call of the item goes to the next copy -- the
+	-- one-at-a-time way of handing out two of one item. "top 2" / "top 5" written in
+	-- the call is the other way: one roll-off, that many winners (winnerCount).
+	local function openCopy(d)
+		return d and d.id == id and not d.rollDone and unowned(d) and d
 	end
+	local sel = L.RollSelected and L.RollSelected()
+	local dp = openCopy(sel) or openCopy(externalRollDrop)
+	local bestRank = dp and "open" or nil
 
-	-- With several copies up, an unrolled copy comes first, and among those the OLDEST:
-	-- a master looter holding tokens from earlier bosses hands them out in the order
-	-- they dropped. A copy whose roll-off already ran is still "unowned" until the
-	-- winner is traded it, but it is spoken for, so it only takes a call when no
-	-- unrolled copy is left.
-	local best, bestRank
-	local seen = {}
-	local function scan(sess)
-		if not (sess and sess.drops) or seen[sess] then return end
-		seen[sess] = true
-		for i = #sess.drops, 1, -1 do
-			local prev = sess.drops[i]
-			if prev.id == id then
-				local rank
-				if unowned(prev) then
-					local holder = prev.heldBy
-					if not holder or holder == "" or (ml and noRealm(holder) == noRealm(ml)) then
-						local rolled = prev.rollDone or (prev.rolls and #prev.rolls > 0)
-						rank = rolled and 1.5 or 1
-					elseif prev.boss == latestBoss or not blind then
-						rank = 2
+	if not dp then
+		-- With several copies up, an unrolled copy comes first, and among those the
+		-- OLDEST: a master looter holding tokens from earlier bosses hands them out in
+		-- the order they dropped. A copy whose roll-off already ran is still "unowned"
+		-- until the winner is traded it, but it is spoken for, so it only takes a call
+		-- when no unrolled copy is left -- and then it is the one rolled most recently,
+		-- since a re-roll follows the roll-off it repeats.
+		local best
+		local seen = {}
+		local function scan(sess)
+			if not (sess and sess.drops) or seen[sess] then return end
+			seen[sess] = true
+			for i = #sess.drops, 1, -1 do   -- newest first
+				local prev = sess.drops[i]
+				if prev.id == id then
+					local rank
+					if unowned(prev) then
+						local holder = prev.heldBy
+						if not holder or holder == "" or (ml and noRealm(holder) == noRealm(ml)) then
+							local rolled = prev.rollDone or (prev.rolls and #prev.rolls > 0)
+							rank = rolled and 1.5 or 1
+						elseif prev.boss == latestBoss or not blind then
+							rank = 2
+						end
+					elseif not blind then
+						rank = 3
 					end
-				elseif not blind then
-					rank = 3
-				end
-				-- newest first, so "<=" lets an older copy of the same rank win
-				if rank and (not bestRank or rank < bestRank or (rank == 1 and bestRank == 1)) then
-					best, bestRank = prev, rank
+					local better = rank and (not bestRank or rank < bestRank
+						or (rank == bestRank and rank == 1)   -- scanning newest first: the older unrolled copy
+						or (rank == bestRank and rank == 1.5
+							and (prev.lastRollAt or 0) > (best.lastRollAt or 0)))
+					if better then best, bestRank = prev, rank end
 				end
 			end
 		end
+		scan(s)
+		scan(sessions()[1])
+		dp = best
 	end
-	scan(s)
-	scan(sessions()[1])
-	local dp = best
 
-	-- No unrolled copy left: the call is a re-roll of one already rolled (a tie, or
-	-- the ML rolling it again). A new call is a new roll-off, so it starts clean --
+	-- Rolled already: this call repeats that roll-off, so it starts clean --
 	-- otherwise "first roll counts" would throw away every re-roll.
-	if dp and bestRank == 1.5 then
+	if dp and (bestRank == "open" or bestRank == 1.5) and (dp.rolls and #dp.rolls > 0 or dp.rollDone) then
 		rollTrace(("call %s: re-roll, clearing %d old roll(s) on %s"):format(link,
 			dp.rolls and #dp.rolls or 0, dropTag(dp)))
 		dp.rolls = {}
@@ -3604,7 +3607,7 @@ local FRAGMENT_IDS = {
 	[45038] = true,  -- Fragment of Val'anyr
 	[45039] = true,  -- Shattered Fragments of Val'anyr
 	[45896] = true,  -- Unbound Fragments of Val'anyr
-	[49869] = true,  -- Shadowfrost Shard (Shadowmourne)
+	[50274] = true,  -- Shadowfrost Shard (Shadowmourne)
 }
 local ORB_IDS = {
 	[45087] = true,  -- Runed Orb

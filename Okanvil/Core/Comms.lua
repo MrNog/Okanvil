@@ -390,7 +390,9 @@ C.VersionOlder = verOlder
 
 -- ------------------------------------------------------------
 -- "New version" toast: top-middle of the screen, 5 seconds, then fades. Only
--- ever shown in answer to a version check someone ran, never on its own.
+-- the player who ran the version check sees it, and only when the check found
+-- a newer build than theirs. Nobody else is ever told: some raiders run addons
+-- only because the guild asks for loot, and an unasked nag is spam to them.
 -- ------------------------------------------------------------
 local TOAST_SECS = 5
 local verToast
@@ -430,12 +432,6 @@ local function showUpdateToast(newest)
 end
 C.ShowUpdateToast = showUpdateToast
 
--- The checker found a newer build in the group than ours. The sender is not
--- trusted for anything but a reminder, and only a newer-than-ours number shows.
-C.On("VERNEW", function(sender, newest)
-	if verOlder(Okanvil.version, newest) then showUpdateToast(newest) end
-end)
-
 -- someone asked -> whisper our version straight back
 C.On("VERQ", function(sender)
 	if not sender or sender == "" then return end
@@ -471,25 +467,12 @@ function C.RequestVersions(scope, onDone, timeout)
 	wire(pack("VERQ"), chan)
 	C.After(timeout or 5, function()
 		verRunning = false
-		-- Tell everyone behind the newest build that answered. Only those who
-		-- replied: no reply means no Okanvil, and they get the whisper link instead.
+		-- The checker alone learns whether a newer build is out.
 		local newest
 		for _, v in pairs(verReplies) do
 			if verParts(v) and (not newest or verOlder(newest, v)) then newest = v end
 		end
-		if newest then
-			local i = 0
-			for name, v in pairs(verReplies) do
-				if verOlder(v, newest) then
-					if name == me then
-						showUpdateToast(newest)
-					else
-						C.After(i * 0.2, function() C.Whisper("VERNEW", name, newest) end)
-						i = i + 1
-					end
-				end
-			end
-		end
+		if newest and verOlder(Okanvil.version, newest) then showUpdateToast(newest) end
 		if C.onVersionReply then C.onVersionReply() end
 		if type(onDone) == "function" then onDone(verReplies) end
 	end)

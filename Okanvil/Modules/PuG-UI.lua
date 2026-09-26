@@ -1294,9 +1294,7 @@ function M.RefreshUI()
 					card._tipTitle = def.label
 					card._tip = nil
 					if who then
-						local nm = class_color(who.class) .. who.name .. "|r"
-						if who.guessed then nm = nm .. " |cffe0b860?|r" end
-						card.name:SetText(nm)
+						card.name:SetText(class_color(who.class) .. who.name .. "|r")
 						card.sub:SetText(M.SubLabel and M.SubLabel(who.name) or "")
 						if #pc.dupes > 0 then
 							-- a second raider on the same set rolls against the first:

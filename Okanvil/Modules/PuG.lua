@@ -707,8 +707,6 @@ function M.VoABoard()
 			end
 		end
 		if target then
-			-- read = the spec is known, or the class has one set so it cannot matter
-			pl.guessed = not spec and target.def.spec ~= nil
 			if target.who then target.dupes[#target.dupes + 1] = pl else target.who = pl end
 		else
 			unplaced[#unplaced + 1] = pl
