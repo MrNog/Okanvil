@@ -147,7 +147,11 @@ function Okanvil:BuildLoot()
 			if who and who ~= "" then
 				return "|cff8a8d93ML:|r |cffffd200" .. who .. "|r"
 			end
-			return "|cffff5555not master loot|r"
+			-- Solo there is no loot method to speak of: say nothing rather than a
+			-- red warning about a normal state.
+			local grouped = (GetNumRaidMembers and GetNumRaidMembers() > 0)
+				or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+			return grouped and "|cff8a8d93not master loot|r" or ""
 		end,
 		-- Officers get the three tabs as pills over one body; everyone else gets
 		-- the loot view alone, with no tab row.

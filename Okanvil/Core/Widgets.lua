@@ -1202,6 +1202,23 @@ function W.Dashboard(parent, cfg)
 				if cfg.tertiaryShown() then cta3:Show() else cta3:Hide() end
 			end
 		end
+		-- Close up behind hidden buttons: each button and the status text sit left
+		-- of the nearest button still SHOWN. Anchored to a hidden one, they kept its
+		-- empty slot, and the status text floated in the middle of the header.
+		local left = cta
+		if cta2 and cta2:IsShown() then
+			cta2:ClearAllPoints()
+			if left then cta2:SetPoint("RIGHT", left, "LEFT", -6, 0) else cta2:SetPoint("RIGHT", -10, 0) end
+			left = cta2
+		end
+		if cta3 and cta3:IsShown() then
+			cta3:ClearAllPoints()
+			if left then cta3:SetPoint("RIGHT", left, "LEFT", -6, 0) else cta3:SetPoint("RIGHT", -10, 0) end
+			left = cta3
+		end
+		status:ClearAllPoints()
+		if left then status:SetPoint("RIGHT", left, "LEFT", -10, 0) else status:SetPoint("RIGHT", -8, 0) end
+		status:SetPoint("LEFT", htitle, "RIGHT", 10, -tdy)
 		if cfg.statusText then status:SetText(cfg.statusText() or "") end
 	end
 	D:Refresh()
