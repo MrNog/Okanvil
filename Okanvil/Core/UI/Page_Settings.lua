@@ -129,7 +129,7 @@ function Okanvil:Settings_General(p)
 	-- and padding together, which is what "make it bigger" actually means.
 	y1 = y1 - SLIDER_TOP
 	W.Slider(p, "Window scale", 0.6, 1.8, 0.05, function() return db.scale end,
-		function(v) db.scale = v; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", C1, y1)
+		function(v) db.scale = v; db.scaleSetByUser = true; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", C1, y1)
 	y1 = y1 - 22
 	hint("text, icons and spacing together", 1)
 

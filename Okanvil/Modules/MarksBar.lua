@@ -408,6 +408,24 @@ local function build()
 	-- which shortcuts survive their gates. One texture per boundary, reused.
 	f.divs = {}
 
+	-- What each icon is, for the hover tooltip. Obvious to whoever built the bar,
+	-- not to a raider seeing it for the first time.
+	local TIPS = {
+		okanvil = { "Okanvil", "Open or close the Okanvil window." },
+		loot    = { "Mini roll", "The loot of this run: rolls, winners and the council." },
+		prio    = { "Loot priority", "Who is next in line for each item (officers)." },
+		finder  = { "Raid Finder", "Groups looking for players in chat." },
+		pug     = { "PuG", "Build and advertise a pick-up raid." },
+		notes   = { "Notes", "Boss notes and assignments." },
+		recruit = { "Recruit", "Guild recruitment messages." },
+		invite  = { "Invite", "Mass invite and invite settings." },
+		ids     = { "ID Finder", "Look up item, spell and NPC ids." },
+		buffs   = { "Raid check", "Who is missing food, flask or buffs." },
+		farm    = { "Farm", "Track what you farm this session." },
+		ready   = { "Ready check", "Start a ready check (leader or assist)." },
+		pull    = { "Pull timer", "Left-click: start the pull countdown.\nRight-click: cancel it." },
+	}
+
 	-- Shortcut buttons: an icon each, built from the SHORTCUTS table.
 	f.short = {}
 	for _, sc in ipairs(SHORTCUTS) do
@@ -434,11 +452,19 @@ local function build()
 
 		b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 		b:SetScript("OnClick", function(_, button) sc.run(button) end)
-		-- No tooltip: the icons are self-evident and a popup over a raid frame is
-		-- more in the way than it is worth. Hover just brightens the icon.
-		b:SetScript("OnEnter", function() t:SetVertexColor(1, 1, 1, 1) end)
+		b:SetScript("OnEnter", function(self)
+			t:SetVertexColor(1, 1, 1, 1)
+			local tip = TIPS[sc.key]
+			if tip then
+				GameTooltip:SetOwner(self, "ANCHOR_TOP")
+				GameTooltip:AddLine(tip[1], 1, 0.82, 0)
+				GameTooltip:AddLine(tip[2], 0.85, 0.85, 0.85, true)
+				GameTooltip:Show()
+			end
+		end)
 		b:SetScript("OnLeave", function()
 			if not sc.accent then t:SetVertexColor(0.82, 0.82, 0.85, 1) end
+			GameTooltip:Hide()
 		end)
 
 		f.short[sc.key] = b

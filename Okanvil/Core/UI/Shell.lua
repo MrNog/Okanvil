@@ -101,6 +101,13 @@ function Okanvil:BuildShell()
 	local f = CreateFrame("Frame", "Okanvil_Window", UIParent)
 	f:SetSize(WIN_W, WIN_H)          -- FIXED size (not resizable) -- use Scale to grow
 	f:SetPoint(db.window.point, UIParent, db.window.point, db.window.x, db.window.y)
+	-- Until the player moves the Scale slider, the window picks its own size:
+	-- 0.85, or smaller if that still would not fit the screen. At 1.0 the
+	-- window filled small screens and big WoW UI scales edge to edge.
+	if not db.scaleSetByUser then
+		local fit = math.min(0.9 * UIParent:GetWidth() / WIN_W, 0.85 * UIParent:GetHeight() / WIN_H)
+		db.scale = math.max(0.6, math.min(0.85, math.floor(fit * 20) / 20))
+	end
 	f:SetScale(db.scale or 1)
 	f:SetFrameStrata("HIGH")
 	f:SetClampedToScreen(true)
