@@ -1168,7 +1168,10 @@ function C_.Ask(links, boss)
 		end
 	end
 
-	local rec = { items = shown, boss = boss or "", replies = {}, at = GetTime() }
+	-- `test` marks a round asked from test mode, so ending the test closes that
+	-- round and never a real one.
+	local rec = { items = shown, boss = boss or "", replies = {}, at = GetTime(),
+		test = C_.testMode or nil }
 
 	local round = C.Ask(TOPIC, payload, {
 		-- The wire round stays open for 30 minutes. Nothing auto-passes any
@@ -2529,6 +2532,15 @@ function C_.Test(num)
 		Okanvil:Print("Loot Council is |cffff5555off|r for this character (Modules list).")
 		return
 	end
+	-- Solo only. In a group the roster watcher below ends a test the moment it
+	-- starts, and a test in a real raid is exactly the state that gives no loot
+	-- away -- in a group, run the council for real.
+	if (GetNumRaidMembers and GetNumRaidMembers() > 0)
+		or (GetNumPartyMembers and GetNumPartyMembers() > 0) then
+		Okanvil:Print("|cffe0b860Loot council:|r the test only runs solo -- "
+			.. "in a group the council runs for real.")
+		return
+	end
 	num = tonumber(num) or 3
 	if num < 1 then num = 1 elseif num > 8 then num = 8 end
 
@@ -2602,6 +2614,9 @@ function C_.Test(num)
 	C_.testStarted = GetTime()      -- the watcher's grace period runs from here
 	-- A test is a council night by definition: without this the mini roll draws no
 	-- Council row and the test would not reach the thing it is meant to exercise.
+	-- The previous state is kept so ending the test puts it back, instead of
+	-- switching off a council night that was already running.
+	C_.testPrevActive = C_.active
 	C_.SetActive(true)
 	-- Remembered so a /reload mid-test can say what happened. testMode itself is
 	-- deliberately NOT restored -- coming back from a reload silently still in a
@@ -2671,9 +2686,13 @@ end
 
 function C_.TestOff()
 	C_.testMode = false
-	if C_.current and C_.current.round and C.CloseAsk then C.CloseAsk(C_.current.round) end
-	closeFrame()
-	if board then board:Hide() end
+	-- Only the TEST round's windows. A real round open on the board is left alone.
+	local rec = C_.current
+	if rec and rec.test then
+		if rec.round and C.CloseAsk then C.CloseAsk(rec.round) end
+		if current and current.round == rec.round then closeFrame() end
+		if board then board:Hide() end
+	end
 
 	-- Put the loot module back exactly as it was. Leaving world-test on would
 	-- silently record open-world drops for the rest of the session, and leaving
@@ -2697,9 +2716,11 @@ function C_.TestOff()
 	local dOff = db()
 	dOff.testAt, dOff.testWho = nil, nil
 	-- A test switched council night ON to get the mini roll row. Ending the test
-	-- must switch it back off, or the flag sat there for its whole six-hour life
-	-- and a real raid hours later opened a corpse straight into an auto-ask.
-	C_.SetActive(false)
+	-- puts it back as it was: left on, the flag sat there for its whole six-hour
+	-- life and a real raid hours later opened a corpse straight into an auto-ask;
+	-- forced off, it killed a council night that was running before the test.
+	C_.SetActive(C_.testPrevActive)
+	C_.testPrevActive = nil
 	if Okanvil.RollMgr and Okanvil.RollMgr.Rebuild then pcall(Okanvil.RollMgr.Rebuild) end
 
 	if C_._paintTest then pcall(C_._paintTest) end
