@@ -461,8 +461,35 @@ end
 -- Prefer ENCOUNTER_START (some 3.3.5a private servers backport it);
 -- fall back to entering combat (PLAYER_REGEN_DISABLED) inside a raid instance.
 -- One auto-snapshot per raid lockout session (reset when the raid empties).
+--
+-- "Already taken" lives in the SavedVariables, not a local: a local resets on
+-- /reload, and every reload mid-raid then saved another snapshot at the next pull
+-- (and pushed real raids out of the 10-slot list). The mark names the instance it
+-- was taken in and goes stale after a raid night, so a new raid -- or a group that
+-- disbanded while you were logged out -- still gets its snapshot.
 -- ------------------------------------------------------------
-local firstPullDone = false
+local AUTO_SNAP_STALE = 6 * 3600
+
+local function instanceKey()
+	if not GetInstanceInfo then return "" end
+	local name, _, diff, _, maxPlayers = GetInstanceInfo()
+	return (name or "") .. "|" .. (diff or 0) .. "|" .. (maxPlayers or 0)
+end
+
+local function autoSnapTaken()
+	local g = Okanvil.db and Okanvil.db.guild
+	local m = g and g.autoSnap
+	if not m then return false end
+	if time() - (m.t or 0) > AUTO_SNAP_STALE then return false end
+	return m.key == instanceKey()
+end
+
+local function setAutoSnap(taken)
+	local db = Okanvil.db
+	if not db then return end
+	db.guild = db.guild or {}
+	db.guild.autoSnap = taken and { key = instanceKey(), t = time() } or nil
+end
 -- Set only when an ENCOUNTER_START actually ARRIVES, never by registering for it.
 -- Stock 3.3.5a accepts the registration and then never fires the event, so trusting
 -- the register meant the combat fallback was disabled by a trigger that never came --
@@ -476,18 +503,17 @@ local function inGroup()
 end
 
 local function tryFirstPull(bossName, trigger)
-	if firstPullDone then return end
+	if autoSnapTaken() then return end
 	if not inGroup() then return end
 	if not Okanvil:ShouldRecord() then return end   -- dungeon/raid toggle
 	local snap = G.SaveSnapshot(trigger, bossName)
 	if snap then
-		firstPullDone = true
+		setAutoSnap(true)
 		Okanvil:Print("Attendance snapshot saved (" .. (snap.count or 0) .. " players).")
 	end
 end
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")   -- entered combat
 ev:RegisterEvent("RAID_ROSTER_UPDATE")
 ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
@@ -509,7 +535,9 @@ ev:SetScript("OnEvent", function(_, event, a1, a2)
 		-- it here would guess. The snapshot's zone + time place the pull.
 		if not haveEncounterEvent then tryFirstPull(nil, "combat") end
 	else
-		-- group emptied -> arm the next session's first-pull capture again
-		if not inGroup() then firstPullDone = false end
+		-- group emptied -> arm the next session's first-pull capture again.
+		-- Not watched on PLAYER_ENTERING_WORLD: at login the roster can read empty
+		-- for a moment, and that would re-arm the capture on every login.
+		if not inGroup() then setAutoSnap(false) end
 	end
 end)
