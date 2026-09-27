@@ -1743,9 +1743,32 @@ local function recordNeedGreed(msg)
 			-- that follow still belong to this same item. Prefer the most recent drop that
 			-- is/was rolling (has rollID or already has .rolls); else the most recent.
 			local s = activeBucket()
-			-- o drop deste item (por id, ignora boss atual) -- o mesmo do rolling.
-			local dp = findOpenDrop(s, id)
+			-- SEVERAL COPIES (five Trophies off one boss): the game rolls each copy
+			-- separately and the chat line carries no roll id. A player rolls once
+			-- per copy, so their roll goes on the oldest still-rolling copy they
+			-- have not rolled on yet. Piling every line onto one copy threw the
+			-- second copy's rolls away as duplicates.
+			local dp
+			local now = time()
+			for i = 1, #s.drops do
+				local d = s.drops[i]
+				if d.id == id and (now - (d.t or 0)) <= DROP_MATCH_WINDOW
+					and (d.rollID or unowned(d)) then
+					local has = false
+					for _, e in ipairs(d.rolls or {}) do
+						if e.player == who then has = true; break end
+					end
+					if not has then dp = d; break end
+				end
+			end
+			dp = dp or findOpenDrop(s, id)
 			if not dp then return end
+			if Okanvil.Trace then
+				Okanvil:Trace("ROLL", ("%s %s %s on %s copy %d"):format(who, kind,
+					tostring(roll), tostring(dp.name or id), (function()
+						for i, d in ipairs(s.drops) do if d == dp then return i end end
+						return 0 end)()))
+			end
 			dp.rolls = dp.rolls or {}
 			-- one entry per player (the first roll counts)
 			for _, e in ipairs(dp.rolls) do if e.player == who then return end end
@@ -1817,8 +1840,24 @@ local function recordRollWon(player, link)
 	local s = activeBucket()
 	-- STRICT: a winner may only claim a copy nobody owns yet. "X won" carries no rollID
 	-- (it is plain chat text), so with several copies of one item the only thing keeping
-	-- them apart is that each winner takes a free one.
-	local dp = findOpenDrop(s, id, true)
+	-- them apart is that each winner takes a free one -- preferably the free copy
+	-- whose rolls they actually top, so the rolls shown under a copy explain its winner.
+	local dp
+	local now = time()
+	for i = 1, #s.drops do
+		local d = s.drops[i]
+		if d.id == id and unowned(d) and (now - (d.t or 0)) <= DROP_MATCH_WINDOW then
+			local top = L.RollWinner(d)
+			if top and top.player == player then dp = d; break end
+		end
+	end
+	dp = dp or findOpenDrop(s, id, true)
+	if Okanvil.Trace then
+		Okanvil:Trace("ROLL", ("%s won %s -> %s"):format(player, tostring(link),
+			dp and ("copy " .. tostring((function()
+				for i, d in ipairs(s.drops) do if d == dp then return i end end
+				return 0 end)())) or "no free copy"))
+	end
 	if dp then
 		dp.receivedBy = player
 		dp.heldBy = nil                       -- a winner outranks whoever carried it
@@ -2702,6 +2741,13 @@ end
 -- handed to the ML first, so receivedBy holds the ML's name and tells you nothing
 -- about who the item is actually for -- it would export a whole raid's loot as won by
 -- one person. The roll is the real answer, so it wins.
+-- Tier of a roll kind: MS / Need outrank OS / Greed / Disenchant outright; within a
+-- tier the number decides. Comparing kinds as "anything but os wins" let a Greed
+-- beat a Need on group loot.
+local function kindTier(kind)
+	return (kind == "os" or kind == "greed" or kind == "de") and 1 or 2
+end
+
 function L.RollWinner(dp)
 	if not (dp and dp.rolls) then return nil end
 	local best
@@ -2709,8 +2755,8 @@ function L.RollWinner(dp)
 		local better
 		if not best then
 			better = true
-		elseif e.kind ~= best.kind then
-			better = (e.kind ~= "os")        -- MS outranks OS outright
+		elseif kindTier(e.kind) ~= kindTier(best.kind) then
+			better = kindTier(e.kind) > kindTier(best.kind)
 		else
 			better = (e.roll or 0) > (best.roll or 0)
 		end
@@ -2728,7 +2774,8 @@ function L.RollsRanked(dp)
 	local out = {}
 	for _, e in ipairs(dp.rolls) do out[#out + 1] = e end
 	table.sort(out, function(a, b)
-		if a.kind ~= b.kind then return a.kind ~= "os" end   -- MS first
+		local ta, tb = kindTier(a.kind), kindTier(b.kind)
+		if ta ~= tb then return ta > tb end                   -- MS / Need first
 		if (a.roll or 0) ~= (b.roll or 0) then return (a.roll or 0) > (b.roll or 0) end
 		return tostring(a.player) < tostring(b.player)        -- stable: never compares equal
 	end)
