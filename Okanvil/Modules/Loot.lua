@@ -3145,7 +3145,7 @@ local function commitAward(id, winner, de)
 		-- Skipped when the winner is us (the client refuses a self-whisper and the
 		-- server answers with a visible "Player not found.").
 		local cdb = Okanvil.db and Okanvil.db.council
-		if winner ~= meName and (not cdb or cdb.whisperWinner ~= false) then
+		if winner ~= meName and cdb and cdb.whisperWinner == true then
 			SendChatMessage((de and "You get %s to disenchant -- trade %s for it."
 				or "You won %s -- trade %s for it."):format(link or nm, meName),
 				"WHISPER", nil, winner)

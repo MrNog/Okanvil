@@ -339,7 +339,7 @@ function Okanvil:Settings_RaidTools(p)
 			function(v) LDB.askOnEnter = v and true or false end)
 		hint("a Start log / No prompt on the raid zone-in; No = no log this raid")
 		chk("Start logging at the first pull",
-			function() return LDB.autoOnPull ~= false end,
+			function() return LDB.autoOnPull == true end,
 			function(v) LDB.autoOnPull = v and true or false end)
 		hint("off: the log only starts when you press Start (REC)")
 		chk("Lock the REC timer",

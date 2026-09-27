@@ -59,17 +59,28 @@ function Okanvil:BuildLoot()
 		end,
 		onSecondary = function()
 			if not (L and L.SetMeAsMasterLooter) then return end
-			local r = L.SetMeAsMasterLooter()
-			if r == "nogroup" then
-				Okanvil:Print("|cffff5555You're not in a party or raid -- nothing to set.|r")
-			elseif r == "notleader" then
-				Okanvil:Print("|cffff5555Only the group leader can set the loot method.|r")
-			elseif r == "noapi" then
-				Okanvil:Print("|cffff5555SetLootMethod unavailable.|r")
-			else
-				Okanvil:Print("Loot method set to |cff7cfc8amaster|r -- you are the Master Looter.")
+			-- Someone else already holds master loot: taking it mid-raid is almost
+			-- always a misclick by a second officer, so it asks first.
+			local function take()
+				local r = L.SetMeAsMasterLooter()
+				if r == "nogroup" then
+					Okanvil:Print("|cffff5555You're not in a party or raid -- nothing to set.|r")
+				elseif r == "notleader" then
+					Okanvil:Print("|cffff5555Only the group leader can set the loot method.|r")
+				elseif r == "noapi" then
+					Okanvil:Print("|cffff5555SetLootMethod unavailable.|r")
+				else
+					Okanvil:Print("Loot method set to |cff7cfc8amaster|r -- you are the Master Looter.")
+				end
+				if fill and fill.refreshAll then fill.refreshAll() end
 			end
-			if fill and fill.refreshAll then fill.refreshAll() end
+			local who = L.MasterLooterName and L.MasterLooterName()
+			if who and who ~= "" then
+				Okanvil:Confirm("|cffffd200" .. who .. "|r is the master looter.\n"
+					.. "Take master loot from them?", "Take master loot", take)
+			else
+				take()
+			end
 		end,
 		statusText = function()
 			if L and L.IsMasterLooter and L.IsMasterLooter() then

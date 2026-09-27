@@ -20,7 +20,7 @@ local defaults = {
 	-- answer. (Kept as a field, not deleted: old saved variables still carry it.)
 	askOnEnter = false,
 	autoLog = false, -- legacy: silently auto-log on raid entry (used only if askOnEnter is off)
-	autoOnPull = true, -- start logging at the first raid pull (Settings > Raid)
+	autoOnPull = false, -- start logging at the first raid pull (Settings > Raid); opt-in
 	recLocked = false, -- lock the REC timer (click-through, no drag)
 	rec = { point = "TOP", x = 0, y = -140 },
 	sessions = {}, -- persisted history of logging sessions (zone, start, stop, bosses)
@@ -751,6 +751,15 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 				end
 			end
 		end
+		-- Automatic logging is opt-in. The defaults used to switch it on, and every
+		-- existing install already had that "on" saved -- so it is switched off once
+		-- here; anyone who wants it turns it back on in Settings > Raid.
+		if not OkanvilLogsDB._autoOffV1 then
+			OkanvilLogsDB.autoOnPull = false
+			OkanvilLogsDB.askOnEnter = false
+			OkanvilLogsDB.autoLog = false
+			OkanvilLogsDB._autoOffV1 = true
+		end
 		db = OkanvilLogsDB
 		-- NOTE: we intentionally KEEP db._cur across reload/relog. A session stays
 		-- open until the user hits Stop, so PLAYER_ENTERING_WORLD can resume the
@@ -846,7 +855,7 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 			else
 				local inInstance, itype = IsInInstance()
 				if inInstance and itype == "raid" and not OkanvilLogs._suppressAuto
-					and db.autoOnPull ~= false then
+					and db.autoOnPull == true then
 					OkanvilLogs.SetLogging(true) -- safety net: never miss a raid boss again
 				end
 			end

@@ -626,6 +626,7 @@ function Okanvil:BuildHome()
 
 	-- tab switching: one card visible at a time, all filling the same space
 	local function showTab(which)
+		Okanvil:Trace("UI", "home tab " .. tostring(which))
 		local snaps, saved = (which == "snaps"), (which == "saved")
 		gcard:SetShown(not snaps and not saved)
 		scard:SetShown(snaps)

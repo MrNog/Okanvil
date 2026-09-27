@@ -94,6 +94,10 @@ end
 C_.active = false
 
 function C_.SetActive(on)
+	if on and not C_.MayRun() then
+		Okanvil:Print("|cffff5555Loot council:|r only the master looter can start council night.")
+		return
+	end
 	C_.active = on and true or false
 	-- Persisted: a /reload in the middle of a raid used to silently end the
 	-- council night -- the mini roll came back with no Council row and nothing
@@ -140,6 +144,21 @@ local function canSeeBoard()
 	return not Okanvil.U or not Okanvil.U.canSeePrio or Okanvil.U.canSeePrio()
 end
 C_.CanSeeBoard = canSeeBoard
+
+-- Who may RUN the council: switch council night on and put items to the raid.
+-- In a group, only the master looter -- other officers see the board and vote.
+-- Any officer could start a round before, and a second officer pressing things
+-- mid-raid (a test, a round on the ML's items) is what made the night a mess.
+-- Solo there is nobody to disturb, so solo is always allowed.
+local function mayRunCouncil()
+	local inGroup = (GetNumRaidMembers and GetNumRaidMembers() > 0)
+		or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+	if not inGroup then return true end
+	local L = Okanvil.Loot
+	local me = UnitName and UnitName("player")
+	return (L and L.MasterLooterName and me and L.MasterLooterName() == me) and true or false
+end
+C_.MayRun = mayRunCouncil
 
 -- ============================================================
 -- RAIDER SIDE -- the frame
@@ -1134,6 +1153,11 @@ function C_.Ask(links, boss)
 		Okanvil:Print("|cffff5555Loot council:|r only officers can put an item to the council.")
 		return false
 	end
+	if not mayRunCouncil() then
+		Okanvil:Print("|cffff5555Loot council:|r only the master looter puts items to the raid "
+			.. "-- you see the board and vote when they do.")
+		return false
+	end
 
 	-- ITEM IDS, NOT LINKS. A full link is ~70 bytes and the id is all the receiver
 	-- needs: it rebuilds the link locally with WarmItem + GetItemInfo, exactly as the
@@ -1206,25 +1230,11 @@ function C_.Ask(links, boss)
 	-- the round was still live on every other client, answering into nothing.
 	C_.SaveAsk()
 
-	-- RE-BROADCAST while the round is open. An addon message can be dropped with
-	-- no error and no retry (C.Send is fire-and-forget), so one lost packet must
-	-- not cost a raider their say. Answers carry the round id, so a re-send to
-	-- someone who already answered changes nothing -- their reply lands on the
-	-- same slot.
-	--
-	-- Only while this is still the round on the board. A raider holds ONE round
-	-- at a time, so re-asking a round the officer has already moved on from pops
-	-- that older question back over the newer one.
-	local function resend(n)
-		if n > 4 then return end
-		C.After(15 * n, function()
-			local r = C_.rounds[round]
-			if not r or r.closed or r ~= C_.current then return end
-			C.ReAsk(round, payload)
-			resend(n + 1)
-		end)
-	end
-	resend(1)
+	-- The question goes out ONCE. It used to be re-broadcast four times, 15s
+	-- apart, in case a packet was dropped -- and every repeat made each client
+	-- answer and re-send its votes again, a burst of traffic per round that kept
+	-- the raid's windows busy long after the item was given. A raider whose
+	-- question never arrived shows as "not answered" on the board.
 	-- Open the board straight away, empty. Whoever asked has to be able to see
 	-- that the question went out and watch answers arrive -- without it there is
 	-- no way to tell a silent raid from a broken round.
@@ -2473,7 +2483,7 @@ function C_.BuildRunTab(body)
 		"Offers council night at the start of a raid",
 		"When the master looter becomes you, or you zone into a raid as leader with no "
 			.. "master looter set (Yes makes you ML). Say no and rolls carry on as they are.",
-		function() return db().askOnML ~= false end,
+		function() return db().askOnML == true end,
 		function(v) db().askOnML = v end)
 
 	opt("Ask automatically when a corpse opens",
@@ -2495,7 +2505,7 @@ function C_.BuildRunTab(body)
 	opt("Whisper the winner when it cannot be given",
 		"Auto loot or item already in bags: they trade you",
 		"Under auto loot the item is in your bags -- the winner is told to trade you.",
-		function() return db().whisperWinner ~= false end,
+		function() return db().whisperWinner == true end,
 		function(v) db().whisperWinner = v end)
 
 	body.refresh = paintState
@@ -2730,33 +2740,26 @@ end
 -- ============================================================
 -- "IS TONIGHT A COUNCIL NIGHT?"
 --
--- Two ways in, both ending in the same prompt:
+-- One way in, and only when "Ask when I become master looter" is switched on
+-- (off by default): the master looter CHANGES and it is now you -> "use loot
+-- council?". Only on a change: the same ML seen again on a roster update is not
+-- a new question, and a No stands until the ML moves.
 --
---   1. The master looter CHANGES and it is now you -> "use loot council?"
---      Only on a change: the same ML seen again on a roster update is not a new
---      question, and a No stands until the ML moves.
---   2. You zone into a raid as leader and nobody is ML yet -> "become master
---      looter and run loot council?"; Yes sets master loot to you first.
+-- Nothing here ever SETS master loot. A prompt that made you the ML on a raid
+-- zone-in let a second officer take master loot off the real one by clicking
+-- Yes; the Loot page's "Set me as ML" button is the only way, and it asks first.
 --
 -- Its own frame, not Okanvil:Confirm: that reuses ONE dialog, so the Logs
 -- prompt firing on the same zone-in would silently replace this one.
--- The Loot page's "Set me as ML" button stays the manual way in.
 -- ============================================================
 local lastML            -- ML name seen by the last check; "" = no master loot
-local declinedLeadZone  -- raid zone where the leader said No to becoming ML
 
 local function sameName(a, b)
 	return a and b and a:gsub("%-.*", ""):lower() == b:gsub("%-.*", ""):lower()
 end
 
-local function currentZone()
-	local zone = (GetRealZoneText and GetRealZoneText()) or ""
-	if zone == "" then zone = (GetZoneText and GetZoneText()) or "?" end
-	return zone
-end
-
 local askNightF
-local function askCouncilNight(becomeML)
+local function askCouncilNight()
 	if not askNightF then
 		local f = CreateFrame("Frame", nil, UIParent)
 		f:SetSize(320, 120)
@@ -2777,19 +2780,7 @@ local function askCouncilNight(becomeML)
 		yes:SetSize(140, 24); yes:SetPoint("BOTTOMLEFT", 14, 14)
 		yes:SetScript("OnClick", function()
 			f:Hide()
-			Okanvil:Trace("COUNCIL", f.becomeML and "Yes to become ML + council" or "Yes to council tonight")
-			if f.becomeML then
-				local L = Okanvil.Loot
-				local r = L and L.SetMeAsMasterLooter and L.SetMeAsMasterLooter()
-				if r ~= true then
-					Okanvil:Print("|cffff5555Could not set master loot|r (" .. tostring(r) .. ").")
-					return
-				end
-				-- Claim the change now so the PARTY_LOOT_METHOD_CHANGED this
-				-- causes is not seen as a new ML and asked about a second time.
-				lastML = UnitName("player")
-				Okanvil:Print("Loot method set to |cff7cfc8amaster|r -- you are the Master Looter.")
-			end
+			Okanvil:Trace("COUNCIL", "Yes to council tonight")
 			C_.SetActive(true)
 		end)
 
@@ -2797,27 +2788,23 @@ local function askCouncilNight(becomeML)
 		no:SetSize(140, 24); no:SetPoint("BOTTOMRIGHT", -14, 14)
 		no:SetScript("OnClick", function()
 			f:Hide()
-			Okanvil:Trace("COUNCIL", f.becomeML and "No to become ML" or "No to council tonight")
-			if f.becomeML then declinedLeadZone = currentZone() end
+			Okanvil:Trace("COUNCIL", "No to council tonight")
 			C_.SetActive(false)
 		end)
 		askNightF = f
 	end
-	askNightF.becomeML = becomeML
-	askNightF.txt:SetText(becomeML
-		and ("No master looter yet.\nBecome |cff7cfc8amaster looter|r and run |cffe0b860loot council|r?")
-		or  ("You are the master looter.\nUse |cffe0b860loot council|r tonight?\n"
-			.. "|cff8a8d93Rolls keep working either way.|r"))
+	askNightF.txt:SetText("You are the master looter.\nUse |cffe0b860loot council|r tonight?\n"
+		.. "|cff8a8d93Rolls keep working either way.|r")
 	-- Tall enough for the text it was just given, plus the buttons under it.
 	local th = askNightF.txt:GetStringHeight() or 40
 	askNightF:SetHeight(16 + th + 18 + 24 + 14)
 	if PlaySound then PlaySound("igMainMenuOpen") end
-	Okanvil:Trace("COUNCIL", becomeML and "asking: become ML + council?" or "asking: council tonight?")
+	Okanvil:Trace("COUNCIL", "asking: council tonight?")
 	askNightF:Show()
 end
 
 local function mayAsk()
-	return enabled() and not C_.testMode and not C_.active and db().askOnML ~= false
+	return enabled() and not C_.testMode and not C_.active and db().askOnML == true
 end
 
 -- Branch 1: runs on every loot-method / roster change, acts only when the ML moved.
@@ -2830,32 +2817,16 @@ local function mlCheck()
 	local me = UnitName("player")
 	if not sameName(ml, me) then
 		-- Someone else (or nobody) runs the loot now: a question about it is stale.
-		if askNightF and askNightF:IsShown() and not askNightF.becomeML then askNightF:Hide() end
+		if askNightF and askNightF:IsShown() then askNightF:Hide() end
 		return
 	end
-	if mayAsk() then askCouncilNight(false) end
-end
-
--- Branch 2: zoned into a raid as leader with no master looter set.
-local function raidEnterCheck()
-	local inInstance, itype = IsInInstance and IsInInstance()
-	if not inInstance or itype ~= "raid" then
-		declinedLeadZone = nil          -- left the raid: ask again next time
-		return
-	end
-	local L = Okanvil.Loot
-	if not L or (L.MasterLooterName and L.MasterLooterName()) then return end
-	if not (L.CanSetLootMethod and L.CanSetLootMethod()) then return end
-	-- A wipe run-back re-enters the instance; one No per raid zone is enough.
-	if declinedLeadZone == currentZone() then return end
-	if mayAsk() then askCouncilNight(true) end
+	if mayAsk() then askCouncilNight() end
 end
 
 do
-	local mlQueued, enterQueued
+	local mlQueued
 	local ev = CreateFrame("Frame")
 	ev:RegisterEvent("PLAYER_ENTERING_WORLD")
-	ev:RegisterEvent("RAID_INSTANCE_WELCOME")
 	ev:RegisterEvent("RAID_ROSTER_UPDATE")
 	ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
 	ev:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
@@ -2872,13 +2843,6 @@ do
 		if not mlQueued then
 			mlQueued = true
 			C.After(1, function() mlQueued = false; mlCheck() end)
-		end
-		-- Leader status and the loot method read wrong for a moment after a
-		-- zone-in, so the raid-enter check waits 2s.
-		if (event == "PLAYER_ENTERING_WORLD" or event == "RAID_INSTANCE_WELCOME")
-			and not enterQueued then
-			enterQueued = true
-			C.After(2, function() enterQueued = false; raidEnterCheck() end)
 		end
 	end)
 end
@@ -3004,6 +2968,17 @@ do
 		-- RESTORE an open round after a /reload or a disconnect. Deferred a few
 		-- seconds: at PLAYER_LOGIN the item cache is cold and the frame would draw
 		-- rows with no name or icon.
+		-- Every automatic council option is opt-in. They used to default ON, so
+		-- installs that already saved them are switched off once; anyone who
+		-- wants one turns it back on on the Loot Council page.
+		do
+			local d = db()
+			if not d._autoOffV1 then
+				d.askOnML, d.autoAsk, d.whisperWinner = false, false, false
+				d._autoOffV1 = true
+			end
+		end
+
 		-- COUNCIL NIGHT survives a reload. Six hours, so it covers a raid night and
 		-- expires before the next one -- "is tonight a council night" is a decision
 		-- about tonight, and a flag that outlived the raid is the one that silently
