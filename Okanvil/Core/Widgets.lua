@@ -778,6 +778,18 @@ local function openMenu(owner)
 		r:Show()
 		y = y + rowH
 	end
+	-- At least as wide as the button, and wider when a label needs it: a menu
+	-- opened from a small button cut its own text off at the button's width.
+	local widest = 0
+	for i = 1, #items do
+		local w = m.rows[i].t:GetStringWidth() or 0
+		if w > widest then widest = w end
+	end
+	local mw = math.max(owner:GetWidth(), widest + 34)
+	if mw ~= m:GetWidth() then
+		m:SetWidth(mw)
+		for i = 1, #items do m.rows[i]:SetWidth(mw - 12) end
+	end
 	m.child:SetHeight(math.max(1, y))
 	local h = math.min(y + 6, MENU_MAX_H)
 	m:SetHeight(h)

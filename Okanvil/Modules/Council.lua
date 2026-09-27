@@ -1543,7 +1543,7 @@ local function ensureBoard()
 			items[#items + 1] = { text = shown(e.name) .. " |cff8a8d93" .. e.skill .. "|r", value = e.name }
 		end
 		if #ench > 0 then return items end
-		items[#items + 1] = { text = "|cff8a8d93no enchanter reported -- whole raid:|r", value = false }
+		items[#items + 1] = { text = "|cff8a8d93No enchanters found. Pick anyone:|r", value = false }
 		local rest = inGroup()
 		table.sort(rest)
 		for _, n in ipairs(rest) do items[#items + 1] = { text = shown(n), value = n } end

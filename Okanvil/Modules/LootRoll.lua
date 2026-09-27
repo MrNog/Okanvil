@@ -305,6 +305,7 @@ local function buildWindow()
 	f.title = title
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
+	f.closeBtn = close
 	-- The soft-reserve list, docked beside this window. Master looter only, and
 	-- only while a list is loaded (RM.SyncSRButton).
 	local srB = W.Button(hdr, "SR"); srB:SetSize(30, 20); srB:SetPoint("RIGHT", close, "LEFT", -4, 0)
@@ -741,8 +742,8 @@ function RM.Rebuild()
 		end
 		rollB.listFn = function()
 			return {
-				{ text = "Roll MS  |cff8a8d93main spec, 1-100|r", value = "ms" },
-				{ text = "Roll OS  |cff8a8d93off spec, 1-99|r",  value = "os" },
+				{ text = "Main spec  |cff8a8d93/roll 100|r", value = "ms" },
+				{ text = "Off spec  |cff8a8d93/roll 99|r",   value = "os" },
 			}
 		end
 		rollB.setFn = function(mode)
@@ -837,6 +838,12 @@ function RM.SyncSRButton()
 	if not (win and win.srBtn) then return end
 	local SRM = Okanvil.SoftRes
 	if isML() and SRM and SRM.Summary() then win.srBtn:Show() else win.srBtn:Hide() end
+	-- Clear sits next to SR when SR is there, else straight next to X: anchored to
+	-- a hidden SR it kept SR's empty slot as a gap.
+	if win.clrBtn then
+		win.clrBtn:ClearAllPoints()
+		win.clrBtn:SetPoint("RIGHT", win.srBtn:IsShown() and win.srBtn or win.closeBtn, "LEFT", -4, 0)
+	end
 end
 
 -- Shrink the list (and the window) to what is actually in it. The list is laid out
