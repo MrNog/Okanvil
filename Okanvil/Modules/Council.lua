@@ -3171,10 +3171,13 @@ function C_.RestoreAsk()
 		-- other client answers a repeat of the round by sending its answers and
 		-- its votes again, so re-asking is what brings them back. The repeats the
 		-- round was running before the reload died with it, hence restarting them.
+		-- Twice only: every repeat makes each raider answer again, so the first
+		-- brings back what the loading screen lost and the second covers one
+		-- message that went missing.
 		local round, payload = s.round, rec.payload
 		local function resend(n)
-			if n > 3 then return end
-			C.After(n == 1 and 3 or 15, function()
+			if n > 2 then return end
+			C.After(n == 1 and 3 or 17, function()
 				local r = C_.rounds[round]
 				if not r or r.closed or r ~= C_.current then return end
 				C.ReAsk(round, payload)
