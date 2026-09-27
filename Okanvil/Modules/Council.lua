@@ -106,7 +106,10 @@ function C_.SetActive(on)
 	local d = db()
 	d.activeAt = C_.active and time() or nil
 	-- Tell the other officers (their header shows it read-only).
-	if C and C.Send and C_.MayRun() then C.Send("CNIGHT", C_.active and "1" or "0") end
+	if C and C.Send and C_.MayRun() then
+		C.Send("CNIGHT", C_.active and "1" or "0")
+		if C_.active and C_.AskEnchanters then C_.AskEnchanters() end
+	end
 	-- The mini roll draws a different button row depending on this, so it has to
 	-- be rebuilt rather than waiting for the next natural refresh.
 	if Okanvil.RollMgr and Okanvil.RollMgr.Rebuild then Okanvil.RollMgr.Rebuild() end
@@ -256,10 +259,10 @@ local function equippedFor(link)
 	return bestID, bestIlvl
 end
 
--- Our Enchanting skill, or nil. Sent with every reply so the master looter's
--- Disenchant list can put the raid's enchanters on top, highest skill first, the
--- way RCLootCouncil's does. The skill line is matched by the localised name of
--- the Enchanting spell, so it works on any client language.
+-- Our Enchanting skill, or nil. Asked ONCE, when the master looter starts council
+-- night (ENCQ below), so their Disenchant list shows the raid's enchanters,
+-- highest skill first, the way RCLootCouncil's does. The skill line is matched by
+-- the localised name of the Enchanting spell, so it works on any client language.
 local ENCHANTING = GetSpellInfo and GetSpellInfo(7411)
 local function enchantSkill()
 	if not (ENCHANTING and GetNumSkillLines and GetSkillLineInfo) then return nil end
@@ -285,9 +288,6 @@ local function buildReply()
 			-- distinction (its WAIT response, "candidate is selecting").
 			it.idx, it.answer or "wait", eqID or "", tostring(diff))
 	end
-	-- "E=<skill>": not an item, so a client that does not know it skips it.
-	local ench = enchantSkill()
-	if ench then parts[#parts + 1] = "E=" .. ench end
 	return table.concat(parts, SEP_ANS)
 end
 
@@ -1108,6 +1108,30 @@ if C then
 	C.On("CNQ", function()
 		if isML(UnitName("player")) then C.Send("CNIGHT", C_.active and "1" or "0") end
 	end)
+
+	-- ENCHANTERS, asked once. The master looter asks when council night starts;
+	-- every Okanvil with Enchanting whispers its skill back, and nobody else says
+	-- anything. The Disenchant list reads this for the rest of the night.
+	C.On("ENCQ", function(sender)
+		local e = enchantSkill()
+		if e and sender then C.Whisper("ENC", sender, tostring(e)) end
+	end)
+	C.On("ENC", function(sender, v)
+		local n = tonumber(v)
+		if sender and n then C_.enchanters[(sender:gsub("%-.*", ""))] = n end
+	end)
+end
+
+-- name -> Enchanting skill, for the Disenchant list. Filled by one ENCQ round.
+C_.enchanters = {}
+
+-- Ask the group once per session. Asking again only happens after a reload,
+-- when the list above starts empty.
+function C_.AskEnchanters()
+	if C_.enchAsked or not (C and C.Send) then return end
+	C_.enchAsked = C.Send("ENCQ") or nil
+	local mine = enchantSkill()
+	if mine then C_.enchanters[UnitName("player")] = mine end
 end
 
 -- Ask the master looter for the council-night state (their answer is CNIGHT).
@@ -1451,10 +1475,10 @@ local function ensureBoard()
 	-- ---- Disenchant ------------------------------------------------------
 	-- Gives the item on screen to someone to disenchant: the history records it
 	-- as DE, not as a win, so it never counts against anyone's loot priority.
-	-- The list is the raid's ENCHANTERS by skill, from every reply of every round
-	-- tonight -- a raider who skipped this round is still an enchanter. The whole
-	-- raid is listed only when nobody has reported Enchanting (the enchanter may be
-	-- running no Okanvil): shown every time, ten names read as "anyone can DE".
+	-- The list is the raid's ENCHANTERS by skill, asked once when council night
+	-- started (C_.AskEnchanters). The whole raid is listed only when nobody has
+	-- reported Enchanting (the enchanter may be running no Okanvil): shown every
+	-- time, ten names read as "anyone can DE".
 	local function inGroup()
 		local out = {}
 		if GetNumRaidMembers and GetNumRaidMembers() > 0 then
@@ -1480,7 +1504,14 @@ local function ensureBoard()
 		local function shown(n) return L and L.ClassColorName and L.ClassColorName(n) or n end
 		local here = {}
 		for _, n in ipairs(inGroup()) do here[n] = true end
+		-- Nothing known yet (council night restored by a reload): ask now, and
+		-- the next time the list opens it is filled.
+		if not next(C_.enchanters) then C_.AskEnchanters() end
 		local skill = {}
+		for name, s in pairs(C_.enchanters) do
+			if here[name] then skill[name] = s end
+		end
+		-- Older Okanvil builds still send their skill with each answer.
 		for _, r in pairs(C_.rounds) do
 			for name, answers in pairs(r.replies or {}) do
 				if answers.ench and here[name] and answers.ench > (skill[name] or 0) then
