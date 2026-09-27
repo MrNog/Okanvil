@@ -35,6 +35,8 @@ Modules\LootPrio.lua
 Modules\SoftRes.lua
 Modules\Loot.lua
 Modules\LootRoll.lua
+Modules\SoftRes-UI.lua
+Modules\LootTrade.lua
 Modules\Invite.lua
 Modules\RecruitLogic.lua
 Modules\Recruit.lua

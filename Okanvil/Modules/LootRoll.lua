@@ -261,6 +261,7 @@ local pendingItemScroll   -- scroll offset that puts the selected item on screen
 -- roll names an exact page and always outranks "go to the newest boss".
 local pendingJumpNewest = false
 local function isML() return amML() end
+RM.IsML = isML
 
 local function buildWindow()
 	if win then return win end
@@ -302,6 +303,21 @@ local function buildWindow()
 	f.title = title
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
+	-- The soft-reserve list, docked beside this window. Master looter only, and
+	-- only while a list is loaded (RM.SyncSRButton).
+	local srB = W.Button(hdr, "SR"); srB:SetSize(30, 20); srB:SetPoint("RIGHT", close, "LEFT", -4, 0)
+	srB:Tooltip("Soft reserves: every reserved item, who reserved it,\nand what happened to it tonight.")
+	srB:SetScript("OnClick", function()
+		local P = Okanvil.SoftResPanel
+		if P then P.Toggle() end
+	end)
+	srB:Hide()
+	f.srBtn = srB
+	-- The list goes away with this window and comes back with it.
+	f:HookScript("OnHide", function()
+		local P = Okanvil.SoftResPanel
+		if P then P.Hide(false) end
+	end)
 
 	-- everything below the title is rebuilt when the ML state changes, so pack the
 	-- mode-specific widgets into a container we can wipe. Give it a FULL size
@@ -593,7 +609,12 @@ function RM.Rebuild()
 
 		r:SetScript("OnEnter", function(s)
 			if s._roll then return end   -- a roll row has no item to preview
-			if s._d and s._d.item then GameTooltip:SetOwner(s, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink(s._d.item); GameTooltip:Show() end
+			if s._d and s._d.item then
+				GameTooltip:SetOwner(s, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink(s._d.item)
+				local SRM = Okanvil.SoftRes
+				if SRM and SRM.AddTooltip then SRM.AddTooltip(GameTooltip, s._d.id or s._d.item) end
+				GameTooltip:Show()
+			end
 		end)
 		r:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
@@ -672,7 +693,7 @@ function RM.Rebuild()
 	local CC = Okanvil.Council
 	if ml and CC and CC.active and CC.Enabled and CC.Enabled() then
 		local ccH = 22
-		local cc = keep(W.Text(body, "Loot council", 10, "dim")); cc:SetPoint("TOPLEFT", M, y); y = y - 13
+		local cc = keep(W.Text(body, "Loot council", 10, "dim")); cc:SetPoint("TOPLEFT", M, y); y = y - 16
 		local gap2, bw2 = 6, (INNER - 6) / 2
 		local askB = keep(W.Button(body, "Ask this one", "primary"))
 		askB:SetSize(bw2, ccH); askB:SetPoint("TOPLEFT", M, y)
@@ -689,13 +710,13 @@ function RM.Rebuild()
 		pickB:SetScript("OnClick", function()
 			if CC.OpenPicker then CC.OpenPicker() end
 		end)
-		y = y - (ccH + 8)
+		y = y - (ccH + 10)
 	end
 
 	-- ML-only: Start Roll row (4 equal buttons) ------------------------------
 	if ml then
 		local srH = 22
-		local sr = keep(W.Text(body, "Start roll (announces)", 10, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - 13
+		local sr = keep(W.Text(body, "Start roll (announces)", 10, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - 16
 		-- TWO buttons, not four. Free was a third kind of roll nobody called, and
 		-- Stop is still on /okroll stop -- four buttons at 62px each was a row you
 		-- had to read rather than aim at.
@@ -711,7 +732,7 @@ function RM.Rebuild()
 		end
 		srBtn("MS", "primary", 1, function() startSel("ms") end)
 		srBtn("OS", nil, 2, function() startSel("os") end)
-		y = y - (srH + 6)
+		y = y - (srH + 10)
 	end
 
 	-- NO "Send prio" button. The ladder is on the Loot Council page and under the
@@ -795,7 +816,7 @@ function RM.Rebuild()
 
 	-- Your roll ---------------------------------------------------------------
 	if wantsChatRollButtons() then
-		local yrl = keep(W.Text(body, "Your roll", 10, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - 15
+		local yrl = keep(W.Text(body, "Your roll", 10, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - 16
 		local hw = (INNER - 8) / 2
 		local bh = 22
 		local myms = keep(W.Button(body, "Roll MS (100)", "primary")); myms:SetSize(hw, bh); myms:SetPoint("TOPLEFT", M, y)
@@ -815,6 +836,15 @@ function RM.Rebuild()
 	f:SetHeight(f.tailBaseH)
 
 	RM.Refresh()
+	RM.SyncSRButton()
+	local P = Okanvil.SoftResPanel
+	if P then P.Sync() end
+end
+
+function RM.SyncSRButton()
+	if not (win and win.srBtn) then return end
+	local SRM = Okanvil.SoftRes
+	if isML() and SRM and SRM.Summary() then win.srBtn:Show() else win.srBtn:Hide() end
 end
 
 -- Shrink the list (and the window) to what is actually in it. The list is laid out
@@ -1183,7 +1213,7 @@ function RM.Refresh()
 					if why then
 						sub = "|cff8a8d93" .. why .. ", no roll|r"
 					elseif SRM and SRM.IsReserved(d.id) then
-						sub = SRM.Names(d.id)
+						sub = SRM.Names(d.id, false, 3)   -- the whole list is on the tooltip
 					else
 						sub = ""
 					end

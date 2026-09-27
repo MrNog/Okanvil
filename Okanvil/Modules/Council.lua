@@ -2525,17 +2525,57 @@ function C_.Test(num)
 	num = tonumber(num) or 3
 	if num < 1 then num = 1 elseif num > 8 then num = 8 end
 
-	-- Everything currently equipped, slots 1-18.
+	-- With a soft-reserve list loaded, test with the reserved items so the [SR]
+	-- tags, the blocked MS rolls and the roll call all show up. Otherwise,
+	-- everything currently equipped, slots 1-18.
 	local pool = {}
-	for slot = 1, 18 do
-		local id = GetInventoryItemID and GetInventoryItemID("player", slot)
-		if id then pool[#pool + 1] = id end
+	local srd = Okanvil.db.softres
+	if srd and srd.items then
+		local cold = 0
+		for id in pairs(srd.items) do
+			if GetItemInfo(id) then
+				pool[#pool + 1] = id
+			else
+				-- never seen on this client: ask the server, it is ready next press
+				cold = cold + 1
+				if Okanvil.WarmItem then Okanvil:WarmItem(id) end
+			end
+		end
+		if #pool == 0 and cold > 0 then
+			Okanvil:Print("|cffe0b860[TEST]|r loading the " .. cold
+				.. " soft-reserved item(s) -- press Test again in a second.")
+			return
+		end
+	end
+	if #pool == 0 then
+		for slot = 1, 18 do
+			local id = GetInventoryItemID and GetInventoryItemID("player", slot)
+			if id then pool[#pool + 1] = id end
+		end
 	end
 	if #pool == 0 then pool = TEST_FALLBACK end
+
+	-- One piece of gear from the BAGS as well, first in the list. Equipped items
+	-- are not in the bags, so awarding one could never show the "owed by trade"
+	-- square; this one can.
+	local bagItem
+	for bag = 0, 4 do
+		for slot = 1, (GetContainerNumSlots(bag) or 0) do
+			local link = GetContainerItemLink(bag, slot)
+			local q
+			if link then q = select(3, GetItemInfo(link)) end
+			if q and q >= 4 and IsEquippableItem(link) then
+				bagItem = tonumber(link:match("item:(%d+)"))
+				break
+			end
+		end
+		if bagItem then break end
+	end
 
 	-- Distinct items where possible: asking about the same ring twice tests
 	-- nothing the first one did not.
 	local picked, seen = {}, {}
+	if bagItem then picked[1] = bagItem; seen[bagItem] = true end
 	local guard = 0
 	while #picked < num and guard < 200 do
 		guard = guard + 1
@@ -2646,6 +2686,7 @@ function C_.TestOff()
 		if L.WorldTest then L.WorldTest(false) end
 	end
 	C_.testPrevWorld = nil
+	if Okanvil.Trade then Okanvil.Trade.ClearTest() end
 	local dOff = db()
 	dOff.testAt, dOff.testWho = nil, nil
 	-- A test switched council night ON to get the mini roll row. Ending the test
@@ -3124,6 +3165,23 @@ function C_.RestoreAsk()
 				C_.RepaintBoard()
 			end,
 		})
+
+		-- ASK AGAIN. Whatever arrived during the loading screen was dropped: an
+		-- addon message is never queued for a client that is reloading. Every
+		-- other client answers a repeat of the round by sending its answers and
+		-- its votes again, so re-asking is what brings them back. The repeats the
+		-- round was running before the reload died with it, hence restarting them.
+		local round, payload = s.round, rec.payload
+		local function resend(n)
+			if n > 3 then return end
+			C.After(n == 1 and 3 or 15, function()
+				local r = C_.rounds[round]
+				if not r or r.closed or r ~= C_.current then return end
+				C.ReAsk(round, payload)
+				resend(n + 1)
+			end)
+		end
+		resend(1)
 	end
 
 	if canSeeBoard() then

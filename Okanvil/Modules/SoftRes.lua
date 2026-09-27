@@ -72,6 +72,7 @@ end
 function SR.Import(text)
 	text = (text or ""):gsub("\r\n?", "\n")
 	local col, items, names, players, rows = nil, {}, {}, {}, 0
+	local bosses, order = {}, {}
 	for line in text:gmatch("[^\n]+") do
 		line = trim(line)
 		if line ~= "" then
@@ -90,6 +91,7 @@ function SR.Import(text)
 			local who = trim(f[col["raider name"]] or "")
 			if id and id > 0 and who ~= "" then
 				rows = rows + 1
+				if not items[id] then order[#order + 1] = id end
 				local list = items[id] or {}
 				items[id] = list
 				local k = key(who)
@@ -108,12 +110,14 @@ function SR.Import(text)
 					}
 				end
 				names[id] = names[id] or trim(f[col["item name"]] or "")
+				local from = trim(f[col["from"]] or "")
+				if from ~= "" then bosses[id] = bosses[id] or from end
 				players[k] = true
 			end
 		end
 	end
 	if rows == 0 then return nil, "No reserves found. Paste the CSV from softres.it (Export > CSV)." end
-	local ni, np = SR._Store(items, names, time(), nil)
+	local ni, np = SR._Store(items, names, time(), nil, bosses, order)
 	-- The master looter or raid leader hands the list to the raid straight
 	-- away, so nobody else has to paste it.
 	if SR.CanShare() then SR.Share() end
@@ -121,9 +125,12 @@ function SR.Import(text)
 end
 
 -- Keep a list, however it arrived. `from` is who sent it, nil for your own paste.
-function SR._Store(items, names, at, from)
+-- `bosses` (id -> the boss it drops from) and `order` (ids as the CSV listed
+-- them) only come with a paste; a list received over comms has neither.
+function SR._Store(items, names, at, from, bosses, order)
 	local d = db()
 	d.items, d.names, d.at, d.from = items, names, at, from
+	d.bosses, d.order = bosses, order
 	local ni, players = 0, {}
 	for _, list in pairs(items) do
 		ni = ni + 1
@@ -133,13 +140,16 @@ function SR._Store(items, names, at, from)
 	for _ in pairs(players) do np = np + 1 end
 	d.nItems, d.nPlayers = ni, np
 	if SR.onChange then SR.onChange() end
+	if SR.onPanel then SR.onPanel() end
 	return ni, np
 end
 
 function SR.Clear()
 	local d = db()
 	d.items, d.names, d.at, d.from, d.nItems, d.nPlayers = nil, nil, nil, nil, nil, nil
+	d.bosses, d.order = nil, nil
 	if SR.onChange then SR.onChange() end
+	if SR.onPanel then SR.onPanel() end
 end
 
 -- items, raiders, import time, who sent it -- or nil when nothing is loaded
@@ -281,6 +291,26 @@ function SR.For(item)
 	return (id and d.items and d.items[id]) or {}
 end
 
+-- Every reserved item id, in the CSV's order when there is one (a received
+-- list has none, so it falls back to item name), with its boss and name.
+function SR.All()
+	local d = db()
+	if not d.items then return {} end
+	local out, seen = {}, {}
+	for _, id in ipairs(d.order or {}) do
+		if d.items[id] and not seen[id] then seen[id] = true; out[#out + 1] = id end
+	end
+	local rest = {}
+	for id in pairs(d.items) do if not seen[id] then rest[#rest + 1] = id end end
+	table.sort(rest, function(a, b) return ((d.names or {})[a] or "") < ((d.names or {})[b] or "") end)
+	for _, id in ipairs(rest) do out[#out + 1] = id end
+	local list = {}
+	for _, id in ipairs(out) do
+		list[#list + 1] = { id = id, boss = (d.bosses or {})[id], name = (d.names or {})[id] }
+	end
+	return list
+end
+
 function SR.IsReserved(item) return #SR.For(item) > 0 end
 
 function SR.IsReserver(item, player)
@@ -297,13 +327,34 @@ local function classColor(token)
 end
 
 -- "Mongoloide, Rellik x2" -- class-coloured for the screen, or plain for chat.
-function SR.Names(item, plain)
-	local out = {}
-	for _, e in ipairs(SR.For(item)) do
+-- `max` caps how many are named; the rest become "+N", for a one-line row where
+-- a long list would otherwise be cut off mid-name.
+function SR.Names(item, plain, max)
+	local out, list = {}, SR.For(item)
+	for i, e in ipairs(list) do
+		if max and i > max then break end
 		local n = e.name .. (e.count > 1 and (" x" .. e.count) or "")
 		out[#out + 1] = plain and n or (classColor(e.class) .. n .. "|r")
 	end
-	return table.concat(out, plain and ", " or "|cff6f7176, |r")
+	local s = table.concat(out, plain and ", " or "|cff6f7176, |r")
+	local left = #list - #out
+	if left > 0 then s = s .. (plain and (" +" .. left) or ("|cff8a8d93 +" .. left .. "|r")) end
+	return s
+end
+
+-- Every reserver, one per line, for the item tooltip: class-coloured name, spec
+-- and the raider's note from softres.it.
+function SR.AddTooltip(tip, item)
+	local list = SR.For(item)
+	if #list == 0 then return end
+	tip:AddLine(" ")
+	tip:AddLine("Soft reserved (" .. #list .. ")", 0.88, 0.72, 0.38)
+	for _, e in ipairs(list) do
+		local n = classColor(e.class) .. e.name .. "|r" .. (e.count > 1 and (" x" .. e.count) or "")
+		local extra = e.spec ~= "" and e.spec or ""
+		if e.note ~= "" then extra = extra .. (extra ~= "" and " - " or "") .. e.note end
+		tip:AddDoubleLine(n, extra, 1, 1, 1, 0.55, 0.55, 0.58)
+	end
 end
 
 -- ---- Hard reserves ------------------------------------------------------
@@ -395,8 +446,12 @@ function SR.Tag(item, id, boe)
 	if cat then return "|cffff5555[" .. cat .. "]|r " end
 	id = id or idOf(item)
 	if not SR.IsReserved(id) then return "" end
-	local L = Okanvil.Loot
-	local ml = L and L.IsMasterLooter and L.IsMasterLooter()
+	-- The mini roll's own answer, so the tag and the window agree (it counts a
+	-- solo council test as master looter; the Loot module's does not).
+	local RM, L = Okanvil.RollMgr, Okanvil.Loot
+	local ml
+	if RM and RM.IsML then ml = RM.IsML()
+	else ml = L and L.IsMasterLooter and L.IsMasterLooter() end
 	if ml or SR.IsReserver(id, UnitName("player")) then return "|cffe0b860[SR]|r " end
 	return "|cff6f7176[SR]|r "
 end

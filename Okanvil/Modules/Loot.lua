@@ -3012,6 +3012,11 @@ local function commitAward(id, winner, de)
 
 		freezeManualRolls(id)
 		markWinner(id, winner, de)
+		-- Owed by trade now: square it in the bags, fill the trade window.
+		if Okanvil.Trade then
+			local CC = Okanvil.Council
+			Okanvil.Trade.Add(id, winner, link or nm, CC and CC.testMode)
+		end
 
 		Okanvil:Print("|cffffd200" .. (link or nm) .. " -> " .. winner
 			.. "|r |cff8a8d93(recorded)|r -- |cffff5555could not hand it over automatically: "
