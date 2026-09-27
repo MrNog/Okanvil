@@ -456,7 +456,11 @@ local function build()
 			t:SetVertexColor(1, 1, 1, 1)
 			local tip = TIPS[sc.key]
 			if tip then
-				GameTooltip:SetOwner(self, "ANCHOR_TOP")
+				-- Always BELOW the bar, clear of its border: above (or on top of) the
+				-- bar it covered the neighbouring icons you were about to click.
+				GameTooltip:SetOwner(self, "ANCHOR_NONE")
+				GameTooltip:ClearAllPoints()
+				GameTooltip:SetPoint("TOP", self, "BOTTOM", 0, -(PAD + 3))
 				GameTooltip:SetText(tip, 1, 0.82, 0)
 				GameTooltip:Show()
 			end
