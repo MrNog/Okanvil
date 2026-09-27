@@ -2197,6 +2197,9 @@ function C_.OpenPicker()
 	-- night this feature is for.
 	local ml = L.MasterLooterName and L.MasterLooterName()
 	local function undecided(dp)
+		-- Awarded or disenchanted is decided, whoever it went to -- the ML
+		-- included, which the name test below cannot tell from "still holding".
+		if dp.awarded or dp.de then return false end
 		if dp.heldBy and dp.heldBy ~= "" and (not dp.receivedBy or dp.receivedBy == "") then
 			return true
 		end
@@ -2209,7 +2212,8 @@ function C_.OpenPicker()
 	for _, grp in ipairs(L.DropsByBoss() or {}) do
 		for _, dp in ipairs(grp.items or {}) do
 			if undecided(dp) then
-				rows[#rows + 1] = { dp = dp, boss = grp.boss or dp.boss or "" }
+				local wn = L.RollWinner and L.RollWinner(dp)
+				rows[#rows + 1] = { dp = dp, boss = grp.boss or dp.boss or "", rolled = wn and wn.player }
 			end
 		end
 	end
@@ -2300,11 +2304,13 @@ function C_.OpenPicker()
 			r._dp, r._boss = dp, row.boss
 			-- Everything undecided starts ticked: the common case is "ask about
 			-- what just dropped", and unticking two is less work than ticking six.
-			r._on = true
+			-- An item already rolled on starts unticked: it has a winner waiting
+			-- to be handed it, and asking again would be a second decision.
+			r._on = not row.rolled
 			-- Plain "x": SetKind("primary") already paints the label dark on gold,
 			-- and a |cff green on top of that is unreadable.
-			r.tick:SetKind("primary")
-			r.tick.text:SetText("x")
+			r.tick:SetKind(r._on and "primary" or "secondary")
+			r.tick.text:SetText(r._on and "x" or "")
 
 			local link = dp.item or ""
 			local nm, _, q = GetItemInfo(link ~= "" and link or dp.id)
@@ -2314,7 +2320,8 @@ function C_.OpenPicker()
 			local hex = (q and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q])
 				and ("|c" .. ITEM_QUALITY_COLORS[q].hex:gsub("^|c", "")) or "|cffffffff"
 			r.label:SetText(("%s%s|r  |cff8a8d93%s|r"):format(
-				hex, nm or dp.name or ("item " .. tostring(dp.id)), row.boss))
+				hex, nm or dp.name or ("item " .. tostring(dp.id)), row.boss)
+				.. (row.rolled and ("  |cffffd200rolled: " .. row.rolled .. "|r") or ""))
 			r:Show()
 		end
 	end
