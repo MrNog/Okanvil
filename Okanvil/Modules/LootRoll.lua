@@ -767,10 +767,9 @@ function RM.Rebuild()
 			end
 			award:Tooltip(open
 				and "Hands the item straight to the winner through master loot."
-				or  "The loot window is closed, so the item is already in your bags.\n"
-				 .. "This records the winner and tells the raid -- you trade it over.\n\n"
-				 .. "Keep the corpse's loot window OPEN during the roll to hand it\n"
-				 .. "over automatically instead.")
+				or  "The loot window is closed. Under master loot the item is still\n"
+				 .. "on the corpse: open it again to hand the item over.\n\n"
+				 .. "Only an item already in your bags is recorded here and traded.")
 		end
 		award.SyncLabel()
 		RM._awardBtn = award
@@ -1350,6 +1349,18 @@ end
 --  BEFORE the window is ever built is not lost -- showWin() applies it once the frame
 --  exists. That is what makes the pager auto-advance to boss 2's loot.)
 
+-- How many drops the window has already shown. A CLOSED window only comes back
+-- on its own for loot it has not shown yet: every award, winner mark and
+-- broadcast echo also runs the refresh, and in a raid each one re-opened a
+-- window the ML had just closed -- seconds after every give.
+local shownDrops = 0
+local function dropCount()
+	local n = 0
+	local g = Okanvil.Loot and Okanvil.Loot.DropsByBoss and Okanvil.Loot.DropsByBoss()
+	for _, b in ipairs(g or {}) do n = n + #b.items end
+	return n
+end
+
 -- show the window (building + rebuilding the mode-specific body)
 local function showWin()
 	buildWindow()
@@ -1369,6 +1380,7 @@ local function showWin()
 	end
 	win:Show()                       -- always show (idempotent)
 	win:Raise()                      -- bring to front in case something covers it
+	shownDrops = dropCount()
 	local ok, err = pcall(RM.ApplyMode)  -- never let a rebuild error leave it half-open
 	if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
 	if OkanvilLootDebug and L and L.Dbg then
@@ -1393,6 +1405,9 @@ local function haveCurrentDrops()
 end
 local function canAutoShow()
 	if not db().autoShow then return false end
+	local n = dropCount()
+	if n < shownDrops then shownDrops = n end   -- list cleared, or a new run
+	if n == shownDrops then return false end
 	if Okanvil.Loot and Okanvil.Loot.InLiveRun and Okanvil.Loot.InLiveRun() then return true end
 	return haveCurrentDrops()
 end
@@ -1423,6 +1438,7 @@ local function popOrRefresh(force)
 			win.userCleared = false   -- new loot -> auto-select it even if you'd cleared
 		end
 		pendingBossIdx = nil; pendingItemScroll = nil
+		shownDrops = dropCount()
 		RM.Refresh()
 		if dbg then L.Dbg("  => refresh (already shown)") end
 	elseif (force and db().autoShow) or canAutoShow() then

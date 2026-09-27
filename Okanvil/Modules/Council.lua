@@ -1415,8 +1415,10 @@ local function ensureBoard()
 	-- ---- Disenchant ------------------------------------------------------
 	-- Gives the item on screen to someone to disenchant: the history records it
 	-- as DE, not as a win, so it never counts against anyone's loot priority.
-	-- The list is the raid, enchanters first by skill (from their replies), then
-	-- everyone else -- the enchanter may be running no Okanvil at all.
+	-- The list is the raid's ENCHANTERS by skill, from every reply of every round
+	-- tonight -- a raider who skipped this round is still an enchanter. The whole
+	-- raid is listed only when nobody has reported Enchanting (the enchanter may be
+	-- running no Okanvil): shown every time, ten names read as "anyone can DE".
 	local function inGroup()
 		local out = {}
 		if GetNumRaidMembers and GetNumRaidMembers() > 0 then
@@ -1438,33 +1440,30 @@ local function ensureBoard()
 	de:SetSize(120, 26)
 	de:SetPoint("LEFT", give, "RIGHT", 8, 0)
 	de.listFn = function()
-		local rec = C_.current
 		local L = Okanvil.Loot
 		local function shown(n) return L and L.ClassColorName and L.ClassColorName(n) or n end
-		local ench, isEnch = {}, {}
-		for name, answers in pairs(rec and rec.replies or {}) do
-			if answers.ench then
-				ench[#ench + 1] = { name = name, skill = answers.ench }
-				isEnch[name] = true
+		local here = {}
+		for _, n in ipairs(inGroup()) do here[n] = true end
+		local skill = {}
+		for _, r in pairs(C_.rounds) do
+			for name, answers in pairs(r.replies or {}) do
+				if answers.ench and here[name] and answers.ench > (skill[name] or 0) then
+					skill[name] = answers.ench
+				end
 			end
 		end
+		local ench = {}
+		for name, s in pairs(skill) do ench[#ench + 1] = { name = name, skill = s } end
 		table.sort(ench, function(a, b) return a.skill > b.skill end)
 		local items = {}
 		for _, e in ipairs(ench) do
 			items[#items + 1] = { text = shown(e.name) .. " |cff8a8d93" .. e.skill .. "|r", value = e.name }
 		end
-		if #ench == 0 then
-			items[#items + 1] = { text = "|cff8a8d93no enchanter answered|r", value = false }
-		end
-		local rest = {}
-		for _, n in ipairs(inGroup()) do
-			if not isEnch[n] then rest[#rest + 1] = n end
-		end
+		if #ench > 0 then return items end
+		items[#items + 1] = { text = "|cff8a8d93no enchanter reported -- whole raid:|r", value = false }
+		local rest = inGroup()
 		table.sort(rest)
-		if #rest > 0 then
-			items[#items + 1] = { text = "|cff8a8d93-- others --|r", value = false }
-			for _, n in ipairs(rest) do items[#items + 1] = { text = shown(n), value = n } end
-		end
+		for _, n in ipairs(rest) do items[#items + 1] = { text = shown(n), value = n } end
 		return items
 	end
 	de.setFn = function(name)
