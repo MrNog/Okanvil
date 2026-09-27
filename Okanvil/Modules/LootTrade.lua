@@ -88,7 +88,18 @@ end
 -- ---- The square in the bags ---------------------------------------------
 -- Bag addons each draw their own buttons, so the button for (bag, slot) is
 -- found per addon: ElvUI names them, AdiBags keeps .bag/.slot on a pooled
--- button, Blizzard's bags number their buttons from the bottom.
+-- button. Blizzard's bags and Bagnon follow the item-button rule that the
+-- button's ID is the slot and its parent's ID the bag (Bagnon also borrows
+-- Blizzard's buttons, which is why both are checked the same way).
+local function templated(b, bag, slot)
+	if not (b and b:IsVisible() and b:GetID() == slot) then return false end
+	local p = b:GetParent()
+	if not (p and p:GetID() == bag) then return false end
+	-- Bagnon can show another character's bags from its cache
+	if b.IsCached and b:IsCached() then return false end
+	return true
+end
+
 local function buttonsFor(bag, slot)
 	local out = {}
 	local elv = _G["ElvUI_ContainerFrameBag" .. bag .. "Slot" .. slot]
@@ -102,12 +113,19 @@ local function buttonsFor(bag, slot)
 		n = n + 1
 	end
 
+	n = 1
+	while true do
+		local b = _G["BagnonItemSlot" .. n]
+		if not b then break end
+		if templated(b, bag, slot) then out[#out + 1] = b end
+		n = n + 1
+	end
+
 	for i = 1, NUM_CONTAINER_FRAMES or 13 do
-		local cf = _G["ContainerFrame" .. i]
-		if cf and cf:IsShown() and cf:GetID() == bag then
-			local size = GetContainerNumSlots(bag) or 0
-			local b = _G["ContainerFrame" .. i .. "Item" .. (size - slot + 1)]
-			if b and b:IsVisible() then out[#out + 1] = b end
+		for j = 1, MAX_CONTAINER_ITEMS or 36 do
+			local b = _G["ContainerFrame" .. i .. "Item" .. j]
+			if not b then break end
+			if templated(b, bag, slot) then out[#out + 1] = b end
 		end
 	end
 	return out
