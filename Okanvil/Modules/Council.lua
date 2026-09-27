@@ -105,6 +105,8 @@ function C_.SetActive(on)
 	-- into next week (see the restore on login).
 	local d = db()
 	d.activeAt = C_.active and time() or nil
+	-- Tell the other officers (their header shows it read-only).
+	if C and C.Send and C_.MayRun() then C.Send("CNIGHT", C_.active and "1" or "0") end
 	-- The mini roll draws a different button row depending on this, so it has to
 	-- be rebuilt rather than waiting for the next natural refresh.
 	if Okanvil.RollMgr and Okanvil.RollMgr.Rebuild then Okanvil.RollMgr.Rebuild() end
@@ -1087,6 +1089,30 @@ if C then
 			C_.ShowRestored(round)
 		end
 	end)
+
+	-- COUNCIL NIGHT, as the master looter has it. Only the ML can switch it, so
+	-- every other officer shows the ML's state in their header, read-only --
+	-- they need to know whether the night is a council night without being able
+	-- to change it. The ML announces each change; anyone opening the page or
+	-- joining asks (CNQ) and the ML answers.
+	local function isML(name)
+		local L = Okanvil.Loot
+		local ml = L and L.MasterLooterName and L.MasterLooterName()
+		return ml and name and ml:gsub("%-.*", ""):lower() == name:gsub("%-.*", ""):lower()
+	end
+	C.On("CNIGHT", function(sender, v)
+		if not isML(sender) or isML(UnitName("player")) then return end
+		C_.remoteNight = (v == "1") and sender:gsub("%-.*", "") or nil
+		if C_._repaintHeader then pcall(C_._repaintHeader) end
+	end)
+	C.On("CNQ", function()
+		if isML(UnitName("player")) then C.Send("CNIGHT", C_.active and "1" or "0") end
+	end)
+end
+
+-- Ask the master looter for the council-night state (their answer is CNIGHT).
+function C_.QueryNight()
+	if C and C.Send then C.Send("CNQ") end
 end
 
 -- ------------------------------------------------------------
@@ -2361,11 +2387,24 @@ function C_.BuildPage(p)
 		footerHeight = 0,
 		-- COUNCIL NIGHT lives in the header, the way PuG's spam switch does: it is
 		-- the state of the whole page, not one more control in the body.
+		-- The master looter switches it; everyone else sees the ML's state.
 		primaryText = function()
+			if not C_.MayRun() then
+				return C_.remoteNight and ("Council night: ON (" .. C_.remoteNight .. ")")
+					or "Council night: OFF"
+			end
 			return C_.active and "Council night: ON" or "Council night: OFF"
 		end,
-		primaryKind = function() return C_.active and "primary" or "secondary" end,
+		primaryKind = function()
+			if not C_.MayRun() then return C_.remoteNight and "primary" or "secondary" end
+			return C_.active and "primary" or "secondary"
+		end,
 		onPrimary = function()
+			if not C_.MayRun() then
+				Okanvil:Print("Loot council: only the master looter switches council night.")
+				C_.QueryNight()
+				return
+			end
 			C_.SetActive(not C_.active)
 			-- Colon: Refresh is a method on the dashboard table.
 			if dashRef and dashRef.Refresh then dashRef:Refresh() end
@@ -2387,6 +2426,13 @@ function C_.BuildPage(p)
 		},
 	})
 	dashRef = dash
+	C_._repaintHeader = function() if dashRef and dashRef.Refresh then dashRef:Refresh() end end
+	-- Opening the page asks the master looter for the council-night state, so an
+	-- officer who joined late does not read OFF on a council night.
+	p:HookScript("OnShow", function()
+		if not C_.MayRun() then C_.QueryNight() end
+		C_._repaintHeader()
+	end)
 	-- The content area is `main` (see W.Dashboard). `body` does not exist, and
 	-- falling back to the raw panel would have drawn under the header strip.
 	-- The body is now the first PILL, not dash.main: the page has tabs, and the
@@ -2814,6 +2860,10 @@ local function mlCheck()
 	local ml = L.MasterLooterName() or ""
 	if ml == lastML then return end
 	lastML = ml
+	-- A new master looter: the old one's council-night state no longer applies.
+	C_.remoteNight = nil
+	if C_._repaintHeader then pcall(C_._repaintHeader) end
+	if ml ~= "" then C_.QueryNight() end
 	local me = UnitName("player")
 	if not sameName(ml, me) then
 		-- Someone else (or nobody) runs the loot now: a question about it is stale.
