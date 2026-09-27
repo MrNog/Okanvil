@@ -340,7 +340,9 @@ function Okanvil:BuildHome()
 				heroic = heroic,
 				title = where .. ((snap.boss or "") ~= "" and ("  |cff8a8d93--|r  " .. snap.boss) or ""),
 				sub = Okanvil.UI.NightStamp(snap.t) .. "   |cff5e6166·|r   " .. (snap.count or 0)
-					.. " players   |cff5e6166·|r   " .. (snap.trigger or ""),
+					.. " players   |cff5e6166·|r   "
+					.. (snap.lockoutId and ("ID " .. snap.lockoutId .. "   |cff5e6166·|r   ") or "")
+					.. (snap.trigger or ""),
 				open = isOpen,
 			})
 
