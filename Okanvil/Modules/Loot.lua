@@ -2336,6 +2336,17 @@ function L.RollIsOpen()
 	return L.HandRollDrop() ~= nil
 end
 
+-- The drop a chat roll would land on right now, or nil: the called item while its
+-- call is live, else the item the ML opened for rolls. The mini roll marks it
+-- "rolling".
+function L.RollTargetDrop()
+	if externalRollDrop then
+		local since = externalRollLastAt > externalRollAt and externalRollLastAt or externalRollAt
+		if (GetTime() - since) <= EXTERNAL_ROLL_WINDOW then return externalRollDrop end
+	end
+	return L.HandRollDrop()
+end
+
 -- The raider's roll buttons. Loot showing up in the mini roll is not a roll call:
 -- raiders saw the drop, clicked MS, and rolled before the ML had called anything
 -- -- rolls that counted for nothing and read as a roll-off that had started.

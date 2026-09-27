@@ -1134,6 +1134,22 @@ function C_.AskEnchanters()
 	if mine then C_.enchanters[UnitName("player")] = mine end
 end
 
+-- Is this item in a council round that is still open and not yet given? The
+-- mini roll marks such an item "asked".
+function C_.IsAsked(id)
+	if not id then return false end
+	for _, rec in pairs(C_.rounds or {}) do
+		if not rec.closed then
+			for i, link in ipairs(rec.items or {}) do
+				if Okanvil.U.itemIDFromLink(link) == id and not (rec.awarded and rec.awarded[i]) then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
 -- Ask the master looter for the council-night state (their answer is CNIGHT).
 function C_.QueryNight()
 	if C and C.Send then C.Send("CNQ") end
