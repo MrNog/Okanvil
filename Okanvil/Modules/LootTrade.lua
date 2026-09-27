@@ -246,12 +246,32 @@ local function fillTrade()
 	end
 end
 
+-- Equipping an owed item is keeping it: it comes off the list for good, so
+-- taking it off again later does not bring the square back.
+local function forgetEquipped()
+	local list = owed()
+	if #list == 0 then return end
+	local worn = {}
+	for slot = 1, 19 do
+		local id = GetInventoryItemID("player", slot)
+		if id then worn[id] = true end
+	end
+	local changed = false
+	for i = #list, 1, -1 do
+		if worn[list[i].id] then table.remove(list, i); changed = true end
+	end
+	if changed then T.Refresh() end
+end
+
 local ev = CreateFrame("Frame")
+ev:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 ev:RegisterEvent("TRADE_SHOW")
 ev:RegisterEvent("TRADE_CLOSED")
 ev:RegisterEvent("UI_INFO_MESSAGE")
 ev:SetScript("OnEvent", function(_, event, msg)
-	if event == "TRADE_SHOW" then
+	if event == "PLAYER_EQUIPMENT_CHANGED" then
+		forgetEquipped()
+	elseif event == "TRADE_SHOW" then
 		partner = short(UnitName("NPC"))
 		before = {}
 		for _, e in ipairs(owed()) do before[e.id] = countOf(e.id) end
