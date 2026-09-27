@@ -192,7 +192,7 @@ function Okanvil:BuildShell()
 		  open = function() Okanvil:ShowPanel("Okanvil-PuG") end },
 		{ label = "Council night", mod = "__council",
 		  on = function() return Okanvil.Council and Okanvil.Council.active end,
-		  open = function() Okanvil:ShowPanel("__council") end },
+		  open = function() Okanvil:OpenLootTab("council") end },
 		{ label = "Farming",       mod = "Okanvil-Farm",
 		  on = function() return Okanvil.Farm and Okanvil.Farm.IsRunning and Okanvil.Farm.IsRunning() end,
 		  open = function() Okanvil:ShowPanel("Okanvil-Farm") end },
@@ -457,9 +457,9 @@ Okanvil.NATIVE = {
 	{ key = "__loot",   title = "Loot",   icon = Okanvil.ICONS.loot,
 	  desc = "Per-boss loot tracking + Mini Roll Manager (MS/OS roll-offs, award, speed-run sweep)." },
 	-- The raider only ever sees a popup; the officer board is its own window. The
-	-- PAGE is where the council is configured and where a round is started by hand
-	-- -- the settings a master looter wants before the pull, not during it.
-	{ key = "__council", title = "Loot Council", icon = Okanvil.ICONS.council, officerOnly = true,
+	-- council has no page of its own: its settings are the Council tab of the Loot
+	-- page (noNav), so Loot and Loot Council are no longer two look-alike entries.
+	{ key = "__council", title = "Loot Council", icon = Okanvil.ICONS.council, noNav = true,
 	  desc = "Ask the raid what an item is worth to them, then award it. Off = no popups, "
 	      .. "no comms handlers, and the proficiency tables are released." },
 }
@@ -506,9 +506,9 @@ end
 Okanvil.NAV_GROUPS = {
 	{ section = nil,      items = { "Home" } },
 	{ section = "RAID",   items = { "Loot", "Notes", "Raid Finder", "PuG" } },
-	-- Loot Council under GUILD, not RAID: what it configures is the guild's own
-	-- loot rules and its priority ladder, which outlive any one raid night.
-	{ section = "GUILD",  items = { "Recruit", "Loot Council" } },
+	-- Loot Council is not here: it is the Council and Priority tabs of Loot.
+	-- GUILD keeps its header for the guild tools still to come.
+	{ section = "GUILD",  items = { "Recruit" } },
 	-- Modules and Settings last: neither is a feature, they are what the addon
 	-- has and how it behaves. Settings is the very last row -- see below, where
 	-- anything unnamed is appended BEFORE it rather than after.
@@ -820,10 +820,22 @@ function Okanvil:OpenSettingsTab(tab)
 	if fill and fill.dash and fill.dash.OpenPage then fill.dash.OpenPage(tab) end
 end
 
+-- Same for the Loot page's tabs (Loot / Council / Priority). A raider's Loot
+-- page has no tabs, so asking for one just shows the page.
+function Okanvil:OpenLootTab(tab)
+	if not self.win or not self.win:IsShown() then self:Toggle() end
+	self:ShowPanel(LOOT)
+	local fill = self.panels[LOOT]
+	if fill and fill.dash and fill.dash.OpenPage then fill.dash.OpenPage(tab) end
+end
+
 function Okanvil:ShowPanel(key)
 	-- Invite was a page; its settings are a Settings tab now. A window last
 	-- closed on it, or an old shortcut, lands there instead of on a blank page.
 	if key == "__invite" then return self:OpenSettingsTab("invite") end
+	-- The Loot Council page is the Council tab of the Loot page now; an old
+	-- shortcut or a window last closed on it lands there.
+	if key == COUNCIL then return self:OpenLootTab("council") end
 	self:CloseDropdown()
 	self:ClearAllFocus()          -- switching pages releases any text-box focus
 	for _, b in ipairs(self._navButtons) do
@@ -846,11 +858,6 @@ function Okanvil:ShowPanel(key)
 		elseif key == LOOT then entry = self:BuildLoot()
 		elseif key == SETTINGS then entry = self:BuildSettings()
 		elseif key == MODULES then entry = self:BuildModules()
-		elseif key == COUNCIL then
-			entry = newFillPanel()
-			if Okanvil.Council and Okanvil.Council.BuildPage then
-				Okanvil.Council.BuildPage(entry.child)
-			end
 		else
 			local plug = self.entries[key]
 			if plug and plug.build then

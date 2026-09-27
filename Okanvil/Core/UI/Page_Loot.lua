@@ -13,75 +13,130 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
--- Three pills, and the first one IS the page you land on -- the same switch the
--- Home page uses for Online/Snapshots. What used to be here as well, and is not
--- any more: Messages and the capture settings, which are configuration and now
--- live in Settings > Loot, where every other module's settings are.
+-- ONE page for loot. It used to be two -- Loot and Loot Council -- with names
+-- close enough that the master looter could not tell which to open. Now:
+--   Loot      what dropped and who got it, with the speed-run fields and the
+--             soft reserves on top (everyone; the page's only view for raiders)
+--   Council   the loot council's settings (officers)
+--   Priority  the ladder pasted from the site (officers)
+-- Neither page is used DURING the raid: that is the mini roll, which the header
+-- opens. Council night is a header button too -- it is the state of the night,
+-- not a setting inside a tab.
 --
--- The Prio pill is officer material, so for everyone else it is not built at all
--- rather than built and refused: a tab that only exists to say "not for you" is a
--- worse page for the raider and tells them nothing they can act on.
--- ONE page, no pills. Collectors is three fields armed at the start of a raid
--- and the history is the list you read for the rest of it -- two clicks apart
--- for no reason. The fields go on top, the list takes the rest of the window.
---
--- The Prio ladder moved to Loot Council: that is the council's decision about
--- who SHOULD get an item, while this page records who DID.
+-- Officer or not is read once, at build: the shell rebuilds this page when the
+-- guild roster changes the answer (InvalidatePanel(LOOT)).
 function Okanvil:BuildLoot()
 	local L = Okanvil.Loot
+	local CC = Okanvil.Council
 	local fill = newFillPanel()
 	local host = fill.child
 	Okanvil._lootFill = fill   -- set BEFORE the tab builders run (they read it)
+	local officer = Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() and true or false
 
-	-- Dashboard shell: header (icon + title + ML status + CTA), three pills, no
-	-- drawer and no footer -- so a page gets the window's full width.
+	-- The loot view: collectors on top, then the history list filling what is
+	-- left. The collectors block is a fixed height, so the history can anchor to
+	-- its bottom and still track the window.
+	local function buildBody(main)
+		local top = W.Frame(main, "page")
+		top:SetPoint("TOPLEFT", 0, 0)
+		top:SetPoint("TOPRIGHT", 0, 0)
+		top:SetHeight(128)
+		Okanvil:Loot_BuildCollectors(top)
+
+		-- The speed-run master-loot block is for officers, and for whoever is master
+		-- looter right now (a pug leader sweeping loot). Everyone else sees only the
+		-- history, which moves up to take the space.
+		local function applyTop()
+			local show = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio())
+				or (L.IsMasterLooter and L.IsMasterLooter())
+			local on = L.CollectorsEnabled and L.CollectorsEnabled()
+			if top.fields then if on then top.fields:Show() else top.fields:Hide() end end
+			if show then top:Show(); top:SetHeight(on and 148 or 50) else top:Hide(); top:SetHeight(1) end
+		end
+		applyTop()
+		fill.applyTop = applyTop
+		top.onToggle = applyTop
+
+		-- Soft reserves: one line when closed, the paste box when open. Shown to
+		-- everyone -- in a pug the master looter is whoever the leader picked.
+		local srp = W.Frame(main, "page")
+		srp:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
+		srp:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -4)
+		Okanvil:Loot_BuildSoftRes(srp)
+
+		local hist = W.Frame(main, "page")
+		hist:SetPoint("TOPLEFT", srp, "BOTTOMLEFT", 0, -14)
+		hist:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", 0, 0)
+		Okanvil:Loot_BuildHistory(hist)
+	end
+
+	local tabs
+	if officer then
+		tabs = {
+			{ key = "loot", label = "Loot", height = 400, fill = true, build = buildBody },
+			{ key = "council", label = "Council", height = 400, fill = true,
+			  build = function(pg)
+				if CC and CC.BuildRunTab then CC.BuildRunTab(pg) end
+			  end },
+			{ key = "prio", label = "Priority", height = 400, fill = true,
+			  build = function(pg) Okanvil:Loot_BuildPrio(pg) end },
+		}
+	end
+
+	local function takeML()
+		if not (L and L.SetMeAsMasterLooter) then return end
+		local function take()
+			local r = L.SetMeAsMasterLooter()
+			if r == "nogroup" then
+				Okanvil:Print("|cffff5555You're not in a party or raid -- nothing to set.|r")
+			elseif r == "notleader" then
+				Okanvil:Print("|cffff5555Only the group leader can set the loot method.|r")
+			elseif r == "noapi" then
+				Okanvil:Print("|cffff5555SetLootMethod unavailable.|r")
+			else
+				Okanvil:Print("Loot method set to |cff7cfc8amaster|r -- you are the Master Looter.")
+			end
+			if fill and fill.refreshAll then fill.refreshAll() end
+		end
+		-- Someone else already holds master loot: taking it mid-raid is almost
+		-- always a misclick by a second officer, so it asks first.
+		local who = L.MasterLooterName and L.MasterLooterName()
+		if who and who ~= "" then
+			Okanvil:Confirm("|cffffd200" .. who .. "|r is the master looter.\n"
+				.. "Take master loot from them?", "Take master loot", take)
+		else
+			take()
+		end
+	end
+
+	-- Dashboard shell: header (icon + title + ML status + buttons), no drawer and
+	-- no footer -- so a page gets the window's full width.
 	local dash = W.Dashboard(host, {
 		title = "Loot",
-		subtitle = "What dropped, per boss, and who got it",
+		subtitle = "Set up before the raid. During it, use the mini roll.",
 		icon = Okanvil.ICONS.loot,
-		-- No COLLECTED drawer. It was a per-person tally of what the speed-run had
-		-- handed out, in a column beside the page with a Show/Hide button on the
-		-- toolbar -- a column of numbers nobody opened, costing every page 200px of
-		-- width and the toolbar a button.
 		drawerWidth = 0,
 		footerHeight = 0,
-		primaryText = function() return "Mini Roll Manager" end,
+		primaryText = function() return "Open mini roll" end,
 		onPrimary = function()
 			if Okanvil.RollMgr and Okanvil.RollMgr.Toggle then Okanvil.RollMgr.Toggle()
 			else Okanvil:Print("Roll manager not loaded.") end
 		end,
-		-- "Set me as ML" -- only shown when you're the leader and NOT already ML.
-		secondaryText = function() return "Set me as ML" end,
-		secondaryWidth = 110,
+		-- Council night: officers, with the council module on.
+		secondaryText = function() return (CC and CC.NightText and CC.NightText()) or "" end,
+		secondaryWidth = 170,
 		secondaryShown = function()
+			return officer and CC and CC.Enabled and CC.Enabled() and true or false
+		end,
+		onSecondary = function() if CC and CC.NightClick then CC.NightClick() end end,
+		-- "Set me as ML" -- only shown when you're the leader and NOT already ML.
+		tertiaryText = function() return "Set me as ML" end,
+		tertiaryWidth = 110,
+		tertiaryShown = function()
 			if not (L and L.CanSetLootMethod and L.CanSetLootMethod()) then return false end
 			return not (L.IsMasterLooter and L.IsMasterLooter())
 		end,
-		onSecondary = function()
-			if not (L and L.SetMeAsMasterLooter) then return end
-			-- Someone else already holds master loot: taking it mid-raid is almost
-			-- always a misclick by a second officer, so it asks first.
-			local function take()
-				local r = L.SetMeAsMasterLooter()
-				if r == "nogroup" then
-					Okanvil:Print("|cffff5555You're not in a party or raid -- nothing to set.|r")
-				elseif r == "notleader" then
-					Okanvil:Print("|cffff5555Only the group leader can set the loot method.|r")
-				elseif r == "noapi" then
-					Okanvil:Print("|cffff5555SetLootMethod unavailable.|r")
-				else
-					Okanvil:Print("Loot method set to |cff7cfc8amaster|r -- you are the Master Looter.")
-				end
-				if fill and fill.refreshAll then fill.refreshAll() end
-			end
-			local who = L.MasterLooterName and L.MasterLooterName()
-			if who and who ~= "" then
-				Okanvil:Confirm("|cffffd200" .. who .. "|r is the master looter.\n"
-					.. "Take master loot from them?", "Take master loot", take)
-			else
-				take()
-			end
-		end,
+		onTertiary = takeML,
 		statusText = function()
 			if L and L.IsMasterLooter and L.IsMasterLooter() then
 				return "|cff7cfc8aMaster Looter|r"
@@ -94,51 +149,19 @@ function Okanvil:BuildLoot()
 			end
 			return "|cffff5555not master loot|r"
 		end,
-		-- pills: the tabs switch one shared body instead of covering a landing page,
-		-- so there is no "< Back" and the switch never leaves the screen
-		-- No tabs: the page is one body now (see below).
+		-- Officers get the three tabs as pills over one body; everyone else gets
+		-- the loot view alone, with no tab row.
+		pills = officer or nil,
+		tabs = tabs,
+		-- The Council tab repaints the header while it is being built.
+		onReady = function(d) fill.dash = d end,
 	})
 	fill.dash = dash
-
-	-- ONE body: collectors on top, then the history list filling what is left.
-	-- The collectors block is a fixed height, so the history can anchor to its
-	-- bottom and still track the window.
-	local main = dash.main
-	local top = W.Frame(main, "page")
-	top:SetPoint("TOPLEFT", 0, 0)
-	top:SetPoint("TOPRIGHT", 0, 0)
-	top:SetHeight(128)
-	Okanvil:Loot_BuildCollectors(top)
-
-	-- The speed-run master-loot block is for officers, and for whoever is master
-	-- looter right now (a pug leader sweeping loot). Everyone else sees only the
-	-- history, which moves up to take the space.
-	local function applyTop()
-		local show = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio())
-			or (L.IsMasterLooter and L.IsMasterLooter())
-		local on = L.CollectorsEnabled and L.CollectorsEnabled()
-		if top.fields then if on then top.fields:Show() else top.fields:Hide() end end
-		if show then top:Show(); top:SetHeight(on and 148 or 50) else top:Hide(); top:SetHeight(1) end
-	end
-	applyTop()
-	fill.applyTop = applyTop
-	top.onToggle = applyTop
-
-	-- Soft reserves: one line when closed, the paste box when open. Shown to
-	-- everyone -- in a pug the master looter is whoever the leader picked.
-	local srp = W.Frame(main, "page")
-	srp:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
-	srp:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -4)
-	Okanvil:Loot_BuildSoftRes(srp)
-
-	local hist = W.Frame(main, "page")
-	hist:SetPoint("TOPLEFT", srp, "BOTTOMLEFT", 0, -14)
-	hist:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", 0, 0)
-	Okanvil:Loot_BuildHistory(hist)
+	if not officer then buildBody(dash.main) end
 
 	-- refresh when loot changes / the page shows / loot method changes
 	local function refreshAll()
-		applyTop()
+		if fill.applyTop then fill.applyTop() end
 		dash:Refresh()
 		if fill._rebuildHistory then fill._rebuildHistory() end
 	end
@@ -169,7 +192,12 @@ function Okanvil:BuildLoot()
 			end
 		end)
 	end
-	fill:SetScript("OnShow", refreshAll)
+	fill:SetScript("OnShow", function()
+		-- An officer who is not the ML asks the ML for the council-night state,
+		-- so joining late does not read OFF on a council night.
+		if officer and CC and CC.MayRun and not CC.MayRun() and CC.QueryNight then CC.QueryNight() end
+		refreshAll()
+	end)
 	Okanvil._lootFill = fill
 	return fill
 end

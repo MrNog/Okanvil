@@ -113,6 +113,7 @@ function C_.SetActive(on)
 	-- The mini roll draws a different button row depending on this, so it has to
 	-- be rebuilt rather than waiting for the next natural refresh.
 	if Okanvil.RollMgr and Okanvil.RollMgr.Rebuild then Okanvil.RollMgr.Rebuild() end
+	if C_._repaintHeader then pcall(C_._repaintHeader) end
 	Okanvil:Print(C_.active
 		and "|cffe0b860Loot council:|r ON for this session -- the mini roll now has a Council row."
 		or  "|cffe0b860Loot council:|r off -- the mini roll is back to plain rolls.")
@@ -2416,75 +2417,40 @@ function C_.OpenPicker()
 end
 
 -- ============================================================
--- THE PAGE (nav: RAID > Loot Council).
+-- COUNCIL NIGHT in the Loot page header.
 --
--- Settings a master looter wants BEFORE the pull, not during it. The round
--- itself happens in the two floating windows -- this page is where the council
--- is configured and where a round can be started by hand.
+-- The council has no page of its own any more: its settings and the priority
+-- ladder are tabs of the Loot page, and council night is a button in that
+-- page's header. These three are what the button reads and does.
+-- The master looter switches it; everyone else sees the ML's state.
 -- ============================================================
-local dashRef            -- the page's Dashboard, so the header CTA can repaint
+function C_.NightText()
+	if not C_.MayRun() then
+		return C_.remoteNight and ("Council night: ON (" .. C_.remoteNight .. ")")
+			or "Council night: OFF"
+	end
+	return C_.active and "Council night: ON" or "Council night: OFF"
+end
 
-function C_.BuildPage(p)
-	local dash
-	dash = W.Dashboard(p, {
-		icon  = (Okanvil.ICONS and Okanvil.ICONS.council) or "Interface\\Icons\\INV_Misc_Tournaments_Banner_Orc",
-		title = "Loot Council",
-		subtitle = "Officers only -- raiders just see the popup",
-		drawerWidth = 0,      -- no side list: this page is one column of settings
-		footerHeight = 0,
-		-- COUNCIL NIGHT lives in the header, the way PuG's spam switch does: it is
-		-- the state of the whole page, not one more control in the body.
-		-- The master looter switches it; everyone else sees the ML's state.
-		primaryText = function()
-			if not C_.MayRun() then
-				return C_.remoteNight and ("Council night: ON (" .. C_.remoteNight .. ")")
-					or "Council night: OFF"
-			end
-			return C_.active and "Council night: ON" or "Council night: OFF"
-		end,
-		primaryKind = function()
-			if not C_.MayRun() then return C_.remoteNight and "primary" or "secondary" end
-			return C_.active and "primary" or "secondary"
-		end,
-		onPrimary = function()
-			if not C_.MayRun() then
-				Okanvil:Print("Loot council: only the master looter switches council night.")
-				C_.QueryNight()
-				return
-			end
-			C_.SetActive(not C_.active)
-			-- Colon: Refresh is a method on the dashboard table.
-			if dashRef and dashRef.Refresh then dashRef:Refresh() end
-		end,
-		-- Tabs: the settings page, and the priority ladder moved over from Loot.
-		pills = true,
-		tabs = {
-			{ key = "run",  label = "Round",   height = 400, fill = true,
-			  build = function(pg) C_.BuildRunTab(pg) end },
-			{ key = "prio", label = "Priority", height = 400, fill = true,
-			  build = function(pg)
-				if Okanvil.LootPrio and Okanvil.LootPrio.BuildTab then
-					Okanvil.LootPrio.BuildTab(pg)
-				else
-					local t = W.Text(pg, "Loot priority module not loaded.", "label", "dim")
-					t:SetPoint("TOPLEFT", 8, -8)
-				end
-			  end },
-		},
-	})
-	dashRef = dash
-	C_._repaintHeader = function() if dashRef and dashRef.Refresh then dashRef:Refresh() end end
-	-- Opening the page asks the master looter for the council-night state, so an
-	-- officer who joined late does not read OFF on a council night.
-	p:HookScript("OnShow", function()
-		if not C_.MayRun() then C_.QueryNight() end
-		C_._repaintHeader()
-	end)
-	-- The content area is `main` (see W.Dashboard). `body` does not exist, and
-	-- falling back to the raw panel would have drawn under the header strip.
-	-- The body is now the first PILL, not dash.main: the page has tabs, and the
-	-- round controls are one of them.
-	return p
+function C_.NightKind()
+	if not C_.MayRun() then return C_.remoteNight and "primary" or "secondary" end
+	return C_.active and "primary" or "secondary"
+end
+
+function C_.NightClick()
+	if not C_.MayRun() then
+		Okanvil:Print("Loot council: only the master looter switches council night.")
+		C_.QueryNight()
+		return
+	end
+	C_.SetActive(not C_.active)
+	C_._repaintHeader()
+end
+
+-- Repaint whatever header shows council night: the Loot page, when built.
+C_._repaintHeader = function()
+	local fill = Okanvil._lootFill
+	if fill and fill.dash and fill.dash.Refresh then fill.dash:Refresh() end
 end
 
 -- The "Round" tab: how a round is started, and the settings that shape it.
@@ -3067,7 +3033,7 @@ do
 		-- rows with no name or icon.
 		-- Every automatic council option is opt-in. They used to default ON, so
 		-- installs that already saved them are switched off once; anyone who
-		-- wants one turns it back on on the Loot Council page.
+		-- wants one turns it back on in the Council tab of the Loot page.
 		do
 			local d = db()
 			if not d._autoOffV1 then
@@ -3383,8 +3349,8 @@ _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 		for l in raw:gmatch("|c%x+|Hitem:.-|h.-|h|r") do links[#links + 1] = l end
 		if #links == 0 then
 			Okanvil:Print("Usage: /okcouncil ask [shift-click one or more items]")
-			Okanvil:Print("  |cff8a8d93For more than ~3 items use the Pick items button on the "
-				.. "Loot Council page -- the chat box truncates longer lines.|r")
+			Okanvil:Print("  |cff8a8d93For more than ~3 items use Ask several items in the "
+				.. "mini roll -- the chat box truncates longer lines.|r")
 			return
 		end
 		C_.Ask(links, "")
