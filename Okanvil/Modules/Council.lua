@@ -2197,6 +2197,9 @@ function C_.OpenPicker()
 	-- night this feature is for.
 	local ml = L.MasterLooterName and L.MasterLooterName()
 	local function undecided(dp)
+		-- Awarded or disenchanted is decided, whoever it went to -- the ML
+		-- included, which the name test below cannot tell from "still holding".
+		if dp.awarded or dp.de then return false end
 		if dp.heldBy and dp.heldBy ~= "" and (not dp.receivedBy or dp.receivedBy == "") then
 			return true
 		end
@@ -2209,7 +2212,8 @@ function C_.OpenPicker()
 	for _, grp in ipairs(L.DropsByBoss() or {}) do
 		for _, dp in ipairs(grp.items or {}) do
 			if undecided(dp) then
-				rows[#rows + 1] = { dp = dp, boss = grp.boss or dp.boss or "" }
+				local wn = L.RollWinner and L.RollWinner(dp)
+				rows[#rows + 1] = { dp = dp, boss = grp.boss or dp.boss or "", rolled = wn and wn.player }
 			end
 		end
 	end
@@ -2300,11 +2304,13 @@ function C_.OpenPicker()
 			r._dp, r._boss = dp, row.boss
 			-- Everything undecided starts ticked: the common case is "ask about
 			-- what just dropped", and unticking two is less work than ticking six.
-			r._on = true
+			-- An item already rolled on starts unticked: it has a winner waiting
+			-- to be handed it, and asking again would be a second decision.
+			r._on = not row.rolled
 			-- Plain "x": SetKind("primary") already paints the label dark on gold,
 			-- and a |cff green on top of that is unreadable.
-			r.tick:SetKind("primary")
-			r.tick.text:SetText("x")
+			r.tick:SetKind(r._on and "primary" or "secondary")
+			r.tick.text:SetText(r._on and "x" or "")
 
 			local link = dp.item or ""
 			local nm, _, q = GetItemInfo(link ~= "" and link or dp.id)
@@ -2314,7 +2320,8 @@ function C_.OpenPicker()
 			local hex = (q and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q])
 				and ("|c" .. ITEM_QUALITY_COLORS[q].hex:gsub("^|c", "")) or "|cffffffff"
 			r.label:SetText(("%s%s|r  |cff8a8d93%s|r"):format(
-				hex, nm or dp.name or ("item " .. tostring(dp.id)), row.boss))
+				hex, nm or dp.name or ("item " .. tostring(dp.id)), row.boss)
+				.. (row.rolled and ("  |cffffd200rolled: " .. row.rolled .. "|r") or ""))
 			r:Show()
 		end
 	end
@@ -2445,8 +2452,9 @@ function C_.BuildRunTab(body)
 	if not canSeeBoard() then testB:Hide() end
 
 	-- ---- options ------------------------------------------------------
-	-- One button tall now, not two.
-	local y = -14 - (BH + 6) - 16
+	-- One button tall now, not two. The gap above the heading matches the one
+	-- between its rule and the first row, so OPTIONS does not sit on the text.
+	local y = -14 - (BH + 6) - 30
 	y = W.Section(body, "OPTIONS", 14, y) - 8
 
 	-- One setting per row: title, what it does, ON / OFF (see W.ToggleRow).
@@ -2524,17 +2532,57 @@ function C_.Test(num)
 	num = tonumber(num) or 3
 	if num < 1 then num = 1 elseif num > 8 then num = 8 end
 
-	-- Everything currently equipped, slots 1-18.
+	-- With a soft-reserve list loaded, test with the reserved items so the [SR]
+	-- tags, the blocked MS rolls and the roll call all show up. Otherwise,
+	-- everything currently equipped, slots 1-18.
 	local pool = {}
-	for slot = 1, 18 do
-		local id = GetInventoryItemID and GetInventoryItemID("player", slot)
-		if id then pool[#pool + 1] = id end
+	local srd = Okanvil.db.softres
+	if srd and srd.items then
+		local cold = 0
+		for id in pairs(srd.items) do
+			if GetItemInfo(id) then
+				pool[#pool + 1] = id
+			else
+				-- never seen on this client: ask the server, it is ready next press
+				cold = cold + 1
+				if Okanvil.WarmItem then Okanvil:WarmItem(id) end
+			end
+		end
+		if #pool == 0 and cold > 0 then
+			Okanvil:Print("|cffe0b860[TEST]|r loading the " .. cold
+				.. " soft-reserved item(s) -- press Test again in a second.")
+			return
+		end
+	end
+	if #pool == 0 then
+		for slot = 1, 18 do
+			local id = GetInventoryItemID and GetInventoryItemID("player", slot)
+			if id then pool[#pool + 1] = id end
+		end
 	end
 	if #pool == 0 then pool = TEST_FALLBACK end
+
+	-- One piece of gear from the BAGS as well, first in the list. Equipped items
+	-- are not in the bags, so awarding one could never show the "owed by trade"
+	-- square; this one can.
+	local bagItem
+	for bag = 0, 4 do
+		for slot = 1, (GetContainerNumSlots(bag) or 0) do
+			local link = GetContainerItemLink(bag, slot)
+			local q
+			if link then q = select(3, GetItemInfo(link)) end
+			if q and q >= 4 and IsEquippableItem(link) then
+				bagItem = tonumber(link:match("item:(%d+)"))
+				break
+			end
+		end
+		if bagItem then break end
+	end
 
 	-- Distinct items where possible: asking about the same ring twice tests
 	-- nothing the first one did not.
 	local picked, seen = {}, {}
+	if bagItem then picked[1] = bagItem; seen[bagItem] = true end
 	local guard = 0
 	while #picked < num and guard < 200 do
 		guard = guard + 1
@@ -2645,6 +2693,7 @@ function C_.TestOff()
 		if L.WorldTest then L.WorldTest(false) end
 	end
 	C_.testPrevWorld = nil
+	if Okanvil.Trade then Okanvil.Trade.ClearTest() end
 	local dOff = db()
 	dOff.testAt, dOff.testWho = nil, nil
 	-- A test switched council night ON to get the mini roll row. Ending the test
@@ -3123,6 +3172,26 @@ function C_.RestoreAsk()
 				C_.RepaintBoard()
 			end,
 		})
+
+		-- ASK AGAIN. Whatever arrived during the loading screen was dropped: an
+		-- addon message is never queued for a client that is reloading. Every
+		-- other client answers a repeat of the round by sending its answers and
+		-- its votes again, so re-asking is what brings them back. The repeats the
+		-- round was running before the reload died with it, hence restarting them.
+		-- Twice only: every repeat makes each raider answer again, so the first
+		-- brings back what the loading screen lost and the second covers one
+		-- message that went missing.
+		local round, payload = s.round, rec.payload
+		local function resend(n)
+			if n > 2 then return end
+			C.After(n == 1 and 3 or 17, function()
+				local r = C_.rounds[round]
+				if not r or r.closed or r ~= C_.current then return end
+				C.ReAsk(round, payload)
+				resend(n + 1)
+			end)
+		end
+		resend(1)
 	end
 
 	if canSeeBoard() then

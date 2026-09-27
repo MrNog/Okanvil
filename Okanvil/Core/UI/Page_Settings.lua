@@ -356,7 +356,7 @@ end
 -- Its own window, so it can stay open while replies trickle in and the Settings
 -- page can be closed. One shared frame, rebuilt rows on every repaint.
 local verDlg
-local DOWNLOAD_URL = "github.com/MrNog/Okanvil/releases/latest"
+local DOWNLOAD_URL = Okanvil.DOWNLOAD_URL
 function Okanvil:ShowVersionChecker()
 	local f = verDlg
 	if not f then

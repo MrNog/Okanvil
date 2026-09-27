@@ -1269,52 +1269,17 @@ function Okanvil:ShowMinimapTip(owner)
 
 	-- ---------- the grid ----------
 	local LO = self.Lockouts
-	local toons = LO and LO:Get() or {}
+	local toons, raidOrder, cell, sizes, soonest
+	if LO and LO.Grid then toons, raidOrder, cell, sizes, soonest = LO:Grid() else toons = {} end
 	if #toons > 0 then
 		y = y - 8
 		local hdr = line("|cffc0943aSaved raids|r", TIP_FONT)
 		hdr:ClearAllPoints(); hdr:SetPoint("TOPLEFT", TIP_PAD, y)
 		y = y - TIP_ROW_H - 2
 
-		-- Collect the distinct raids (rows) and the raid SIZES actually in use.
-		-- cell[raid][toon][size] = true  -- a toon can be saved to the same raid at
-		-- two sizes (10 AND 25), which is why size is a dimension and not a string.
-		local raidOrder, cell, sizeSeen = {}, {}, {}
-		local soonest
-		for _, toon in ipairs(toons) do
-			for _, inst in ipairs(toon.instances) do
-				if not cell[inst.name] then
-					cell[inst.name] = {}
-					raidOrder[#raidOrder + 1] = inst.name
-				end
-				-- The label carries the difficulty, not just the size: a 25 normal and a
-				-- 25 heroic are different lockouts and must not share a cell. "25H" /
-				-- "10H" sorts after the plain size, which is the order we want.
-				local n = (inst.players and inst.players > 0) and inst.players or 0
-				local size = inst.heroic and (n .. "H") or tostring(n)
-				cell[inst.name][toon.name] = cell[inst.name][toon.name] or {}
-				cell[inst.name][toon.name][size] = true
-				sizeSeen[size] = true
-				if not soonest or inst.resets < soonest then soonest = inst.resets end
-			end
-		end
-		table.sort(raidOrder)
-
-		-- Sizes become FIXED sub-columns, ascending: 10H | 25 | 25H. This is what makes
-		-- the grid line up -- a lone "25" lands in the 25-column, directly under every
-		-- other 25, instead of drifting into a merged cell.
-		--
-		-- Sorted by the NUMBER first, then normal before heroic. A plain table.sort on
-		-- the strings would order them lexically, which puts "10H" before "10" and
-		-- breaks as soon as a label reaches two digits.
-		local sizes = {}
-		for s in pairs(sizeSeen) do sizes[#sizes + 1] = s end
-		table.sort(sizes, function(a, b)
-			local na = tonumber(a:match("%d+")) or 0
-			local nb = tonumber(b:match("%d+")) or 0
-			if na ~= nb then return na < nb end
-			return (a:find("H") == nil) and (b:find("H") ~= nil)
-		end)
+		-- Sizes are FIXED sub-columns, ascending: 10H | 25 | 25H (see Lockouts:Grid).
+		-- That is what makes the grid line up -- a lone "25" lands in the 25-column,
+		-- directly under every other 25, instead of drifting into a merged cell.
 
 		local probe = tip.probe
 		probe:SetFont(Okanvil:Font(), TIP_FONT)

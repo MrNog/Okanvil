@@ -364,6 +364,74 @@ local verRunning = false
 C.VersionReplies = function() return verReplies end
 C.VersionCheckRunning = function() return verRunning end
 
+Okanvil.DOWNLOAD_URL = "github.com/MrNog/Okanvil/releases/latest"
+
+-- "1.2.10" -> {1, 2, 10}; nil for anything that is not dotted numbers (a local
+-- "dev" build, "?"), so an unreadable version never tells anyone to update.
+local function verParts(v)
+	v = tostring(v or ""):match("^v?([%d%.]+)$")
+	if not v then return nil end
+	local out = {}
+	for n in v:gmatch("%d+") do out[#out + 1] = tonumber(n) end
+	return #out > 0 and out or nil
+end
+
+-- true when a is an older release than b; false when either is unreadable
+local function verOlder(a, b)
+	local pa, pb = verParts(a), verParts(b)
+	if not (pa and pb) then return false end
+	for i = 1, math.max(#pa, #pb) do
+		local x, y = pa[i] or 0, pb[i] or 0
+		if x ~= y then return x < y end
+	end
+	return false
+end
+C.VersionOlder = verOlder
+
+-- ------------------------------------------------------------
+-- "New version" toast: top-middle of the screen, 5 seconds, then fades. Only
+-- the player who ran the version check sees it, and only when the check found
+-- a newer build than theirs. Nobody else is ever told: some raiders run addons
+-- only because the guild asks for loot, and an unasked nag is spam to them.
+-- ------------------------------------------------------------
+local TOAST_SECS = 5
+local verToast
+
+local function showUpdateToast(newest)
+	local W = Okanvil.W
+	if not W then return end
+	local f = verToast
+	if not f then
+		f = W.Frame(UIParent, "raise")
+		f:SetFrameStrata("DIALOG")
+		f:SetSize(420, 58)
+		f:SetPoint("TOP", UIParent, "TOP", 0, -120)
+		f:EnableMouse(false)
+		f.title = W.Text(f, "", "head", "accent")
+		f.title:SetPoint("TOP", 0, -10)
+		f.body = W.Text(f, "", "body")
+		f.body:SetPoint("TOP", f.title, "BOTTOM", 0, -6)
+		f:SetScript("OnUpdate", function(self, elapsed)
+			self._left = (self._left or 0) - elapsed
+			if self._left <= 0 then
+				self:Hide()
+			elseif self._left < 1 then
+				self:SetAlpha(self._left)          -- fade out over the last second
+			end
+		end)
+		verToast = f
+	end
+	f.title:SetText(("Okanvil %s is available"):format(newest))
+	f.body:SetText(("You have |cffffd200%s|r  --  |cff8a8d93%s|r")
+		:format(tostring(Okanvil.version or "?"), Okanvil.DOWNLOAD_URL))
+	f:SetWidth(math.max(420, f.body:GetStringWidth() + 40))
+	f._left = TOAST_SECS
+	f:SetAlpha(1)
+	f:Show()
+	PlaySound("UI_BnetToast")
+end
+C.ShowUpdateToast = showUpdateToast
+
 -- someone asked -> whisper our version straight back
 C.On("VERQ", function(sender)
 	if not sender or sender == "" then return end
@@ -399,6 +467,12 @@ function C.RequestVersions(scope, onDone, timeout)
 	wire(pack("VERQ"), chan)
 	C.After(timeout or 5, function()
 		verRunning = false
+		-- The checker alone learns whether a newer build is out.
+		local newest
+		for _, v in pairs(verReplies) do
+			if verParts(v) and (not newest or verOlder(newest, v)) then newest = v end
+		end
+		if newest and verOlder(Okanvil.version, newest) then showUpdateToast(newest) end
 		if C.onVersionReply then C.onVersionReply() end
 		if type(onDone) == "function" then onDone(verReplies) end
 	end)

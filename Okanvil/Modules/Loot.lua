@@ -38,7 +38,7 @@ local ACCEPT_IDS = {
 	[45087] = true, -- Runed Orb
 	[49908] = true, -- Primordial Saronite
 	[43102] = true, -- Frozen Orb (drop do ultimo boss -- a raid rola por ele)
-	[45038] = true, [45039] = true, [45896] = true, [49869] = true, -- fragmentos de lendario
+	[45038] = true, [45039] = true, [45896] = true, [50274] = true, -- fragmentos de lendario
 	[47242] = true, -- Trophy of the Crusade (drop do boss -- a raid rola por ele para upgrade de tier)
 }
 local DENY_IDS = {
@@ -571,8 +571,40 @@ end
 --   * winners recorded as the literal word "You" (see buildLootPatterns) are put
 --     back to this character's name -- the history is per character, so "You" in
 --     it can only ever have been whoever owns it;
---   * trash-only items filed under a boss go back to the Trash page.
+--   * a drop filed under the wrong boss goes to the boss its item drops from.
 local youFixed = false
+
+-- The same correction captureDrop applies (see itemBossFix), for drops saved
+-- before it existed or by a path that missed it. Moving a copy onto a page that
+-- already holds that item for the same winner means one drop was recorded twice
+-- -- the Gunship chest re-adding bracers that had been filed under Deathwhisper --
+-- so the moved copy is dropped instead. Two copies with different winners are two
+-- real drops and both stay.
+local function fixDropBosses(sess)
+	local drops = sess.drops
+	if not (OkanvilItemBoss and type(drops) == "table") then return end
+	local function winner(d) return d.receivedBy or d.heldBy end
+	for i = #drops, 1, -1 do
+		local d = drops[i]
+		local real = d.id and OkanvilItemBoss[d.id]
+		if real and d.boss ~= real and (real == "Trash" or not d.boe) then
+			local dup
+			for _, o in ipairs(drops) do
+				if o ~= d and o.id == d.id and o.boss == real
+					and (winner(d) == nil or winner(o) == winner(d)) then
+					dup = o; break
+				end
+			end
+			if dup then
+				dup.receivedBy = dup.receivedBy or d.receivedBy
+				table.remove(drops, i)
+			else
+				d.boss = real
+			end
+		end
+	end
+end
+
 local function fixYouWinners()
 	if youFixed then return end
 	local me = UnitName("player")
@@ -583,11 +615,8 @@ local function fixYouWinners()
 		for _, d in ipairs(sess.drops or {}) do
 			if d.receivedBy == you or d.receivedBy == "You" then d.receivedBy = me end
 			if d.heldBy == you or d.heldBy == "You" then d.heldBy = me end
-			-- A trash-only item filed under the boss fought before it (see itemBossFix).
-			if OkanvilItemBoss and d.id and OkanvilItemBoss[d.id] == "Trash" and d.boss ~= "Trash" then
-				d.boss = "Trash"
-			end
 		end
+		fixDropBosses(sess)
 	end
 end
 
@@ -1984,6 +2013,23 @@ local externalRollAt = 0
 -- keeps its target alive as long as people are still rolling.
 local externalRollLastAt = 0
 local EXTERNAL_ROLL_WINDOW = 60   -- seconds of SILENCE before the target goes cold
+
+-- Where rolls go is decided silently, so it is traced: which copy a call picked, and
+-- where each roll landed or why it was dropped. Two copies of one item share a name,
+-- so a drop is named by its place on the list as well.
+local function dropTag(dp)
+	if not dp then return "nil" end
+	local s = activeBucket and activeBucket()
+	local idx = "?"
+	if s and s.drops then
+		for i, d in ipairs(s.drops) do if d == dp then idx = i; break end end
+	end
+	return ("%s #%s (%s, held=%s, won=%s)"):format(tostring(dp.name or dp.id), idx,
+		tostring(dp.boss), tostring(dp.heldBy), tostring(dp.receivedBy))
+end
+local function rollTrace(line)
+	if Okanvil.Trace then Okanvil:Trace("ROLL", line) end
+end
 -- resolve the drop for an announced item link, mark it the external-roll target, and
 -- tell the UI to select it. findOpenDrop (defined above) prefers an un-awarded copy.
 function L.NoteExternalRoll(link, winners)
@@ -1991,7 +2037,7 @@ function L.NoteExternalRoll(link, winners)
 	local id = itemIDFromLink(link)
 	if not id or id == 0 then return end
 	local s = activeBucket and activeBucket()
-	if not s then return end
+	if not s then rollTrace("call " .. link .. ": no loot session, not followed"); return end
 
 	-- WHICH COPY is being rolled. Searched over the whole run (a roll is called long
 	-- after the kill) and over the session the roll manager shows, newest first:
@@ -2012,32 +2058,71 @@ function L.NoteExternalRoll(link, winners)
 		local b = s.drops[i].boss
 		if b and b ~= "" and b ~= "Trash" then latestBoss = b; break end
 	end
-	local best, bestRank
-	local seen = {}
-	local function scan(sess)
-		if not (sess and sess.drops) or seen[sess] then return end
-		seen[sess] = true
-		for i = #sess.drops, 1, -1 do
-			local prev = sess.drops[i]
-			if prev.id == id then
-				local rank
-				if unowned(prev) then
-					local holder = prev.heldBy
-					if not holder or holder == "" or (ml and noRealm(holder) == noRealm(ml)) then
-						rank = 1
-					elseif prev.boss == latestBoss or not blind then
-						rank = 2
+	-- WHICH ROLL-OFF this call is.
+	--
+	-- The copy open in the roll manager is the one being rolled (a call selects the
+	-- copy it lands on, and the ML can open another by hand). Called again before
+	-- anyone announced a winner, it is the same roll-off again: a re-roll, for a tie
+	-- or rolls the ML threw out. Announcing the winner ("X wins", onRollAnnounce)
+	-- ends that roll-off, so the next call of the item goes to the next copy -- the
+	-- one-at-a-time way of handing out two of one item. "top 2" / "top 5" written in
+	-- the call is the other way: one roll-off, that many winners (winnerCount).
+	local function openCopy(d)
+		return d and d.id == id and not d.rollDone and unowned(d) and d
+	end
+	local sel = L.RollSelected and L.RollSelected()
+	local dp = openCopy(sel) or openCopy(externalRollDrop)
+	local bestRank = dp and "open" or nil
+
+	if not dp then
+		-- With several copies up, an unrolled copy comes first, and among those the
+		-- OLDEST: a master looter holding tokens from earlier bosses hands them out in
+		-- the order they dropped. A copy whose roll-off already ran is still "unowned"
+		-- until the winner is traded it, but it is spoken for, so it only takes a call
+		-- when no unrolled copy is left -- and then it is the one rolled most recently,
+		-- since a re-roll follows the roll-off it repeats.
+		local best
+		local seen = {}
+		local function scan(sess)
+			if not (sess and sess.drops) or seen[sess] then return end
+			seen[sess] = true
+			for i = #sess.drops, 1, -1 do   -- newest first
+				local prev = sess.drops[i]
+				if prev.id == id then
+					local rank
+					if unowned(prev) then
+						local holder = prev.heldBy
+						if not holder or holder == "" or (ml and noRealm(holder) == noRealm(ml)) then
+							local rolled = prev.rollDone or (prev.rolls and #prev.rolls > 0)
+							rank = rolled and 1.5 or 1
+						elseif prev.boss == latestBoss or not blind then
+							rank = 2
+						end
+					elseif not blind then
+						rank = 3
 					end
-				elseif not blind then
-					rank = 3
+					local better = rank and (not bestRank or rank < bestRank
+						or (rank == bestRank and rank == 1)   -- scanning newest first: the older unrolled copy
+						or (rank == bestRank and rank == 1.5
+							and (prev.lastRollAt or 0) > (best.lastRollAt or 0)))
+					if better then best, bestRank = prev, rank end
 				end
-				if rank and (not bestRank or rank < bestRank) then best, bestRank = prev, rank end
 			end
 		end
+		scan(s)
+		scan(sessions()[1])
+		dp = best
 	end
-	scan(s)
-	scan(sessions()[1])
-	local dp = best
+
+	-- Rolled already: this call repeats that roll-off, so it starts clean --
+	-- otherwise "first roll counts" would throw away every re-roll.
+	if dp and (bestRank == "open" or bestRank == 1.5) and (dp.rolls and #dp.rolls > 0 or dp.rollDone) then
+		rollTrace(("call %s: re-roll, clearing %d old roll(s) on %s"):format(link,
+			dp.rolls and #dp.rolls or 0, dropTag(dp)))
+		dp.rolls = {}
+		dp.rollDone = nil
+		dp.lastRollAt = nil
+	end
 
 	-- Still nothing: the item is not one of OUR captured drops at all.
 	--
@@ -2051,7 +2136,10 @@ function L.NoteExternalRoll(link, winners)
 	-- every real drop, so anything still unmatched here is just a raider talking about an
 	-- item -- and creating it put phantom loot on the boss page for gear that never
 	-- dropped. Follow-only in that case: no capture, no record.
-	if not dp and not blind then return end
+	if not dp and not blind then
+		rollTrace("call " .. link .. ": not one of our drops, not followed")
+		return
+	end
 
 	if not dp then
 		local name, _, rarity = GetItemInfo(link)
@@ -2071,6 +2159,11 @@ function L.NoteExternalRoll(link, winners)
 				break
 			end
 		end
+		-- ...and let the item overrule that guess, as every captured drop does. A
+		-- raider never sees the Gunship die (it ends in a chest), so the latest boss
+		-- was still Deathwhisper and the Gunship's bracers were filed there -- and
+		-- opening the chest later added them again under the right boss.
+		boss = itemBossFix(boss, id, false)
 
 		dp = {
 			t = time(), boss = boss, id = id,
@@ -2088,6 +2181,8 @@ function L.NoteExternalRoll(link, winners)
 	-- pasted again to nudge stragglers) must not silently drop it back to one winner.
 	if winners and winners > 1 and winners > (dp.winners or 1) then dp.winners = winners end
 
+	rollTrace(("call %s -> %s rank=%s winners=%s"):format(link, dropTag(dp),
+		tostring(bestRank or "new"), tostring(dp.winners or 1)))
 	externalRollDrop = dp
 	externalRollAt = (GetTime and GetTime()) or 0
 	externalRollLastAt = 0   -- new call: the window restarts from this announce
@@ -2101,15 +2196,26 @@ function L.NoteExternalRoll(link, winners)
 		handRollAt = 0
 	end
 
-	if L.onRollStart then L.onRollStart(id) end   -- roll manager pages to + selects it
+	if L.onRollStart then L.onRollStart(id, dp) end   -- roll manager pages to + selects THIS copy
 	if L.onLootWindow then L.onLootWindow() end   -- and force it open: a roll is starting
 end
 
 function L.StartRoll(link, mode)
 	if not link then return end
 	mode = mode or "free"
+	-- A hard-reserved item is never rolled: it already has an owner, and putting
+	-- it up by a misclick is how a raid ends up with two people who "won" it.
+	local SRM = Okanvil.SoftRes
+	local why = SRM and SRM.Blocked and SRM.Blocked(link, isBoE(link))
+	if why then
+		Okanvil:Print("|cffff5555" .. link .. " is " .. why .. " -- no roll started.|r")
+		return
+	end
+	-- A soft-reserved item rolled MS is rolled among its reservers only. OS stays
+	-- open to everyone: that is the master looter putting it up for the raid.
+	local srOnly = mode == "ms" and SRM and SRM.IsReserved(link)
 	activeRoll = { id = itemIDFromLink(link), link = link, name = (GetItemInfo(link)) or "",
-		mode = mode, opened = GetTime(), best = nil, list = {}, seen = {} }
+		mode = mode, opened = GetTime(), best = nil, list = {}, seen = {}, srOnly = srOnly }
 	-- This item is now open for rolls, so chat rolls land on it even after activeRoll's
 	-- own window closes -- a slow roll-off still belongs to the item that was called.
 	do
@@ -2120,7 +2226,7 @@ function L.StartRoll(link, mode)
 	local secs = L.RollTimer()
 	local chan = announceChannel()
 	if chan then
-		local msg = L.RollMsg(mode):gsub("%[item%]", link)
+		local msg = srOnly and SRM.RollCall(link) or L.RollMsg(mode):gsub("%[item%]", link)
 		if secs > 0 then msg = msg .. ("  (%ds)"):format(secs) end
 		SendChatMessage(msg, chan)
 	end
@@ -2185,6 +2291,28 @@ end
 
 local ROLL_PATTERN = (RANDOM_ROLL_RESULT or "%s rolls %d (%d-%d)")
 	:gsub("([%(%)%-])", "%%%1"):gsub("%%s", "(.+)"):gsub("%%d", "(%%d+)")
+-- On a soft-reserved item only the reservers' rolls count. Anyone else's is not
+-- recorded at all, so it can never top the list or be awarded. The raider is
+-- whispered why, once per item, so a roll that "vanished" is not a mystery --
+-- a whisper and not raid chat, which would read out every stray roll to all.
+-- Only the master looter sends it, or every Okanvil in the raid would.
+local srWarned = {}
+local function srRejects(id, who, openRoll, link)
+	local SRM = Okanvil.SoftRes
+	if not (SRM and id and SRM.IsReserved(id)) then return false end
+	if openRoll then return false end
+	if SRM.IsReserver(id, who) then return false end
+	local k = id .. ":" .. who:lower()
+	if not srWarned[k] and L.IsMasterLooter and L.IsMasterLooter() then
+		srWarned[k] = true
+		local item = (link and link ~= "") and link or "that item"
+		SendChatMessage(item .. " is SR -- your roll didn't count, you didn't reserve it.",
+			"WHISPER", nil, who)
+		Okanvil:Print("|cff8a8d93SR: ignored " .. who .. "'s roll (whispered them).|r")
+	end
+	return true
+end
+
 local function captureRoll(msg)
 	local who, roll, _, hi = msg:match(ROLL_PATTERN)
 	if not who then return end
@@ -2213,12 +2341,22 @@ local function captureRoll(msg)
 		-- landed nowhere -- the item just sat there reading "no rolls yet".
 		local since = externalRollLastAt > externalRollAt and externalRollLastAt or externalRollAt
 		local externalLive = dp and (GetTime() - since) <= EXTERNAL_ROLL_WINDOW
+		local via = "call"
 		if not externalLive then
 			dp = L.HandRollDrop()     -- an item the ML explicitly opened for rolls
+			via = "hand"
 		end
-		if not dp then return end     -- nothing is being rolled: the roll is not ours
+		local what = ("%s %d (1-%d)"):format(key, roll, hiN)
+		if not dp then rollTrace(what .. ": dropped, nothing open for rolls"); return end
+		if srRejects(dp.id, key, false, dp.item) then rollTrace(what .. ": dropped, SR on " .. dropTag(dp)); return end
 		dp.rolls = dp.rolls or {}
-		for _, e in ipairs(dp.rolls) do if e.player == key then return end end   -- first roll counts
+		for _, e in ipairs(dp.rolls) do
+			if e.player == key then   -- first roll counts
+				rollTrace(what .. ": dropped, already rolled " .. e.roll .. " on " .. dropTag(dp))
+				return
+			end
+		end
+		rollTrace(what .. " -> " .. dropTag(dp) .. " via " .. via)
 		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
 		dp.lastRollAt = GetTime()   -- keeps the roll-off "open" while people are rolling
 		if dp == externalRollDrop then externalRollLastAt = dp.lastRollAt end
@@ -2228,8 +2366,14 @@ local function captureRoll(msg)
 		return
 	end
 
-	if (GetTime() - activeRoll.opened) > ROLL_WINDOW then return end
+	local what = ("%s %d (1-%d)"):format(key, roll, hiN)
+	if (GetTime() - activeRoll.opened) > ROLL_WINDOW then
+		rollTrace(what .. ": dropped, our own roll on " .. tostring(activeRoll.link) .. " timed out")
+		return
+	end
+	if srRejects(activeRoll.id, key, not activeRoll.srOnly, activeRoll.link) then return end
 	if activeRoll.seen[key] then return end
+	rollTrace(what .. " -> our own roll on " .. tostring(activeRoll.link))
 	activeRoll.seen[key] = true
 	activeRoll.list[#activeRoll.list + 1] = { player = key, roll = roll, spec = spec }
 	local b = activeRoll.best
@@ -2327,7 +2471,17 @@ local function onRollAnnounce(msg, sender, event)
 	-- WHOLE WORDS (%f is Lua's frontier pattern). As bare substrings these hide inside
 	-- ordinary words -- "won" sits in "wound"/"wonder", "wins" in "winsome" -- so a
 	-- legitimate call carrying one was thrown away and the raid's rolls went nowhere.
-	if lower:find("%f[%w]won%f[%W]") or lower:find("congrat") or lower:find("%f[%w]wins%f[%W]") then return end
+	if lower:find("%f[%w]won%f[%W]") or lower:find("congrat") or lower:find("%f[%w]wins%f[%W]") then
+		-- ...but it does END the roll-off it names, so the next call for the same item
+		-- goes to the next copy instead of piling onto this one (NoteExternalRoll).
+		local wl = msg:match("|Hitem:(%d+)")
+		local cur = externalRollDrop
+		if wl and cur and cur.id == tonumber(wl) and canOpenRoll(sender, event) then
+			cur.rollDone = true
+			rollTrace("roll-off ended on " .. dropTag(cur))
+		end
+		return
+	end
 	if lower:find("%f[%w]passed%f[%W]") or lower:find("disenchant") then return end
 
 	local link = msg:match("|c%x+|Hitem:.-|h.-|h|r") or msg:match("|Hitem:[^|]+|h%[.-%]|h")
@@ -2369,7 +2523,11 @@ local function onRollAnnounce(msg, sender, event)
 	end
 
 	rest = rest:gsub("[%s%p%d]", "")
-	if rest == "" then L.NoteExternalRoll(link, winnerCount(lower)) end
+	if rest == "" then
+		L.NoteExternalRoll(link, winnerCount(lower))
+	else
+		rollTrace(("%s from %s: not read as a roll call"):format(link, tostring(sender)))
+	end
 end
 
 -- ------------------------------------------------------------
@@ -2447,8 +2605,38 @@ function L.SetMeAsMasterLooter()
 	if not L.CanSetLootMethod() then return "notleader" end
 	Okanvil:Trace("LOOT", "setting master loot to me")
 	SetLootMethod("master", UnitName("player"))
+	-- Blues must go through the master looter too. Anything under the loot
+	-- threshold skips master loot and is free for whoever clicks it first, so a
+	-- blue orb or BoE at an Epic threshold is how a pug walks off with it. The
+	-- server applies the method first; the threshold goes a second later.
+	local C = Okanvil.Comms
+	local function lower()
+		if GetLootThreshold and SetLootThreshold and (GetLootThreshold() or 0) > 3 then
+			SetLootThreshold(3)
+			Okanvil:Print("Loot threshold set to |cff0070ddRare|r, so blue drops go through master loot.")
+		end
+	end
+	if C and C.After then C.After(1, lower) else lower() end
 	return true
 end
+
+-- Warn the master looter, once, when the loot threshold is above Rare: blue
+-- drops then skip master loot entirely. Re-arms when the threshold is fixed,
+-- so raising it again later warns again.
+local thrWarned = false
+local thrEv = CreateFrame("Frame")
+thrEv:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
+thrEv:RegisterEvent("RAID_ROSTER_UPDATE")
+thrEv:SetScript("OnEvent", function()
+	if not (L.IsMasterLooter and L.IsMasterLooter()) then return end
+	local thr = GetLootThreshold and GetLootThreshold()
+	if not thr then return end
+	if thr <= 3 then thrWarned = false; return end
+	if thrWarned then return end
+	thrWarned = true
+	Okanvil:Print("|cffff5555Loot threshold is above Rare|r -- blue drops skip master loot and anyone can "
+		.. "take them. Set it to Rare (right-click your portrait > Loot Threshold).")
+end)
 
 local function mlCandidate(playerName)
 	if not (GetMasterLootCandidate and playerName) then return nil end
@@ -2824,6 +3012,11 @@ local function commitAward(id, winner, de)
 
 		freezeManualRolls(id)
 		markWinner(id, winner, de)
+		-- Owed by trade now: square it in the bags, fill the trade window.
+		if Okanvil.Trade then
+			local CC = Okanvil.Council
+			Okanvil.Trade.Add(id, winner, link or nm, CC and CC.testMode)
+		end
 
 		Okanvil:Print("|cffffd200" .. (link or nm) .. " -> " .. winner
 			.. "|r |cff8a8d93(recorded)|r -- |cffff5555could not hand it over automatically: "
@@ -3419,7 +3612,7 @@ local FRAGMENT_IDS = {
 	[45038] = true,  -- Fragment of Val'anyr
 	[45039] = true,  -- Shattered Fragments of Val'anyr
 	[45896] = true,  -- Unbound Fragments of Val'anyr
-	[49869] = true,  -- Shadowfrost Shard (Shadowmourne)
+	[50274] = true,  -- Shadowfrost Shard (Shadowmourne)
 }
 local ORB_IDS = {
 	[45087] = true,  -- Runed Orb

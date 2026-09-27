@@ -122,6 +122,56 @@ function L:Get()
 	return out
 end
 
+-- ------------------------------------------------------------
+-- Grid: the lockouts as a raid-by-toon table, for the minimap tooltip and the
+-- Home page's Saved raids tab.
+--   toons     -- L:Get(), current character first
+--   raids     -- raid names, current tier first (see U.raidRank)
+--   cell      -- cell[raid][toon][size] = true; a toon can hold the same raid
+--                at two sizes, so size is a dimension, not a string
+--   sizes     -- every size label in use, ascending: "10", "10H", "25", "25H"
+--   soonest   -- the earliest reset, as a time() value
+-- The label carries the difficulty, not just the size: a 25 normal and a 25
+-- heroic are different lockouts and must not share a cell.
+-- ------------------------------------------------------------
+function L:Grid()
+	local toons = self:Get()
+	local raids, cell, sizeSeen, soonest = {}, {}, {}, nil
+	for _, toon in ipairs(toons) do
+		for _, inst in ipairs(toon.instances) do
+			if not cell[inst.name] then
+				cell[inst.name] = {}
+				raids[#raids + 1] = inst.name
+			end
+			local n = (inst.players and inst.players > 0) and inst.players or 0
+			local size = inst.heroic and (n .. "H") or tostring(n)
+			cell[inst.name][toon.name] = cell[inst.name][toon.name] or {}
+			cell[inst.name][toon.name][size] = true
+			sizeSeen[size] = true
+			if not soonest or inst.resets < soonest then soonest = inst.resets end
+		end
+	end
+	-- current tier first (Okanvil.U.raidRank), then by name for raids it does not know
+	local U = Okanvil.U
+	table.sort(raids, function(a, b)
+		local ra = U and U.raidRank and U.raidRank(a) or 0
+		local rb = U and U.raidRank and U.raidRank(b) or 0
+		if ra ~= rb then return ra < rb end
+		return a < b
+	end)
+	-- By the NUMBER first, then normal before heroic. A plain string sort puts
+	-- "10H" before "10" and breaks once a label reaches two digits.
+	local sizes = {}
+	for s in pairs(sizeSeen) do sizes[#sizes + 1] = s end
+	table.sort(sizes, function(a, b)
+		local na = tonumber(a:match("%d+")) or 0
+		local nb = tonumber(b:match("%d+")) or 0
+		if na ~= nb then return na < nb end
+		return (a:find("H") == nil) and (b:find("H") ~= nil)
+	end)
+	return toons, raids, cell, sizes, soonest
+end
+
 -- "4d 12h" / "12h 30m" / "45m" -- raid lockouts are long, so seconds are noise.
 function L:FormatTime(remaining)
 	if not remaining or remaining <= 0 then return "expired" end

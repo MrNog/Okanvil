@@ -61,7 +61,7 @@ Note keys carry `(10)`.
 | `Frostbolt Volley 1` | Frostbolt Volley 1 |
 | `Frostbolt Volley 2` | Frostbolt Volley 2 |
 | `{time:00:11,SCC:72905:2}Frostbolt Volley 3 - \|cfff58cbaRellik\|r {spell:31821} AM {spell:48945}` | 00:11  Frostbolt Volley 3 - **Rellik** 🔵 AM ⚪ |
-| `{time:00:21,SCC:72905:3}Frostbolt Volley 4 - \|cfff58cbaOkanath\|r {spell:31821} AM {spell:48945}` | 00:21  Frostbolt Volley 4 - **Okanath** 🔵 AM ⚪ |
+| `{time:00:21,SCC:72905:3}Frostbolt Volley 4 - \|cfff58cbaOkanor\|r {spell:31821} AM {spell:48945}` | 00:21  Frostbolt Volley 4 - **Okanor** 🔵 AM ⚪ |
 | `\|cfff58cbaOkanor\|r FFA {spell:64205} DSAC` | **Okanor** FFA 🟡 DSAC |
 
 

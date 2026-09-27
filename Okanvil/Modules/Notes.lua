@@ -456,7 +456,16 @@ end
 -- know about OkanvilNotesDB, the shipped pack, or how zones pick a note.
 -- ------------------------------------------------------------
 function N.Current()
+	-- Outside the note's room the aura gets nothing. It starts its timers on
+	-- any combat and on any DBM pull, so without this a dungeon boss (or a
+	-- trash pack) ran whatever raid note was selected. It re-reads the note on
+	-- every pull, so walking into the right room is enough to bring it back.
+	if not N.InNoteRoom() then return "" end
 	local text = N.Get(db and db.selected) or ""
+	-- One note for two bosses (Rotface & Festergut): in a fight the aura gets only
+	-- the fought boss's section, or it would start the other boss's timers too.
+	local P0 = Okanvil.NotesParse
+	if text ~= "" and P0 and P0.Section then text = P0.Section(db.selected, text) end
 
 	-- Fill the role slots before handing the note over.
 	--
@@ -714,23 +723,39 @@ local function customRooms()
 end
 
 -- The note a room belongs to: the note's own {room:} first, then the shipped table.
+-- The second value says whether the name is a room either table knows at all --
+-- a known room that belongs to no note is an answer ("not here"), not a blank.
 local function noteForRoom(name)
-	if not name or name == "" then return nil end
+	if not name or name == "" then return nil, false end
 	local c = customRooms()
-	if c.rooms[name] then return c.rooms[name] end
+	if c.rooms[name] then return c.rooms[name], true end
 	local boss = ZONE_NOTE[name]
-	if boss and not c.owned[boss] then return boss end
-	return nil
+	if boss and not c.owned[boss] then return boss, true end
+	return nil, boss ~= nil
 end
 
 -- The note for the room you are standing in, or nil outside a boss room.
 function N.NoteForHere()
 	-- Sized on the way out, so walking into a room on a 10 picks the 10-man note
 	-- and the same step on a 25 picks the 25. One lookup, one place.
-	local bySub = noteForRoom(GetSubZoneText())
+	--
+	-- The minimap's name first: it is the most specific place the client knows.
+	-- The subzone can be the whole wing -- on this server the lower spire, from the
+	-- entrance to Marrowgar, all reads "The Spire", while the minimap says
+	-- "Light's Hammer" at the entrance. A minimap name that is a known room
+	-- decides on its own, so the entrance does not fall through to the wing and
+	-- light up Marrowgar's note on every run back from a wipe.
+	local mini = GetMinimapZoneText and GetMinimapZoneText()
+	local sub = GetSubZoneText()
+	if mini and mini ~= "" and mini ~= sub then
+		local byMini, known = noteForRoom(mini)
+		if byMini then return N.SizedName(byMini) end
+		if known then return nil end
+	end
+	local bySub = noteForRoom(sub)
 	if bySub then return N.SizedName(bySub) end
 	-- Halion's own zone reads through GetZoneText, not a subzone
-	local byZone = noteForRoom(GetZoneText())
+	local byZone = (noteForRoom(GetZoneText()))
 	if byZone then return N.SizedName(byZone) end
 	-- No subzone to ask: let the target answer instead.
 	local byTarget = N.NoteForTarget()
@@ -787,6 +812,7 @@ end
 -- ------------------------------------------------------------
 local watcher = CreateFrame("Frame")
 local pendingZone = false
+local wasInRoom
 
 local function applyZone()
 	if not (db and db.autoZone) then return end
@@ -841,6 +867,13 @@ watcher:SetScript("OnEvent", function(_, event)
 		if not N.IsOneRoomRaid() then return end
 	end
 	applyZone()
+	-- Walking into the selected note's room changes no selection, so applyZone
+	-- redraws nothing -- but the chip has to flip SELECTED -> LIVE.
+	local inRoom = N.InNoteRoom()
+	if inRoom ~= wasInRoom then
+		wasInRoom = inRoom
+		if F and F.panel and F.panel:IsShown() then N.Refresh() end
+	end
 end)
 
 -- ------------------------------------------------------------
@@ -1251,14 +1284,9 @@ local function listRow(i)
 	hl:SetAllPoints(); hl:SetTexture(FLAT)
 	hl:SetVertexColor(1, 1, 1, 0.05)
 
-	-- Two lines: the boss, then who last wrote the note.
-	--
-	-- The credit used to be a word squeezed against the right edge, which cost
-	-- the name the room it needed -- "Deathbringer Sa..." -- and said "edited"
-	-- without saying by whom. Underneath it fits, and it can say the name.
-	-- The forge look's row: the boss, the note's first line under it, and a
-	-- status chip on the right (LIVE / READY / EMPTY). Who last edited it is in
-	-- the row's tooltip.
+	-- The forge look's row: the boss, who last edited the note and when under
+	-- it, and a status chip on the right (LIVE / READY / EMPTY). The note's
+	-- first line is in the row's tooltip.
 	r.chip = CreateFrame("Frame", nil, r)
 	r.chip:SetHeight(16); r.chip:SetPoint("RIGHT", -6, 0)
 	r.chip:SetBackdrop({ edgeFile = FLAT, edgeSize = 1 })
@@ -1830,7 +1858,25 @@ function N.BuildWindowPage(p)
 		function(v) if WIN then WIN.SetOnlyInRoom(v) end end)
 	F.wRoom:SetPoint("TOPLEFT", X, y)
 	F.wRoom:Tooltip("Off, the window stays up everywhere -- useful while writing\nnotes, noisy while playing.")
+	y = y - 26
+
+	-- Each checkbox carries a hint line under it, the same rhythm as the sliders:
+	-- control, hint, then the gap. Two bare checkboxes 40px apart read as one
+	-- cramped block and put the next slider's label on top of the last box.
+	local rHint = W.Text(p, "Off, the window stays up everywhere.", "note", "dim")
+	rHint:SetPoint("TOPLEFT", X, y)
 	y = y - 40
+
+	F.wMine = W.Check(p, "Only my lines",
+		function() return WIN and WIN.OnlyMine() end,
+		function(v) if WIN then WIN.SetOnlyMine(v) end end)
+	F.wMine:SetPoint("TOPLEFT", X, y)
+	F.wMine:Tooltip("On: only the lines with the name of the character you are on.\nOff: the whole note.\nEither way, a note that does not name you never opens the window.")
+	y = y - 26
+
+	local mHint = W.Text(p, "On: only your lines. Off: the whole note. Not named: no window.", "note", "dim")
+	mHint:SetPoint("TOPLEFT", X, y)
+	y = y - 48
 
 	F.wSize = W.Slider(p, "Text size", 10, 20, 1,
 		function() return WIN and WIN.GetSize() or 13 end,
@@ -1965,7 +2011,9 @@ function N.Refresh()
 		-- -- which is the boss -- so printing "In <that>" read as if the subzone
 		-- were called "Deathbringer Saurfang", and looked like a bad match when
 		-- the match was right.
-		local room = GetSubZoneText()
+		-- The minimap's name, the one NoteForHere reads first.
+		local room = GetMinimapZoneText and GetMinimapZoneText()
+		if not room or room == "" then room = GetSubZoneText() end
 		if not room or room == "" then room = GetZoneText() or "" end
 		if room ~= "" and room ~= here then
 			F.here:SetText(("|cff6f7176%s|r  |cff8a8d93->|r |cffe0b860%s|r"):format(room, here))
@@ -1978,7 +2026,8 @@ function N.Refresh()
 		F.here:SetText("|cffe0b860" .. (GetZoneText() or "")
 			.. "|r |cff6f7176-- pick the note yourself, one room for every boss|r")
 	else
-		local z = GetSubZoneText()
+		local z = GetMinimapZoneText and GetMinimapZoneText()
+		if not z or z == "" then z = GetSubZoneText() end
 		if not z or z == "" then z = GetZoneText() or "" end
 		F.here:SetText(z ~= "" and ("|cff6f7176" .. z .. "|r") or "")
 	end
@@ -2009,26 +2058,23 @@ function N.Refresh()
 		-- The boss, never the key: the size is the tab you are on, and repeating
 		-- it on every row is noise you have to read past twelve times.
 		r.name:SetText((has and "|cffdcddde" or "|cff6f7176") .. N.BossOf(name) .. "|r")
-		-- WHO and WHEN, not "edited".
-		--
-		-- The old badge said a note had been changed without saying by whom, which
-		-- is the half worth knowing: a plan somebody else rewrote this morning is a
-		-- different thing from one you typed last week. The shipped notes say
-		-- nothing at all -- a badge on every row is a badge nobody reads.
+		-- Under the boss: WHO last wrote the note and WHEN. A plan somebody else
+		-- rewrote this morning is a different thing from one you typed last week.
+		-- The note's own first line read like a timestamp and credit ("Pull -
+		-- |Okanor| DSAC"), so it lives in the tooltip instead. The shipped notes
+		-- have no author and say nothing.
 		local by = N.AuthorOf(name)
 		if by then
 			local stamp = db.stamps and db.stamps[name]
-			local when = stamp and date("%d %b", stamp) or nil
-			local col = own and "|cff7cfc8a" or "|cff8a8d93"
-			r._tipText = when
-				and ("|cff8a8d93last edit|r %s%s|r |cff8a8d93%s|r"):format(col, by, when)
-				or ("|cff8a8d93last edit|r %s%s|r"):format(col, by)
+			local col = own and "|cff7cfc8a" or "|cffb8babd"
+			local when = stamp and ("  |cff8a8d93%s|r"):format(date("%d %b %H:%M", stamp)) or ""
+			r.dot:SetText(("|cff8a8d93by|r %s%s|r%s"):format(col, by, when))
 		else
-			r._tipText = nil
+			r.dot:SetText("")
 		end
-		-- Preview: the note's first real line, markup stripped (timers, spell
-		-- tags, colour codes), so the row says what the plan is at a glance.
-		local first = ""
+		-- Tooltip: the note's first real line, markup stripped (timers, spell
+		-- tags, colour codes), for a peek without opening it.
+		local first
 		if has then
 			for line in (text .. "\n"):gmatch("(.-)\n") do
 				local t = line:gsub("%b{}", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
@@ -2036,12 +2082,15 @@ function N.Refresh()
 				if t ~= "" then first = t; break end
 			end
 		end
-		r.dot:SetText(first)
-		-- LIVE = the note the raid is on (sent to their WeakAuras); READY = has a
-		-- plan; EMPTY = nothing written yet.
+		r._tipText = first
+		-- LIVE = selected AND you stand in its room, so the aura is running it;
+		-- SELECTED = picked, but the aura gets nothing until you reach that room
+		-- (N.Current); READY = has a plan; EMPTY = nothing written yet.
 		local cc, label
-		if name == db.selected and has then
+		if name == db.selected and has and N.InNoteRoom() then
 			cc, label = Okanvil.Colors.ok, "LIVE"
+		elseif name == db.selected and has then
+			cc, label = Okanvil.Colors.accentHi, "SELECTED"
 		elseif has then
 			cc, label = Okanvil.Colors.textDim, "READY"
 		else

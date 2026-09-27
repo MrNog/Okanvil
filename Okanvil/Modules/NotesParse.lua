@@ -44,6 +44,11 @@ local counters = {}       -- ["SCC:72905"] = 3
 local reached  = {}       -- ["SCC:72905:3"] = GetTime() when it hit 3
 local phase = 1
 local phaseAt = nil
+local dbmLive = false     -- a DBM-engaged boss fight is running
+local fightId, fightName = nil, nil   -- the DBM mod being fought: id ("Rotface") and its local name
+-- In combat this much longer than DBM's engage = trash ran into the boss.
+local DBM_GRACE = 3
+local DBM_STALE = 20 * 60
 
 function P.InCombat() return pullAt ~= nil end
 function P.Phase() return phase end
@@ -61,9 +66,14 @@ function P.Phase() return phase end
 -- note waits on are the early ones. This goes to the same SavedVariables file
 -- the error log uses, so it survives the wipe and can be read out of the file
 -- afterwards.
--- The saved record. Declared in the .toc beside OkanvilBugDB, and kept to a few
--- pulls: a raid night of every cast would be a file nobody can open.
-local LOG_PULLS = 4
+-- The saved record. Declared in the .toc beside OkanvilBugDB. Enough pulls for a
+-- whole raid night with its wipes, so every boss of the night can be measured.
+-- What keeps the file small is the per-spell cap below, not the pull count: the
+-- first occurrences of each ability are what a note is timed from, and an aura
+-- landing on 25 raiders or an add's spam would otherwise fill a pull on its own.
+local LOG_PULLS = 30
+local LOG_PER_SPELL = 12      -- occurrences kept per prefix:spell in one pull
+local LOG_PER_PULL = 1500
 
 -- Created at load, not at the pull. The table only ever appeared in the file
 -- once recording had caught a fight, so a run that recorded nothing -- watch
@@ -319,6 +329,9 @@ local function logPull()
 		start = time(),
 		zone = (GetZoneText and GetZoneText()) or "?",
 		room = (GetSubZoneText and GetSubZoneText()) or "?",
+		-- The minimap's name as well: it is what picks the note (NoteForHere),
+		-- and the two differ where a subzone spans a whole wing.
+		mini = (GetMinimapZoneText and GetMinimapZoneText()) or "?",
 		note = (OkanvilNotesDB and OkanvilNotesDB.selected) or "?",
 		events = {},
 	}
@@ -334,6 +347,67 @@ local function resetEncounter()
 	phase, phaseAt = 1, nil
 	counters = {}
 	reached = {}
+	fightId, fightName = nil, nil
+end
+
+-- ------------------------------------------------------------
+-- Two bosses, one note
+--
+-- Rotface and Festergut share one subzone, so they share one note, split by a
+-- header line per boss ("Rotface - Right" / "Festergut - Left"). Run whole, the
+-- Festergut timers counted down on the Rotface pull too, and the other way round.
+--
+-- During a DBM fight only the section of the boss being fought is kept, plus
+-- whatever sits above the first header (shared by both). Out of a fight the
+-- whole note shows, so it still reads as one plan.
+--
+-- A header is a line that STARTS with one of the names in the note's own name
+-- ("Rotface & Festergut"), colour codes ignored. The boss is matched on DBM's
+-- mod id ("Rotface"), which is the same in every client language, or on its
+-- localised name.
+-- ------------------------------------------------------------
+local function plainLower(s)
+	return (s:gsub("||", "|"):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+		:gsub("{[^}]*}", ""):match("^%s*(.-)%s*$") or ""):lower()
+end
+
+function P.FightBoss() return fightId, fightName end
+
+-- When DBM engaged the boss being fought (GetTime() clock), or nil. The Timers
+-- aura reads it on entering combat: a healer who gets into combat seconds after
+-- the tank pulled would otherwise start every pull-timed line that late.
+function P.PullAt() return dbmLive and pullAt or nil end
+
+function P.Section(noteName, text)
+	if not (fightId or fightName) or type(text) ~= "string" or type(noteName) ~= "string" then
+		return text
+	end
+	local base = noteName:gsub("%s*%(10%)", ""):gsub("%s*%(HC%)", "")
+	if not base:find("&", 1, true) then return text end
+	local parts = {}
+	for part in base:gmatch("[^&]+") do
+		part = part:match("^%s*(.-)%s*$"):lower()
+		if part ~= "" then parts[#parts + 1] = part end
+	end
+	local want
+	local id, loc = (fightId or ""):lower(), (fightName or ""):lower()
+	for _, part in ipairs(parts) do
+		if part == id or part == loc or (id ~= "" and part:find(id, 1, true))
+			or (loc ~= "" and part:find(loc, 1, true)) then
+			want = part
+		end
+	end
+	if not want then return text end   -- a fight this note has no section for
+
+	local out, current = {}, nil
+	for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+		local low = plainLower(line)
+		for _, part in ipairs(parts) do
+			if low:sub(1, #part) == part then current = part; break end
+		end
+		if current == nil or current == want then out[#out + 1] = line end
+	end
+	return table.concat(out, "\n")
 end
 
 -- ------------------------------------------------------------
@@ -365,10 +439,10 @@ local function parseAnchor(opts)
 	for opt in opts:gmatch("[^,]+") do
 		local prefix, spellID, count = opt:match("^(%a+):(%d+):?(%d*)$")
 		if prefix and (prefix == "SCC" or prefix == "SCS" or prefix == "SAA" or prefix == "SAR") then
-			-- The parts are kept beside the key because the key is not final: most
-			-- Icecrown abilities carry a different id per difficulty, so the number
-			-- written in the note is translated at match time (see Remaining). The
-			-- key stays as typed, for anything that wants to show it back.
+			-- The key is matched exactly as typed. Most Icecrown abilities carry a
+			-- different id per difficulty (Infest 70541/73779/73780/73781), and
+			-- nothing translates between them: a note must name the id of its own
+			-- difficulty, or the line waits for an event that never comes.
 			return {
 				kind   = "event",
 				prefix = prefix,
@@ -662,29 +736,42 @@ local function moduleOn()
 	return not Okanvil.ModuleActive or Okanvil:ModuleActive("Okanvil-Notes")
 end
 
+-- A fresh pull, counted from `at`.
+local function startEncounter(at)
+	resetEncounter()
+	pullAt = at
+	phaseAt = at
+	-- A fresh pull starts a fresh record. Kept past the end of the fight,
+	-- unlike the counters, so a wipe can still be read back afterwards.
+	seenKeys = {}
+	catZone = raidZone()
+	catDiff = catZone and raidDiff() or nil
+	-- Raid pulls only, like the catalogue: notes are for raid bosses, and a
+	-- watch left on would otherwise log (and announce) every dungeon pack.
+	pullRec = (P.Debug() and catZone) and logPull() or nil
+	if pullRec then
+		Okanvil:Print("|cff7cfc8a[notes]|r recording this pull -- /reload when done.")
+	end
+end
+
 watch:SetScript("OnEvent", function(_, event, ...)
 	if not moduleOn() then return end
 
 	if event == "PLAYER_REGEN_DISABLED" then
-		-- No ENCOUNTER_START on 3.3.5a, so entering combat is the pull.
-		resetEncounter()
-		pullAt = GetTime()
-		phaseAt = pullAt
-		-- A fresh pull starts a fresh record. Kept past PLAYER_REGEN_ENABLED,
-		-- unlike the counters, so a wipe can still be read back afterwards.
-		seenKeys = {}
-		catZone = raidZone()
-		catDiff = catZone and raidDiff() or nil
-		-- Raid pulls only, like the catalogue: notes are for raid bosses, and a
-		-- watch left on would otherwise log (and announce) every dungeon pack.
-		pullRec = (P.Debug() and catZone) and logPull() or nil
-		if pullRec then
-			Okanvil:Print("|cff7cfc8a[notes]|r recording this pull -- /reload when done.")
-		end
+		-- DBM already started this fight (see P.HookDBM): its clock stands, and
+		-- the casts counted while you were still out of combat stay counted.
+		-- A DBM fight older than any boss lasts lost its kill/wipe: not this one.
+		if dbmLive and pullAt and GetTime() - pullAt < DBM_STALE then return end
+		dbmLive = false
+		-- No ENCOUNTER_START on 3.3.5a and no DBM fight: entering combat is the pull.
+		startEncounter(GetTime())
 		return
 	end
 
 	if event == "PLAYER_REGEN_ENABLED" then
+		-- In a DBM fight, leaving combat is YOU (dead, feigned, vanished), not the
+		-- boss: the fight ends on DBM's kill or wipe.
+		if dbmLive then return end
 		resetEncounter()
 		return
 	end
@@ -692,12 +779,12 @@ watch:SetScript("OnEvent", function(_, event, ...)
 	if not pullAt then return end
 
 	-- 3.3.5a's combat log has no raid-flag fields, so spellID sits two slots
-	-- earlier than on retail. Signature, per DBM-Core.lua:1166:
+	-- earlier than on retail. Signature:
 	--   timestamp, event, sourceGUID, sourceName, sourceFlags,
 	--   destGUID, destName, destFlags, spellID, spellName, spellSchool
 	-- Reading the retail position silently counted spellName as the id, so
 	-- every {time:...,SCC:nnn:k} anchor waited for an occurrence that never came.
-	local _, sub, srcGUID, srcName, _, _, dstName, _, spellID = ...
+	local _, sub, srcGUID, srcName, srcFlags, _, dstName, _, spellID = ...
 
 	-- A catalogued NPC dying closes its record for this difficulty.
 	if sub == "UNIT_DIED" then
@@ -718,6 +805,12 @@ watch:SetScript("OnEvent", function(_, event, ...)
 	-- as a vehicle -- the Gunship, Halion's twilight realm, Putricide's oozes --
 	-- so asking it alone threw away the very casts those notes are anchored to.
 	if not isNPCsrc(srcGUID) then return end
+
+	-- ...and not one a PLAYER controls. A mage's Mirror Images, a shaman's
+	-- wolves, a priest's Shadowfiend are creatures by GUID too, and their
+	-- Frostbolts and Bashes filled the pull record and the catalogue. The log
+	-- marks them: COMBATLOG_OBJECT_CONTROL_PLAYER (0x100) in the source flags.
+	if srcFlags and bit and bit.band(srcFlags, 0x100) ~= 0 then return end
 
 	-- The id must be a number in slot 9. When it is not, the core is laying the
 	-- log out differently and EVERY anchored line in every note will wait for
@@ -748,7 +841,7 @@ watch:SetScript("OnEvent", function(_, event, ...)
 
 	-- The full ordered trace is the opt-in half (/oknotes watch), because that
 	-- one IS per occurrence and would grow without bound.
-	if pullRec and #pullRec.events < 400 then
+	if pullRec and #pullRec.events < LOG_PER_PULL and n <= LOG_PER_SPELL then
 		pullRec.events[#pullRec.events + 1] = {
 			key = key, at = at, name = tostring(spellName or "?"),
 		}
@@ -758,10 +851,63 @@ end)
 -- DBM already tracks phases and fires a callback for them (DBM-Core.lua:6926),
 -- so there is nothing to infer here. Registered once, lazily -- DBM loads after
 -- this file.
+--
+-- The pull too. Entering combat is only when YOU got into it: a healer standing
+-- back, a pre-pot, or trash running into the boss puts that seconds away from
+-- the engage, and every {time:} line drifted off DBM's bars by the same amount.
+-- DBM_Pull is the engage DBM starts its own timers from, with how late it
+-- noticed (delay), so the notes count from the same moment DBM does.
+--
+-- DBM builds its callback API across its own load steps and may not have it at
+-- PLAYER_LOGIN, so this retries like Core's pull hook.
 local hooked = false
-function P.HookDBM()
-	if hooked or not (DBM and DBM.RegisterCallback) then return end
+local HOOK_TRIES, HOOK_EVERY = 20, 1.5
+function P.HookDBM(attempt)
+	if hooked then return end
+	if not (DBM and DBM.RegisterCallback) then
+		attempt = attempt or 1
+		local After = Okanvil.Comms and Okanvil.Comms.After
+		if attempt < HOOK_TRIES and After then
+			After(HOOK_EVERY, function() P.HookDBM(attempt + 1) end)
+		end
+		return
+	end
 	hooked = true
+	DBM:RegisterCallback("DBM_Pull", function(_, mod, delay)
+		if not moduleOn() then return end
+		local at = GetTime() - (tonumber(delay) or 0)
+		dbmLive = true
+		-- Set after startEncounter below would wipe it; see the end of this function.
+		local id = mod and mod.id
+		local loc = mod and mod.localization and mod.localization.general
+			and mod.localization.general.name
+		if not pullAt or at - pullAt > DBM_GRACE then
+			-- Not in combat yet (the tank has the boss, you have not acted), or in
+			-- combat since the trash before it: either way the boss starts now,
+			-- and what trash did is not counted against its note.
+			startEncounter(at)
+		else
+			-- Entered combat within a moment of the engage: same pull, DBM's clock.
+			pullAt = at
+			phase, phaseAt = 1, at
+		end
+		fightId = type(id) == "string" and id or nil
+		fightName = type(loc) == "string" and loc or nil
+		-- The Timers aura keeps its own clock. Tell it where the pull really was,
+		-- after the boss is known, so a note shared by two bosses is re-read as
+		-- this boss's section when the aura restarts its timers.
+		if WeakAuras and WeakAuras.ScanEvents then
+			WeakAuras.ScanEvents("OKANVIL_PULL", at)
+		end
+	end)
+	-- The fight ends when DBM says so, not when you leave combat.
+	local function fightOver()
+		if not dbmLive then return end
+		dbmLive = false
+		if not (InCombatLockdown and InCombatLockdown()) then resetEncounter() end
+	end
+	DBM:RegisterCallback("DBM_Kill", fightOver)
+	DBM:RegisterCallback("DBM_Wipe", fightOver)
 	-- The gate goes INSIDE the callback, not around the registration: DBM offers
 	-- no way to unregister, so a hook installed at login is permanent. Checking
 	-- here means a disabled Notes module stops tracking phases without leaving a

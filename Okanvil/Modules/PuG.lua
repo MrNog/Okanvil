@@ -93,6 +93,9 @@ end
 local function raidLabel()
 	local r = raidInfo()
 	if not r then return "" end
+	-- A class run is its own kind of raid: the server calls it "VoA18" whatever
+	-- the instance size, because it fills at 18.
+	if db.classRun then return r.short .. "18" end
 	if db.hc and r.hc then
 		local alt = OkanvilRaidHCName and OkanvilRaidHCName[r.key]
 		if alt then return alt .. db.size end
@@ -636,6 +639,102 @@ end
 function M.IsClassRun() return db and db.classRun and true or false end
 
 -- ------------------------------------------------------------
+-- VoA 18: one raider per PvP set, plus two tanks.
+--
+-- The vault drops PvP gear, and a PvP set belongs to a SPEC, not a class: a holy
+-- and a ret paladin wear different sets, and so do the three shamans and the
+-- three druids. Two players on the same set roll against each other for every
+-- piece, which is what the run exists to avoid -- so each set is one place on
+-- the board. That is 16 sets; the two tanks hold Toravon and Koralon.
+-- `spec` holds the Inspect module's spec names; no `spec` = any dps spec of the
+-- class (a class with one set). A tank goes to a tank place whatever its class.
+-- ------------------------------------------------------------
+local VOA_SLOTS = {
+	{ key = "DK",      class = "DEATHKNIGHT", label = "Death Knight",  short = "DK" },
+	{ key = "BOOMKIN", class = "DRUID",   label = "Balance Druid",     short = "Boomkin", spec = { Balance = true } },
+	{ key = "FERAL",   class = "DRUID",   label = "Feral Druid",       short = "Feral",   spec = { ["Feral (Cat)"] = true, Feral = true } },
+	{ key = "RDRUID",  class = "DRUID",   label = "Resto Druid",       short = "rDruid",  spec = { Restoration = true } },
+	{ key = "HUNTER",  class = "HUNTER",  label = "Hunter",            short = "Hunter" },
+	{ key = "MAGE",    class = "MAGE",    label = "Mage",              short = "Mage" },
+	{ key = "HPALA",   class = "PALADIN", label = "Holy Paladin",      short = "hPala",   spec = { Holy = true } },
+	{ key = "RET",     class = "PALADIN", label = "Ret Paladin",       short = "Ret",     spec = { Retribution = true } },
+	{ key = "HPRIEST", class = "PRIEST",  label = "Disc / Holy Priest", short = "hPriest", spec = { Discipline = true, Holy = true } },
+	{ key = "SPRIEST", class = "PRIEST",  label = "Shadow Priest",     short = "Shadow",  spec = { Shadow = true } },
+	{ key = "ROGUE",   class = "ROGUE",   label = "Rogue",             short = "Rogue" },
+	{ key = "ELE",     class = "SHAMAN",  label = "Ele Shaman",        short = "Ele",     spec = { Elemental = true } },
+	{ key = "ENH",     class = "SHAMAN",  label = "Enh Shaman",        short = "Enh",     spec = { Enhancement = true } },
+	{ key = "RSHAM",   class = "SHAMAN",  label = "Resto Shaman",      short = "rSham",   spec = { Restoration = true } },
+	{ key = "LOCK",    class = "WARLOCK", label = "Warlock",           short = "Lock" },
+	{ key = "WARR",    class = "WARRIOR", label = "Warrior (Arms/Fury)", short = "Warr" },
+	{ key = "TANK1",   tank = true,       label = "Tank",              short = "Tank" },
+	{ key = "TANK2",   tank = true,       label = "Tank",              short = "Tank" },
+}
+M.VoASlots = VOA_SLOTS
+
+-- Who holds each place. Returns the places in board order, each
+-- { def = slot, who = player or nil, dupes = { players on the same set } }, and
+-- the raiders it could not place: hybrids whose spec has not been read yet (a
+-- druid could be any of three places, so guessing one would hide a gap).
+function M.VoABoard()
+	local places, byKey = {}, {}
+	for i, s in ipairs(VOA_SLOTS) do
+		places[i] = { def = s, dupes = {} }
+		byKey[s.key] = places[i]
+	end
+	local unplaced = {}
+	local I = Okanvil.Inspect
+	for _, pl in ipairs(rosterList()) do
+		local cls = pl.class and pl.class:upper()
+		local spec, role
+		if I and I.Get then
+			local s, _, r = I.Get(pl.name)
+			spec, role = s, r
+		end
+		-- a hand placement in the Tank column is the leader's call and wins
+		local hand = M.AssignedRole and M.AssignedRole(pl.name)
+		if hand == "tank" then role = "tank" elseif hand and role == "tank" then role = nil end
+
+		local target
+		if role == "tank" then
+			target = byKey.TANK1.who and byKey.TANK2 or byKey.TANK1
+		else
+			for _, p in ipairs(places) do
+				local d = p.def
+				if not d.tank and d.class == cls and (not d.spec or (spec and d.spec[spec])) then
+					target = p
+					break
+				end
+			end
+		end
+		if target then
+			if target.who then target.dupes[#target.dupes + 1] = pl else target.who = pl end
+		else
+			unplaced[#unplaced + 1] = pl
+		end
+	end
+	return places, unplaced
+end
+
+-- The empty places, as the LFM line names them: "Ret, Boomkin, 2 Tank", and how
+-- many places that is (the two tanks count as two).
+function M.VoAMissing()
+	local out, tanks, n = {}, 0, 0
+	local places = M.VoABoard()
+	for _, p in ipairs(places) do
+		if not p.who then
+			n = n + 1
+			if p.def.tank then tanks = tanks + 1 else out[#out + 1] = p.def.short end
+		end
+	end
+	if tanks > 0 then out[#out + 1] = tanks .. " Tank" end
+	return out, n
+end
+
+-- Up to this many empty places the line names them; above it the run is still
+-- forming, everyone is welcome, and a list of fifteen classes is just noise.
+local VOA_NAME_AT = 6
+
+-- ------------------------------------------------------------
 -- Reserved loot
 --
 -- The categories, letters and wrapper below are NOT invented: they are exactly
@@ -868,11 +967,11 @@ local function buildMessage()
 
 	local bits = {}
 	if db.classRun then
-		-- A class run asks by CLASS, not by role: "need Rogue, Mage" is the whole
-		-- point of the run, and role counts say nothing about it.
-		for _, c in ipairs(M.ClassesMissing()) do
-			bits[#bits + 1] = (c.missing > 1 and (c.missing .. " ") or "") .. c.short
-		end
+		-- A class run asks by PvP set, not by role: "need Ret, Boomkin, 1 Tank" is
+		-- the whole point of the run, and role counts say nothing about it.
+		local miss, n = M.VoAMissing()
+		if n > VOA_NAME_AT then bits[1] = "all"
+		elseif #miss > 0 then bits[1] = table.concat(miss, ", ") end
 	else
 		-- Every role carries its own picks, so one line can say "2 Tank (Druid)
 		-- 1 Ranged (Hunter/Mage)". The Want row only shows one role at a time, but

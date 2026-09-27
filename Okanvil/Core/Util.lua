@@ -103,7 +103,44 @@ local RAID_SHORT = {
 	{ "ahn'kahet",                   "AK"   },
 	{ "violet hold",                 "VH"   },
 	{ "the oculus",                  "Oculus" },
+	-- The Burning Crusade and Classic raids: people run them for transmog and
+	-- mounts, and their lockouts show up beside the current tier.
+	{ "sunwell",                     "SWP"  },
+	{ "black temple",                "BT"   },
+	{ "hyjal",                       "Hyjal" },
+	{ "zul'aman",                    "ZA"   },
+	{ "serpentshrine",               "SSC"  },
+	{ "tempest keep",                "TK"   },
+	{ "magtheridon",                 "Mag"  },
+	{ "gruul",                       "Gruul" },
+	{ "karazhan",                    "Kara" },
+	{ "ruins of ahn'qiraj",          "AQ20" },   -- before the temple, which also says "ahn'qiraj"
+	{ "ahn'qiraj",                   "AQ40" },
+	{ "blackwing lair",              "BWL"  },
+	{ "zul'gurub",                   "ZG"   },
+	{ "molten core",                 "MC"   },
 }
+
+-- Raids in the order a lockout list shows them: the current tier first, then
+-- back through the expansion, then The Burning Crusade, then Classic. Matched
+-- on the same lowercased substrings as RAID_SHORT. A raid missing from here
+-- still shows -- it sorts after every listed one, by name.
+local RAID_ORDER = {
+	"ruby sanctum", "icecrown citadel", "trial of the grand crusader", "trial of the crusader",
+	"onyxia", "ulduar", "naxxramas", "obsidian sanctum", "eye of eternity", "vault of archavon",
+	"sunwell", "black temple", "hyjal", "zul'aman", "serpentshrine", "tempest keep",
+	"magtheridon", "gruul", "karazhan",
+	"ruins of ahn'qiraj", "ahn'qiraj", "blackwing lair", "zul'gurub", "molten core",
+}
+
+-- Where a raid sits in RAID_ORDER; unknown raids get a number past the end.
+function U.raidRank(name)
+	local low = (name or ""):lower()
+	for i, key in ipairs(RAID_ORDER) do
+		if low:find(key, 1, true) then return i end
+	end
+	return #RAID_ORDER + 1
+end
 
 -- maxLen: only shorten when the name is actually too long for the space (nil = always).
 function U.raidShort(name, maxLen)
