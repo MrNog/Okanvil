@@ -143,7 +143,19 @@ function Okanvil:BuildLoot()
 		if fill._rebuildHistory then fill._rebuildHistory() end
 	end
 	fill.refreshAll = refreshAll
-	L.onLoot = function() if fill:IsShown() then refreshAll() end end
+	-- CHAINED, never replaced: the mini roll hooks onLoot at login, and this page
+	-- is built later, the first time it is opened. Assigning over it cut the mini
+	-- roll off from every loot change for the rest of the session. The page can be
+	-- rebuilt, so the chain is installed once and calls whichever page is current.
+	Okanvil._lootPageRefresh = function() if fill:IsShown() then refreshAll() end end
+	if not Okanvil._lootPageHooked then
+		Okanvil._lootPageHooked = true
+		local prev = L.onLoot
+		L.onLoot = function()
+			if prev then prev() end
+			if Okanvil._lootPageRefresh then Okanvil._lootPageRefresh() end
+		end
+	end
 	if not fill._mlEv then
 		fill._mlEv = CreateFrame("Frame")
 		fill._mlEv:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
