@@ -20,6 +20,8 @@ local T = {}
 Okanvil.Trade = T
 
 local TRADE_WINDOW = 2 * 3600
+-- A council test's mark is there to be looked at, not kept: it goes by itself.
+local TEST_LIFE = 120
 
 local function short(n) return n and (n:gsub("%-.*$", "")) or n end
 
@@ -29,7 +31,8 @@ local function owed()
 	cdb.lootOwed = cdb.lootOwed or {}
 	local now = time()
 	for i = #cdb.lootOwed, 1, -1 do
-		if (now - (cdb.lootOwed[i].at or 0)) > TRADE_WINDOW then table.remove(cdb.lootOwed, i) end
+		local e = cdb.lootOwed[i]
+		if (now - (e.at or 0)) > (e.test and TEST_LIFE or TRADE_WINDOW) then table.remove(cdb.lootOwed, i) end
 	end
 	return cdb.lootOwed
 end
@@ -305,3 +308,22 @@ ev:SetScript("OnEvent", function(_, event, msg)
 		if C and C.After then C.After(0.5, settle) else settle() end
 	end
 end)
+
+-- /oktrade        -- what you still owe, and to whom
+-- /oktrade clear  -- forget all of it (the squares and tooltip lines go too)
+SLASH_OKTRADE1 = "/oktrade"
+SlashCmdList["OKTRADE"] = function(msg)
+	local list = owed()
+	if (msg or ""):lower():match("^%s*clear") then
+		for i = #list, 1, -1 do table.remove(list, i) end
+		T.Refresh()
+		Okanvil:Print("|cffe0b860Trade:|r owed list cleared.")
+		return
+	end
+	if #list == 0 then Okanvil:Print("|cffe0b860Trade:|r you owe nothing."); return end
+	for _, e in ipairs(list) do
+		local mins = math.floor((time() - (e.at or 0)) / 60)
+		Okanvil:Print(("|cffe0b860Trade:|r %s -> %s |cff8a8d93(%d min ago)|r"):format(
+			e.link or ("item " .. e.id), e.winner, mins))
+	end
+end
