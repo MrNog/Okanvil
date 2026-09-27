@@ -129,7 +129,7 @@ function Okanvil:Settings_General(p)
 	-- and padding together, which is what "make it bigger" actually means.
 	y1 = y1 - SLIDER_TOP
 	W.Slider(p, "Window scale", 0.6, 1.8, 0.05, function() return db.scale end,
-		function(v) db.scale = v; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", C1, y1)
+		function(v) db.scale = v; db.scaleSetByUser = true; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", C1, y1)
 	y1 = y1 - 22
 	hint("text, icons and spacing together", 1)
 
@@ -339,7 +339,7 @@ function Okanvil:Settings_RaidTools(p)
 			function(v) LDB.askOnEnter = v and true or false end)
 		hint("a Start log / No prompt on the raid zone-in; No = no log this raid")
 		chk("Start logging at the first pull",
-			function() return LDB.autoOnPull ~= false end,
+			function() return LDB.autoOnPull == true end,
 			function(v) LDB.autoOnPull = v and true or false end)
 		hint("off: the log only starts when you press Start (REC)")
 		chk("Lock the REC timer",

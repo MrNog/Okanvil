@@ -217,7 +217,7 @@ function Okanvil:ShowSetup()
 					y = para(host, "You are an officer, so these show up for you automatically:",
 						0, y, CW, "body", "dim")
 					for _, line in ipairs({
-						"Loot Council setup -- the Round and Priority tabs",
+						"Loot Council setup -- the Council and Priority tabs of Loot",
 						"Export buttons -- loot runs and raid snapshots, for the website",
 						"Master-loot tools -- speed-run auto loot on the Loot page",
 					}) do

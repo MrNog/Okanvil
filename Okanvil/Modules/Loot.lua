@@ -1743,9 +1743,32 @@ local function recordNeedGreed(msg)
 			-- that follow still belong to this same item. Prefer the most recent drop that
 			-- is/was rolling (has rollID or already has .rolls); else the most recent.
 			local s = activeBucket()
-			-- o drop deste item (por id, ignora boss atual) -- o mesmo do rolling.
-			local dp = findOpenDrop(s, id)
+			-- SEVERAL COPIES (five Trophies off one boss): the game rolls each copy
+			-- separately and the chat line carries no roll id. A player rolls once
+			-- per copy, so their roll goes on the oldest still-rolling copy they
+			-- have not rolled on yet. Piling every line onto one copy threw the
+			-- second copy's rolls away as duplicates.
+			local dp
+			local now = time()
+			for i = 1, #s.drops do
+				local d = s.drops[i]
+				if d.id == id and (now - (d.t or 0)) <= DROP_MATCH_WINDOW
+					and (d.rollID or unowned(d)) then
+					local has = false
+					for _, e in ipairs(d.rolls or {}) do
+						if e.player == who then has = true; break end
+					end
+					if not has then dp = d; break end
+				end
+			end
+			dp = dp or findOpenDrop(s, id)
 			if not dp then return end
+			if Okanvil.Trace then
+				Okanvil:Trace("ROLL", ("%s %s %s on %s copy %d"):format(who, kind,
+					tostring(roll), tostring(dp.name or id), (function()
+						for i, d in ipairs(s.drops) do if d == dp then return i end end
+						return 0 end)()))
+			end
 			dp.rolls = dp.rolls or {}
 			-- one entry per player (the first roll counts)
 			for _, e in ipairs(dp.rolls) do if e.player == who then return end end
@@ -1817,8 +1840,24 @@ local function recordRollWon(player, link)
 	local s = activeBucket()
 	-- STRICT: a winner may only claim a copy nobody owns yet. "X won" carries no rollID
 	-- (it is plain chat text), so with several copies of one item the only thing keeping
-	-- them apart is that each winner takes a free one.
-	local dp = findOpenDrop(s, id, true)
+	-- them apart is that each winner takes a free one -- preferably the free copy
+	-- whose rolls they actually top, so the rolls shown under a copy explain its winner.
+	local dp
+	local now = time()
+	for i = 1, #s.drops do
+		local d = s.drops[i]
+		if d.id == id and unowned(d) and (now - (d.t or 0)) <= DROP_MATCH_WINDOW then
+			local top = L.RollWinner(d)
+			if top and top.player == player then dp = d; break end
+		end
+	end
+	dp = dp or findOpenDrop(s, id, true)
+	if Okanvil.Trace then
+		Okanvil:Trace("ROLL", ("%s won %s -> %s"):format(player, tostring(link),
+			dp and ("copy " .. tostring((function()
+				for i, d in ipairs(s.drops) do if d == dp then return i end end
+				return 0 end)())) or "no free copy"))
+	end
 	if dp then
 		dp.receivedBy = player
 		dp.heldBy = nil                       -- a winner outranks whoever carried it
@@ -2285,7 +2324,37 @@ function L.StopRoll()
 	if L.onRoll then L.onRoll() end
 end
 
+-- Is anything open for rolls right now: a managed roll, a called roll still in
+-- its window, or an item the ML opened for hand rolls. The same three targets the
+-- roll capture below accepts, so a roll made while this is false lands nowhere.
+function L.RollIsOpen()
+	if activeRoll then return true end
+	if externalRollDrop then
+		local since = externalRollLastAt > externalRollAt and externalRollLastAt or externalRollAt
+		if (GetTime() - since) <= EXTERNAL_ROLL_WINDOW then return true end
+	end
+	return L.HandRollDrop() ~= nil
+end
+
+-- The drop a chat roll would land on right now, or nil: the called item while its
+-- call is live, else the item the ML opened for rolls. The mini roll marks it
+-- "rolling".
+function L.RollTargetDrop()
+	if externalRollDrop then
+		local since = externalRollLastAt > externalRollAt and externalRollLastAt or externalRollAt
+		if (GetTime() - since) <= EXTERNAL_ROLL_WINDOW then return externalRollDrop end
+	end
+	return L.HandRollDrop()
+end
+
+-- The raider's roll buttons. Loot showing up in the mini roll is not a roll call:
+-- raiders saw the drop, clicked MS, and rolled before the ML had called anything
+-- -- rolls that counted for nothing and read as a roll-off that had started.
 function L.SelfRoll(mode)
+	if not L.RollIsOpen() then
+		Okanvil:Print("|cff8a8d93No roll called yet -- wait for the master looter to call the item.|r")
+		return
+	end
 	if mode == "os" then RandomRoll(1, 99) else RandomRoll(1, 100) end
 end
 
@@ -2683,6 +2752,13 @@ end
 -- handed to the ML first, so receivedBy holds the ML's name and tells you nothing
 -- about who the item is actually for -- it would export a whole raid's loot as won by
 -- one person. The roll is the real answer, so it wins.
+-- Tier of a roll kind: MS / Need outrank OS / Greed / Disenchant outright; within a
+-- tier the number decides. Comparing kinds as "anything but os wins" let a Greed
+-- beat a Need on group loot.
+local function kindTier(kind)
+	return (kind == "os" or kind == "greed" or kind == "de") and 1 or 2
+end
+
 function L.RollWinner(dp)
 	if not (dp and dp.rolls) then return nil end
 	local best
@@ -2690,8 +2766,8 @@ function L.RollWinner(dp)
 		local better
 		if not best then
 			better = true
-		elseif e.kind ~= best.kind then
-			better = (e.kind ~= "os")        -- MS outranks OS outright
+		elseif kindTier(e.kind) ~= kindTier(best.kind) then
+			better = kindTier(e.kind) > kindTier(best.kind)
 		else
 			better = (e.roll or 0) > (best.roll or 0)
 		end
@@ -2709,7 +2785,8 @@ function L.RollsRanked(dp)
 	local out = {}
 	for _, e in ipairs(dp.rolls) do out[#out + 1] = e end
 	table.sort(out, function(a, b)
-		if a.kind ~= b.kind then return a.kind ~= "os" end   -- MS first
+		local ta, tb = kindTier(a.kind), kindTier(b.kind)
+		if ta ~= tb then return ta > tb end                   -- MS / Need first
 		if (a.roll or 0) ~= (b.roll or 0) then return (a.roll or 0) > (b.roll or 0) end
 		return tostring(a.player) < tostring(b.player)        -- stable: never compares equal
 	end)
@@ -2970,10 +3047,38 @@ local function freezeManualRolls(id)
 	end
 end
 
+-- Is a copy of this item in our own bags? Decides whether a failed master-loot
+-- give can fall back to "record it and trade it".
+local function inMyBags(id)
+	for bag = 0, 4 do
+		for slot = 1, (GetContainerNumSlots(bag) or 0) do
+			local link = GetContainerItemLink(bag, slot)
+			if link and itemIDFromLink(link) == id then return true end
+		end
+	end
+	return false
+end
+
+-- Returns true when the award went through (handed over, or recorded to be
+-- traded), false when nothing happened and the officer has to try again.
 local function commitAward(id, winner, de)
 	local res, slot = giveLootNow(id, winner)
 	L.Dbg("commitAward: giveLootNow -> " .. tostring(res) .. " slot=" .. tostring(slot))
 	local nm = (GetItemInfo(id)) or "item"
+
+	-- The item is still on the CORPSE, not in our bags. Under master loot, closing
+	-- the loot window leaves the item on the boss; it only reaches the ML's bags
+	-- if they loot it to themselves. Recording a winner here and whispering them
+	-- to trade sent them to someone who did not have the item. Nothing is recorded:
+	-- open the corpse and give again.
+	if res == "nocand" or ((res == "closed" or res == "noitem") and not inMyBags(id)) then
+		local how = (res == "nocand")
+			and (winner .. " cannot receive it right now (out of range, offline or not eligible).")
+			or  "the boss's loot window is closed and the item is not in your bags."
+		Okanvil:Print("|cffff5555Not given:|r " .. how
+			.. " |cff8a8d93Open the boss corpse and give it again.|r")
+		return false
+	end
 
 	-- The roll that produced this winner, captured BEFORE activeRoll is cleared --
 	-- it is what the chat announcement and the history entry are built from.
@@ -3006,7 +3111,7 @@ local function commitAward(id, winner, de)
 		-- me"). Only the automatic hand-over failed.
 		local why = ({
 			noapi = "master loot unavailable", notml = "loot method is not Master Loot",
-			closed = "loot window closed (item is in your bags)", noitem = "item is no longer in the window",
+			closed = "loot window closed", noitem = "item is no longer in the window",
 			nocand = winner .. " is not a valid candidate (out of range/offline)",
 		})[res] or "unknown reason"
 
@@ -3051,7 +3156,7 @@ local function commitAward(id, winner, de)
 		-- Skipped when the winner is us (the client refuses a self-whisper and the
 		-- server answers with a visible "Player not found.").
 		local cdb = Okanvil.db and Okanvil.db.council
-		if winner ~= meName and (not cdb or cdb.whisperWinner ~= false) then
+		if winner ~= meName and cdb and cdb.whisperWinner == true then
 			SendChatMessage((de and "You get %s to disenchant -- trade %s for it."
 				or "You won %s -- trade %s for it."):format(link or nm, meName),
 				"WHISPER", nil, winner)
@@ -3061,6 +3166,7 @@ local function commitAward(id, winner, de)
 
 	if L.onLoot then L.onLoot() end
 	if L.onRoll then L.onRoll() end
+	return true
 end
 
 -- Mark a drop as decided by the COUNCIL rather than by a roll, with the response
@@ -3088,8 +3194,9 @@ end
 -- player's enchant confirm. Our own frame can't touch that pool. See Widgets.lua.
 -- de = true gives the item to be disenchanted: it is recorded as DE, not as a win,
 -- and the raid is told in RCLootCouncil's wording (see L.AnnounceDisenchant).
--- onGiven, when passed, runs only once the officer has confirmed -- a caller that
--- marks the item as given must not do it for a Cancel.
+-- onGiven, when passed, runs only once the officer has confirmed AND the award
+-- went through -- not for a Cancel, and not for a give that could not happen
+-- because the item is still on a closed corpse.
 function L.AwardWinner(id, winner, topRoll, spec, de, onGiven)
 	L.Dbg("AwardWinner: id=" .. tostring(id) .. " winner=" .. tostring(winner)
 		.. " roll=" .. tostring(topRoll) .. " spec=" .. tostring(spec) .. (de and " DE" or ""))
@@ -3106,8 +3213,7 @@ function L.AwardWinner(id, winner, topRoll, spec, de, onGiven)
 			"Disenchant?\nGive " .. itemStr .. " to |cffffd200" .. winner .. "|r to disenchant?",
 			"DE to " .. winner,
 			function()
-				commitAward(id, winner, true)
-				if onGiven then onGiven() end
+				if commitAward(id, winner, true) and onGiven then onGiven() end
 			end)
 		return
 	end
@@ -3115,8 +3221,7 @@ function L.AwardWinner(id, winner, topRoll, spec, de, onGiven)
 		"Are you sure?\nGive " .. itemStr .. " to |cffffd200" .. winner .. "|r" .. rollTag .. "?",
 		"Give to " .. winner,                                -- button carries the name, like RaidRoll
 		function()
-			commitAward(id, winner)
-			if onGiven then onGiven() end
+			if commitAward(id, winner) and onGiven then onGiven() end
 		end)
 end
 

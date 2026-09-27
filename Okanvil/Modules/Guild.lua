@@ -115,8 +115,22 @@ end
 -- Attendance snapshot
 -- ------------------------------------------------------------
 -- A snapshot = the raid roster (name/class/group/role/rank) plus raid meta
--- (zone, difficulty, boss, trigger, time). Stored in the guild SavedVariables
--- so the hub can be fed later even after a /reload.
+-- (zone, difficulty, boss, trigger, time, lockout id). Stored in the guild
+-- SavedVariables so the hub can be fed later even after a /reload.
+
+-- Our own lockout id for this instance and difficulty, or nil when we are not
+-- saved yet. 3.3.5a only reports the lockouts of the character logged in.
+local function myLockoutId(zone, diff)
+	if not (zone and GetNumSavedInstances and GetSavedInstanceInfo) then return nil end
+	for i = 1, (GetNumSavedInstances() or 0) do
+		local iname, id, expires, idiff, locked, _, _, raid = GetSavedInstanceInfo(i)
+		if iname == zone and idiff == diff and raid and locked and (expires or 0) > 0 then
+			return id
+		end
+	end
+	return nil
+end
+
 local function snapshotRaid(trigger, bossName)
 	local raidN = (GetNumRaidMembers and GetNumRaidMembers()) or 0
 	local partyN = (GetNumPartyMembers and GetNumPartyMembers()) or 0
@@ -190,6 +204,9 @@ local function snapshotRaid(trigger, bossName)
 		groupSize = groupSize or (raidN > 0 and raidN or (partyN + 1)),
 		boss = bossName or "", trigger = trigger,
 		count = #players, players = players,
+		-- nil at the first pull of a fresh lockout: nobody is saved until the first
+		-- boss dies. G.FillLockout adds it as soon as the game reports it.
+		lockoutId = myLockoutId(zone, difficultyID),
 	}
 end
 
@@ -271,6 +288,43 @@ function G.ScanSnapshotSpecs(snap, tries)
 	end
 end
 
+-- ------------------------------------------------------------
+-- The LOCKOUT ID of a snapshot taken before anyone was saved.
+--
+-- The auto snapshot fires at the first pull; the lockout only exists once the
+-- first boss is dead. So after each fight in a raid we ask the server for our
+-- lockouts (RequestRaidInfo is async: the answer is UPDATE_INSTANCE_INFO) and fill
+-- the newest snapshot of this instance that is still missing its id -- only one
+-- taken in the last 12 hours, so an old snapshot never picks up a new lockout.
+-- ------------------------------------------------------------
+function G.FillLockout()
+	local list = Okanvil.db and Okanvil.db.guild and Okanvil.db.guild.snapshots
+	local snap = list and list[1]
+	if not snap or snap.lockoutId or (time() - (snap.t or 0)) > 12 * 3600 then return end
+	local id = myLockoutId(snap.zone, snap.difficulty)
+	if id then
+		snap.lockoutId = id
+		if G.onSnapshot then G.onSnapshot() end
+	end
+end
+
+do
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("PLAYER_REGEN_ENABLED")
+	f:RegisterEvent("UPDATE_INSTANCE_INFO")
+	f:SetScript("OnEvent", function(_, event)
+		local list = Okanvil.db and Okanvil.db.guild and Okanvil.db.guild.snapshots
+		local snap = list and list[1]
+		if not snap or snap.lockoutId then return end
+		if event == "PLAYER_REGEN_ENABLED" then
+			local inInstance, itype = IsInInstance()
+			if inInstance and itype == "raid" and RequestRaidInfo then RequestRaidInfo() end
+		else
+			G.FillLockout()
+		end
+	end)
+end
+
 function G.DeleteSnapshot(snap)
 	local list = Okanvil.db.guild and Okanvil.db.guild.snapshots
 	if not list then return end
@@ -329,9 +383,11 @@ function G.SnapshotJSON(snap)
 	end
 	return string.format(
 		'{"type":"attendance","guildName":"%s","realm":"%s","capturedAt":%d,"zone":"%s",'
-		.. '"mapID":%d,"difficulty":%d,"groupSize":%d,"boss":"%s","trigger":"%s","players":[%s]}',
+		.. '"mapID":%d,"difficulty":%d,"groupSize":%d,"boss":"%s","trigger":"%s",'
+		.. '"lockoutId":%s,"players":[%s]}',
 		esc(guildName), esc(realm), snap.t, esc(snap.zone),
 		snap.mapID or 0, snap.difficulty, snap.groupSize, esc(snap.boss), esc(snap.trigger),
+		snap.lockoutId and tostring(snap.lockoutId) or "null",
 		table.concat(rows, ",")
 	)
 end
@@ -444,7 +500,9 @@ function G.ShowSnapshot(snap)
 	local where = (snap.zone ~= "" and snap.zone) or "Unknown"
 	f.title:SetText("|cffffd200" .. where .. "|r")
 	f.meta:SetText(dateStr .. "   |cff8a8d93" .. (snap.count or 0) .. " players  |  "
-		.. (snap.boss ~= "" and (snap.boss .. "  |  ") or "") .. (snap.trigger or "") .. "|r")
+		.. (snap.boss ~= "" and (snap.boss .. "  |  ") or "")
+		.. (snap.lockoutId and ("ID " .. snap.lockoutId .. "  |  ") or "")
+		.. (snap.trigger or "") .. "|r")
 
 	f.body:SetText(G.SnapshotBodyText(snap))
 	-- size the scroll child to the text so the slider range is right
@@ -461,8 +519,35 @@ end
 -- Prefer ENCOUNTER_START (some 3.3.5a private servers backport it);
 -- fall back to entering combat (PLAYER_REGEN_DISABLED) inside a raid instance.
 -- One auto-snapshot per raid lockout session (reset when the raid empties).
+--
+-- "Already taken" lives in the SavedVariables, not a local: a local resets on
+-- /reload, and every reload mid-raid then saved another snapshot at the next pull
+-- (and pushed real raids out of the 10-slot list). The mark names the instance it
+-- was taken in and goes stale after a raid night, so a new raid -- or a group that
+-- disbanded while you were logged out -- still gets its snapshot.
 -- ------------------------------------------------------------
-local firstPullDone = false
+local AUTO_SNAP_STALE = 6 * 3600
+
+local function instanceKey()
+	if not GetInstanceInfo then return "" end
+	local name, _, diff, _, maxPlayers = GetInstanceInfo()
+	return (name or "") .. "|" .. (diff or 0) .. "|" .. (maxPlayers or 0)
+end
+
+local function autoSnapTaken()
+	local g = Okanvil.db and Okanvil.db.guild
+	local m = g and g.autoSnap
+	if not m then return false end
+	if time() - (m.t or 0) > AUTO_SNAP_STALE then return false end
+	return m.key == instanceKey()
+end
+
+local function setAutoSnap(taken)
+	local db = Okanvil.db
+	if not db then return end
+	db.guild = db.guild or {}
+	db.guild.autoSnap = taken and { key = instanceKey(), t = time() } or nil
+end
 -- Set only when an ENCOUNTER_START actually ARRIVES, never by registering for it.
 -- Stock 3.3.5a accepts the registration and then never fires the event, so trusting
 -- the register meant the combat fallback was disabled by a trigger that never came --
@@ -476,18 +561,17 @@ local function inGroup()
 end
 
 local function tryFirstPull(bossName, trigger)
-	if firstPullDone then return end
+	if autoSnapTaken() then return end
 	if not inGroup() then return end
 	if not Okanvil:ShouldRecord() then return end   -- dungeon/raid toggle
 	local snap = G.SaveSnapshot(trigger, bossName)
 	if snap then
-		firstPullDone = true
+		setAutoSnap(true)
 		Okanvil:Print("Attendance snapshot saved (" .. (snap.count or 0) .. " players).")
 	end
 end
 
 local ev = CreateFrame("Frame")
-ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")   -- entered combat
 ev:RegisterEvent("RAID_ROSTER_UPDATE")
 ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
@@ -509,7 +593,9 @@ ev:SetScript("OnEvent", function(_, event, a1, a2)
 		-- it here would guess. The snapshot's zone + time place the pull.
 		if not haveEncounterEvent then tryFirstPull(nil, "combat") end
 	else
-		-- group emptied -> arm the next session's first-pull capture again
-		if not inGroup() then firstPullDone = false end
+		-- group emptied -> arm the next session's first-pull capture again.
+		-- Not watched on PLAYER_ENTERING_WORLD: at login the roster can read empty
+		-- for a moment, and that would re-arm the capture on every login.
+		if not inGroup() then setAutoSnap(false) end
 	end
 end)

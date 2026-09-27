@@ -23,16 +23,18 @@ Okanvil.RollMgr = RM
 -- everything was truncated and the rows were unreadable. Two lines give each
 -- its own space and let the icon grow.
 --
--- The rolls are NOT a separate panel: expanding an item inserts its rolls as extra rows
--- in this same list (an accordion). One list means one scroll, no repeated item caption,
--- and the rolls sit directly under the item they belong to.
---   LIST_ROWS -- visible rows of the mixed list (items + any expanded rolls).
---   MAX_ROLLS -- rolls shown inline before the roll block itself starts scrolling.
+-- The rolls of the selected item sit in their OWN box under the list, not inside it.
+-- Rolls expanded inline under an item pushed every other item down the moment a
+-- 25-man roll-off came in, and the place to click moved with them; a fixed box keeps
+-- the item list still and the Give button in one place.
+--   LIST_ROWS -- item rows visible in the list (the list shrinks to fewer).
+--   MAX_ROLLS -- rolls visible in the roll box; more scroll inside it.
 -- One size. There used to be a "full" layout twice this wide, switched by a
 -- chevron in the title bar -- but the compact one is what the window is FOR: a
 -- small thing beside the loot frame that never covers what you are looting.
-local SIZE = { ROW_H = 26, FONT_SZ = 11, SUB_SZ = 9, ROLL_H = 15, LIST_ROWS = 10, WIN_W = 270 }
-local MAX_ROLLS = 5   -- inline rolls visible at once; the rest scroll within the block
+local SIZE = { ROW_H = 26, FONT_SZ = 11, SUB_SZ = 9, ROLL_H = 15, LIST_ROWS = 6, WIN_W = 270 }
+local MAX_ROLLS = 6   -- rolls visible in the roll box; the rest scroll within it
+local STATUS_W = 56   -- the fixed status column on an item row ("rolling", "asked")
 
 -- Live geometry, unpacked from SIZE. These are locals rather than SIZE lookups
 -- because the layout code reads them on every row of every rebuild.
@@ -303,6 +305,7 @@ local function buildWindow()
 	f.title = title
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
+	f.closeBtn = close
 	-- The soft-reserve list, docked beside this window. Master looter only, and
 	-- only while a list is loaded (RM.SyncSRButton).
 	local srB = W.Button(hdr, "SR"); srB:SetSize(30, 20); srB:SetPoint("RIGHT", close, "LEFT", -4, 0)
@@ -313,6 +316,27 @@ local function buildWindow()
 	end)
 	srB:Hide()
 	f.srBtn = srB
+	-- START FRESH for a new raid: hides every listed item (the loot history and the
+	-- export keep them). End-of-raid tidying, so it sits in the title bar, out of
+	-- the way of the buttons used on every boss. Master looter only (RM.Rebuild).
+	local clrB = W.Button(hdr, "Clear"); clrB:SetSize(44, 20); clrB:SetPoint("RIGHT", srB, "LEFT", -4, 0)
+	clrB:Tooltip("Empty the list for a new raid.\nThe loot history and the export keep everything.")
+	clrB:SetScript("OnClick", function()
+		Okanvil:Confirm("Clear the mini roll list?\n"
+			.. "|cff8a8d93The loot history keeps everything -- this only empties the window.|r",
+			"Clear list",
+			function()
+				if L.ClearActiveDrops and L.ClearActiveDrops() then
+					Okanvil:Print("Mini roll: list cleared.")
+				else
+					Okanvil:Print("Mini roll: nothing to clear.")
+				end
+				local ok, err = pcall(RM.Rebuild)
+				if not ok and Okanvil.Err then Okanvil:Err("RollMgr clear", err) end
+			end)
+	end)
+	clrB:Hide()
+	f.clrBtn = clrB
 	-- The list goes away with this window and comes back with it.
 	f:HookScript("OnHide", function()
 		local P = Okanvil.SoftResPanel
@@ -365,10 +389,8 @@ local function buildWindow()
 				if r:IsShown() and r._rolling and d then
 					-- SETTLED: the roll is over the moment the item has an owner (or
 					-- everyone passed). recordRollWon() clears rollID *and* rollStart, which
-					-- left `frac` nil below -- so the "timer ended" branch never fired and
-					-- this loop kept re-appending "- rolling" from a STALE _baseTxt (captured
-					-- before the winner was known). That is why an awarded item stayed
-					-- "rolling ..." until you clicked it and forced a Refresh.
+					-- leaves `frac` nil below -- so settle here, or the row would keep
+					-- saying "rolling" until something else forced a Refresh.
 					if d.receivedBy or d.passed or not (d.rollID or d.rollStart) then
 						r._rolling = false
 						r.bar:Hide()
@@ -393,9 +415,11 @@ local function buildWindow()
 						if frac and frac <= 0 then
 							r._rolling = false
 							d.rollID = nil; d.rollStart = nil
-							if r._baseTxt then r.txt:SetText(r._baseTxt) end
-						elseif r._baseTxt then
-							r.txt:SetText(r._baseTxt .. "  |cffffd200- rolling " .. dots .. "|r")
+							r.status:SetText("")
+						else
+							-- In the status column, never after the name: a long name
+							-- was cut with "..." and took "rolling" with it.
+							r.status:SetText("|cffffd200rolling" .. dots .. "|r")
 						end
 					end
 				end
@@ -404,7 +428,7 @@ local function buildWindow()
 			if needRefresh then RM.Refresh() end
 		end
 		-- (a live roll announces itself ON the item row -- the shrinking bar and the
-		--  "- rolling ..." suffix above -- so there is no separate status line.)
+		--  "rolling" status above -- so there is no separate status line.)
 	end)
 
 	win = f
@@ -448,8 +472,8 @@ function RM.Rebuild()
 		end
 	end
 	f.bodyKids = {}
-	-- One row pool. A row renders EITHER as an item (icon + name + winner + timer) or as
-	-- a roll of the expanded item -- the list is a single mixed sequence of the two.
+	-- The item row pool (icon + name + status + winner + timer). The rolls have
+	-- their own rows, in the roll box under the list.
 	f.itemRows = {}
 	local body = f.body
 	-- Once the list is placed, `trackTail` turns on and every widget kept after it is
@@ -468,9 +492,10 @@ function RM.Rebuild()
 	local ml = isML()
 		local ac = Okanvil.Colors and Okanvil.Colors.accent or { 0.75, 0.58, 0.23 }
 
-	-- UNIFIED layout: raider and ML share the same look (boss pager, the list, "Your
-	-- roll"). The ML additionally gets the management controls (Start roll MS/OS/Free/
-	-- Stop + Award/Clear). The raider just watches and rolls.
+	-- UNIFIED layout: raider and ML share the same look (boss pager, the list, the
+	-- roll box, "Your roll"). The ML additionally gets one slot of controls (Ask
+	-- council / Roll, or Give). Under group loot nobody gets buttons: the game's own
+	-- need/greed frames do the rolling, and this window only shows it.
 	--
 	-- M is the margin on ALL FOUR sides of the body, so the gap left of the "<" equals
 	-- the gap right of the ">" and the list is inset the same amount on both edges.
@@ -500,7 +525,7 @@ function RM.Rebuild()
 	f.bossHd = bossHd
 	y = y - (pgH + 6)
 
-	-- THE LIST -- items, plus the rolls of whichever item is expanded ---------
+	-- THE LIST -- the boss's items ------------------------------------------
 	-- LIST_ROWS is the CAP, not the size: the box is resized to what is actually in it
 	-- (fitList below), so three drops give a three-row window instead of a tall empty
 	-- panel. LIST_H here is only the starting height; Refresh has the real content.
@@ -515,9 +540,7 @@ function RM.Rebuild()
 	f.tail = {}
 	f.tailBaseH = nil        -- window height as laid out (before any shrink)
 	trackTail = true
-	-- mouse wheel scrolls the list. Over an expanded item's ROLLS the wheel scrolls
-	-- the rolls instead, so a long roll-off doesn't drag the whole list around --
-	-- the row under the cursor decides, which is set in the row's own OnMouseWheel.
+	-- mouse wheel scrolls the list (the roll box scrolls its own rolls).
 	ibox:EnableMouseWheel(true)
 	ibox:SetScript("OnMouseWheel", function(_, delta)
 		f.itemScroll = (f.itemScroll or 0) - delta   -- wheel up = earlier items
@@ -535,10 +558,8 @@ function RM.Rebuild()
 	thumb:SetPoint("TOPRIGHT", -2, -3); thumb:SetWidth(SB_W)
 	thumb:SetTexture(0.75, 0.58, 0.23, 0.9)   -- gold thumb
 	f.sbTrack, f.sbThumb, f.sbW = track, thumb, SB_W
-	-- One row object serves BOTH jobs. It carries an item face (icon + name + winner +
-	-- trade timer) and a roll face (indented name + number); render time shows one and
-	-- hides the other. A single pool means the mixed list needs no second row type and
-	-- no second scroll.
+	-- One item row: icon, name, the status column, and a second line with the
+	-- winner and the trade timer.
 	f.makeItemRow = function(i)
 		local r = f.itemRows[i]
 		if r then return r end
@@ -560,10 +581,17 @@ function RM.Rebuild()
 		r.icon:SetPoint("LEFT", PAD, 0)
 		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-		-- line 1: item name, rarity-coloured
+		-- line 1: item name, rarity-coloured, and a FIXED status column on the right
+		-- ("rolling", "asked"). The column is placed first and the name is cut
+		-- before it, so a long name can never hide the status.
+		r.status = W.Text(r, "", SUB_SZ)
+		r.status:SetPoint("TOPRIGHT", -PAD, -3)
+		r.status:SetWidth(STATUS_W)
+		r.status:SetJustifyH("RIGHT")
+		if r.status.SetWordWrap then r.status:SetWordWrap(false) end
 		r.txt = W.Text(r, "", FONT_SZ)
 		r.txt:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", ICO_GAP, 1)
-		r.txt:SetPoint("RIGHT", -PAD, 0)
+		r.txt:SetPoint("RIGHT", r.status, "LEFT", -4, 0)
 		r.txt:SetJustifyH("LEFT")
 		if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
 
@@ -579,36 +607,7 @@ function RM.Rebuild()
 		r.sub:SetPoint("RIGHT", r.timer, "LEFT", -4, 0)
 		r.hl = r:CreateTexture(nil, "BORDER"); r.hl:SetAllPoints(); r.hl:SetTexture(0.75, 0.58, 0.23, 0.22); r.hl:Hide()
 
-		-- ROLL FACE: shown instead of the item face when this row renders a roll of the
-		-- expanded item.
-		--
-		-- TREE GUIDE: two 1px LINES (textures), drawn -- not text glyphs. "|-" and "`-"
-		-- render in a proportional font, so they never line up down the column nor sit at
-		-- the right height, which is what made the branch look broken.
-		--
-		-- `stem` is the vertical run down the row, `elbow` the tick across to the name.
-		-- Every roll gets the same pair, full height: stopping the stem half-way on the
-		-- last roll left a stub dangling mid-row instead of reading as a corner.
-		local TREE_X = PAD + 6            -- the column the branch runs down
-		r.stem = r:CreateTexture(nil, "ARTWORK")
-		r.stem:SetWidth(1)
-		r.stem:SetTexture(0.45, 0.45, 0.48, 0.9)
-		r.stem:Hide()
-		r.elbow = r:CreateTexture(nil, "ARTWORK")
-		r.elbow:SetHeight(1)
-		r.elbow:SetTexture(0.45, 0.45, 0.48, 0.9)
-		r.elbow:Hide()
-		r._treeX = TREE_X
-
-		r.rollTxt = W.Text(r, "", FONT_SZ)
-		r.rollTxt:SetPoint("LEFT", textX(), 0)
-		r.rollTxt:SetPoint("RIGHT", -PAD, 0)
-		r.rollTxt:SetJustifyH("LEFT")
-		if r.rollTxt.SetWordWrap then r.rollTxt:SetWordWrap(false) end
-		r.rollTxt:Hide()
-
 		r:SetScript("OnEnter", function(s)
-			if s._roll then return end   -- a roll row has no item to preview
 			if s._d and s._d.item then
 				GameTooltip:SetOwner(s, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink(s._d.item)
 				local SRM = Okanvil.SoftRes
@@ -618,31 +617,20 @@ function RM.Rebuild()
 		end)
 		r:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-		-- Wheel over an EXPANDED item's rolls scrolls the rolls; anywhere else it
-		-- scrolls the list. Without this a long roll-off could only be reached by
-		-- dragging the whole list, which pushed the item itself off screen.
 		r:EnableMouseWheel(true)
-		r:SetScript("OnMouseWheel", function(s, delta)
-			if s._roll then
-				f.rollScroll = (f.rollScroll or 0) - delta
-			else
-				f.itemScroll = (f.itemScroll or 0) - delta
-			end
+		r:SetScript("OnMouseWheel", function(_, delta)
+			f.itemScroll = (f.itemScroll or 0) - delta
 			RM.Refresh()
 		end)
 
 		-- CLICK.
 		--   shift-click -> link the item into the open chat edit box (the game-wide
-		--                  convention). Works on the item row and on its roll rows, since
-		--                  both belong to the same item.
-		--   item row    -> EXPAND it (anyone). Its rolls appear inline, right below.
-		--                  Clicking the open item again collapses it. One at a time.
-		--   roll row    -> AWARD that player (master looter only).
+		--                  convention).
+		--   click       -> SELECT it (anyone): its rolls fill the roll box below.
+		--                  Clicking the selected item again clears the selection.
 		r:SetScript("OnClick", function(s)
 			if IsShiftKeyDown() then
-				-- the item is on the row itself (item face) or on the selected drop the
-				-- roll belongs to (roll face)
-				local link = (s._d and s._d.item) or (s._roll and selected and selected.item)
+				local link = s._d and s._d.item
 				if link then
 					-- ChatEdit_InsertLink only works when an edit box is already open;
 					-- if none is, open one first, exactly like a shift-click in the bags.
@@ -656,23 +644,17 @@ function RM.Rebuild()
 				end
 				return
 			end
-			if s._roll then
-				if not isML() then return end
-				if not selected then return end
-				L.AwardWinner(selected.id, s._roll.player, s._roll.roll, s._roll.spec)
-				return
-			end
 			if not s._d then return end
-			-- toggle: clicking the already-expanded item collapses it. (Don't use the
+			-- toggle: clicking the selected item clears it. (Don't use the
 			-- "a and nil or b" idiom -- nil is falsy in Lua, so "true and nil or s._d"
-			-- returns s._d and never collapsed.)
+			-- returns s._d and never cleared.)
 			if selected == s._d then
 				selected = nil
-				f.userCleared = true    -- deliberate collapse: don't auto-expand again
+				f.userCleared = true    -- deliberate clear: don't auto-select again
 			else
 				selected = s._d
 				f.userCleared = false
-				f.scrollToSelected = true   -- opened by hand: make sure it is in view
+				f.scrollToSelected = true   -- picked by hand: make sure it is in view
 			end
 			f.rollScroll = 0            -- new item -> start its rolls at the top
 			RM.Refresh()
@@ -682,148 +664,159 @@ function RM.Rebuild()
 	end
 	y = y - (LIST_H + 6) - 6
 
-	-- ML-only: COUNCIL row, above the rolls ----------------------------------
-	--
-	-- Only when the council is switched on for this session (Loot Council page ->
-	-- "Council night"). The two are NOT modes of the night: a master looter
-	-- running a council still says "this one just roll" for a piece nobody is
-	-- arguing about, so both rows act on the SAME selected item and each item goes
-	-- one way or the other. With the council off, this row does not exist and the
-	-- mini roll is exactly what it has always been.
-	local CC = Okanvil.Council
-	if ml and CC and CC.active and CC.Enabled and CC.Enabled() then
-		local ccH = 22
-		local cc = keep(W.Text(body, "Loot council", 10, "dim")); cc:SetPoint("TOPLEFT", M, y); y = y - 16
-		local gap2, bw2 = 6, (INNER - 6) / 2
-		local askB = keep(W.Button(body, "Ask this one", "primary"))
-		askB:SetSize(bw2, ccH); askB:SetPoint("TOPLEFT", M, y)
-		askB:SetScript("OnClick", function()
-			if not (selected and selected.item) then Okanvil:Print("Pick an item first."); return end
-			-- Starting a council round on something being rolled on closes the roll
-			-- first: two ways of deciding one item at once is how a raid ends up
-			-- with two winners.
-			if L.StopRoll then L.StopRoll() end
-			CC.Ask({ selected.item }, selected.boss or "")
-		end)
-		local pickB = keep(W.Button(body, "Pick several"))
-		pickB:SetSize(bw2, ccH); pickB:SetPoint("TOPLEFT", M + bw2 + gap2, y)
-		pickB:SetScript("OnClick", function()
-			if CC.OpenPicker then CC.OpenPicker() end
-		end)
-		y = y - (ccH + 10)
+	-- ROLLS of the selected item, in their own box --------------------------
+	-- A caption naming the item, then up to MAX_ROLLS rolls, best first. The wheel
+	-- scrolls a longer roll-off inside the box; the item list above never moves.
+	local rollHd = keep(W.Text(body, "", 10, "dim"))
+	rollHd:SetPoint("TOPLEFT", M, y); rollHd:SetPoint("RIGHT", body, "RIGHT", -M, 0)
+	rollHd:SetJustifyH("LEFT")
+	if rollHd.SetWordWrap then rollHd:SetWordWrap(false) end
+	f.rollHd = rollHd
+	y = y - 16
+	local RBOX_H = MAX_ROLLS * ROLL_H + 6
+	local rbox = keep(W.Frame(body, "soft")); rbox:SetPoint("TOPLEFT", M, y); rbox:SetSize(INNER, RBOX_H)
+	local function wheelRolls(_, delta)
+		f.rollScroll = (f.rollScroll or 0) - delta
+		RM.Refresh()
 	end
+	rbox:EnableMouseWheel(true)
+	rbox:SetScript("OnMouseWheel", wheelRolls)
+	f.rollRows = {}
+	for i = 1, MAX_ROLLS do
+		local rr = CreateFrame("Button", nil, rbox)
+		rr:SetHeight(ROLL_H)
+		rr:SetPoint("TOPLEFT", PAD, -3 - (i - 1) * ROLL_H)
+		rr:SetPoint("RIGHT", rbox, "RIGHT", -PAD, 0)
+		rr.hl = rr:CreateTexture(nil, "BORDER"); rr.hl:SetAllPoints(); rr.hl:Hide()
+		rr.num = W.Text(rr, "", FONT_SZ); rr.num:SetPoint("RIGHT", -4, 0); rr.num:SetJustifyH("RIGHT")
+		rr.txt = W.Text(rr, "", FONT_SZ); rr.txt:SetPoint("LEFT", 4, 0)
+		rr.txt:SetPoint("RIGHT", rr.num, "LEFT", -6, 0); rr.txt:SetJustifyH("LEFT")
+		if rr.txt.SetWordWrap then rr.txt:SetWordWrap(false) end
+		-- Click a roll: give the item to that player (master looter only).
+		rr:SetScript("OnClick", function(s)
+			local e = s._roll
+			if not (e and selected and isML()) then return end
+			local spec = e.spec or ((e.kind == "os") and "off" or nil)
+			L.AwardWinner(selected.id, e.player, e.roll, spec)
+		end)
+		rr:EnableMouseWheel(true)
+		rr:SetScript("OnMouseWheel", wheelRolls)
+		rr:Hide()
+		f.rollRows[i] = rr
+	end
+	y = y - (RBOX_H + 8)
 
-	-- ML-only: Start Roll row (4 equal buttons) ------------------------------
+	-- ML-only: what to do with the selected item -----------------------------
+	--
+	-- ONE slot with two faces, swapped by Refresh:
+	--   an item nobody has rolled on -> [Ask council] [Roll]   (council night)
+	--                                   [Roll]                 (no council)
+	--   an item with rolls           -> [Give to <top roll>]
+	-- Roll opens a small MS / OS menu and announces the roll. Council night is
+	-- decided at the start of the raid, so there is no council / roll switch here:
+	-- each item simply goes one way or the other.
+	f.askB, f.rollB, f.giveB = nil, nil, nil
 	if ml then
-		local srH = 22
-		local sr = keep(W.Text(body, "Start roll (announces)", 10, "dim")); sr:SetPoint("TOPLEFT", M, y); y = y - 16
-		-- TWO buttons, not four. Free was a third kind of roll nobody called, and
-		-- Stop is still on /okroll stop -- four buttons at 62px each was a row you
-		-- had to read rather than aim at.
+		local bh = 22
 		local gap, bw = 6, (INNER - 6) / 2
-		local function srBtn(label, kind, idx, fn)
-			local b = keep(W.Button(body, label, kind)); b:SetSize(bw, srH)
-			b:SetPoint("TOPLEFT", M + (idx - 1) * (bw + gap), y)
-			b:SetScript("OnClick", fn); return b
+		local CC = Okanvil.Council
+		local council = CC and CC.active and CC.Enabled and CC.Enabled()
+
+		local rollB = keep(W.Button(body, "Roll", (not council) and "primary" or nil))
+		if council then
+			local askB = keep(W.Button(body, "Ask council", "primary"))
+			askB:SetSize(bw, bh); askB:SetPoint("TOPLEFT", M, y)
+			askB:SetScript("OnClick", function()
+				if not (selected and selected.item) then Okanvil:Print("Pick an item first."); return end
+				-- Asking the council about an item being rolled on closes the roll:
+				-- two ways of deciding one item at once is how a raid ends up with
+				-- two winners.
+				if L.StopRoll then L.StopRoll() end
+				CC.Ask({ selected.item }, selected.boss or "")
+				RM.Refresh()
+			end)
+			f.askB = askB
+			rollB:SetSize(bw, bh); rollB:SetPoint("TOPLEFT", M + bw + gap, y)
+		else
+			rollB:SetSize(INNER, bh); rollB:SetPoint("TOPLEFT", M, y)
 		end
-		local function startSel(mode)
+		rollB.listFn = function()
+			return {
+				{ text = "Main spec  |cff8a8d93/roll 100|r", value = "ms" },
+				{ text = "Off spec  |cff8a8d93/roll 99|r",   value = "os" },
+			}
+		end
+		rollB.setFn = function(mode)
 			if not (selected and selected.item) then Okanvil:Print("Pick an item first."); return end
 			L.StartRoll(selected.item, mode)
 		end
-		srBtn("MS", "primary", 1, function() startSel("ms") end)
-		srBtn("OS", nil, 2, function() startSel("os") end)
-		y = y - (srH + 10)
-	end
+		rollB:SetScript("OnClick", function(s) if W.OpenMenu then W.OpenMenu(s) end end)
+		f.rollB = rollB
 
-	-- NO "Send prio" button. The ladder is on the Loot Council page and under the
-	-- item on the council board -- the two places an officer is already looking
-	-- when they need it. Posting it to officer chat from here was a third copy,
-	-- and the button spent most of its life reading "(not on the list)".
-
-	-- (No separate rolls panel: the rolls render inside the list above, under whichever
-	--  item is expanded.)
-
-	-- ML-only: award ---------------------------------------------------------
-	-- "Stop" above already cancels a roll, and clicking the winning roll in the list
-	-- awards the item -- so this is only the shortcut for "give it to the top roll"
-	-- without aiming at the name. Hiding the run's loot lives on the Loot page: it is
-	-- end-of-raid tidying, not something you reach for mid-boss.
-	if ml then
-		local awH = 22
-		local award = keep(W.Button(body, "Award top roll", "primary")); award:SetSize(INNER, awH); award:SetPoint("TOPLEFT", M, y)
-
-		-- Say WHICH award this will be before it is clicked. GiveMasterLoot only works
-		-- from an OPEN loot window; once the corpse is closed the item is in the ML's
-		-- bags and the award can only be recorded, with the hand-over done by trade.
-		-- Both are fine -- but finding out afterwards is what made this feel broken.
-		award.SyncLabel = function()
-			local open = (GetNumLootItems and (GetNumLootItems() or 0) > 0)
-			if award.text then
-				-- No embedded colour: a "primary" button paints its label DARK on
-				-- gold, so a |cff8a8d93 grey landed grey-on-gold and could not be
-				-- read. The distinction is carried by the word itself, and the
-				-- tooltip explains it -- the same rule as the council's Give button.
-				award.text:SetText(open and "Award top roll" or "Award top roll (record)")
-			end
-			award:Tooltip(open
-				and "Hands the item straight to the winner through master loot."
-				or  "The loot window is closed, so the item is already in your bags.\n"
-				 .. "This records the winner and tells the raid -- you trade it over.\n\n"
-				 .. "Keep the corpse's loot window OPEN during the roll to hand it\n"
-				 .. "over automatically instead.")
-		end
-		award.SyncLabel()
-		RM._awardBtn = award
-
-		award:SetScript("OnClick", function()
-			if not selected then Okanvil:Print("|cffff5555Open an item in the list first.|r"); return end
-			-- Award the top roll of the OPEN item, from the rolls actually captured on
-			-- it, falling back to a managed roll's own winner.
+		-- Give: the same place as Ask / Roll, shown instead of them once there are
+		-- rolls. Its label names who it gives to; Refresh writes it.
+		local give = keep(W.Button(body, "Give", "primary"))
+		give:SetSize(INNER, bh); give:SetPoint("TOPLEFT", M, y)
+		give:SetScript("OnClick", function()
+			if not selected then Okanvil:Print("|cffff5555Pick an item first.|r"); return end
 			local top = L.RollWinner and L.RollWinner(selected)
 			if not top then
 				local ar = L.ActiveRoll()
 				if ar and ar.best and ((not ar.id) or (not selected.id) or ar.id == selected.id) then top = ar.best end
 			end
-			if not top then Okanvil:Print("|cffff5555No rolls captured for this item yet.|r"); return end
-			L.AwardWinner(selected.id, top.player, top.roll, top.spec)
+			if not top then Okanvil:Print("|cffff5555No rolls on this item yet.|r"); return end
+			L.AwardWinner(selected.id, top.player, top.roll, top.spec or ((top.kind == "os") and "off" or nil))
 		end)
-		y = y - (awH + 6)
+		-- Says which give this will be before it is clicked: GiveMasterLoot only
+		-- works from an OPEN corpse.
+		give.SyncLabel = function()
+			local open = (GetNumLootItems and (GetNumLootItems() or 0) > 0)
+			give:Tooltip(open
+				and "Hands the item straight to the winner through master loot.\n"
+					.. "Click a roll above to give it to someone else."
+				or  "The loot window is closed. Under master loot the item is still\n"
+					.. "on the corpse: open it again to hand the item over.")
+		end
+		give.SyncLabel()
+		give:Hide()
+		RM._awardBtn = give
+		f.giveB = give
+		y = y - (bh + 6)
 
-		-- START FRESH. The list keeps the whole run, which is right during a raid
-		-- and wrong the moment the next one starts -- last week's boss pages were
-		-- still sitting there. This HIDES the drops (they stay in the history and
-		-- the export); it does not delete the session.
-		local clr = keep(W.Button(body, "Clear list (new raid)"))
-		clr:SetSize(INNER, awH); clr:SetPoint("TOPLEFT", M, y)
-		clr:Tooltip("Hides every item currently listed, so the window is empty for a\n"
-			.. "new raid. The loot history and the export keep them.")
-		clr:SetScript("OnClick", function()
-			Okanvil:Confirm("Clear the mini roll list?\n"
-				.. "|cff8a8d93The loot history keeps everything -- this only empties the window.|r",
-				"Clear list",
-				function()
-					if L.ClearActiveDrops and L.ClearActiveDrops() then
-						Okanvil:Print("Mini roll: list cleared.")
-					else
-						Okanvil:Print("Mini roll: nothing to clear.")
-					end
-					local ok, err = pcall(RM.Rebuild)
-					if not ok and Okanvil.Err then Okanvil:Err("RollMgr clear", err) end
-				end)
-		end)
-		y = y - (awH + 10)
+		if council then
+			local several = keep(W.Button(body, "Ask several items..."))
+			several:SetSize(INNER, bh); several:SetPoint("TOPLEFT", M, y)
+			several:SetScript("OnClick", function()
+				if CC.OpenPicker then CC.OpenPicker() end
+			end)
+			y = y - (bh + 6)
+		end
+		y = y - 4
 	end
 
-	-- Your roll ---------------------------------------------------------------
+	-- Your roll: everyone, the master looter included, but ONLY while a roll is
+	-- open. Before the call there is nothing to roll on, and buttons that were
+	-- always there got pressed the moment loot appeared. Last in the window, so
+	-- Refresh can hide it and shorten the window without moving anything else.
+	f.yourRoll, f.yourRollH, f.yourRollLbl = nil, 0, nil
 	if wantsChatRollButtons() then
+		local y0 = y
 		local yrl = keep(W.Text(body, "Your roll", 10, "dim")); yrl:SetPoint("TOPLEFT", M, y); y = y - 16
+		yrl:SetPoint("RIGHT", body, "RIGHT", -M, 0); yrl:SetJustifyH("LEFT")
+		if yrl.SetWordWrap then yrl:SetWordWrap(false) end
 		local hw = (INNER - 8) / 2
 		local bh = 22
-		local myms = keep(W.Button(body, "Roll MS (100)", "primary")); myms:SetSize(hw, bh); myms:SetPoint("TOPLEFT", M, y)
+		local myms = keep(W.Button(body, "Roll MS (100)")); myms:SetSize(hw, bh); myms:SetPoint("TOPLEFT", M, y)
 		myms:SetScript("OnClick", function() L.SelfRoll("ms") end)
 		local myos = keep(W.Button(body, "Roll OS (99)")); myos:SetSize(hw, bh); myos:SetPoint("LEFT", myms, "RIGHT", 8, 0)
 		myos:SetScript("OnClick", function() L.SelfRoll("os") end)
 		y = y - (bh + 4)
+		f.yourRoll = { yrl, myms, myos }
+		f.yourRollLbl = yrl
+		f.yourRollH = y0 - y
+	end
+	if f.clrBtn then
+		if ml then f.clrBtn:Show() else f.clrBtn:Hide() end
 	end
 	-- (fragment/BoE collector tally is NOT shown here -- it lives on the Loot page's
 	--  COLLECTED panel. The mini manager stays focused on rolling.)
@@ -845,6 +838,12 @@ function RM.SyncSRButton()
 	if not (win and win.srBtn) then return end
 	local SRM = Okanvil.SoftRes
 	if isML() and SRM and SRM.Summary() then win.srBtn:Show() else win.srBtn:Hide() end
+	-- Clear sits next to SR when SR is there, else straight next to X: anchored to
+	-- a hidden SR it kept SR's empty slot as a gap.
+	if win.clrBtn then
+		win.clrBtn:ClearAllPoints()
+		win.clrBtn:SetPoint("RIGHT", win.srBtn:IsShown() and win.srBtn or win.closeBtn, "LEFT", -4, 0)
+	end
 end
 
 -- Shrink the list (and the window) to what is actually in it. The list is laid out
@@ -1011,6 +1010,7 @@ function RM.Refresh()
 	f.bossCount = #groups
 	if f.bossCount == 0 then
 		if f.bossHd then f.bossHd:SetText("|cff8a8d93No loot yet|r") end
+		selected = nil
 		for _, r in ipairs(f.itemRows) do r:Hide() end
 		if f.sbThumb then f.sbThumb:Hide(); if f.sbTrack then f.sbTrack:Hide() end end
 		fitList(f, ROW_H)   -- nothing to show -> collapse to a single empty row
@@ -1060,39 +1060,11 @@ function RM.Refresh()
 			selected = pick or g.items[1]
 			f.scrollToSelected = true   -- auto-opened: bring it into view once
 		end
-		-- BUILD THE MIXED LIST: every item, and -- directly under the OPEN one -- its
-		-- rolls. One list, one scroll, and the rolls sit against the item they belong
-		-- to instead of in a panel that had to repeat the item's name to say so.
-		--
-		-- Only the open item's rolls are inserted, and at most MAX_ROLLS of them: a
-		-- 25-man roll-off would otherwise push every other item off the screen. The
-		-- rest scroll within the block (wheel over a roll row).
-		local entries = {}          -- { d = drop } | { roll = e, best = bool }
-		local rolls, best
-		for _, d in ipairs(g.items) do
-			entries[#entries + 1] = { d = d }
-			if selected == d then
-				rolls, best = rankedRolls(d, ar)
-				local nR = #rolls
-				if nR == 0 then
-					entries[#entries + 1] = { empty = true }
-				else
-					local maxR = math.max(0, nR - MAX_ROLLS)
-					f.rollScroll = math.max(0, math.min(f.rollScroll or 0, maxR))
-					local shown = math.min(MAX_ROLLS, nR)
-					for i = 1, shown do
-						local e = rolls[i + f.rollScroll]
-						if e then
-							entries[#entries + 1] = {
-								roll = e,
-								best = (best == e),
-								more = (nR > MAX_ROLLS) and nR or nil,
-							}
-						end
-					end
-				end
-			end
-		end
+		-- The list is the ITEMS only; the selected item's rolls go in the roll box.
+		local entries = {}          -- { d = drop }
+		for _, d in ipairs(g.items) do entries[#entries + 1] = { d = d } end
+		local rollTarget = L.RollTargetDrop and L.RollTargetDrop()
+		local CC = Okanvil.Council
 
 		-- SCROLL the list. Clamp so we never scroll past the last full page.
 		local nEnt = #entries
@@ -1120,11 +1092,9 @@ function RM.Refresh()
 		end
 		f.scrollToSelected = nil
 
-		for _, r in ipairs(f.itemRows) do r._d = nil; r._roll = nil; r:Hide() end
+		for _, r in ipairs(f.itemRows) do r._d = nil; r:Hide() end
 
-		-- Rows pack from the top: an item row is ROW_H tall, a roll row only ROLL_H, so
-		-- the y cursor advances by whatever the row actually is rather than by a fixed
-		-- stride (which would leave a gap under every roll).
+		-- Rows pack from the top, ROW_H each.
 		local yRow = -2
 
 		-- Reserve room for the scrollbar ONLY when there is one. Always reserving it
@@ -1145,8 +1115,7 @@ function RM.Refresh()
 				-- ---- ITEM FACE ----
 				local d = en.d
 				r:SetHeight(ROW_H); yRow = yRow - ROW_H
-				r._d = d; r._roll = nil
-				r.rollTxt:Hide(); r.stem:Hide(); r.elbow:Hide()
+				r._d = d
 				r.icon:Show(); r.icon:SetTexture(itemIcon(d.item) or "Interface\\Icons\\INV_Misc_QuestionMark")
 				r.txt:Show(); r.sub:Show(); r.timer:Show()
 				r.txt:SetTextColor(1, 1, 1)   -- base; inline codes do the coloring
@@ -1237,79 +1206,22 @@ function RM.Refresh()
 					r.bar:SetWidth(r:GetWidth())   -- start full; OnUpdate shrinks it
 					r.bar:SetTexture(cr * 0.6, cg * 0.6, cb * 0.6, 0.30)  -- tinted by rarity
 					r._rolling = true
-					r._baseTxt = baseTxt           -- OnUpdate appends " - rolling ..."
+					r.status:SetText("|cffffd200rolling|r")   -- OnUpdate animates it
 				else
 					r.bar:Hide()
 					r._rolling = false
+					-- A master-loot roll has no game timer: the called item is the one
+					-- open for rolls. An item put to the council says "asked".
+					local st = ""
+					if not owned then
+						if rollTarget == d then st = "|cffffd200rolling|r"
+						elseif CC and CC.IsAsked and CC.IsAsked(d.id) then st = "|cff8a8d93asked|r" end
+					end
+					r.status:SetText(st)
 				end
 				r.txt:SetText(baseTxt)
 				r:Show()
 
-			elseif en.roll then
-				-- ---- ROLL FACE (inline, under the open item) ----
-				local e = en.roll
-				r:SetHeight(ROLL_H); yRow = yRow - ROLL_H
-				r._d = nil; r._roll = e; r._rolling = false
-				r.icon:Hide(); r.txt:Hide(); r.sub:Hide(); r.timer:Hide(); r.bar:Hide()
-
-				-- TREE. The stem runs the full height of every roll row and the elbow ticks
-				-- across to where the name starts, so the branch reads as one continuous
-				-- line down the column with a rung at each roll.
-				local tx = r._treeX
-				-- mid FLOORED + stem 1px TALLER than the row: with an odd ROLL_H (compact = 15)
-				-- the fractional half (7.5) rounded inconsistently, so adjacent stems landed a
-				-- hair apart -- some pixel-columns carried two overlapping 1px stems (a THICK/
-				-- double line), others a gap. Snapping mid to an int + overlapping each stem 1px
-				-- into the next row makes one clean continuous line (the artefact was compact-only).
-				local mid = math.floor(ROLL_H / 2)
-				r.stem:ClearAllPoints()
-				r.stem:SetPoint("TOPLEFT", tx, 0)
-				r.stem:SetHeight(ROLL_H + 1)
-				r.stem:Show()
-
-				-- Elbow starts 1px RIGHT of the stem so the horizontal rung ABUTS the vertical
-				-- line instead of stacking a second texture in the stem's own pixel column --
-				-- the overlapped corner was the darker/"doubled" rung. `mid` is already floored
-				-- (integer), so the rung sits on a whole pixel row and stays a crisp 1px.
-				r.elbow:ClearAllPoints()
-				r.elbow:SetPoint("TOPLEFT", tx + 1, -mid)
-				r.elbow:SetWidth(math.max(1, textX() - tx - 5))
-				r.elbow:Show()
-
-				-- tag: the roll TYPE. `kind` is the captured roll (need/greed/de, or ms/os
-				-- from the 1-100 vs 1-99 range); `spec` is the managed roll's own field.
-				local kind = e.kind or ((e.spec == "off") and "os" or "ms")
-				local tag = ""
-				if kind == "greed" then tag = " |cff8a8d93(greed)|r"
-				elseif kind == "de" then tag = " |cff8a5ad9(DE)|r"
-				elseif kind == "need" then tag = " |cff7cfc8a(need)|r"
-				elseif kind == "os" then tag = " |cff8a5ad9(OS)|r" end
-
-				local mark = en.best and "|cff7cfc8a> |r" or ""
-				local more = ""
-				if en.more then more = "  |cff5e6166(" .. en.more .. ")|r" end
-				r.rollTxt:SetText(mark .. classColorCode(e.player) .. e.player .. "|r  |cffffd200"
-					.. (e.roll or 0) .. "|r" .. tag .. more)
-				r.rollTxt:Show()
-				r.hl:SetShown(en.best and true or false)
-				if en.best then r.hl:SetTexture(0.49, 0.99, 0.54, 0.16)
-				else r.hl:SetTexture(0.75, 0.58, 0.23, 0.22) end
-				r:Show()
-
-			else
-				-- ---- open item, but nobody has rolled yet ----
-				r:SetHeight(ROLL_H); yRow = yRow - ROLL_H
-				r._d = nil; r._roll = nil; r._rolling = false
-				r.icon:Hide(); r.txt:Hide(); r.sub:Hide(); r.timer:Hide(); r.bar:Hide(); r.hl:Hide()
-				-- same branch as a real roll, just with nothing hanging off it
-				local tx, mid = r._treeX, math.floor(ROLL_H / 2)   -- floor + 1px overlap: see roll face above
-				r.stem:ClearAllPoints(); r.stem:SetPoint("TOPLEFT", tx, 0)
-				r.stem:SetHeight(ROLL_H + 1); r.stem:Show()
-				r.elbow:ClearAllPoints(); r.elbow:SetPoint("TOPLEFT", tx + 1, -mid)   -- +1: abut, don't stack on the stem
-				r.elbow:SetWidth(math.max(1, textX() - tx - 5)); r.elbow:Show()
-				r.rollTxt:SetText("|cff5e6166no rolls yet|r")
-				r.rollTxt:Show()
-				r:Show()
 			end
 		end
 
@@ -1336,6 +1248,82 @@ function RM.Refresh()
 		end
 	end
 
+	-- THE ROLL BOX: the selected item's rolls, best first --------------------
+	local rolls, best = {}, nil
+	if selected then rolls, best = rankedRolls(selected, ar) end
+	if f.rollHd then
+		if selected then
+			local cr, cg, cb = rarityColor(selected.rarity)
+			f.rollHd:SetText(string.format("|cff%02x%02x%02x", cr * 255, cg * 255, cb * 255)
+				.. ((selected.name ~= "" and selected.name) or "?") .. "|r  |cff8a8d93rolls|r")
+		else
+			f.rollHd:SetText("|cff8a8d93Pick an item to see its rolls|r")
+		end
+	end
+	if f.rollRows then
+		local nR = #rolls
+		f.rollScroll = math.max(0, math.min(f.rollScroll or 0, math.max(0, nR - MAX_ROLLS)))
+		for i, rr in ipairs(f.rollRows) do
+			local e = rolls[i + f.rollScroll]
+			rr._roll = e
+			if e then
+				-- the roll TYPE: `kind` is the captured roll (need/greed/de, or ms/os
+				-- from the 1-100 vs 1-99 range); `spec` is the managed roll's own field
+				local kind = e.kind or ((e.spec == "off") and "os" or "ms")
+				local tag = ({ need = "|cff7cfc8aNeed|r", greed = "|cff8a8d93Greed|r",
+					de = "|cff8a5ad9DE|r", os = "|cff8a5ad9OS|r", ms = "|cff8a8d93MS|r" })[kind] or ""
+				local isBest = (e == best)
+				rr.txt:SetText((isBest and "|cff7cfc8a> |r" or "") .. classColorCode(e.player) .. e.player .. "|r")
+				rr.num:SetText(tag .. "  |cffffd200" .. (e.roll or 0) .. "|r")
+				if isBest then rr.hl:SetTexture(0.49, 0.99, 0.54, 0.16); rr.hl:Show() else rr.hl:Hide() end
+				rr:Show()
+			elseif i == 1 then
+				rr.txt:SetText(selected and "|cff5e6166no rolls yet|r" or "")
+				rr.num:SetText(nR > MAX_ROLLS and ("|cff5e6166" .. nR .. " rolls|r") or "")
+				rr.hl:Hide()
+				rr:Show()
+			else
+				rr:Hide()
+			end
+		end
+	end
+
+	-- THE ML SLOT: Ask council / Roll for an item with no rolls, Give once it has
+	-- them. An item already handed out offers Ask / Roll again, for a re-roll.
+	if f.giveB then
+		local mlName = L.MasterLooterName and L.MasterLooterName()
+		local owned = selected and selected.receivedBy and selected.receivedBy ~= ""
+			and selected.receivedBy ~= mlName
+		local top = selected and L.RollWinner and L.RollWinner(selected)
+		if not top and selected and ar and ar.best and ((not ar.id) or ar.id == selected.id) then top = ar.best end
+		if selected and top and not owned then
+			local tag = (top.kind == "os" or top.spec == "off") and " OS" or ""
+			f.giveB.text:SetText("Give to " .. top.player .. " (" .. (top.roll or 0) .. tag .. ")")
+			f.giveB:Show()
+			if f.askB then f.askB:Hide() end
+			if f.rollB then f.rollB:Hide() end
+		else
+			f.giveB:Hide()
+			if f.askB then f.askB:Show() end
+			if f.rollB then f.rollB:Show() end
+		end
+	end
+
+	-- YOUR ROLL: only while a roll is open, and the window shrinks when it is not.
+	if f.yourRoll then
+		local open = L.RollIsOpen and L.RollIsOpen()
+		for _, w in ipairs(f.yourRoll) do
+			if open then w:Show() else w:Hide() end
+		end
+		if open then
+			local t = L.RollTargetDrop and L.RollTargetDrop()
+			f.yourRollLbl:SetText("Your roll" .. ((t and t.name and t.name ~= "")
+				and ("  |cff8a8d93" .. t.name .. "|r") or ""))
+		else
+			f:SetHeight(f:GetHeight() - (f.yourRollH or 0))
+		end
+	end
+
 	-- WATCH the open item for manual /rolls (the ML rolling bag items by hand). Done
 	-- here so EVERY path that changes `selected` (click, boss page, clear, award,
 	-- auto-open) updates the watch: opening an item is enough to capture what people
@@ -1349,6 +1337,18 @@ end
 --  lives at MODULE scope, not on the maybe-nil `win` frame, so a loot event arriving
 --  BEFORE the window is ever built is not lost -- showWin() applies it once the frame
 --  exists. That is what makes the pager auto-advance to boss 2's loot.)
+
+-- How many drops the window has already shown. A CLOSED window only comes back
+-- on its own for loot it has not shown yet: every award, winner mark and
+-- broadcast echo also runs the refresh, and in a raid each one re-opened a
+-- window the ML had just closed -- seconds after every give.
+local shownDrops = 0
+local function dropCount()
+	local n = 0
+	local g = Okanvil.Loot and Okanvil.Loot.DropsByBoss and Okanvil.Loot.DropsByBoss()
+	for _, b in ipairs(g or {}) do n = n + #b.items end
+	return n
+end
 
 -- show the window (building + rebuilding the mode-specific body)
 local function showWin()
@@ -1369,6 +1369,7 @@ local function showWin()
 	end
 	win:Show()                       -- always show (idempotent)
 	win:Raise()                      -- bring to front in case something covers it
+	shownDrops = dropCount()
 	local ok, err = pcall(RM.ApplyMode)  -- never let a rebuild error leave it half-open
 	if not ok then Okanvil:Print("|cffff5555Roll rebuild error:|r " .. tostring(err)) end
 	if OkanvilLootDebug and L and L.Dbg then
@@ -1393,6 +1394,9 @@ local function haveCurrentDrops()
 end
 local function canAutoShow()
 	if not db().autoShow then return false end
+	local n = dropCount()
+	if n < shownDrops then shownDrops = n end   -- list cleared, or a new run
+	if n == shownDrops then return false end
 	if Okanvil.Loot and Okanvil.Loot.InLiveRun and Okanvil.Loot.InLiveRun() then return true end
 	return haveCurrentDrops()
 end
@@ -1423,6 +1427,7 @@ local function popOrRefresh(force)
 			win.userCleared = false   -- new loot -> auto-select it even if you'd cleared
 		end
 		pendingBossIdx = nil; pendingItemScroll = nil
+		shownDrops = dropCount()
 		RM.Refresh()
 		if dbg then L.Dbg("  => refresh (already shown)") end
 	elseif (force and db().autoShow) or canAutoShow() then
@@ -1456,8 +1461,8 @@ end
 -- a loot window just opened with items in front of us -> always pop (forced).
 function RM.OnLootWindow() popOrRefresh(true) end
 
--- The loot window opened or closed, so "Award top roll" may have just changed
--- between handing the item over and only recording it. Cheap: relabels one button.
+-- The loot window opened or closed, so the Give button's tooltip may have just
+-- changed (hand over now, or open the corpse first). Cheap: one button.
 function RM.SyncAward()
 	if RM._awardBtn and RM._awardBtn.SyncLabel then
 		local ok, err = pcall(RM._awardBtn.SyncLabel)

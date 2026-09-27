@@ -206,23 +206,38 @@ end
 -- until the roster changes. The officer / alt checks used to walk the whole
 -- guild for every question, several times per raid roster event.
 local rosterCache
+-- The FULL roster, offline members included. An officer playing an alt has their
+-- main offline, and an online-only walk could not find the main behind the alt's
+-- "<Main> alt" note -- so every officer alt was treated as a plain raider.
 local function roster()
 	if rosterCache then return rosterCache end
-	rosterCache = {}
-	for i = 1, (GetNumGuildMembers and GetNumGuildMembers() or 0) do
-		local n, _, rankIndex, _, _, _, publicnote, officernote = GetGuildRosterInfo(i)
-		if n then
-			rosterCache[(n:gsub("%-.*$", ""))] =
-				{ rank = rankIndex, pub = publicnote, off = officernote }
+	local cache = {}
+	local function walk(total)
+		for i = 1, total do
+			local n, _, rankIndex, _, _, _, publicnote, officernote = GetGuildRosterInfo(i)
+			if n then
+				cache[(n:gsub("%-.*$", ""))] =
+					{ rank = rankIndex, pub = publicnote, off = officernote }
+			end
 		end
 	end
+	if Okanvil.WithFullRoster then
+		Okanvil:WithFullRoster(walk)
+	else
+		walk(GetNumGuildMembers and GetNumGuildMembers() or 0)
+	end
+	rosterCache = cache
 	return rosterCache
 end
 do
 	local f = CreateFrame("Frame")
 	f:RegisterEvent("GUILD_ROSTER_UPDATE")
 	f:RegisterEvent("PLAYER_GUILD_UPDATE")
-	f:SetScript("OnEvent", function() rosterCache = nil end)   -- re-read on next ask
+	-- Re-read on the next ask -- except for the roster events our own full walk
+	-- causes, or every read would throw away the cache it just built.
+	f:SetScript("OnEvent", function()
+		if not Okanvil.rosterBusy then rosterCache = nil end
+	end)
 end
 
 -- rankIndex for a guild member by name, or nil when not in the guild / not found.

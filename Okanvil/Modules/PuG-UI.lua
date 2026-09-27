@@ -663,6 +663,12 @@ local function buildBottom(p)
 	F.resetBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -6, -6)
 	F.resetBtn:OnClick(function()
 		local d = db()
+		-- Release the box FIRST. With the cursor still in it the refresh below
+		-- would not redraw it, and the next focus-lost saved the old text as a
+		-- hand-edit again -- Rebuild looked like it did nothing.
+		if F.preview and F.preview.edit and F.preview.edit:HasFocus() then
+			F.preview.edit:ClearFocus()
+		end
 		d.useCustom = false
 		d.custom = ""
 		M.RefreshUI()

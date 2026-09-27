@@ -408,6 +408,24 @@ local function build()
 	-- which shortcuts survive their gates. One texture per boundary, reused.
 	f.divs = {}
 
+	-- What each icon is, for the hover tooltip. Obvious to whoever built the bar,
+	-- not to a raider seeing it for the first time.
+	local TIPS = {
+		okanvil = "Okanvil",
+		loot    = "Mini roll",
+		prio    = "Loot priority",
+		finder  = "Raid Finder",
+		pug     = "PuG",
+		notes   = "Notes",
+		recruit = "Recruit",
+		invite  = "Invite",
+		ids     = "ID Finder",
+		buffs   = "Raid check",
+		farm    = "Farm",
+		ready   = "Ready check",
+		pull    = "Pull timer (right-click: cancel)",
+	}
+
 	-- Shortcut buttons: an icon each, built from the SHORTCUTS table.
 	f.short = {}
 	for _, sc in ipairs(SHORTCUTS) do
@@ -434,11 +452,22 @@ local function build()
 
 		b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 		b:SetScript("OnClick", function(_, button) sc.run(button) end)
-		-- No tooltip: the icons are self-evident and a popup over a raid frame is
-		-- more in the way than it is worth. Hover just brightens the icon.
-		b:SetScript("OnEnter", function() t:SetVertexColor(1, 1, 1, 1) end)
+		b:SetScript("OnEnter", function(self)
+			t:SetVertexColor(1, 1, 1, 1)
+			local tip = TIPS[sc.key]
+			if tip then
+				-- Always BELOW the bar, clear of its border: above (or on top of) the
+				-- bar it covered the neighbouring icons you were about to click.
+				GameTooltip:SetOwner(self, "ANCHOR_NONE")
+				GameTooltip:ClearAllPoints()
+				GameTooltip:SetPoint("TOP", self, "BOTTOM", 0, -(PAD + 3))
+				GameTooltip:SetText(tip, 1, 0.82, 0)
+				GameTooltip:Show()
+			end
+		end)
 		b:SetScript("OnLeave", function()
 			if not sc.accent then t:SetVertexColor(0.82, 0.82, 0.85, 1) end
+			GameTooltip:Hide()
 		end)
 
 		f.short[sc.key] = b
