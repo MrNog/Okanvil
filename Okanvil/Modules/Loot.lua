@@ -126,10 +126,17 @@ local function nameHasAny(name, list)
 	return false
 end
 
--- Rarity threshold = the SETTING from the "Log items of quality" dropdown
--- (db.lootThreshold, default 3 = Rare+). It used to be hardcoded to epic (4), which
--- ignored the dropdown and ate all the blue dungeon loot (e.g. Oculus drops
--- tudo azul). Agora respeita a setting: Rare+ apanha os azuis.
+-- Rarity threshold = the Dungeons or Raids "quality" setting, whichever instance we
+-- are in. Raids default to Epic so blue patterns stay out; the raid's blue-worthy
+-- drops (orbs, Primordial Saronite, fragments) are in ACCEPT_IDS / ACCEPT_NAME and
+-- skip the threshold.
+local isRaidHere
+local function lootThreshold()
+	local db = Okanvil.db
+	if isRaidHere() then return (db and db.lootThresholdRaid) or 4 end
+	return (db and db.lootThresholdDungeon) or 3
+end
+
 local function acceptItem(id, rarity, name)
 	if id ~= 0 and DENY_IDS[id] then return false end
 	if name and name ~= "" and DENY_NAME_EXACT[name:lower()] then return false end
@@ -140,14 +147,12 @@ local function acceptItem(id, rarity, name)
 	-- deny below, which would otherwise eat them on the "twilight opal" substring -- but they
 	-- still answer to the quality threshold, so green cooking recipes stay out.
 	if nameHasAny(name, ACCEPT_NAME_IF_QUALITY) then
-		local threshold = (Okanvil.db and Okanvil.db.lootThreshold) or 3
-		return (rarity or 0) >= threshold
+		return (rarity or 0) >= lootThreshold()
 	end
 	-- Epic gems, cut or uncut (a JC cutting mid-raid, or an uncut gem that dropped). Denied
 	-- by NAME so we never chase per-cut ids. Safe: no gear shares a gem's name.
 	if nameHasAny(name, DENY_GEM_NAME) then return false end
-	local threshold = (Okanvil.db and Okanvil.db.lootThreshold) or 3
-	return (rarity or 0) >= threshold
+	return (rarity or 0) >= lootThreshold()
 end
 
 -- Zone gate: raid sempre; dungeon honra o toggle do Okanvil.
@@ -183,10 +188,13 @@ local function currentContext()   -- "raid" | "party" | "world"
 	if itype == "party" then return "party" end
 	return "world"
 end
-local function shouldRecordHere()
+function isRaidHere()
 	local zone = GetRealZoneText and GetRealZoneText() or ""
+	return currentContext() == "raid" or RAID_ZONES[zone] or false
+end
+local function shouldRecordHere()
 	local ctx = currentContext()
-	if ctx == "raid" or RAID_ZONES[zone] then return Okanvil.db.recordRaid ~= false end
+	if isRaidHere() then return Okanvil.db.recordRaid ~= false end
 	if ctx == "party" then return Okanvil.db.recordDungeon ~= false end
 	-- TEST MODE: /okdebug world lets open-world kills record so the loot/award
 	-- flow can be exercised without entering a dungeon. Default off; toggle off
@@ -761,6 +769,18 @@ local function newSession(key, name, diff, mapID)
 	local list = sessions()
 	local s = { t = time(), day = date("%Y-%m-%d"), zone = name or "", difficulty = diff or 0,
 		mapID = mapID or 0, boss = resolveBoss(), key = key, drops = {} }
+	-- "Keep in history" off for this instance type: the run lives only until the next
+	-- one starts, so the mini roll still has it but the history never fills with it.
+	-- Flagged at creation, so turning the setting off never deletes runs kept before.
+	local db = Okanvil.db
+	if isRaidSession(s) then
+		if db.lootKeepRaid == false then s.noKeep = true end
+	elseif not db.lootKeepDungeon then
+		s.noKeep = true
+	end
+	for i = #list, 1, -1 do
+		if list[i].noKeep then table.remove(list, i) end
+	end
 	table.insert(list, 1, s)
 	while #list > MAX_SESSIONS do table.remove(list) end
 	return s

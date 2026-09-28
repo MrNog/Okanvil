@@ -695,9 +695,12 @@ function Okanvil:Loot_BuildHistory(main)
 		for _, c in ipairs(cards) do c:Hide() end
 		-- Runs that never dropped anything (walking through open world, a zone
 		-- visited and left) are not listed; a raid shows up with its first drop.
+		-- A run with "Keep in history" off is listed only while it is the latest one.
 		local sessions = {}
-		for _, sess in ipairs((L.Sessions and L.Sessions()) or {}) do
-			if sess.drops and #sess.drops > 0 then sessions[#sessions + 1] = sess end
+		for i, sess in ipairs((L.Sessions and L.Sessions()) or {}) do
+			if sess.drops and #sess.drops > 0 and (i == 1 or not sess.noKeep) then
+				sessions[#sessions + 1] = sess
+			end
 		end
 		local RH = Okanvil.UI.RECORD_ROW_H
 		if #sessions == 0 then
@@ -822,42 +825,50 @@ function Okanvil:Loot_BuildSettings(p)
 	-- normal-case "label" text, so half the page's headings looked like the
 	-- label of a control rather than the name of a group.
 	--
-	-- The quality dropdown and the two capture checkboxes sit side by side: both
-	-- are narrow, and stacked they used 90px of height for two short controls.
+	-- One row per instance type: capture on/off, the lowest quality logged, and
+	-- whether the run stays in the history once the next one starts.
 	local ll = W.Text(p, "CAPTURE", "note", "dim"); ll:SetPoint("TOPLEFT", 8, -8)
 
-	local llx = W.Text(p, "Log items of quality", "label", "dim")
-	llx:SetPoint("TOPLEFT", 8, -32)
+	local hQ = W.Text(p, "Log items of quality", "label", "dim"); hQ:SetPoint("TOPLEFT", 130, -32)
+
 	local RARITY = {
 		{ text = "|cff9d9d9dPoor+|r", value = 0 }, { text = "|cffffffffCommon+|r", value = 1 },
 		{ text = "|cff1eff00Uncommon+|r", value = 2 }, { text = "|cff0070ddRare+|r", value = 3 },
 		{ text = "|cffa335eeEpic|r", value = 4 },
 	}
-	local lootDD = W.DropDown(p, function() return RARITY end,
-		function() return db.lootThreshold or 3 end, function(v) db.lootThreshold = v end)
-	lootDD:Size(160, 22):Point("TOPLEFT", 8, -50)
-	lootDD.refreshText = function(self)
-		local cur = db.lootThreshold or 3
-		for _, o in ipairs(RARITY) do
-			if o.value == cur then self.textFS:SetText(o.text); return end
+	local function captureRow(y, label, recKey, thrKey, thrDef, keepKey, keepDef)
+		local c = W.Check(p, label,
+			function() return db[recKey] ~= false end, function(v) db[recKey] = v end)
+		c:SetPoint("TOPLEFT", 8, y - 2)
+		local dd = W.DropDown(p, function() return RARITY end,
+			function() return db[thrKey] or thrDef end, function(v) db[thrKey] = v end)
+		dd:Size(140, 22):Point("TOPLEFT", 130, y)
+		dd.refreshText = function(self)
+			local cur = db[thrKey] or thrDef
+			for _, o in ipairs(RARITY) do
+				if o.value == cur then self.textFS:SetText(o.text); return end
+			end
 		end
+		dd:refreshText()
+		local k = W.Check(p, "Keep in history", function()
+			if db[keepKey] == nil then return keepDef end
+			return db[keepKey]
+		end, function(v) db[keepKey] = v end)
+		k:SetPoint("TOPLEFT", 290, y - 2)
 	end
-	lootDD:refreshText()
+	captureRow(-50, "Dungeons", "recordDungeon", "lootThresholdDungeon", 3, "lootKeepDungeon", false)
+	captureRow(-80, "Raids", "recordRaid", "lootThresholdRaid", 4, "lootKeepRaid", true)
 
-	local rhint = W.Text(p, "Auto-capture in", "label", "dim")
-	rhint:SetPoint("TOPLEFT", 220, -32)
-	local cDun = W.Check(p, "Dungeons",
-		function() return db.recordDungeon ~= false end, function(v) db.recordDungeon = v end)
-	cDun:SetPoint("TOPLEFT", 220, -52)
-	local cRaid = W.Check(p, "Raids",
-		function() return db.recordRaid ~= false end, function(v) db.recordRaid = v end)
-	cRaid:SetPoint("TOPLEFT", 340, -52)
+	local hint = W.Text(p, "Orbs, Primordial Saronite and legendary fragments are always logged.\n"
+		.. "A run not kept stays visible until the next one starts.", "label", "dim")
+	hint:SetPoint("TOPLEFT", 8, -110)
+	hint:SetJustifyH("LEFT")
 
 	-- announce templates: everyone who awards loot needs these. It reports where
 	-- it ended, and the next block starts there -- a hard -330 below drifts the
 	-- moment anything above changes height, which is how the whisper box came to
 	-- sit on top of the priority toggle.
-	local y = buildMessages(p, -96)
+	local y = buildMessages(p, -150)
 
 	-- Everything below is about the priority list, so it is only built for someone
 	-- who can see that list -- to anyone else these are controls for a thing they

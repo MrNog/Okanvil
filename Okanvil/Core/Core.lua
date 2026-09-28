@@ -197,7 +197,11 @@ local defaults = {
 	-- Both are set in Settings > Branding, or with /okanvil brand|hub.
 	brand = "",
 	hubURL = "",
-	lootThreshold = 3, -- min item rarity to log: 0 poor,1 common,2 uncommon,3 rare,4 epic
+	-- min item rarity to log, per instance type: 0 poor,1 common,2 uncommon,3 rare,4 epic
+	lootThresholdDungeon = 3, -- blue dungeon gear
+	lootThresholdRaid = 4,    -- epic only; orbs/Primordial Saronite/fragments bypass it
+	lootKeepDungeon = false,  -- a dungeon run shows in the mini roll, then is dropped
+	lootKeepRaid = true,
 	recordDungeon = true, -- capture attendance/loot in 5-man dungeons (party instances)
 	recordRaid = true,    -- capture attendance/loot in raids
 	closeOnPull = true,    -- DBM pull -> close all Okanvil windows (get out of the way on engage)
