@@ -372,6 +372,8 @@ local role_words = {
 	           "%f[%w]disc%f[%W]", "%f[%w]resto%f[%W]",
 	           "%f[%w]dd%f[%W]", "%f[%w]dudu%f[%W]" },              -- dd/dudu = resto druid (this realm's slang)
 	dps    = { "%f[%w]dps%f[%W]", "%f[%w]rdps%f[%W]", "%f[%w]mdps%f[%W]",
+	           "%f[%w]melees?%f[%W]", "%f[%w]ranged?%f[%W]", "%f[%w]rangeds%f[%W]",
+	           "%f[%w]casters?%f[%W]",                               -- "5 Melee 8 Ranged"
 	           "%f[%w]boom%a*", "%f[%w]bomy%f[%W]", "%f[%w]moonkin%f[%W]",  -- boomy/boomie/boomkin/moonkin (+ "bomy" typo)
 		           "%f[%w]feral%a*", "%f[%w]kitty%f[%W]",               -- feral / kitty = feral dps
 	           "%f[%w]spriest%f[%W]", "shadow%s?priest", "%f[%w]spri%a*",
@@ -410,6 +412,7 @@ local function roleOfWord(w)
 	if w == "tank" or w == "mt" or w == "ot" or w == "bear" or w == "prot" then return "tank" end
 	if w == "heal" or w == "healer" or w == "healz" then return "healer" end
 	if w == "dps" or w == "dd" then return "dps" end
+	if w == "melee" or w == "ranged" or w == "range" or w == "caster" then return "dps" end
 	return nil
 end
 

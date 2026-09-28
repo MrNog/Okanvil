@@ -76,6 +76,27 @@ local function activeGroup(inspect)
 	return (GetActiveTalentGroup and GetActiveTalentGroup(inspect and true or false)) or 1
 end
 
+-- Does the inspect cache hold THIS class's talent trees? INSPECT_TALENT_READY
+-- carries no unit, and other addons (GearScore, Details, Skada) inspect too: when
+-- one of them asks about someone else between our request and the answer, the
+-- cache holds THAT player. Read as ours, a Blood DK's tab 1 became a Combat
+-- rogue's "Assassination". Tab names are English only on an enUS client, so a
+-- name we do not know (another locale) is not treated as a mismatch.
+local KNOWN_TAB = {}
+for cls, tabs in pairs(TREES) do
+	for _, t in ipairs(tabs) do KNOWN_TAB[t] = KNOWN_TAB[t] or {}; KNOWN_TAB[t][cls] = true end
+end
+KNOWN_TAB["Feral Combat"] = { DRUID = true }   -- the client's full name for the tab
+
+local function cacheIsFor(class, group)
+	for i = 1, 3 do
+		local tabName = GetTalentTabInfo(i, true, false, group)
+		local owners = tabName and KNOWN_TAB[tabName]
+		if owners and not owners[class] then return false end
+	end
+	return true
+end
+
 -- Read the spec out of the INSPECT CACHE. Every talent call takes the inspect
 -- flag `true` -- without it the API answers about YOUR OWN talents and every
 -- player in the raid comes back as your spec.
@@ -227,6 +248,7 @@ local waited   = 0       -- seconds the in-flight request has been outstanding
 local total, done = 0, 0
 local active   = false
 local onDone   = nil
+local retried  = {}      -- names re-asked this scan after a foreign answer
 
 -- The server silently drops inspect requests for players who are out of range or
 -- zoning. Without a timeout the whole queue stalls on one missing answer.
@@ -346,7 +368,19 @@ ev:SetScript("OnEvent", function()
 	-- Confirm the unit still holds the player we asked about. If the roster moved
 	-- under us between request and answer, the cache now describes someone else --
 	-- storing it would file the wrong spec under curName.
-	if stripRealm(UnitName(curUnit)) == curName then
+	local _, curClass = UnitClass(curUnit)
+	if stripRealm(UnitName(curUnit)) == curName and curClass
+	   and not cacheIsFor(curClass, activeGroup(true)) then
+		-- Another addon's inspect answered in our place (see cacheIsFor). Store
+		-- nothing -- not even gear, which is from the same wrong player -- and ask
+		-- again once at the back of the queue.
+		Okanvil:Trace("INSPECT", "foreign answer for " .. curName .. ", retrying")
+		if not retried[curName] then
+			retried[curName] = true
+			queue[#queue + 1] = curName
+			total = total + 1
+		end
+	elseif stripRealm(UnitName(curUnit)) == curName then
 		local spec, class, role, icon = readSpec(curUnit)
 		-- Gear is read even when the talents came back empty: the two are cached
 		-- separately by the client, and a player with no spec still has a gearscore
@@ -446,6 +480,7 @@ function M.ScanOne(name, callback)
 
 	queue = { name }
 	total, done = 1, 0
+	retried = {}
 	active, onDone = true, callback
 	fireNext()
 	return true
@@ -488,6 +523,7 @@ function M.ScanGroup(force, callback)
 	end
 
 	total, done = #queue, 0
+	retried = {}
 	if total == 0 then
 		if callback then callback(0, 0) end
 		return true, 0

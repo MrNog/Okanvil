@@ -653,6 +653,19 @@ local function isRaidSession(s)
 	return s.zone and RAID_ZONES[s.zone] or false
 end
 
+-- Does this run belong in the history list? Read against the CURRENT setting, not
+-- only the flag stamped at creation, so switching "Keep in history" off hides the
+-- runs recorded before it too. Nothing is deleted: switching it back on shows them.
+-- World loot ("day|" keys) is neither a raid nor a dungeon and is always listed.
+function L.IsKept(s)
+	if not s then return false end
+	if s.noKeep then return false end
+	local db = Okanvil.db
+	if isRaidSession(s) then return db.lootKeepRaid ~= false end
+	if s.key and s.key:find("^run|") then return db.lootKeepDungeon and true or false end
+	return true
+end
+
 local function migrateTrashLabels()
 	local cdb = charDB()
 	if not cdb or cdb.trashMigrated then return end
@@ -3281,20 +3294,6 @@ function L.AnnounceDisenchant(winner, link)
 	SendChatMessage(("%s was awarded with %s for Disenchant!"):format(winner, tostring(link)), ch)
 end
 
--- HIDE this run's drops from the mini roll list -- does NOT delete them. The old
--- version did wipe(s.drops), which destroyed the run's history in SavedVariables;
--- worse, it read sessions()[1] blindly, so pressing it after zoning into a new run
--- wiped the PREVIOUS run's loot. To actually delete a session, use L.DeleteSession
--- from the Loot page, where the intent is explicit.
-function L.ClearActiveDrops()
-	local s = activeBucket()
-	if not s or #s.drops == 0 then return false end
-	for i = 1, #s.drops do s.drops[i].hidden = true end
-	activeRoll = nil
-	if L.onLoot then L.onLoot() end
-	return true
-end
-
 -- ------------------------------------------------------------
 -- Data accessors for the UI.
 -- ------------------------------------------------------------
@@ -3313,7 +3312,9 @@ end
 -- run of the instance you just entered (see DropsByBoss).
 local SAME_NIGHT = 6 * 3600
 
-function L.DropsByBoss()
+-- The run the mini roll is showing. DropsByBoss lists it and ClearActiveDrops
+-- hides it, so both must pick the same one.
+local function rollSession()
 	-- Inside a live run: that run's drops. OUTSIDE one (you hearthed out and opened the
 	-- mini roll to review): fall back to the MOST RECENT session instead of the empty
 	-- pending buffer -- otherwise stepping out of the dungeon made the window look like
@@ -3345,6 +3346,28 @@ function L.DropsByBoss()
 		-- like scrolling had wiped the loot. sessions()[1] is stable.
 		s = sessions()[1]
 	end
+	return s
+end
+
+-- HIDE the mini roll's drops -- does NOT delete them. The old version did
+-- wipe(s.drops), which destroyed the run's history in SavedVariables; worse, it
+-- read sessions()[1] blindly, so pressing it after zoning into a new run wiped
+-- the PREVIOUS run's loot. To actually delete a session, use L.DeleteSession
+-- from the Loot page, where the intent is explicit.
+function L.ClearActiveDrops()
+	local s = rollSession()
+	if not s then return false end
+	local any = false
+	for _, dp in ipairs(s.drops or {}) do
+		if not dp.hidden then dp.hidden = true; any = true end
+	end
+	activeRoll = nil
+	if L.onLoot then L.onLoot() end
+	return any
+end
+
+function L.DropsByBoss()
+	local s = rollSession()
 	if not s then return {} end
 	local order, byBoss = {}, {}
 	for _, dp in ipairs(s.drops) do

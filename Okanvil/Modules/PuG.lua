@@ -51,6 +51,8 @@ local defaults = {
 	assignOver = {},         -- [name] = true: placed by hand while their spec was known,
 	                         -- so it stands even where the spec says another role
 	autoGroup = true,        -- seat joiners who land outside the raid's groups
+	sortGroups = false,      -- 25-man: file each joiner by role (melee 1-2, ranged 3-4, heal 5)
+	sortedIn = {},           -- [name] = true: already filed this raid, never moved again
 	wantRole = "tank",       -- which role's classes the Want row is showing right now
 	classRun = false,        -- VoA-style "one of each class" instead of role targets
 	classPer = 1,            -- how many of each class a class run wants
@@ -182,6 +184,17 @@ function M.ClassesForRole(role)
 	return out
 end
 
+-- How long a whisper's reading is trusted. A pug forms in well under this; a
+-- reading older than that is from another night and may be another spec.
+local APPLICANT_TTL = 3 * 3600
+
+-- What this name's whisper told us, or nil when it was too long ago to count.
+local function applicant(name)
+	local a = name and db.applicants and db.applicants[name]
+	if a and a.t and time() - a.t > APPLICANT_TTL then return nil end
+	return a
+end
+
 -- What the INSPECTED spec says this player does. nil = we have not inspected them
 -- (or the answer is stale), so the caller falls through to its other guesses.
 local function specRole(name, class)
@@ -212,7 +225,7 @@ function M.GuessRole(name, class)
 	local bySpec = name and specRole(name, class)
 	if bySpec then return bySpec end
 
-	local a = name and db.applicants[name]
+	local a = applicant(name)
 	if a and a.role then return a.role end
 
 	-- A hybrid we could not inspect has no default (see CLASS_DEFAULT), so this
@@ -228,7 +241,7 @@ function M.RoleIsKnown(name, class)
 	if not name then return false end
 	if M.AssignedRole(name) then return true end     -- placed by hand: a decision
 	if specRole(name, class) then return true end    -- inspected
-	local a = db.applicants[name]
+	local a = applicant(name)
 	return (a and a.role) ~= nil                     -- they told us themselves
 end
 
@@ -1130,8 +1143,8 @@ local SPEC_WORDS = {
 	{ "udk",          "melee",  "Unholy DK" },
 	{ "frost%s*dk",   "melee",  "Frost DK"  },
 	{ "%f[%w]mm%f[%W]",     "ranged", "MM"     },
-	{ "survival",           "melee",  "Survival" },
-	{ "%f[%w]sv%f[%W]",     "melee",  "Survival" },
+	{ "%f[%w]surv%a*",      "ranged", "Survival" },
+	{ "%f[%w]sv%f[%W]",     "ranged", "Survival" },
 	{ "%f[%w]bm%f[%W]",     "ranged", "BM"     },
 	{ "%f[%w]aff%a*",       "ranged", "Affli"  },
 	{ "destro%a*",          "ranged", "Destro" },
@@ -1266,7 +1279,7 @@ function M.SubLabel(name)
 	local bits = {}
 	local I = Okanvil.Inspect
 	local info = I and I.Info and I.Info(name)
-	local a = db.applicants and db.applicants[name]
+	local a = applicant(name)
 
 	-- The spec is the ROLE's colour, matching the column it belongs in: a healer
 	-- reads green here and sits in the green column, so the board can be scanned
@@ -1508,7 +1521,13 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 			if guid and GetPlayerInfoByGUID then
 				class = select(2, GetPlayerInfoByGUID(guid))
 			end
-			local a = db.applicants[sender] or { name = sender }
+			-- What they said on another night, or on another class, is not about
+			-- this whisper: a hunter who wrote "fury 5.7" last week and "surv 5.7"
+			-- today must not come out as Fury. Only whispers from the same forming
+			-- session add up ("ret pala", then "5.4k").
+			local a = applicant(sender)
+			if a and class and a.class and class ~= a.class then a = nil end
+			a = a or { name = sender }
 			local role, spec, gs = classify(msg, class or a.class)
 			a.class = class or a.class
 			a.role, a.spec, a.gs = role or a.role, spec or a.spec, gs or a.gs
@@ -1540,15 +1559,14 @@ end)
 -- for RAID_ROSTER_UPDATE rather than happening at invite time.
 -- ------------------------------------------------------------
 
--- NO role-to-group map.
+-- By default, NO role-to-group map.
 --
--- This used to own the comp: tanks to group 1, healers to 2, melee 3-4, ranged
--- 5-6. It fought the raid leader -- you arrange the groups for buffs and
--- assignments, the addon shoves someone back because their spec says "ranged",
--- and the board you built comes apart as people join.
+-- A map that re-applies itself fights the raid leader -- you arrange the groups
+-- for buffs and assignments, the addon shoves someone back because their spec
+-- says "ranged", and the board you built comes apart as people join.
 --
--- A joiner just needs A seat. Ordering is the leader's call, made once when the
--- raid is full, and nothing here should undo it.
+-- So by default a joiner just gets A seat. The optional role sort (sortGroups,
+-- below) files each person once as they join and never touches them again.
 
 -- Only ever move people when it is OUR raid to arrange. Never reshuffle someone
 -- else's group.
@@ -1638,7 +1656,67 @@ function M.ArrangeRaid()
 	return moved
 end
 
--- As people accept, make sure they have a seat -- nothing more.
+-- Optional role sort ("Sort joiners by role"), 25-man only.
+--
+-- Off by default, because a map like this fights a leader who arranges groups by
+-- hand. When it is on, each raider is filed ONCE, as they join, and is then
+-- theirs to move: `sortedIn` remembers who was filed this raid (across a
+-- /reload) and is cleared when the raid ends. Tanks go with the melee.
+local SORT_GROUPS = { tank = { 1, 2 }, melee = { 1, 2 }, ranged = { 3, 4 }, healer = { 5 } }
+M.SORT_GROUPS = SORT_GROUPS
+
+-- Where each unsorted raider sat when we first saw them without a known role.
+-- If the leader moves them before the role turns up, they are left alone.
+local waitSeat = {}
+
+-- File one raider by role. `counts` is this pass's own group tally: the roster
+-- does not update until the server confirms a move, so reading it again would
+-- put six people in group 5. Returns true once the raider is settled (moved,
+-- already in place, or no room), false while their role is still unknown.
+local function sortOne(idx, name, class, cur, counts)
+	local role = M.GuessRole(name, class)
+	if not role then
+		if waitSeat[name] == nil then waitSeat[name] = cur end
+		return waitSeat[name] ~= cur          -- moved by hand while we waited: settled
+	end
+	waitSeat[name] = nil
+	local groups = SORT_GROUPS[role]
+	if not groups then return true end
+	for _, g in ipairs(groups) do
+		if cur == g then return true end
+	end
+	for _, g in ipairs(groups) do
+		if (counts[g] or 0) < 5 then
+			SetRaidSubgroup(idx, g)
+			counts[cur] = (counts[cur] or 1) - 1
+			counts[g] = (counts[g] or 0) + 1
+			return true
+		end
+	end
+	-- Their groups are full: leave them where they are (placeOne still makes
+	-- sure that is a real seat).
+	placeOne(name)
+	return true
+end
+
+local function sortPass()
+	db.sortedIn = db.sortedIn or {}
+	local n = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+	local counts = {}
+	for i = 1, n do
+		local _, _, sub = GetRaidRosterInfo(i)
+		if sub then counts[sub] = (counts[sub] or 0) + 1 end
+	end
+	for i = 1, n do
+		local rn, _, sub, _, _, class = GetRaidRosterInfo(i)
+		if rn and not db.sortedIn[rn] then
+			if sortOne(i, rn, class, sub, counts) then db.sortedIn[rn] = true end
+		end
+	end
+end
+
+-- As people accept, make sure they have a seat -- and, with the role sort on in
+-- a 25, put them in their role's groups.
 --
 -- placeOne leaves anyone already inside the raid's groups alone, so this cannot
 -- undo the leader's arrangement. The `seenInRaid` guard stays anyway: without
@@ -1647,10 +1725,21 @@ local seenInRaid = {}
 local aev = CreateFrame("Frame")
 aev:RegisterEvent("RAID_ROSTER_UPDATE")
 aev:SetScript("OnEvent", Okanvil:CombatSafe("pug.autoGroup", function()
-	if not db or not db.autoGroup then return end
+	if not db then return end
+	local n = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+	if n == 0 then
+		-- raid over: the next one files everyone afresh
+		db.sortedIn = {}
+		waitSeat = {}
+		return
+	end
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 	if not canArrange() then return end
-	local n = (GetNumRaidMembers and GetNumRaidMembers()) or 0
+	if db.sortGroups and db.size ~= 10 and SetRaidSubgroup then
+		sortPass()
+		return
+	end
+	if not db.autoGroup then return end
 	local present = {}
 	for i = 1, n do
 		local rn = GetRaidRosterInfo(i)

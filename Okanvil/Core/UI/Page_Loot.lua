@@ -695,10 +695,11 @@ function Okanvil:Loot_BuildHistory(main)
 		for _, c in ipairs(cards) do c:Hide() end
 		-- Runs that never dropped anything (walking through open world, a zone
 		-- visited and left) are not listed; a raid shows up with its first drop.
-		-- A run with "Keep in history" off is listed only while it is the latest one.
+		-- A run with "Keep in history" off is never listed; the mini roll still has
+		-- it until the next run starts.
 		local sessions = {}
-		for i, sess in ipairs((L.Sessions and L.Sessions()) or {}) do
-			if sess.drops and #sess.drops > 0 and (i == 1 or not sess.noKeep) then
+		for _, sess in ipairs((L.Sessions and L.Sessions()) or {}) do
+			if sess.drops and #sess.drops > 0 and (not L.IsKept or L.IsKept(sess)) then
 				sessions[#sessions + 1] = sess
 			end
 		end
@@ -860,7 +861,7 @@ function Okanvil:Loot_BuildSettings(p)
 	captureRow(-80, "Raids", "recordRaid", "lootThresholdRaid", 4, "lootKeepRaid", true)
 
 	local hint = W.Text(p, "Orbs, Primordial Saronite and legendary fragments are always logged.\n"
-		.. "A run not kept stays visible until the next one starts.", "label", "dim")
+		.. "A run not kept stays in the mini roll only, until the next one starts.", "label", "dim")
 	hint:SetPoint("TOPLEFT", 8, -110)
 	hint:SetJustifyH("LEFT")
 

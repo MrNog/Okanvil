@@ -46,11 +46,11 @@ function Okanvil:BuildSettings()
 			  height = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) and 470 or 320,
 			  build = function(pg) Okanvil:Loot_BuildSettings(pg) end },
 			-- Two columns: the ready-check popup and the marks bar side by side.
-			{ key = "raid",    label = "Raid",       height = 400,
+			{ key = "raid",    label = "Raid",       height = 480,
 			  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
 			-- Keyword auto-invite: three switches and a keyword list, set once --
 			-- configuration, not a page of its own.
-			{ key = "invite",  label = "Invite",     height = 220,
+			{ key = "invite",  label = "Invite",     height = 290,
 			  build = function(pg) Okanvil:Settings_Invite(pg) end },
 			-- No Modules pill: Modules is not configuration, it is what the addon
 			-- has, and it is its own nav entry.
@@ -234,12 +234,12 @@ function Okanvil:Settings_RaidTools(p)
 	local function chk(label, getFn, setFn, tip)
 		local c = W.ToggleRow(p, label, nil, getFn, setFn)
 		c:SetHeight(26); c.btn:SetSize(46, 18); c:SetWidth(COL_W - 20)
-		c:SetPoint("TOPLEFT", cx(), cy()); step(28)
+		c:SetPoint("TOPLEFT", cx(), cy()); step(34)
 		if tip then c:Tooltip(tip) end
 		return c
 	end
 	local function hint(text)
-		setY(W.Hint(p, text, cx() + 21, cy(), COL_W - 30, 8))
+		setY(W.Hint(p, text, cx() + 21, cy(), COL_W - 30, 14))
 	end
 
 	local RC = Okanvil.RaidCheck
@@ -275,7 +275,7 @@ function Okanvil:Settings_RaidTools(p)
 			end)
 		hint("off: only buffs people actually have are drawn")
 
-		step(6)
+		step(10)
 		local rcSortL = W.Text(p, "Sort by", "label", "dim")
 		rcSortL:SetPoint("TOPLEFT", cx(), cy() + 4)
 		W.DropDown(p,
@@ -312,14 +312,14 @@ function Okanvil:Settings_RaidTools(p)
 			function(v) if MB.Toggle then MB:Toggle(v and true or false) end end)
 		hint("marks, ready check and pull -- only while you are leader or assist")
 
-		step(SLIDER_TOP)
+		step(SLIDER_TOP + 12)
 		W.Slider(p, "Size", 70, 160, 5,
 			function() return mbdb().scale or 100 end,
 			function(v)
 				mbdb().scale = v
 				if MB.Refresh then MB:Refresh() end
 			end):SetPoint("TOPLEFT", cx(), cy())
-		step(24 + SLIDER_TOP)
+		step(32 + SLIDER_TOP)
 		W.Slider(p, "Pull timer (seconds)", 3, 30, 1,
 			function() return mbdb().pullTime or 10 end,
 			function(v) mbdb().pullTime = v end):SetPoint("TOPLEFT", cx(), cy())
@@ -332,7 +332,7 @@ function Okanvil:Settings_RaidTools(p)
 	local LDB = OkanvilLogs and OkanvilLogs.DB and OkanvilLogs.DB()
 	if LDB then
 		col = 2
-		step(14)
+		step(22)
 		head("COMBAT LOG")
 		chk("Ask when entering a raid",
 			function() return LDB.askOnEnter and true or false end,
@@ -572,6 +572,20 @@ function Okanvil:Settings_Invite(p)
 	kwHint:SetPoint("LEFT", kwBox, "RIGHT", 10, 0)
 
 	refreshPreview(kwBox.edit:GetText())
+
+	-- Raid groups: the PuG module's optional role sort for people who join.
+	local P = Okanvil.PuG
+	if P and P.DB and P.DB() then
+		local grpLbl = W.Text(p, "RAID GROUPS", "note", "dim"); grpLbl:SetPoint("TOPLEFT", X, -186 + Y0)
+		local sortChk = W.Check(p, "Sort joiners by role",
+			function() return P.DB().sortGroups and true or false end,
+			function(v) P.DB().sortGroups = v and true or false end)
+		sortChk:SetPoint("TOPLEFT", X, -206 + Y0)
+		sortChk:Tooltip("When you lead a 25-man, each person who joins goes to their role's groups once. Move them afterwards and they stay put.")
+		local sortHint = W.Text(p, "25-man: melee and tanks to groups 1-2, ranged 3-4, healers 5. "
+			.. "Each person is placed once, when they join.", "note", "dim")
+		sortHint:SetPoint("TOPLEFT", X + 2, -232 + Y0); sortHint:SetWidth(600); sortHint:SetJustifyH("LEFT")
+	end
 
 	-- The login toast and its switch are gone: it double-counted one person into
 	-- (+1)(+2)(+4) as the roster refreshed, and arrived late regardless. Home's
