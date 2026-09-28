@@ -1,6 +1,8 @@
 # Attendance for fair loot: plan
 
-Status: **designed, not built.** Written 2026-09-28 after the ToC 25 debrief.
+Status: **built on branch `attendance`** (Okanvil + rats), 2026-09-28. Not merged.
+Written 2026-09-28 after the ToC 25 debrief; the GM's ICC 25 rule (same day) settled the
+pending decisions below.
 Visual mock: https://claude.ai/artifact/WN9Aa2FP5SENE85vw2fV8i (private; ask Okanor for access).
 
 ## Goal
@@ -77,7 +79,55 @@ existing pasted ladder.
 - **Zero addon comms.** Only one client records the night, so five officers online
   never compete to update anything.
 
-## Pending decisions
+## Decisions settled by the GM's rule (2026-09-28)
+
+- **Main run = ICC 25 only.** ICC 10, other raids and anything on alts are free.
+- A main must be **saved to our ICC 25 ID** each week. Night 1 or night 2 both count;
+  missing night 1 still means keeping the main free for night 2.
+- Pugging ICC 25 on a main is OK only when an **officer cleared it first**: the officer
+  excuses that lockout on the site (History > Missed our ID). Vacations excuse themselves.
+- Penalty: **bottom of every loot ladder until they come to a main run again**.
+- Recorder = master looter, else the raid leader (decision 1: yes).
+- A night only counts as the main run when **at least half the raid is in the guild**
+  (a pug in ICC 25 on an officer's alt must never be filed as ours).
+
+## Letters and the three outcomes (added 2026-09-28)
+
+A main not in our run is **absent** (no raid that week: only the attendance % drops),
+**saved elsewhere** (proof: an Okanvil letter with another ICC 25 ID, or an officer's
+mark: on the list + bottom of prio until they attend a main run), or **excused**
+(officer cleared it beforehand / vacation).
+
+Letters (`Modules/AttendanceLetters.lua`): every Okanvil writes one per ICC/RS lockout
+of its character, keeps it on disk until an officer is online, sends it once on the
+guild addon channel (`ATTL`), and stops when an officer answers (`ATTA`, whisper; only
+an officer's answer counts). Officers keep an inbox (8 weeks). **Officer sync** (one officer, Okanor, uploads to
+the site, so that inbox must be complete): an officer who logs in sends their last 5
+weeks of letters to the guild (`ATTS`, big payload); every officer online merges and
+whispers theirs back (`ATTR`). Both sides merge, so any letter reaches every officer the
+next time two of them are online together. Our ID = the recorded run's, else the ID 3+ letters agree on. A letter with our
+ID also proves presence for someone who joined after the snapshot.
+
+10-man effort (information only): per main, last 4 weeks, "25 + 10" / "25 only" / "10
+only". ICC/RS 10 on the MAIN counts, guild or pug; alts don't. "25 only" = confirmed by
+the raider's letters; "25 only?" = no Okanvil, only guild 10-mans checked. Officers can
+exempt a geared main. Loot prio shows a "25 only" tag (confirmed only), never reorders.
+
+## Clear, Our ID = mine, raid loggers (added 2026-09-28)
+
+- **Clear** (in game, "Saved elsewhere" box): an officer marks that the raider talked
+  to them (Told us before / Real life / Sick / Other). No penalty. Stored per week with
+  who cleared it; an Undo is stored too, the newer word wins. Sent to the officers
+  online at once and in the login sync; exported as `clears`, imported on the site as
+  the excuse (an Undo removes only an excuse that came from Okanvil).
+- **Our ID = mine**: an officer who raided with the guild sets the week's ICC 25 ID from
+  their own lockout. Order for "our ID": recorded run, officer, 3+ letters. Exported as
+  `ours`.
+- **Raid loggers in loot prio**: a confirmed "25 only" main goes to the END OF THEIR
+  CLASS on every ladder (the class keeps its slots; inside them loggers take the last
+  ones). Other classes don't move. Tag "25 only" on the name.
+
+## Pending decisions (original)
 
 1. Who records: only the **master looter** (or the raid leader when there is no
    ML)? Proposed: yes.

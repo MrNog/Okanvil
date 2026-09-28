@@ -27,6 +27,8 @@ Core\UI\Setup.lua
 
 Modules\Inspect.lua
 Modules\Guild.lua
+Modules\Attendance.lua
+Modules\AttendanceLetters.lua
 Modules\Bosses-Data.lua
 Modules\ItemBoss-Data.lua
 Modules\Proficiency-Data.lua

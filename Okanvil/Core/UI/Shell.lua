@@ -431,6 +431,7 @@ Okanvil.ICONS = {
 	pug        = "Interface\\Icons\\Ability_Hunter_Harass",
 	farm       = "Interface\\Icons\\INV_Misc_Bag_10",
 	raidfinder = "Interface\\Icons\\Ability_Warrior_BattleShout",
+	attendance = "Interface\\Icons\\INV_Misc_PocketWatch_01",
 }
 
 Okanvil.NATIVE = {
@@ -508,7 +509,7 @@ Okanvil.NAV_GROUPS = {
 	{ section = "RAID",   items = { "Loot", "Notes", "Raid Finder", "PuG" } },
 	-- Loot Council is not here: it is the Council and Priority tabs of Loot.
 	-- GUILD keeps its header for the guild tools still to come.
-	{ section = "GUILD",  items = { "Recruit" } },
+	{ section = "GUILD",  items = { "Attendance", "Recruit" } },
 	-- Modules and Settings last: neither is a feature, they are what the addon
 	-- has and how it behaves. Settings is the very last row -- see below, where
 	-- anything unnamed is appended BEFORE it rather than after.
@@ -533,6 +534,7 @@ Okanvil.PANEL_KEY = {
 	["Raid Finder"] = "Okanvil-RaidFinder",
 	["PuG"] = "Okanvil-PuG",
 	["Recruit"] = "Okanvil-Recruit",
+	["Attendance"] = "Okanvil-Attendance",
 	["ID Finder"] = "Okanvil-IDs",
 	["Farm"] = "Okanvil-Farm",
 }
@@ -574,7 +576,9 @@ function Okanvil:RefreshNav()
 	for name in pairs(self.entries) do
 		-- plugins honour `noNav` too: a module whose UI is a floating window or a
 		-- marks-bar button should not also claim a nav row
-		if self:IsModuleEnabled(name) and not self.entries[name].noNav then
+		local e = self.entries[name]
+		local plugOk = not e.officerOnly or (self.U and self.U.canSeePrio and self.U.canSeePrio())
+		if self:IsModuleEnabled(name) and not e.noNav and plugOk then
 			local t = self.entries[name].title or name
 			pool[t] = { key = name, title = t, icon = self.entries[name].icon }
 		end

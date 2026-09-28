@@ -444,6 +444,33 @@ local function termMatches(rec, key, term)
 	return false
 end
 
+-- ICC in kill order, for grouping by boss; a boss not listed sorts after, by name.
+local BOSS_ORDER = { "marrowgar", "deathwhisper", "gunship", "saurfang", "festergut", "rotface",
+	"putricide", "blood prince", "lana", "valithria", "sindragosa", "lich king" }
+local function bossRank(bo)
+	bo = (bo or ""):lower()
+	for i, k in ipairs(BOSS_ORDER) do
+		if bo:find(k, 1, true) then return i end
+	end
+	if bo:find("council", 1, true) then return 8 end
+	if bo:find("skybreaker", 1, true) or bo:find("orgrim", 1, true) then return 3 end
+	if bo:find("dreamwalker", 1, true) then return 10 end
+	return 50
+end
+
+-- How the list is grouped: "type" (the slot headings the site sends) or "boss".
+function P.GroupBy()
+	return db().groupBy == "boss" and "boss" or "type"
+end
+function P.SetGroupBy(by)
+	db().groupBy = (by == "boss") and "boss" or nil
+end
+-- the heading an item sits under
+function P.GroupOf(rec)
+	if P.GroupBy() == "boss" then return (rec.bo and rec.bo ~= "") and rec.bo or "Other" end
+	return rec.g or "Other"
+end
+
 -- tier: "all" | "R" (reserved, the council's calls) | "P" (prio roll)
 function P.Sorted(filter, tier)
 	local d = db()
@@ -470,8 +497,15 @@ function P.Sorted(filter, tier)
 	end
 	-- Grouped by slot, in the website's own order (trinkets, rings, weapons...),
 	-- so an item is found where you would look for it rather than somewhere in
-	-- one long alphabetical run.
+	-- one long alphabetical run. By boss: kill order, then the same slot order
+	-- inside each boss.
+	local byBoss = P.GroupBy() == "boss"
 	table.sort(out, function(a, b)
+		if byBoss then
+			local ra, rb = bossRank(a.bo), bossRank(b.bo)
+			if ra ~= rb then return ra < rb end
+			if (a.bo or "") ~= (b.bo or "") then return (a.bo or "") < (b.bo or "") end
+		end
 		local ga, gb = a.go or 99, b.go or 99
 		if ga ~= gb then return ga < gb end
 		return (a.n or "") < (b.n or "")
@@ -582,6 +616,28 @@ function P.BuildTab(p)
 	local bAll = tierBtn("All", "all", 44, search, 10)
 	local bRes = tierBtn("Reserved", "R", 74, bAll)
 	local bRoll = tierBtn("Prio roll", "P", 70, bRes)
+
+	-- Group by boss (what the raid is fighting) or by type (what "a trinket
+	-- dropped" means), the same switch as the website's. Remembered.
+	local groupBtns = {}
+	local function paintGroup()
+		for k, b in pairs(groupBtns) do b:SetKind(k == P.GroupBy() and "primary" or nil) end
+	end
+	local function groupBtn(label, key, w, anchor, gap)
+		local b = W.Button(p, label)
+		b:SetSize(w, 22)
+		b:SetPoint("LEFT", anchor, "RIGHT", gap or 6, 0)
+		b:SetScript("OnClick", function()
+			P.SetGroupBy(key)
+			paintGroup()
+			if p._rebuild then p._rebuild() end
+		end)
+		groupBtns[key] = b
+		return b
+	end
+	local bBoss = groupBtn("Boss", "boss", 50, bRoll, 16)
+	groupBtn("Type", "type", 50, bBoss)
+	paintGroup()
 
 	-- Three buttons used to live here and no longer do:
 	--   SAY / Officer -- a channel switch for testing the format. Send always goes
@@ -776,14 +832,15 @@ function P.BuildTab(p)
 		-- how many items each group holds, so a folded header can still say so
 		local nIn = {}
 		for _, rec in ipairs(list) do
-			local g = rec.g or "Other"
+			local g = P.GroupOf(rec)
 			nIn[g] = (nIn[g] or 0) + 1
 		end
+		local byBoss = P.GroupBy() == "boss"
 
 		local y, lastG, nHead, nRow = 0, nil, 0, 0
 		for _, rec in ipairs(list) do
-			-- slot header whenever the group changes, like the page's sections
-			local g = rec.g or "Other"
+			-- a header whenever the group changes, like the page's sections
+			local g = P.GroupOf(rec)
 			if g ~= lastG then
 				lastG = g
 				nHead = nHead + 1
@@ -811,7 +868,8 @@ function P.BuildTab(p)
 			r.name:SetText("|cffa335ee" .. (rec.n or "?") .. "|r")
 			if rec.r then r.bar:SetVertexColor(0.75, 0.58, 0.23, 1); r.bar:Show()
 			else r.bar:Hide() end
-			r.boss:SetText(rec.bo or "")
+			-- beside the name: what the heading does not say (the type under a boss)
+			r.boss:SetText((byBoss and rec.g or rec.bo) or "")
 			r.prio:SetText(P.Line(rec.p))
 			if rec.ic and rec.ic ~= "" then
 				r.icon:SetTexture("Interface\\Icons\\" .. rec.ic)

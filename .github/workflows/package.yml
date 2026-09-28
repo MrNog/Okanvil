@@ -175,25 +175,23 @@ jobs:
             echo "::warning::LOG_WEBHOOK secret is not set -- release published, Discord not notified."
             exit 0
           fi
-          # The embed is read by OFFICERS, not by developers: it must say what
-          # CHANGED for a user, never how. So we do NOT use GitHub's generated
-          # notes (a bare list of commit subjects + a compare link -- meaningless
-          # to anyone who does not read the diff).
+          # The embed is read by EVERY RAIDER, not by developers or officers: it
+          # must be short and say only what a raider notices in-game. So we do NOT
+          # use GitHub's generated notes (commit subjects + a compare link), and
+          # we do not link the full changelog -- it would expose officer tooling.
           #
-          # Instead we walk every commit since the previous tag and sort its body
-          # lines into two buckets by leading keyword:
-          #
-          #   new: adds the Invite tab      -> "New" list
-          #   fix: loot no longer duplicates -> "Fixed" list
-          #
-          # Accepted prefixes (case-insensitive, `-`/`*` bullet optional):
+          # We walk every commit since the previous tag and keep only body lines
+          # with a raider-facing keyword (case-insensitive, `-`/`*` bullet optional):
           #   new: / feature: / add: / added:   -> New
           #   fix: / fixed: / bug:              -> Fixed
+          # Everything else is left out -- including `officer:` lines (officer-only
+          # tools) and commits with no keyword line at all. Nothing falls back to
+          # the commit subject: silence is safer than developer shorthand.
           #
-          # A commit whose body has NO such line still gets announced: its subject
-          # is used, going to "Fixed" unless it is a [minor]/[major] bump (-> New).
-          # That way a lazy one-line commit degrades to today's behaviour instead
-          # of vanishing from the post.
+          # Each section shows at most MAX items, each cut to LINE chars at a word
+          # boundary, so a big release still posts a handful of lines.
+          MAX=3
+          LINE=90
           # The previous tag is the one that PRECEDES this commit in history --
           # ask git to walk it. (Sorting all tags by version and taking the top
           # one looks equivalent but is not: it ignores which commit we are on,
@@ -206,33 +204,22 @@ jobs:
           # %x00-separated commits so bodies with blank lines stay one record
           git log "$RANGE" --no-merges --pretty=format:'%s%n%b%x00' | \
           while IFS= read -r -d '' commit; do
-            subject="$(printf '%s' "$commit" | head -n1)"
             lower="$(printf '%s' "$commit" | tr '[:upper:]' '[:lower:]')"
             case "$lower" in *"[skip"*) continue ;; esac
 
-            matched=0
             while IFS= read -r line; do
               # strip a leading bullet and whitespace
               item="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*[-*][[:space:]]*//')"
+              text="$(printf '%s' "$item" | sed -E 's/^[^:]+:[[:space:]]*//')"
+              # cut long lines at the last word boundary before LINE chars
+              if [ "${#text}" -gt "$LINE" ]; then
+                text="$(printf '%s' "${text:0:$LINE}" | sed -E 's/[[:space:]]+[^[:space:]]*$//')…"
+              fi
               case "$(printf '%s' "$item" | tr '[:upper:]' '[:lower:]')" in
-                new:*|feature:*|feat:*|add:*|added:*)
-                  printf -- '- %s\n' "$(printf '%s' "$item" | sed -E 's/^[^:]+:[[:space:]]*//')" >> new.txt
-                  matched=1 ;;
-                fix:*|fixed:*|bug:*)
-                  printf -- '- %s\n' "$(printf '%s' "$item" | sed -E 's/^[^:]+:[[:space:]]*//')" >> fix.txt
-                  matched=1 ;;
+                new:*|feature:*|feat:*|add:*|added:*) printf -- '- %s\n' "$text" >> new.txt ;;
+                fix:*|fixed:*|bug:*)                  printf -- '- %s\n' "$text" >> fix.txt ;;
               esac
             done <<< "$commit"
-
-            # no keyword lines anywhere -> fall back to the bare subject
-            if [ "$matched" = "0" ]; then
-              clean="$(printf '%s' "$subject" | sed -E 's/\[(minor|major|skip[^]]*)\]//Ig; s/^[[:space:]]+|[[:space:]]+$//g')"
-              [ -z "$clean" ] && continue
-              case "$lower" in
-                *"[minor]"*|*"[major]"*) printf -- '- %s\n' "$clean" >> new.txt ;;
-                *)                       printf -- '- %s\n' "$clean" >> fix.txt ;;
-              esac
-            fi
           done
 
           # Assemble the sections.
@@ -246,25 +233,32 @@ jobs:
           # newlines -- do NOT reach for a bare multi-line NL='...' literal here: a
           # line at column 0 terminates the enclosing YAML block scalar and breaks
           # the whole workflow.
-          DESC=""
-          if [ -s new.txt ]; then
-            DESC="$(printf '**✨ New**\n%s' "$(head -c 900 new.txt)")"
+          # Anything past MAX lines collapses into one "+ other small fixes" line.
+          NEWS="$(head -n "$MAX" new.txt)"
+          FIXES="$(head -n "$MAX" fix.txt)"
+          if [ "$(wc -l < new.txt)" -gt "$MAX" ] || [ "$(wc -l < fix.txt)" -gt "$MAX" ]; then
+            FIXES="$(printf '%s\n- + other small fixes' "$FIXES" | sed '/^$/d')"
           fi
-          if [ -s fix.txt ]; then
+          DESC=""
+          if [ -n "$NEWS" ]; then
+            DESC="$(printf '**✨ New**\n%s' "$NEWS")"
+          fi
+          if [ -n "$FIXES" ]; then
             if [ -n "$DESC" ]; then
-              DESC="$(printf '%s\n\n**🔧 Fixed**\n%s' "$DESC" "$(head -c 900 fix.txt)")"
+              DESC="$(printf '%s\n\n**🔧 Fixed**\n%s' "$DESC" "$FIXES")"
             else
-              DESC="$(printf '**🔧 Fixed**\n%s' "$(head -c 900 fix.txt)")"
+              DESC="$(printf '**🔧 Fixed**\n%s' "$FIXES")"
             fi
           fi
-          [ -z "$DESC" ] && DESC="Maintenance release."
+          [ -z "$DESC" ] && DESC="Small fixes and improvements."
 
-          URL="https://github.com/$REPO/releases/tag/$TAG"
+          # Title and link both point at the zip, never the release page (its
+          # generated notes list every commit subject).
           ZIP="https://github.com/$REPO/releases/download/$TAG/Okanvil.zip"
-          DESC="$(printf '%s\n\n**Install:** unzip into `World of Warcraft\\Interface\\AddOns\\`, then restart WoW.\n[Download Okanvil.zip](%s)  ·  [Full changelog](%s)' "$DESC" "$ZIP" "$URL")"
+          DESC="$(printf '%s\n\n**Install:** unzip into `World of Warcraft\\Interface\\AddOns\\`, then restart WoW.\n[Download Okanvil.zip](%s)' "$DESC" "$ZIP")"
 
           # 12686394 = #c1943a (RATS gold)
-          payload="$(jq -n --arg t "Okanvil $VERSION" --arg u "$URL" \
+          payload="$(jq -n --arg t "Okanvil $VERSION" --arg u "$ZIP" \
                            --arg d "$DESC" --arg f "$REPO" \
             '{embeds:[{author:{name:"Okanvil - new release"},title:$t,url:$u,
                        description:$d,color:12686394,footer:{text:$f}}]}')"

@@ -20,12 +20,14 @@
 --      sizes  raid sizes that exist for this instance
 --      hc     instance has a heroic/hard mode worth advertising
 --      wq     instance is commonly run as a weekly quest
+--      hcLockout  heroic has its OWN lockout ID (ToC / ToGC); ICC and RS heroic
+--                 share the normal lockout, so they have no flag
 -- ============================================================
 
 OkanvilRaids = {
 	{ key = "icc",     name = "Icecrown Citadel",       short = "ICC",    sizes = { 10, 25 }, hc = true,  wq = true  },
 	{ key = "rs",      name = "The Ruby Sanctum",       short = "RS",     sizes = { 10, 25 }, hc = true              },
-	{ key = "toc",     name = "Trial of the Crusader",  short = "ToC",    sizes = { 10, 25 }, hc = true              },
+	{ key = "toc",     name = "Trial of the Crusader",  short = "ToC",    sizes = { 10, 25 }, hc = true, hcLockout = true },
 	{ key = "ulduar",  name = "Ulduar",                 short = "Ulduar", sizes = { 10, 25 }, hc = true,  wq = true  },
 	{ key = "naxx",    name = "Naxxramas",              short = "Naxx",   sizes = { 10, 25 },             wq = true  },
 	{ key = "os",      name = "The Obsidian Sanctum",   short = "OS",     sizes = { 10, 25 },             wq = true  },
