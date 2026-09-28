@@ -180,15 +180,18 @@ local OFFICER_MAX_RANK = 1
 
 -- Every rank the guild actually has, as { [index] = "Name" }, plus the highest
 -- index seen. Built from the roster because 3.3.5a has no reliable rank-name
--- call outside the guild-control frame.
+-- call outside the guild-control frame. From the FULL roster (see roster()):
+-- walking only the online members made the highest online rank look like the
+-- bottom one, so every rank colour and the "newest members" tile came out wrong
+-- whenever few people were on.
+local roster
 function U.guildRanks()
 	local names, maxIdx = {}, -1
 	if not (IsInGuild and IsInGuild()) then return names, maxIdx end
-	for i = 1, (GetNumGuildMembers and GetNumGuildMembers() or 0) do
-		local _, rank, rankIndex = GetGuildRosterInfo(i)
-		if rankIndex and rank and rank ~= "" then
-			names[rankIndex] = rank
-			if rankIndex > maxIdx then maxIdx = rankIndex end
+	for _, m in pairs(roster()) do
+		if m.rank and m.rankName and m.rankName ~= "" then
+			names[m.rank] = m.rankName
+			if m.rank > maxIdx then maxIdx = m.rank end
 		end
 	end
 	return names, maxIdx
@@ -209,15 +212,15 @@ local rosterCache
 -- The FULL roster, offline members included. An officer playing an alt has their
 -- main offline, and an online-only walk could not find the main behind the alt's
 -- "<Main> alt" note -- so every officer alt was treated as a plain raider.
-local function roster()
+function roster()
 	if rosterCache then return rosterCache end
 	local cache = {}
 	local function walk(total)
 		for i = 1, total do
-			local n, _, rankIndex, _, _, _, publicnote, officernote = GetGuildRosterInfo(i)
+			local n, rankName, rankIndex, _, _, _, publicnote, officernote = GetGuildRosterInfo(i)
 			if n then
 				cache[(n:gsub("%-.*$", ""))] =
-					{ rank = rankIndex, pub = publicnote, off = officernote }
+					{ rank = rankIndex, rankName = rankName, pub = publicnote, off = officernote }
 			end
 		end
 	end

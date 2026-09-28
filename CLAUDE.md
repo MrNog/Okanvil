@@ -33,30 +33,35 @@ which you chose and why. Do not ask unless it is genuinely ambiguous.
 - A mixed diff takes the **highest** level it contains — a feature plus a docs tweak is
   `[minor]`, never `[skip]`.
 
-### The commit body becomes the Discord post — write it for officers
+### The commit body becomes the Discord post — write it for EVERY raider
 
-The release embed in `#okanor-logs` is built from the commit **bodies** since the last
-tag, not from the diff. Officers read it; they do not read code. So the body must say
-what changed *for a user*, in plain words.
+The release embed is built from the commit **bodies** since the last tag, not from the
+diff. It goes to **all raiders** through one webhook, so it must be short and must
+never reveal officer tooling — the user tells officers about their features in person.
 
-Sort each user-visible change onto its own line, prefixed with a keyword:
+Sort each change onto its own line, prefixed with a keyword:
 
 ```
-[minor] loot: raid ID tracking
+[minor] loot: mini roll buttons, lockout ID
 
-new: Loot now tracks the raid ID, so two raids on the same night no longer merge.
-fix: Master-loot window no longer shows for every raider, only the actual ML.
-- Internal: renamed exportRunId. (no keyword -> not announced)
+new: Mini roll: each item has a Roll button that asks Main or Off spec.
+fix: Shortcut tooltips no longer cover the other icons.
+officer: Attendance snapshots record the raid's lockout ID. (never posted)
+- Internal: renamed exportRunId. (no keyword -> not posted)
 ```
 
-- `new:` / `feature:` / `add:` → the **✨ New** list.
-- `fix:` / `fixed:` / `bug:` → the **🔧 Fixed** list.
-- Any other line (internals, refactors, co-author trailers) is **left out of the post**.
-- A commit with no keyword line at all falls back to its subject, so nothing ever
-  vanishes — but that subject is usually developer shorthand, which is exactly the
-  problem. **Write the keyword lines.**
+- `new:` / `feature:` / `add:` → **✨ New**. `fix:` / `fixed:` / `bug:` → **🔧 Fixed**.
+  Only things **a raider sees** (mini roll, tooltips, menus, their own view).
+- `officer:` → **never posted**. Everything only officers see or that tracks raiders:
+  Council/Priority tabs, attendance, lockout IDs, prio, blacklist, website export,
+  ML/officer-only buttons. When in doubt, it is `officer:`.
+- Any other line, and a commit with no keyword line, is **left out** (no subject
+  fallback). If nothing is left, the post just says "Small fixes and improvements."
+- The post shows at most **3 New + 3 Fixed**, each cut at ~90 chars; extras collapse
+  into "+ other small fixes". So put the most important line first and keep each
+  line under ~80 chars.
 
-One line = one thing the officer would notice in-game. Name the module, say the effect,
+One line = one thing a raider notices in-game. Name the module, say the effect,
 skip the mechanism ("no longer merges two raids", not "keys off s.key not s.day").
 
 **Never hand-edit `## Version:` in `Okanvil/Okanvil.toc`.** The tag is the single source of

@@ -83,19 +83,6 @@ local function itemIcon(itemLink)
 	return itemLink and Okanvil:ItemIcon(itemLink) or nil
 end
 
--- Should the body carry the "Roll MS / Roll OS" buttons? They /roll into chat, which is
--- the RATS roll-off convention -- and that convention only runs under MASTER LOOT. Under
--- group loot / need-before-greed you roll in Blizzard's own need/greed frame, so a manual
--- chat /roll there is noise; a stray /roll under a Blizzard roll-off just confuses the ML.
---
--- So the buttons show only when the group is actually on master loot (which already
--- implies party/raid -- there is no master loot solo). It stays a named function because
--- Rebuild decides the layout from it and OnRollOpen decides whether the layout needs
--- rebuilding from it, and those two must never disagree.
-local function wantsChatRollButtons()
-	return L and L.IsMasterLootMethod and L.IsMasterLootMethod() or false
-end
-
 -- are we the loot master right now? (drives ML-vs-raider layout)
 -- MUST match the Loot module's real check: master-loot method AND *we* are the ML.
 -- The old test only checked the method was "master" (true for EVERYONE in the raid,
@@ -119,6 +106,21 @@ local function amML()
 	end
 	if L and L.IsMasterLooter then return L.IsMasterLooter() end
 	return false
+end
+
+-- Should the body carry the "Roll MS / Roll OS" buttons? They /roll into chat, which is
+-- the RATS roll-off convention -- and that convention only runs under MASTER LOOT. Under
+-- group loot / need-before-greed you roll in Blizzard's own need/greed frame, so a manual
+-- chat /roll there is noise; a stray /roll under a Blizzard roll-off just confuses the ML.
+--
+-- So the buttons show when the group is on master loot, or when we are the ML ourselves:
+-- the ML rolls on the items they call like everyone else, and council test mode is ML
+-- with no master loot at all (solo). It stays a named function because Rebuild decides
+-- the layout from it and OnRollOpen decides whether the layout needs rebuilding from it,
+-- and those two must never disagree.
+local function wantsChatRollButtons()
+	if L and L.IsMasterLootMethod and L.IsMasterLootMethod() then return true end
+	return amML()
 end
 
 -- class-ish color for an item by rarity (falls back to white)
@@ -306,6 +308,8 @@ local function buildWindow()
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 	f.closeBtn = close
+	-- Ctrl + mouse wheel on the title bar sizes the window; never past the screen
+	W.FitToScreen(f, "rollmgr", hdr)
 	-- The soft-reserve list, docked beside this window. Master looter only, and
 	-- only while a list is loaded (RM.SyncSRButton).
 	local srB = W.Button(hdr, "SR"); srB:SetSize(30, 20); srB:SetPoint("RIGHT", close, "LEFT", -4, 0)

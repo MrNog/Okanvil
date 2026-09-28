@@ -1199,6 +1199,7 @@ local function buildUI(panel)
 		icon = ICON,
 		drawerWidth = 0,   -- single-panel page
 		footerHeight = 0,  -- no footer -> the list uses the full height (no dead strip)
+		landingLabel = "Listings",
 		statusText = function() return "" end,
 		-- CTA header button opens the floating Mini Raid Browser (same pattern as
 		-- Loot's "Mini Roll Manager"). It scans + shows listings in a compact

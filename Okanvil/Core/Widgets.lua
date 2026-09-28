@@ -857,6 +857,7 @@ W.OpenMenu = openMenu
 --     secondaryText / tertiaryText = fn() -> "",   -- their labels (live)
 --     statusText  = fn() -> "|cff..Advertising OFF|r",
 --     tabs = { {key=, label=, build=fn(page)}, ... },  -- config overlays
+--     landingLabel = "Listings",                   -- the main view's own tab (non-pill pages)
 --     drawerWidth = 168, footerHeight = 26,
 --   })
 --   dash.main            -- fill Frame for the live content
@@ -877,6 +878,13 @@ function W.Dashboard(parent, cfg)
 	-- pill, so there is nothing to go "< Back" to. The overlay mode stays for
 	-- pages whose tabs really are separate screens on top of a landing page.
 	local pillMode = cfg.pills and true or false
+	-- An overlay page gets its landing view as the FIRST tab (cfg.landingLabel).
+	-- A lone "Settings" tab reads as a selected item, not as a tab: with the
+	-- landing beside it there are always two, and the lit one is where you are.
+	-- The tabs then stay on screen like pills, so there is no "< Back" either.
+	local LANDING = "__landing"
+	local landing = (not pillMode) and cfg.tabs and #cfg.tabs > 0 and (cfg.landingLabel or "Overview")
+	local switchMode = pillMode or (landing and true or false)
 
 	-- The setup's header: icon, gold title, a hairline under it. No filled strip:
 	-- the page sits on the window's art like every other part of the shell.
@@ -1049,7 +1057,7 @@ function W.Dashboard(parent, cfg)
 	-- Transparent: the body it replaces is hidden while it shows, so the page art
 	-- carries through instead of a dark slab.
 	local overlay = W.Frame(parent, "bare")
-	if pillMode then
+	if switchMode then
 		overlay:SetPoint("TOPLEFT", toolbar, "BOTTOMLEFT", -PAD, -4)
 		overlay:SetPoint("TOPRIGHT", toolbar, "BOTTOMRIGHT", PAD, -4)
 	else
@@ -1064,13 +1072,24 @@ function W.Dashboard(parent, cfg)
 	local otitle = W.Text(overlay, "", nil, "accent")
 	otitle:SetPoint("LEFT", back, "RIGHT", 12, 0)
 
+	local function paintTabs(key)
+		for _, b in pairs(D.tabBtns) do
+			b._active = (b._key == key)
+			-- Pills read as a segmented switch, so the picked one takes the solid
+			-- gold fill the Home page uses for Online/Snapshots. Gold TEXT alone was
+			-- too quiet to say "you are here" when the pills never go away.
+			if b.SetKind then b:SetKind(b._active and "tabOn" or "tab") end
+			if b._paint then b._paint(false) end
+		end
+	end
+
 	local function closeOverlay()
 		-- In pill mode there is nothing to close BACK to -- a pill is always the
 		-- current page -- so this is a no-op rather than a way to end up staring at
 		-- an empty body with every pill unlit.
 		if pillMode then return end
 		overlay:Hide(); toolbar:Show(); body:Show(); if footer then footer:Show() end
-		for _, b in pairs(D.tabBtns) do b._active = false; b:SetKind("tab") end
+		paintTabs(LANDING)
 	end
 	back:SetScript("OnClick", closeOverlay)
 	D.CloseOverlay = closeOverlay
@@ -1086,7 +1105,7 @@ function W.Dashboard(parent, cfg)
 		if not D.pages[key] then
 			-- in pill mode there is no "< Back" row to clear, so the page starts at
 			-- the top of the overlay instead of 34px down
-			local topPad = pillMode and 6 or 34
+			local topPad = switchMode and 6 or 34
 			local sf = CreateFrame("ScrollFrame", nil, overlay)
 			sf:SetPoint("TOPLEFT", PAD, -topPad); sf:SetPoint("BOTTOMRIGHT", -(PAD + 6), 8)
 			local page = W.Frame(sf, "bare")
@@ -1121,7 +1140,7 @@ function W.Dashboard(parent, cfg)
 		end
 		for k, p in pairs(D.pages) do p:SetShown(k == key); if p.sb then p.sb:SetShown(k == key and (select(2, p.sb:GetMinMaxValues()) > 4)) end end
 		if D.pages[key]._relayout then D.pages[key]._relayout() end
-		if pillMode then
+		if switchMode then
 			-- the pills stay on screen and stay clickable: this is a switch, not a
 			-- drill-down, so the toolbar is part of the page rather than something
 			-- the page covers up
@@ -1131,30 +1150,28 @@ function W.Dashboard(parent, cfg)
 		else
 			toolbar:Hide(); body:Hide(); if footer then footer:Hide() end; overlay:Show()
 		end
-		for _, b in pairs(D.tabBtns) do
-			b._active = (b._key == key)
-			-- Pills read as a segmented switch, so the picked one takes the solid
-			-- gold fill the Home page uses for Online/Snapshots. Gold TEXT alone was
-			-- too quiet to say "you are here" when the pills never go away.
-			if b.SetKind then b:SetKind(b._active and "tabOn" or "tab") end
-			b._paint(false)
-		end
+		paintTabs(key)
 	end
 	D.OpenPage = openPage
 
 	-- lay the tab buttons + drawer toggle onto the toolbar. Width auto-fits the
 	-- label (min 60) so longer labels like "Appearance"/"Collectors" never clip.
 	local prev
-	for _, t in ipairs(cfg.tabs or {}) do
-		local b = W.Button(toolbar, t.label, "tab")
+	local function addTabBtn(key, label, onClick)
+		local b = W.Button(toolbar, label, "tab")
 		local tw = (b.text and b.text:GetStringWidth() or 60) + 22
-		b:SetSize(math.max(60, tw), 20); b._key = t.key
+		b:SetSize(math.max(60, tw), 20); b._key = key
 		if prev then b:SetPoint("LEFT", prev, "RIGHT", 10, 0)
 		else b:SetPoint("LEFT", 0, 0) end
-		b:SetScript("OnClick", function() openPage(t.key) end)
-		D.tabBtns[t.key] = b
+		b:SetScript("OnClick", onClick)
+		D.tabBtns[key] = b
 		prev = b
 	end
+	if landing then addTabBtn(LANDING, landing, closeOverlay) end
+	for _, t in ipairs(cfg.tabs or {}) do
+		addTabBtn(t.key, t.label, function() openPage(t.key) end)
+	end
+	if landing then paintTabs(LANDING) end
 	-- drawer toggle (right end of toolbar) -- only when the page has a drawer.
 	-- Width follows the LABEL, never a magic number: "Show collected" is wider
 	-- than "Hide collected", and a fixed 96px glued the text to the border.
@@ -1310,6 +1327,63 @@ function W.ForgeArt(f, alpha)
 	return art, fade
 end
 
+-- A window never bigger than the screen. Sizes are fixed in UI units (the council
+-- board is 980 wide), and the screen in UI units shrinks with a small resolution or
+-- a big UI scale -- so when the window does not fit, it scales down until it does.
+-- Re-fitted whenever it is shown or resized, and when the resolution or UI scale changes.
+--
+-- With a key and a grip (the window's title bar), Ctrl + mouse wheel on the grip
+-- sets the window's own size, remembered per key in db.winScale. Scale, not a drag
+-- corner: the layouts are fixed sizes and a drag-resize broke them. The screen
+-- still wins -- the size you pick is used as far as it fits.
+local FIT_MARGIN, FIT_MIN = 40, 0.5
+local USER_MIN, USER_MAX, USER_STEP = 0.6, 1.4, 0.05
+-- Until you pick a size, a window takes the screen's: 1.0 on a screen 1600 UI units
+-- wide -- where the council board (980), the raider's window (540) and the gaps sit
+-- side by side -- and proportionally smaller on a narrower one.
+local FIT_REF_W = 1600
+local fitted = {}
+local function defaultScale()
+	local sw = UIParent:GetWidth() or FIT_REF_W
+	return math.max(USER_MIN, math.min(1, math.floor(sw / FIT_REF_W * 20) / 20))
+end
+local function userScale(key)
+	local t = key and Okanvil.db and Okanvil.db.winScale
+	return (t and t[key]) or defaultScale()
+end
+function W.FitToScreen(f, key, grip)
+	local function fit()
+		local w, h = f:GetWidth(), f:GetHeight()
+		local sw, sh = UIParent:GetWidth(), UIParent:GetHeight()
+		if not (w and h and w > 1 and h > 1 and sw and sh) then return end
+		local s = math.max(FIT_MIN, math.min(userScale(key), (sw - FIT_MARGIN) / w, (sh - FIT_MARGIN) / h))
+		if math.abs((f:GetScale() or 1) - s) > 0.01 then f:SetScale(s) end
+	end
+	f:HookScript("OnShow", fit)
+	f:HookScript("OnSizeChanged", fit)
+	if key and grip then
+		grip:EnableMouseWheel(true)
+		grip:SetScript("OnMouseWheel", function(_, delta)
+			if not IsControlKeyDown() then return end
+			local db = Okanvil.db
+			if not db then return end
+			db.winScale = db.winScale or {}
+			local s = math.floor((userScale(key) + delta * USER_STEP) * 20 + 0.5) / 20
+			db.winScale[key] = math.max(USER_MIN, math.min(USER_MAX, s))
+			fit()
+		end)
+	end
+	fitted[#fitted + 1] = fit
+	fit()
+	return fit
+end
+do
+	local ev = CreateFrame("Frame")
+	ev:RegisterEvent("UI_SCALE_CHANGED")
+	ev:RegisterEvent("DISPLAY_SIZE_CHANGED")
+	ev:SetScript("OnEvent", function() for _, fit in ipairs(fitted) do fit() end end)
+end
+
 function Okanvil:Popup(title)
 	self:ClosePopup()
 	local f = CreateFrame("Frame", nil, UIParent)
@@ -1344,6 +1418,7 @@ function Okanvil:Popup(title)
 	f:HookScript("OnHide", function(sf)
 		if openPopup == sf then openPopup = nil end
 	end)
+	W.FitToScreen(f, "popup:" .. tostring(title), hdr)
 	return Mod(f)
 end
 
@@ -1498,13 +1573,22 @@ end
 -- (Ctrl+C to copy). One shared, reused dialog. For roster/attendance JSON.
 -- ------------------------------------------------------------
 local exportDlg
-function Okanvil:ShowExport(text, label)
+-- label = a short title (cut with "..." rather than run past the window);
+-- hint (optional) = the grey line under it, for the details and where to paste.
+local EXPORT_HINT = "Ctrl+C to copy, then paste into the hub importer."
+function Okanvil:ShowExport(text, label, hint)
 	local f = exportDlg
 	if not f then
 		f = self:Popup("Export")
 		f:SetSize(440, 320)
-		local hint = W.Text(f, "Ctrl+C to copy, then paste into the hub importer.", "note", "dim")
-		hint:SetPoint("TOPLEFT", 10, -30)
+		f.title:SetPoint("RIGHT", f.header, "RIGHT", -28, 0)
+		f.title:SetJustifyH("LEFT")
+		if f.title.SetWordWrap then f.title:SetWordWrap(false) end
+		local hint = W.Text(f, EXPORT_HINT, "note", "dim")
+		hint:SetPoint("TOPLEFT", 10, -30); hint:SetPoint("RIGHT", f, "RIGHT", -10, 0)
+		hint:SetJustifyH("LEFT")
+		if hint.SetWordWrap then hint:SetWordWrap(false) end
+		f.hint = hint
 
 		local box = W.Frame(f, "input")
 		box:SetPoint("TOPLEFT", 8, -48); box:SetPoint("BOTTOMRIGHT", -8, 8)
@@ -1539,11 +1623,64 @@ function Okanvil:ShowExport(text, label)
 		exportDlg = f
 	end
 	f.title:SetText("|cffffd200" .. (label or "Export") .. "|r")
+	f.hint:SetText(hint or EXPORT_HINT)
 	f.eb:SetText(text or "")
 	f:Show()
 	if f._range then f._range() end
 	-- Focus the box so Ctrl+A/Ctrl+C works -- but NEVER while in combat (grabbing
 	-- the keyboard mid-fight would eat your movement keys). Out of combat only.
+	if not (InCombatLockdown and InCombatLockdown()) then
+		f.eb:SetFocus()
+		f.eb:HighlightText()
+	end
+	f.eb:SetCursorPosition(0)
+end
+
+-- ------------------------------------------------------------
+-- Copy line -- ShowExport without the wall of text: a small window with ONE line
+-- of the text showing, already selected. Ctrl+C still copies all of it (the
+-- EditBox holds everything; the view just clips to a line). For exports that are
+-- pasted somewhere else and never read here.
+--   Okanvil:ShowCopyLine(text, "Attendance export", "Ctrl+C, then ... on the site")
+-- ------------------------------------------------------------
+local copyDlg
+function Okanvil:ShowCopyLine(text, label, hint)
+	local f = copyDlg
+	if not f then
+		f = self:Popup("Copy")
+		f:SetSize(420, 96)
+		f.title:SetPoint("RIGHT", f.header, "RIGHT", -28, 0)
+		f.title:SetJustifyH("LEFT")
+		if f.title.SetWordWrap then f.title:SetWordWrap(false) end
+		local h = W.Text(f, "", "note", "dim")
+		h:SetPoint("TOPLEFT", 10, -32); h:SetPoint("RIGHT", f, "RIGHT", -10, 0)
+		h:SetJustifyH("LEFT")
+		if h.SetWordWrap then h:SetWordWrap(false) end
+		f.hint = h
+		local box = W.Frame(f, "input")
+		box:SetPoint("BOTTOMLEFT", 8, 10); box:SetPoint("BOTTOMRIGHT", -8, 10); box:SetHeight(24)
+		-- a scroll frame one line tall: it clips the multi-line box to its first line
+		local sf = CreateFrame("ScrollFrame", nil, box)
+		sf:SetPoint("TOPLEFT", 6, -5); sf:SetPoint("BOTTOMRIGHT", -6, 3)
+		local eb = CreateFrame("EditBox", nil, sf)
+		eb:SetMultiLine(true); eb:SetAutoFocus(false); eb:SetWidth(390)
+		eb:SetFontObject(GameFontHighlightSmall)
+		eb:SetTextColor(unpack3(C.textDim))
+		eb:SetScript("OnEscapePressed", function() f:Hide() end)
+		-- nothing to type here: any key but Ctrl+C / Ctrl+A puts the text back
+		eb:SetScript("OnTextChanged", function(s, user) if user and f._text then s:SetText(f._text); s:HighlightText() end end)
+		Okanvil:TrackEditBox(eb)
+		f:HookScript("OnHide", function() eb:ClearFocus() end)
+		sf:SetScrollChild(eb)
+		f.eb = eb
+		copyDlg = f
+	end
+	f._text = text or ""
+	f.title:SetText("|cffffd200" .. (label or "Copy") .. "|r")
+	f.hint:SetText(hint or "Ctrl+C to copy.")
+	f.eb:SetText(f._text)
+	f:Show()
+	-- Focus so Ctrl+C works -- never in combat (it would eat the movement keys).
 	if not (InCombatLockdown and InCombatLockdown()) then
 		f.eb:SetFocus()
 		f.eb:HighlightText()

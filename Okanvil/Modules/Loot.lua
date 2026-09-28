@@ -3049,32 +3049,59 @@ end
 
 -- Is a copy of this item in our own bags? Decides whether a failed master-loot
 -- give can fall back to "record it and trade it".
+--
+-- A copy already owed to someone else does not count: with one Gormok's Band in the
+-- bags owed to X, a second award of the same item found "a copy" and sent Y to trade
+-- for a ring that was still on the corpse.
 local function inMyBags(id)
+	local have = 0
 	for bag = 0, 4 do
 		for slot = 1, (GetContainerNumSlots(bag) or 0) do
 			local link = GetContainerItemLink(bag, slot)
-			if link and itemIDFromLink(link) == id then return true end
+			if link and itemIDFromLink(link) == id then have = have + 1 end
 		end
 	end
-	return false
+	local owed = 0
+	local T = Okanvil.Trade
+	for _, e in ipairs(T and T.Owed and T.Owed() or {}) do
+		if e.id == id and not e.test then owed = owed + 1 end
+	end
+	return have > owed
 end
 
 -- Returns true when the award went through (handed over, or recorded to be
 -- traded), false when nothing happened and the officer has to try again.
 local function commitAward(id, winner, de)
-	local res, slot = giveLootNow(id, winner)
-	L.Dbg("commitAward: giveLootNow -> " .. tostring(res) .. " slot=" .. tostring(slot))
 	local nm = (GetItemInfo(id)) or "item"
 
-	-- The item is still on the CORPSE, not in our bags. Under master loot, closing
-	-- the loot window leaves the item on the boss; it only reaches the ML's bags
-	-- if they loot it to themselves. Recording a winner here and whispering them
-	-- to trade sent them to someone who did not have the item. Nothing is recorded:
-	-- open the corpse and give again.
-	if res == "nocand" or ((res == "closed" or res == "noitem") and not inMyBags(id)) then
+	-- COUNCIL TEST: nothing is handed over and nothing is said in chat, like the
+	-- council board's own test award. The win is recorded so the mini roll shows it,
+	-- and a copy in the bags gets the trade mark (it goes when the test ends).
+	local CC = Okanvil.Council
+	if CC and CC.testMode then
+		freezeManualRolls(id)
+		markWinner(id, winner, de)
+		if Okanvil.Trade and inMyBags(id) then Okanvil.Trade.Add(id, winner, nm, true) end
+		Okanvil:Print(("|cffe0b860[TEST]|r would give %s to |cffffd200%s|r "
+			.. "-- |cff8a8d93nothing was given or sent.|r"):format(nm, winner))
+		activeRoll = nil
+		if L.onLoot then L.onLoot() end
+		if L.onRoll then L.onRoll() end
+		return true
+	end
+
+	local res, slot = giveLootNow(id, winner)
+	L.Dbg("commitAward: giveLootNow -> " .. tostring(res) .. " slot=" .. tostring(slot))
+
+	-- Master loot could not hand it over, and the item is not in our bags either:
+	-- it is still on the CORPSE. Closing the loot window leaves it on the boss; it
+	-- only reaches the ML's bags if they loot it to themselves. Announcing "trade me"
+	-- here sent the winner to someone who did not have the item. Nothing is recorded
+	-- and nothing is said: open the corpse and give again.
+	if res == "nocand" or (res ~= "ok" and not inMyBags(id)) then
 		local how = (res == "nocand")
 			and (winner .. " cannot receive it right now (out of range, offline or not eligible).")
-			or  "the boss's loot window is closed and the item is not in your bags."
+			or  "the item is not in your bags -- it is still on the boss."
 		Okanvil:Print("|cffff5555Not given:|r " .. how
 			.. " |cff8a8d93Open the boss corpse and give it again.|r")
 		return false

@@ -1418,6 +1418,7 @@ function M.BuildUI(parent)
 		icon = (Okanvil.ICONS and Okanvil.ICONS.pug) or "Interface\\Icons\\Ability_Warrior_RallyingCry",
 		drawerWidth = 0,          -- one full-width page; the board needs the room
 		footerHeight = 0,
+		landingLabel = "Raid",
 		primaryText = function() return M.IsActive() and "STOP spamming" or "START spamming" end,
 		primaryKind = function() return M.IsActive() and "primary" or "secondary" end,
 		onPrimary = function() M.Toggle(); M.RefreshUI() end,

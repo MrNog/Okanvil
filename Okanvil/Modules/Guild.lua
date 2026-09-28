@@ -130,6 +130,7 @@ local function myLockoutId(zone, diff)
 	end
 	return nil
 end
+G.MyLockoutId = myLockoutId
 
 local function snapshotRaid(trigger, bossName)
 	local raidN = (GetNumRaidMembers and GetNumRaidMembers()) or 0
@@ -203,6 +204,7 @@ local function snapshotRaid(trigger, bossName)
 		t = time(), zone = zone or "", difficulty = difficultyID or 0, mapID = mapID or 0,
 		groupSize = groupSize or (raidN > 0 and raidN or (partyN + 1)),
 		boss = bossName or "", trigger = trigger,
+		char = UnitName("player") or "",   -- which toon took it: lockout IDs are per character
 		count = #players, players = players,
 		-- nil at the first pull of a fresh lockout: nobody is saved until the first
 		-- boss dies. G.FillLockout adds it as soon as the game reports it.
@@ -235,6 +237,11 @@ function G.SaveSnapshot(trigger, bossName)
 		table.remove(db.guild.snapshots)
 	end
 	if G.onSnapshot then G.onSnapshot() end       -- refresh the tab if open
+	local A = Okanvil.Attendance
+	if A and A.OnSnapshot then
+		local ok, e = pcall(A.OnSnapshot, snap)
+		if not ok then Okanvil:Err("Attendance", e) end
+	end
 	G.ScanSnapshotSpecs(snap)
 	return snap
 end
@@ -281,6 +288,12 @@ function G.ScanSnapshotSpecs(snap, tries)
 			end
 		end
 		snap.specsAt = time()
+		-- the attendance night was filed before the scan answered: give it the specs
+		local A = Okanvil.Attendance
+		if A and A.OnSpecs then
+			local okS, eS = pcall(A.OnSpecs, snap)
+			if not okS and Okanvil.Err then Okanvil:Err("Attendance.OnSpecs", eS) end
+		end
 		if G.onSnapshot then G.onSnapshot() end
 	end)
 	if not ok and tries < 6 and Okanvil.Comms and Okanvil.Comms.After then
@@ -305,6 +318,11 @@ function G.FillLockout()
 	if id then
 		snap.lockoutId = id
 		if G.onSnapshot then G.onSnapshot() end
+		local A = Okanvil.Attendance
+		if A and A.OnLockout then
+			local ok, e = pcall(A.OnLockout, snap)
+			if not ok then Okanvil:Err("Attendance", e) end
+		end
 	end
 end
 
