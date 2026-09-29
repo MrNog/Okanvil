@@ -164,15 +164,16 @@ jobs:
       - name: Announce the release to Discord
         if: steps.ver.outputs.release == 'true'
         env:
-          WEBHOOK: ${{ secrets.LOG_WEBHOOK }}      # #okanor-logs webhook
+          WEBHOOK: ${{ secrets.LOG_WEBHOOK }}              # RATS #okanor-logs
+          WEBHOOK_FORGE: ${{ secrets.LOG_WEBHOOK_FORGE }}  # Okanor's Forge #releases
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
           TAG: ${{ steps.ver.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
           set -uo pipefail
-          if [ -z "${WEBHOOK:-}" ]; then
-            echo "::warning::LOG_WEBHOOK secret is not set -- release published, Discord not notified."
+          if [ -z "${WEBHOOK:-}" ] && [ -z "${WEBHOOK_FORGE:-}" ]; then
+            echo "::warning::LOG_WEBHOOK and LOG_WEBHOOK_FORGE are not set -- release published, Discord not notified."
             exit 0
           fi
           # The embed is read by EVERY RAIDER, not by developers or officers: it
@@ -263,10 +264,17 @@ jobs:
             '{embeds:[{author:{name:"Okanvil - new release"},title:$t,url:$u,
                        description:$d,color:12686394,footer:{text:$f}}]}')"
 
-          code="$(curl -s -o /dev/null -w '%{http_code}' \
-                  -H 'Content-Type: application/json' -d "$payload" "$WEBHOOK")"
-          if [ "$code" = "204" ] || [ "$code" = "200" ]; then
-            echo "Announced $TAG to Discord (HTTP $code)"
-          else
-            echo "::warning::Discord webhook failed (HTTP $code) -- release is still published."
-          fi
+          # Same embed to every server that has a webhook set; one failing
+          # does not stop the other.
+          for target in "RATS|${WEBHOOK:-}" "Forge|${WEBHOOK_FORGE:-}"; do
+            name="${target%%|*}"
+            url="${target#*|}"
+            [ -z "$url" ] && continue
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+                    -H 'Content-Type: application/json' -d "$payload" "$url")"
+            if [ "$code" = "204" ] || [ "$code" = "200" ]; then
+              echo "Announced $TAG to $name (HTTP $code)"
+            else
+              echo "::warning::$name webhook failed (HTTP $code) -- release is still published."
+            fi
+          done
