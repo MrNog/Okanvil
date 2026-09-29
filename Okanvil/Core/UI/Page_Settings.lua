@@ -379,9 +379,11 @@ function Okanvil:ShowVersionChecker()
 		local box = W.Frame(f, "soft")
 		box:SetPoint("TOPLEFT", 10, -62); box:SetPoint("BOTTOMRIGHT", -10, 44)
 
-		-- Whispers the download link to everyone who did not reply. Only shown once
-		-- the check has finished: while it runs, "no reply" still means "not yet".
-		local bLink = W.Button(f, "Whisper download link")
+		-- The download link, to copy and paste wherever you choose. Never whispered
+		-- to the list: a line to every name that did not answer reads as spam.
+		-- Only shown once the check has finished: while it runs, "no reply" still
+		-- means "not yet".
+		local bLink = W.Button(f, "Copy download link")
 		bLink:SetSize(260, 26); bLink:SetPoint("BOTTOMLEFT", 12, 10)
 		bLink:Hide()
 		f.bLink = bLink
@@ -443,7 +445,6 @@ function Okanvil:ShowVersionChecker()
 				.. (waiting and "  |cff8a8d93asking...|r" or ""))
 			f._missing = missing
 			if not waiting and #missing > 0 then
-				f.bLink.text:SetText(("Whisper download link (%d)"):format(#missing))
 				f.bLink:Show()
 			else
 				f.bLink:Hide()
@@ -474,20 +475,8 @@ function Okanvil:ShowVersionChecker()
 			end
 			paint()
 		end
-		-- Spaced out so a long guild list does not trip the server's chat throttle.
 		bLink:SetScript("OnClick", function()
-			local list = f._missing or {}
-			if #list == 0 then return end
-			local msg = "[Okanvil] You don't seem to have Okanvil (the RATS raid addon). "
-				.. "Download: " .. DOWNLOAD_URL .. " -- unzip into Interface\\AddOns and restart WoW."
-			for i, name in ipairs(list) do
-				Okanvil.Comms.After((i - 1) * 0.4, function()
-					SendChatMessage(msg, "WHISPER", nil, name)
-				end)
-			end
-			Okanvil:Print(("Whispered the download link to %d player(s)."):format(#list))
-			f._missing = {}
-			bLink:Hide()
+			Okanvil:ShowExport(DOWNLOAD_URL, "Okanvil download link", "Ctrl+C to copy, then paste it where you want.")
 		end)
 		bGroup:SetScript("OnClick", function() ask("group") end)
 		bGuild:SetScript("OnClick", function() ask("guild") end)

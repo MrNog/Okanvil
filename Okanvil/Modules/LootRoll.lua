@@ -341,6 +341,16 @@ local function buildWindow()
 	end)
 	clrB:Hide()
 	f.clrBtn = clrB
+	-- Back to the council board of the open round, for an officer who closed it.
+	-- Only while a round is open (RM.SyncCouncilButton).
+	local cnB = W.Button(hdr, "Council"); cnB:SetSize(58, 20)
+	cnB:Tooltip("Open the council board of the round in progress.")
+	cnB:SetScript("OnClick", function()
+		local CC = Okanvil.Council
+		if CC and CC.OpenBoard then CC.OpenBoard() end
+	end)
+	cnB:Hide()
+	f.cnBtn = cnB
 	-- The list goes away with this window and comes back with it.
 	f:HookScript("OnHide", function()
 		local P = Okanvil.SoftResPanel
@@ -848,6 +858,18 @@ function RM.SyncSRButton()
 		win.clrBtn:ClearAllPoints()
 		win.clrBtn:SetPoint("RIGHT", win.srBtn:IsShown() and win.srBtn or win.closeBtn, "LEFT", -4, 0)
 	end
+	RM.SyncCouncilButton()
+end
+
+-- Council sits left of whatever is showing in the title bar: Clear, SR or X.
+function RM.SyncCouncilButton()
+	if not (win and win.cnBtn) then return end
+	local CC = Okanvil.Council
+	if CC and CC.HasOpenRound and CC.HasOpenRound() then win.cnBtn:Show() else win.cnBtn:Hide() end
+	local left = (win.clrBtn and win.clrBtn:IsShown() and win.clrBtn)
+		or (win.srBtn:IsShown() and win.srBtn) or win.closeBtn
+	win.cnBtn:ClearAllPoints()
+	win.cnBtn:SetPoint("RIGHT", left, "LEFT", -4, 0)
 end
 
 -- Shrink the list (and the window) to what is actually in it. The list is laid out
@@ -1166,7 +1188,7 @@ function RM.Refresh()
 				local sub
 				if d.de then
 					sub = "|cff8a5ad9Disenchanted|r"
-						.. (owned and (" |cff8a8d93by " .. d.receivedBy .. "|r") or "")
+						.. (owned and (" |cff8a8d93by|r " .. classColorCode(d.receivedBy) .. d.receivedBy .. "|r") or "")
 				elseif pendId and pendId == d.id and pendWho and not d.receivedBy then
 					sub = "|cff5e6166" .. pendWho .. " (giving...)|r"
 				elseif wn then

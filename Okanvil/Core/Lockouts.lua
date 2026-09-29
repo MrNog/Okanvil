@@ -223,3 +223,108 @@ ev:SetScript("OnEvent", function(_, event)
 		RequestRaidInfo()
 	end
 end)
+
+-- ------------------------------------------------------------
+-- WINTERGRASP  --  "does our faction hold VoA right now?"
+--
+-- 3.3.5a has no call that names Wintergrasp's owner. What it does have is the
+-- "Essence of Wintergrasp" buff, which the game puts on every player of the
+-- controlling faction while they are in Northrend. So in Northrend, outside an
+-- instance and outside a battle: buff = our faction holds it, no buff = theirs.
+--
+-- Anywhere else we cannot see it, so the last reading is kept account-wide in
+-- db.wg with the time it was taken. GetWintergraspWaitTime works everywhere and
+-- gives the next battle; a reading from before a battle that has since happened
+-- may no longer be true, and the Home tile says so.
+-- ------------------------------------------------------------
+local WG = {}
+Okanvil.WG = WG
+
+local ESSENCE = { 57940, 58045 }   -- Essence of Wintergrasp (Northrend / the zone)
+local NORTHREND = 4                -- GetCurrentMapContinent()
+local BATTLE_LEN = 30 * 60
+
+local inNorthrend = false
+
+local function hasEssence()
+	for _, id in ipairs(ESSENCE) do
+		local n = GetSpellInfo(id)
+		if n and UnitAura("player", n) then return true end
+	end
+	return false
+end
+
+-- SetMapToCurrentZone moves the world map, so never while someone is reading it.
+local function checkZone()
+	if IsInInstance() then inNorthrend = false; return end
+	if WorldMapFrame and WorldMapFrame:IsShown() then return end
+	SetMapToCurrentZone()
+	inNorthrend = (GetCurrentMapContinent() == NORTHREND)
+end
+
+local function wgDB()
+	local db = Okanvil.db
+	if not db then return nil end
+	db.wg = db.wg or {}
+	return db.wg
+end
+
+function WG.Read()
+	local d = wgDB()
+	if not d then return end
+	local wait = GetWintergraspWaitTime and GetWintergraspWaitTime()
+	if wait and wait > 0 then
+		-- the battle we were counting down to has been fought: remember when, so a
+		-- holder read before it is known to be out of date
+		if d.nextAt and d.nextAt <= time() then d.lastBattle = d.nextAt end
+		d.nextAt = time() + wait
+	end
+	-- nil wait = the battle is on: nobody holds it until it ends
+	if inNorthrend and wait and wait > 0 then
+		local mine = UnitFactionGroup("player")
+		local other = (mine == "Horde") and "Alliance" or "Horde"
+		local holder = hasEssence() and mine or other
+		if d.faction ~= holder and Okanvil.Trace then
+			Okanvil:Trace("WG", "holder " .. tostring(holder))
+		end
+		d.faction, d.at = holder, time()
+	end
+	if WG.onChange then pcall(WG.onChange) end
+end
+
+-- faction or nil, state: "ok" | "old" (read before the last battle) | "battle" | "unknown";
+-- plus seconds to the next battle (nil when not known)
+function WG.State()
+	local d = wgDB() or {}
+	local now = time()
+	-- A nextAt in the past is a battle that has started since the last read. The
+	-- next one is only known once the game reports it again (WG.Read).
+	local nextAt, lastBattle = d.nextAt, d.lastBattle
+	if nextAt and nextAt <= now then
+		if now < nextAt + BATTLE_LEN then return d.faction, "battle", nil end
+		lastBattle, nextAt = nextAt, nil
+	end
+	local toNext = nextAt and (nextAt - now) or nil
+	if not d.faction then return nil, "unknown", toNext end
+	if lastBattle and (d.at or 0) < lastBattle then return d.faction, "old", toNext end
+	return d.faction, "ok", toNext
+end
+
+local wgEv = CreateFrame("Frame")
+wgEv:RegisterEvent("PLAYER_ENTERING_WORLD")
+wgEv:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+wgEv:RegisterEvent("UNIT_AURA")
+local auraWait = 0
+wgEv:SetScript("OnEvent", function(_, event, unit)
+	if event == "UNIT_AURA" then
+		-- cheap: only in Northrend, and at most every 2 seconds
+		if unit ~= "player" or not inNorthrend or GetTime() < auraWait then return end
+		auraWait = GetTime() + 2
+		WG.Read()
+		return
+	end
+	-- the buff lands a moment after the zone-in
+	local After = Okanvil.Comms and Okanvil.Comms.After
+	local function go() checkZone(); WG.Read() end
+	if After then After(3, go) else go() end
+end)

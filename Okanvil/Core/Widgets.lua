@@ -1412,7 +1412,7 @@ function Okanvil:Popup(title)
 	local t = W.Text(hdr, title, "head", "accent"); t:SetPoint("LEFT", 10, 0)
 	local close = W.Button(hdr, "X"); close:SetSize(20, 18); close:SetPoint("RIGHT", -2, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
-	f.header, f.title = hdr, t
+	f.header, f.title, f.closeBtn = hdr, t, close
 
 	openPopup = f
 	f:HookScript("OnHide", function(sf)

@@ -765,6 +765,7 @@ watch:SetScript("OnEvent", function(_, event, ...)
 		dbmLive = false
 		-- No ENCOUNTER_START on 3.3.5a and no DBM fight: entering combat is the pull.
 		startEncounter(GetTime())
+		Okanvil:Trace("NOTES", "clock: combat start (no DBM pull yet)")
 		return
 	end
 
@@ -869,10 +870,13 @@ function P.HookDBM(attempt)
 		local After = Okanvil.Comms and Okanvil.Comms.After
 		if attempt < HOOK_TRIES and After then
 			After(HOOK_EVERY, function() P.HookDBM(attempt + 1) end)
+		else
+			Okanvil:Trace("NOTES", "DBM not found: notes count from entering combat")
 		end
 		return
 	end
 	hooked = true
+	Okanvil:Trace("NOTES", "DBM hooked: notes count from DBM's pull")
 	DBM:RegisterCallback("DBM_Pull", function(_, mod, delay)
 		if not moduleOn() then return end
 		local at = GetTime() - (tonumber(delay) or 0)
@@ -881,13 +885,18 @@ function P.HookDBM(attempt)
 		local id = mod and mod.id
 		local loc = mod and mod.localization and mod.localization.general
 			and mod.localization.general.name
+		local modName = tostring(id or "?")
 		if not pullAt or at - pullAt > DBM_GRACE then
 			-- Not in combat yet (the tank has the boss, you have not acted), or in
 			-- combat since the trash before it: either way the boss starts now,
 			-- and what trash did is not counted against its note.
+			Okanvil:Trace("NOTES", ("clock: DBM pull %s (DBM %.1fs late) -- new fight%s"):format(modName,
+				tonumber(delay) or 0, pullAt and (", combat was %.1fs earlier"):format(at - pullAt) or ""))
 			startEncounter(at)
 		else
 			-- Entered combat within a moment of the engage: same pull, DBM's clock.
+			Okanvil:Trace("NOTES", ("clock: DBM pull %s (DBM %.1fs late) -- moved %.1fs from combat start"):format(
+				modName, tonumber(delay) or 0, at - pullAt))
 			pullAt = at
 			phase, phaseAt = 1, at
 		end
@@ -904,6 +913,7 @@ function P.HookDBM(attempt)
 	local function fightOver()
 		if not dbmLive then return end
 		dbmLive = false
+		Okanvil:Trace("NOTES", ("DBM fight over at %.1fs"):format(pullAt and (GetTime() - pullAt) or -1))
 		if not (InCombatLockdown and InCombatLockdown()) then resetEncounter() end
 	end
 	DBM:RegisterCallback("DBM_Kill", fightOver)
@@ -917,6 +927,8 @@ function P.HookDBM(attempt)
 		if Okanvil.ModuleActive and not Okanvil:ModuleActive("Okanvil-Notes") then return end
 		phase = stage
 		phaseAt = GetTime()
+		Okanvil:Trace("NOTES", ("DBM stage %s at %.1fs"):format(tostring(stage),
+			pullAt and (phaseAt - pullAt) or -1))
 	end)
 end
 

@@ -430,6 +430,9 @@ local function ensureFrame()
 	if frame then return frame end
 
 	local f = Okanvil:Popup("Loot council")
+	-- Out of the one-popup slot: this frame and the board are on screen together,
+	-- and creating one must not close the other.
+	Okanvil:SetPopup(nil)
 	f:SetWidth(FRAME_W)
 	f:SetHeight(200)
 	-- Above the loot window and the mini roll, below Confirm (which is
@@ -1277,7 +1280,7 @@ function C_.Ask(links, boss)
 			C_.SaveAsk()        -- a crash now loses at most this one reply
 		end,
 		onDone = function()
-			rec.closed = true        -- stops the re-broadcast loop above
+			rec.closed = true
 			C_.SaveAsk()             -- clears the saved round: it is over
 			Okanvil:Print("|cffe0b860Loot council:|r round closed.")
 			C_.RepaintBoard()
@@ -1307,7 +1310,7 @@ function C_.Ask(links, boss)
 	-- no way to tell a silent raid from a broken round.
 	boardItem = 1
 	tabFirst  = 1        -- a new round starts at the first page of tabs
-	C_.RepaintBoard()
+	C_.RepaintBoard(true)
 
 	Okanvil:Print(("|cffe0b860Loot council:|r asked about %d item(s)%s."):format(
 		#links, (boss and boss ~= "") and (" from " .. boss) or ""))
@@ -1333,6 +1336,16 @@ end
 local function ensureBoard()
 	if board then return board end
 	local f = Okanvil:Popup("Loot council -- responses")
+	Okanvil:SetPopup(nil)      -- shares the screen with the raider frame (see ensureFrame)
+	-- Closed by hand = this officer is done with the round (voted, or has no
+	-- opinion). Answers still arrive, a reload still restores the round, but
+	-- neither puts the board back; /okcouncil board does.
+	if f.closeBtn then
+		f.closeBtn:HookScript("OnClick", function()
+			local rec = C_.current
+			if rec then rec.dismissed = true; C_.SaveAsk() end
+		end)
+	end
 	f:SetWidth(BOARD_W)
 	f:SetHeight(240)
 	f:SetFrameStrata("DIALOG")
@@ -1458,6 +1471,7 @@ local function ensureBoard()
 		local function given()
 			rec.awarded = rec.awarded or {}
 			rec.awarded[item] = pick
+			C_.SaveAsk()
 			C_.RepaintBoard()
 		end
 
@@ -1564,6 +1578,7 @@ local function ensureBoard()
 		local function given()
 			rec.awarded = rec.awarded or {}
 			rec.awarded[item] = name .. " (DE)"
+			C_.SaveAsk()
 			C_.RepaintBoard()
 		end
 		local L = Okanvil.Loot
@@ -1616,11 +1631,19 @@ end
 
 -- One row per responder. Sorted so the people who answered come first -- a
 -- council reading the board wants the answers, not the gaps, at the top.
-function C_.RepaintBoard()
+-- open = the player asked for the board (their own Ask, /okcouncil board, the
+-- mini roll's Council button). Every other call -- an answer arriving, a vote, a
+-- mirrored or restored round -- never puts back a board that was closed by hand.
+function C_.RepaintBoard(open)
 	local rec = C_.current
 	if not rec then return end
 	if not canSeeBoard() then return end
 	local f = ensureBoard()
+	if open then
+		rec.dismissed = nil
+	elseif rec.dismissed and not f:IsShown() then
+		return
+	end
 	if boardItem > #rec.items then boardItem = 1 end
 
 	-- ---- item tabs -------------------------------------------------------
@@ -2761,6 +2784,7 @@ function C_.TestOff()
 		if current and current.round == rec.round then closeFrame() end
 		if board then board:Hide() end
 	end
+	if C_.SyncRollButton then C_.SyncRollButton() end
 
 	-- Put the loot module back exactly as it was. Leaving world-test on would
 	-- silently record open-world drops for the rest of the session, and leaving
@@ -2960,6 +2984,27 @@ do
 	end)
 end
 
+-- RELOAD TEST (off). Lets a solo council test survive a quick /reload, to test
+-- the reload path without a second player. Three blocks, all marked RELOAD TEST:
+-- this one, the restore in the login block, and the save in C_.SaveAsk.
+-- Uncomment all three together.
+--
+-- Stamps the moment a test leaves, so the login block can tell a /reload
+-- (seconds) from anything else.
+--[[
+do
+	local o = CreateFrame("Frame")
+	o:RegisterEvent("PLAYER_LOGOUT")
+	o:SetScript("OnEvent", function()
+		if not C_.testMode then return end
+		local d = db()
+		d.testOutAt = time()
+		d.testPrevActive = C_.testPrevActive
+		d.testPrevWorld = C_.testPrevWorld
+	end)
+end
+--]]
+
 -- ============================================================
 -- AUTO-OPEN on the loot window.
 --
@@ -3073,6 +3118,23 @@ do
 			-- loot list. Say so once, name the command, and forget the flag.
 			local tAt = tonumber(d.testAt or 0) or 0
 			local me  = UnitName and UnitName("player")
+			-- RELOAD TEST (off, see the PLAYER_LOGOUT block): a test left less than
+			-- a minute ago, by this character, while solo, comes back -- that is a
+			-- /reload, never a new session or a raid. To enable, uncomment and turn
+			-- the `if` below into `elseif`.
+			--[[
+			local outAt = tonumber(d.testOutAt or 0) or 0
+			local solo = not ((GetNumRaidMembers and GetNumRaidMembers() > 0)
+				or (GetNumPartyMembers and GetNumPartyMembers() > 0))
+			d.testOutAt = nil
+			if tAt > 0 and d.testWho == me and solo and outAt > 0 and (time() - outAt) <= 60 then
+				C_.testMode = true
+				C_.testStarted = GetTime() + 5      -- windows reappear over the next seconds
+				C_.testPrevActive = d.testPrevActive
+				C_.testPrevWorld = d.testPrevWorld
+				C_.active = true
+				Okanvil:Print("|cffe0b860[TEST]|r test restored after the reload.")
+			--]]
 			if tAt > 0 and (d.testWho == nil or d.testWho == me) then
 				d.testAt, d.testWho = nil, nil
 				Okanvil:Print("|cffe0b860Loot council:|r a test was left open before. "
@@ -3163,18 +3225,44 @@ end
 -- one; restored on login so the board comes back and the item can still be
 -- awarded.
 -- ------------------------------------------------------------
+-- A round this officer can still act on: open, with an item not yet given.
+function C_.HasOpenRound()
+	local rec = C_.current
+	if not rec or rec.closed or not canSeeBoard() then return false end
+	for i in ipairs(rec.items or {}) do
+		if not (rec.awarded and rec.awarded[i]) then return true end
+	end
+	return false
+end
+
+-- The board on request (mini roll's Council button, /okcouncil board).
+function C_.OpenBoard()
+	if C_.current then C_.RepaintBoard(true) end
+end
+
+-- The mini roll shows its Council button only while there is a round to open.
+local function syncRollButton()
+	local RM = Okanvil.RollMgr
+	if RM and RM.SyncCouncilButton then pcall(RM.SyncCouncilButton) end
+end
+C_.SyncRollButton = syncRollButton
+
 function C_.SaveAsk()
+	syncRollButton()
 	local d = db()
 	local rec = C_.current
 	if not rec or rec.closed then d.askRound = nil; return end
 	-- A TEST round is never saved. It exists to exercise the UI for a minute; a
 	-- reload an hour later restoring one put an Ulduar item on the board in the
 	-- middle of a 5-man.
+	-- RELOAD TEST (off, see the PLAYER_LOGOUT block): delete this line to save
+	-- the test round too; it is marked `test` and only restored with the test.
 	if C_.testMode then d.askRound = nil; return end
 	d.askRound = {
+		test = rec.test,
 		round = rec.round, boss = rec.boss, items = rec.items,
 		replies = rec.replies, awarded = rec.awarded, votes = rec.votes,
-		asker = rec.asker, mirror = rec.mirror,
+		asker = rec.asker, mirror = rec.mirror, dismissed = rec.dismissed,
 		payload = rec.payload, savedAt = time(),
 		-- Where and with whom it was asked. A round belongs to the run it was
 		-- opened in; coming back somewhere else means it is over.
@@ -3204,10 +3292,19 @@ function C_.RestoreAsk()
 		return
 	end
 
+	-- Every item already handed out: the round is over, nothing to bring back.
+	local open = false
+	for i in ipairs(s.items) do
+		if not (s.awarded and s.awarded[i]) then open = true; break end
+	end
+	if not open then d.askRound = nil; return end
+	if s.test and not C_.testMode then d.askRound = nil; return end
+
 	local rec = {
+		test = s.test,
 		round = s.round, boss = s.boss or "", items = s.items,
 		replies = s.replies or {}, awarded = s.awarded, votes = s.votes,
-		asker = s.asker, mirror = s.mirror,
+		asker = s.asker, mirror = s.mirror, dismissed = s.dismissed,
 		payload = s.payload, at = GetTime(),
 	}
 	C_.rounds[s.round] = rec
@@ -3216,6 +3313,12 @@ function C_.RestoreAsk()
 
 	-- Re-open the collection on the wire as well, so answers still arriving are
 	-- recorded rather than dropped as an unknown round.
+	--
+	-- NO RE-ASK. The board comes back from what SaveAsk wrote after every reply;
+	-- only answers sent during the loading screen itself are missing. Asking the
+	-- raid again to fill that gap made every client answer again, and every
+	-- answer put the board back on every officer's screen, mid-fight. A raider
+	-- who clicks after the reload still arrives normally through Adopt.
 	if C.Ask and rec.payload then
 		C.Adopt(TOPIC, s.round, {
 			timeout = 1800,
@@ -3230,33 +3333,16 @@ function C_.RestoreAsk()
 				C_.RepaintBoard()
 			end,
 		})
-
-		-- ASK AGAIN. Whatever arrived during the loading screen was dropped: an
-		-- addon message is never queued for a client that is reloading. Every
-		-- other client answers a repeat of the round by sending its answers and
-		-- its votes again, so re-asking is what brings them back. The repeats the
-		-- round was running before the reload died with it, hence restarting them.
-		-- Twice only: every repeat makes each raider answer again, so the first
-		-- brings back what the loading screen lost and the second covers one
-		-- message that went missing.
-		local round, payload = s.round, rec.payload
-		local function resend(n)
-			if n > 2 then return end
-			C.After(n == 1 and 3 or 17, function()
-				local r = C_.rounds[round]
-				if not r or r.closed or r ~= C_.current then return end
-				C.ReAsk(round, payload)
-				resend(n + 1)
-			end)
-		end
-		resend(1)
 	end
 
 	if canSeeBoard() then
 		boardItem = 1
 		C_.RepaintBoard()
-		Okanvil:Print("|cffe0b860Loot council:|r your open round was restored.")
+		if not rec.dismissed then
+			Okanvil:Print("|cffe0b860Loot council:|r your open round was restored.")
+		end
 	end
+	syncRollButton()
 end
 
 -- ------------------------------------------------------------
@@ -3307,7 +3393,7 @@ _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 		if not canSeeBoard() then
 			Okanvil:Print("|cffff5555Loot council:|r the board is officers only.")
 		elseif C_.current then
-			C_.RepaintBoard()
+			C_.RepaintBoard(true)
 		else
 			Okanvil:Print("Loot council: no round open.")
 		end

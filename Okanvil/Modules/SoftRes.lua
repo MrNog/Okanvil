@@ -416,6 +416,13 @@ function SR.ReservedCat(item, boe)
 	local pdb = P and P.DB and P.DB()
 	local r = pdb and pdb.reserve
 	if type(r) ~= "table" or pdb.reserveNone then return nil end
+	-- A reserve is the master looter keeping loot back. Under group or need-before-
+	-- greed loot (a random dungeon, a pug with no ML) nobody holds anything, and a
+	-- BoE from trash is open to the whole group. The solo council test counts as ML.
+	local RM = Okanvil.RollMgr
+	if (GetLootMethod and GetLootMethod()) ~= "master" and not (RM and RM.IsML and RM.IsML()) then
+		return nil
+	end
 	local id, name = idOf(item), nameOf(item)
 	if (r.frag or r.shard) and ((id and FRAG_IDS[id]) or hasAny(name, FRAG_NAMES)) then return "Frag" end
 	if r.orb and ((id and ORB_IDS[id]) or hasAny(name, ORB_NAMES)) then return "Orb" end

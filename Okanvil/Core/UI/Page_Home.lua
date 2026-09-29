@@ -83,6 +83,68 @@ function Okanvil:BuildHome()
 	tiles.sewers = tile(3, "MEMBERS")
 	tiles.rank = tile(4, "YOUR RANK")
 
+	-- Who holds Wintergrasp, so nobody runs to the VoA portal to find out. Read
+	-- from the buff in Northrend and kept since (Okanvil.WG); the label says how
+	-- far to trust it.
+	tiles.voa = tile(5, "VOA")
+	tiles.voa:SetWidth(200)
+	tiles.voa:EnableMouse(true)
+	-- In the page's top-right corner, read right to left, apart from the guild counts.
+	tiles.voa:ClearAllPoints()
+	tiles.voa:SetPoint("TOP", tiles._t1, "TOP", 0, 0)
+	tiles.voa:SetPoint("RIGHT", p, "RIGHT", -X, 0)
+	tiles.voa.lbl:ClearAllPoints(); tiles.voa.lbl:SetPoint("BOTTOMRIGHT", 0, 6)
+	tiles.voa.num:ClearAllPoints()
+	tiles.voa.num:SetPoint("BOTTOMRIGHT", tiles.voa.lbl, "TOPRIGHT", 0, 5)
+	tiles.voa.num:SetPoint("LEFT", tiles.voa, "LEFT", 0, 0)
+	tiles.voa.num:SetJustifyH("RIGHT")
+	local FACTION_COL = { Alliance = "ff4a90e2", Horde = "ffe05555" }
+	local function paintVoA()
+		local WG = Okanvil.WG
+		if not WG then return end
+		local holder, state, toNext = WG.State()
+		local col = FACTION_COL[holder or ""] or "ffffffff"
+		if state == "unknown" then
+			tiles.voa.num:SetText("|cff8a8d93--|r")
+		elseif state == "battle" then
+			tiles.voa.num:SetText("|cffe0b860Battle|r")
+		elseif state == "old" then
+			tiles.voa.num:SetText("|cff8a8d93" .. holder .. "?|r")
+		else
+			tiles.voa.num:SetText("|c" .. col .. holder .. "|r")
+		end
+		local tail
+		if state == "battle" then tail = "battle on now"
+		elseif state == "unknown" then tail = "visit Northrend"
+		elseif state == "old" then tail = "before last battle"
+		elseif toNext then
+			local m = math.floor(toNext / 60)
+			tail = (m >= 60) and ("next battle %dh %02dm"):format(math.floor(m / 60), m % 60)
+				or ("next battle %dm"):format(m)
+		end
+		tiles.voa.lbl:SetText("VOA" .. (tail and ("  --  " .. tail:upper()) or ""))
+	end
+	tiles.voa:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+		GameTooltip:AddLine("Vault of Archavon")
+		GameTooltip:AddLine("Who holds Wintergrasp, read from the Essence of Wintergrasp buff "
+			.. "while you are in Northrend. Kept until the next battle.", 0.8, 0.8, 0.8, true)
+		local at = Okanvil.db.wg and Okanvil.db.wg.at
+		if at then
+			GameTooltip:AddLine(("Last seen %d min ago."):format(math.floor((time() - at) / 60)), 0.55, 0.55, 0.58)
+		end
+		GameTooltip:Show()
+	end)
+	tiles.voa:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	tiles.voa:SetScript("OnUpdate", function(self, el)
+		self._t = (self._t or 0) + el
+		if self._t < 30 then return end
+		self._t = 0
+		if Okanvil.WG then Okanvil.WG.Read() end
+	end)
+	if Okanvil.WG then Okanvil.WG.onChange = paintVoA end
+	paintVoA()
+
 	-- guild online card -- a SCROLLABLE row list (shows everyone, not a capped
 	-- text blob) with a per-row [inv] button for quick invites from Home.
 	-- The online card fills the rest of the page height (Home is a fixed-size
@@ -888,7 +950,7 @@ function Okanvil:BuildHome()
 		paintPug()
 	end)
 
-	local guildParts = { tiles._t1, tiles._t2, tiles._t3, tiles._t4, tabOnline, tabSnaps, tabSaved, gcard, scard, lcard }
+	local guildParts = { tiles._t1, tiles._t2, tiles._t3, tiles._t4, tiles._t5, tabOnline, tabSnaps, tabSaved, gcard, scard, lcard }
 	local function setPugMode(on)
 		if on then
 			for _, f in ipairs(guildParts) do f:Hide() end
@@ -898,7 +960,7 @@ function Okanvil:BuildHome()
 			pug:Show()
 		elseif pug:IsShown() then
 			pug:Hide()
-			for i = 1, 4 do tiles["_t" .. i]:Show() end
+			for i = 1, 5 do tiles["_t" .. i]:Show() end
 			tabOnline:Show()
 			tabSnaps:SetShown(Okanvil:IsModuleEnabled("__guild"))
 			tabSaved:Show()

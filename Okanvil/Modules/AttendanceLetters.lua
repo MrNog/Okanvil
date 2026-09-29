@@ -24,7 +24,7 @@ A.Letters = L
 
 local RETRY_GAP = 600      -- seconds between tries while no officer answers
 local MAX_TRIES = 6        -- per login; the next login starts over
-local KEEP_WEEKS = 8       -- officers keep letters this long
+local KEEP_WEEKS = 5       -- officers keep letters this long: the 4-week grid + this week; the site keeps the rest
 
 local function stripRealm(n) return (n or ""):gsub("%-.*$", "") end
 
