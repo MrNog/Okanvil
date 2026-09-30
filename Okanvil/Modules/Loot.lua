@@ -2167,6 +2167,19 @@ end
 local function rollTrace(line)
 	if Okanvil.Trace then Okanvil:Trace("ROLL", line) end
 end
+-- A call for an item we don't track (a Crusader Orb handed out from the ML's bags)
+-- still means the raid moved on. Leaving the last item armed made every roll for
+-- the untracked one land on it, so the old targets go and those rolls are dropped.
+local function retireRollTargets(why)
+	if externalRollDrop or handRollDrop then
+		rollTrace(why .. ", stops rolls landing on " .. dropTag(externalRollDrop or handRollDrop))
+	end
+	externalRollDrop = nil
+	externalRollLastAt = 0
+	handRollDrop = nil
+	handRollAt = 0
+	if L.onRoll then L.onRoll() end
+end
 -- resolve the drop for an announced item link, mark it the external-roll target, and
 -- tell the UI to select it. findOpenDrop (defined above) prefers an un-awarded copy.
 function L.NoteExternalRoll(link, winners)
@@ -2174,7 +2187,7 @@ function L.NoteExternalRoll(link, winners)
 	local id = itemIDFromLink(link)
 	if not id or id == 0 then return end
 	local s = activeBucket and activeBucket()
-	if not s then rollTrace("call " .. link .. ": no loot session, not followed"); return end
+	if not s then retireRollTargets("call " .. link .. ": no loot session, not followed"); return end
 
 	-- WHICH COPY is being rolled. Searched over the whole run (a roll is called long
 	-- after the kill) and over the session the roll manager shows, newest first:
@@ -2274,7 +2287,7 @@ function L.NoteExternalRoll(link, winners)
 	-- item -- and creating it put phantom loot on the boss page for gear that never
 	-- dropped. Follow-only in that case: no capture, no record.
 	if not dp and not blind then
-		rollTrace("call " .. link .. ": not one of our drops, not followed")
+		retireRollTargets("call " .. link .. ": not one of our drops, not followed")
 		return
 	end
 
