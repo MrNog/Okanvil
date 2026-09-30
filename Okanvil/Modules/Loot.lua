@@ -730,17 +730,63 @@ local function runToken(bump)
 end
 
 -- WoW lockout week anchor: the date (YYYY-MM-DD) of the most recent reset boundary,
--- used to build a raid session key when the server never told us the real reset (a solo
--- clear that doesn't populate GetSavedInstanceInfo). WotLK raids reset weekly on RESET_WD
--- (Wednesday = 4 in Lua's date "%w", where Sunday = 0) -- the same Wed->Wed boundary the
--- rankings site keys off. Anchoring on the reset day (not the raw calendar day) means two
--- nights of the SAME lockout share one key and rejoin one session, while a genuinely new
--- lockout next week gets a fresh key. Wall-clock date(), so it survives a /reload.
-local RESET_WD = 4   -- Wednesday. If this guild's server resets on another day, change here.
+-- used to build a raid session key when the current raid has no lockout yet (a solo
+-- clear, or the first pull before anything saved you). Anchoring on the reset (not the
+-- raw calendar day) means two nights of the SAME lockout share one key and rejoin one
+-- session, while a genuinely new lockout next week gets a fresh key.
+--
+-- The reset moment is read from the server, in this order:
+--   1. any weekly raid lockout this character has (GetSavedInstanceInfo gives the
+--      seconds until it expires, and every weekly raid expires at the same reset);
+--   2. RAID_INSTANCE_WELCOME, which carries the same seconds when you zone into a raid;
+--   3. the last reset learned on this realm by any character, rolled forward a week
+--      at a time (a timestamp, so it survives a /reload and logging out);
+--   4. only then a guess: the daily quest reset hour on RESET_WD.
+local WEEK = 7 * 86400
+local RESET_WD = 3   -- Wednesday ("%w": Sunday = 0). Only used when nothing above is known.
+
+-- Remember the NEXT weekly reset (a timestamp) for this realm, account-wide.
+local function learnWeeklyReset(secondsLeft)
+	if not (secondsLeft and secondsLeft > 0 and secondsLeft <= WEEK + 3600) then return end
+	local db = Okanvil.db
+	if not db then return end
+	db.weeklyReset = db.weeklyReset or {}
+	db.weeklyReset[GetRealmName() or "?"] = time() + secondsLeft
+end
+
+local function scanWeeklyReset()
+	if not (GetNumSavedInstances and GetSavedInstanceInfo) then return end
+	for i = 1, GetNumSavedInstances() do
+		local _, _, reset, _, locked, _, _, isRaid = GetSavedInstanceInfo(i)
+		if isRaid and locked and reset and reset > 0 then
+			learnWeeklyReset(reset)
+			return
+		end
+	end
+end
+
+-- The moment the current lockout week began.
+local function weekStart()
+	scanWeeklyReset()
+	local now = time()
+	local db = Okanvil.db
+	local nxt = db and db.weeklyReset and db.weeklyReset[GetRealmName() or "?"]
+	if nxt then
+		while nxt <= now do nxt = nxt + WEEK end
+		while nxt - WEEK > now do nxt = nxt - WEEK end
+		return nxt - WEEK
+	end
+	-- Guess: the daily reset hour, on the last RESET_WD at or before now.
+	local daily = now + ((GetQuestResetTime and GetQuestResetTime()) or 0)
+	for d = 1, 7 do
+		local t = daily - d * 86400
+		if tonumber(date("%w", t)) == RESET_WD then return t end
+	end
+	return now
+end
+
 local function lootWeekAnchor()
-	local wd = tonumber(date("%w")) or 0        -- 0=Sun .. 6=Sat, local time
-	local back = (wd - RESET_WD + 7) % 7        -- days since the last reset weekday
-	return date("%Y-%m-%d", time() - back * 86400)
+	return date("%Y-%m-%d", weekStart())
 end
 
 -- The current run key (nil if we are not in a recordable instance).
@@ -762,6 +808,7 @@ function runKey()
 			for i = 1, GetNumSavedInstances() do
 				local sname, _, reset, sdiff = GetSavedInstanceInfo(i)
 				if sname == name and (not sdiff or sdiff == diff) and reset and reset > 0 then
+					learnWeeklyReset(reset)
 					return "lock|" .. name .. "|" .. (diff or 0) .. "|" .. date("%Y-%m-%d", time() + reset), name, diff, mapID
 				end
 			end
@@ -860,7 +907,8 @@ local function currentSession(create)
 	if key:find("^lock|") then
 		local weekKey = "week|" .. (name or "") .. "|" .. (diff or 0) .. "|" .. lootWeekAnchor()
 		for i = 1, #list do
-			if list[i].key == weekKey then
+			-- A session opened before this lockout began is last week's run.
+			if list[i].key == weekKey and (list[i].t or 0) >= weekStart() - 3600 then
 				list[i].key = key                -- upgrade to the precise lockout key
 				if i > 1 then
 					local found = table.remove(list, i)
@@ -4015,6 +4063,7 @@ ev:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")         -- entrou em combate
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")         -- entrada em instancia -> run novo (dungeon)
 ev:RegisterEvent("UPDATE_INSTANCE_INFO")          -- lockout chegou -> resolve a sessao da raid
+ev:RegisterEvent("RAID_INSTANCE_WELCOME")         -- zoning into a raid: seconds until the weekly reset
 
 -- deteta ENTRADA numa dungeon nova para bumpar o runToken (= sessao nova por run).
 -- So dungeons (party): reentrar/refazer a mesma dungeon = run novo. Raids agrupam
@@ -4105,6 +4154,11 @@ ev:SetScript("OnEvent", function(_, event, ...)
 		or event == "CHAT_MSG_RAID_LEADER" then
 		local a1, a2 = ...; if a1 then onRollAnnounce(a1, a2, event) end
 	elseif event == "PLAYER_ENTERING_WORLD" then onEnterWorld()
+	elseif event == "RAID_INSTANCE_WELCOME" then
+		-- Heroic dungeons send this too, with their DAILY reset, so raids only.
+		local _, itype = IsInInstance()
+		local _, secondsLeft = ...
+		if itype == "raid" then learnWeeklyReset(tonumber(secondsLeft)) end
 	elseif event == "UPDATE_INSTANCE_INFO" then
 		-- lockout info landed: open/rejoin the real session and flush buffered drops.
 		resolveSession()
