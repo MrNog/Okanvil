@@ -63,15 +63,19 @@ end
 -- Touching a PICK hands control back to the generator.
 --
 -- Hand-editing the line switches the builder off, which is right -- your typing
--- must not be overwritten. But then every raid / size / need / Reserve / Want /
--- Spec control silently stopped doing anything, and the only way back was a
--- Rebuild button you had to know existed. Clicking a pick IS the statement
--- "build it from my picks", so it takes control back by itself and the
--- dead-button state cannot happen.
+-- must not be overwritten. But then the raid / size / difficulty / Reserve
+-- controls would silently do nothing, so clicking one of those IS the statement
+-- "build it from my picks" and takes control back.
 --
--- The hand-typed text is kept in d.custom (just no longer used), so nothing the
--- user wrote is destroyed by a stray click -- and `gs` / `note`, which are typed
--- rather than picked, deliberately do NOT call this.
+-- The need counts and the Ask-for chips do NOT call this. They only change the
+-- "need ..." clause, and a hand-typed line already gets that clause spliced in
+-- live (PuG.lua outgoing), so they work on your text without discarding it.
+-- Leaders tap +/- all night as people join; if that threw the text away, the
+-- spam went out as the default line and nobody noticed until pugs said so.
+--
+-- When it does take over it says so in chat: the text is kept in d.custom but
+-- no longer sent, and the box is below the fold of attention mid-pug. `gs` /
+-- `note`, which are typed rather than picked, never call this.
 --
 -- Declared up here, above the first builder that uses it: a `local` is only in
 -- scope AFTER its declaration, so defining it further down would leave the top
@@ -79,7 +83,9 @@ end
 -- ------------------------------------------------------------
 local function pickTakesOver()
 	local d = db()
-	if d.useCustom then d.useCustom = false end
+	if not d.useCustom then return end
+	d.useCustom = false
+	Okanvil:Print("|cffF1C40F[PuG]|r Your own text was replaced by the built line (you changed the raid, size or reserves). Type it again to send your wording.")
 end
 
 -- ------------------------------------------------------------
@@ -346,15 +352,14 @@ local function buildBoard(p)
 			cnt:SetPoint("RIGHT", minus, "LEFT", -6, 0)
 
 			-- SetNeed clamps the total to the raid size, taking any surplus off the
-			-- other dps bucket first (see PuG.lua)
+			-- other dps bucket first (see PuG.lua). They only change the need clause,
+			-- which a hand-typed line gets spliced in, so they never take over.
 			local role = key
 			minus:OnClick(function()
-				pickTakesOver()
 				M.SetNeed(role, (tonumber(db().need[role]) or 0) - 1)
 				M.RefreshUI()
 			end)
 			plus:OnClick(function()
-				pickTakesOver()
 				M.SetNeed(role, (tonumber(db().need[role]) or 0) + 1)
 				M.RefreshUI()
 			end)
@@ -384,7 +389,7 @@ local function buildBoard(p)
 				b._token = token
 				local role = key
 				b:SetScript("OnClick", function()
-					pickTakesOver()
+					if db().classRun then pickTakesOver() end   -- a class run lists these outside the need clause
 					local picks = M.RolePicks(role)
 					picks[token] = (not picks[token]) or nil
 					M.RefreshUI()
@@ -836,13 +841,26 @@ local function makeList(parent, x, w, top, bottom)
 	local child = CreateFrame("Frame", nil, sf)
 	child:SetSize(10, 1); sf:SetScrollChild(child)
 
+	-- 3.3.5a hides rows scrolled out of view but still hit-tests them, so a row
+	-- scrolled off the top sits invisibly over the search box and takes its
+	-- clicks. Only rows whose middle is inside the viewport keep the mouse.
+	local function syncMouse()
+		local top, bottom = sf:GetTop(), sf:GetBottom()
+		if not (top and bottom) then return end
+		for _, row in ipairs({ child:GetChildren() }) do
+			local rt, rb = row:GetTop(), row:GetBottom()
+			local mid = rt and rb and (rt + rb) / 2
+			row:EnableMouse(mid ~= nil and mid <= top and mid >= bottom)
+		end
+	end
+
 	local sb = CreateFrame("Slider", nil, card)
 	sb:SetPoint("TOPRIGHT", -3, -4); sb:SetPoint("BOTTOMRIGHT", -3, 4); sb:SetWidth(4)
 	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
 	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetSize(4, 30)
 	do local a = C.accent; th:SetVertexColor(a[1], a[2], a[3], 1) end
 	sb:SetThumbTexture(th)
-	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
+	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v); syncMouse() end)
 	sf:EnableMouseWheel(true)
 	sf:SetScript("OnMouseWheel", function(_, dz) sb:SetValue(sb:GetValue() - dz * 30) end)
 	sf:SetScript("OnSizeChanged", function() child:SetWidth(sf:GetWidth()) end)
@@ -852,6 +870,7 @@ local function makeList(parent, x, w, top, bottom)
 		child:SetHeight(math.max(1, h or 1))
 		local maxs = math.max(0, (h or 1) - sf:GetHeight())
 		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
+		syncMouse()
 	end
 	return card, child, relayout, sf
 end

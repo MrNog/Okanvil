@@ -10,7 +10,7 @@ name **"Okanvil"** and the author credit are **fixed**; only the _guild skin_ (`
 configurable — see **Branding** below.
 
 **Addon lives in a nested `Okanvil\` folder.** The repo root holds dev files (README, `.github`,
-`.claude`); the addon itself is `Projects\Okanvil\Okanvil\` (`Okanvil.toc` + `Core\ Modules\ Libs\
+`.claude`); the addon itself is `Projects\wow-addons\Okanvil\Okanvil\` (`Okanvil.toc` + `Core\ Modules\ Libs\
 Media\ PLAN.md`). The build zips that subfolder as-is. Edit source here; the live `…\AddOns\Okanvil\`
 copy is synced separately (Fork GUI / manual copy). **New addon folder → full game RESTART; code-only
 → `/reload`.**
@@ -151,7 +151,7 @@ The **git tag is the single source of truth** — you never edit `## Version:` i
 ## File map
 
 ```
-Projects\Okanvil\                 (repo root -- dev files only)
+Projects\wow-addons\Okanvil\                 (repo root -- dev files only)
   README.md
   .github\workflows\package.yml    (zips Okanvil\ into Okanvil.zip on push to main)
   .claude\  .agents\  .gitignore

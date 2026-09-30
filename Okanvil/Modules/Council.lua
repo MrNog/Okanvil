@@ -93,6 +93,10 @@ end
 -- item goes one way or the other.
 C_.active = false
 
+-- How long council night, and the answer to "council tonight?", outlive a reload.
+-- One raid night at most, never the next one.
+local NIGHT_TTL = 3 * 3600
+
 function C_.SetActive(on)
 	if on and not C_.MayRun() then
 		Okanvil:Print("|cffff5555Loot council:|r only the master looter can start council night.")
@@ -2563,8 +2567,8 @@ function C_.BuildRunTab(body)
 
 	opt("Ask when I become master looter",
 		"Offers council night at the start of a raid",
-		"When the master looter becomes you, or you zone into a raid as leader with no "
-			.. "master looter set (Yes makes you ML). Say no and rolls carry on as they are.",
+		"When the master looter becomes you. Asks once per raid ID; a reload keeps "
+			.. "your answer. Say no and rolls carry on as they are.",
 		function() return db().askOnML == true end,
 		function(v) db().askOnML = v end)
 
@@ -2808,7 +2812,7 @@ function C_.TestOff()
 	local dOff = db()
 	dOff.testAt, dOff.testWho = nil, nil
 	-- A test switched council night ON to get the mini roll row. Ending the test
-	-- puts it back as it was: left on, the flag sat there for its whole six-hour
+	-- puts it back as it was: left on, the flag sat there for its whole NIGHT_TTL
 	-- life and a real raid hours later opened a corpse straight into an auto-ask;
 	-- forced off, it killed a council night that was running before the test.
 	C_.SetActive(C_.testPrevActive)
@@ -2841,6 +2845,36 @@ local function sameName(a, b)
 	return a and b and a:gsub("%-.*", ""):lower() == b:gsub("%-.*", ""):lower()
 end
 
+-- The answer (Yes or No) is kept for the raid it was given in, so a /reload or a
+-- relog does not ask again. It is the same raid while the loot run key matches,
+-- or for NIGHT_TTL unless you are now in a DIFFERENT raid instance (the key moves
+-- from "week|" to "lock|" after the first kill, and the question is often
+-- answered outside, before zoning in). A new ID or the next night asks again.
+-- Changing it by hand is always the Council toggle on the Loot page.
+
+local function raidContext()
+	local L = Okanvil.Loot
+	local key, zone, diff = L and L.RunKey and L.RunKey()
+	local inRaid = select(2, IsInInstance()) == "raid"
+	return key, zone, diff, inRaid
+end
+
+local function rememberAnswer(yes)
+	local key, zone, diff, inRaid = raidContext()
+	db().nightAnswer = { yes = yes and true or false, at = time(),
+		key = key, zone = zone, diff = diff, raid = inRaid }
+end
+
+local function answeredForThisRaid()
+	local a = db().nightAnswer
+	if type(a) ~= "table" or not a.at then return false end
+	if time() - a.at >= NIGHT_TTL then return false end
+	local key, zone, diff, inRaid = raidContext()
+	if a.key and a.key == key then return true end
+	if a.raid and inRaid and (a.zone ~= zone or a.diff ~= diff) then return false end
+	return true
+end
+
 local askNightF
 local function askCouncilNight()
 	if not askNightF then
@@ -2864,6 +2898,7 @@ local function askCouncilNight()
 		yes:SetScript("OnClick", function()
 			f:Hide()
 			Okanvil:Trace("COUNCIL", "Yes to council tonight")
+			rememberAnswer(true)
 			C_.SetActive(true)
 		end)
 
@@ -2872,6 +2907,7 @@ local function askCouncilNight()
 		no:SetScript("OnClick", function()
 			f:Hide()
 			Okanvil:Trace("COUNCIL", "No to council tonight")
+			rememberAnswer(false)
 			C_.SetActive(false)
 		end)
 		askNightF = f
@@ -2887,7 +2923,14 @@ local function askCouncilNight()
 end
 
 local function mayAsk()
-	return enabled() and not C_.testMode and not C_.active and db().askOnML == true
+	if not (enabled() and not C_.testMode and not C_.active and db().askOnML == true) then
+		return false
+	end
+	if answeredForThisRaid() then
+		Okanvil:Trace("COUNCIL", "not asking: already answered for this raid")
+		return false
+	end
+	return true
 end
 
 -- Branch 1: runs on every loot-method / roster change, acts only when the ML moved.
@@ -3087,14 +3130,14 @@ do
 			end
 		end
 
-		-- COUNCIL NIGHT survives a reload. Six hours, so it covers a raid night and
+		-- COUNCIL NIGHT survives a reload, for NIGHT_TTL, so it covers a raid night and
 		-- expires before the next one -- "is tonight a council night" is a decision
 		-- about tonight, and a flag that outlived the raid is the one that silently
 		-- does the wrong thing three weeks later.
 		do
 			local d = db()
 			local at = tonumber(d.activeAt or 0) or 0
-			if at > 0 and (time() - at) < 6 * 3600 then
+			if at > 0 and (time() - at) < NIGHT_TTL then
 				C_.active = true
 				Okanvil:Print("|cffe0b860Loot council:|r council night restored.")
 			else

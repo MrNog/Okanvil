@@ -29,7 +29,7 @@ out of the main window.
    Available: `W.Frame/Text/Button/Check/Slider/EditBox/DropDown/MultiEdit` +
    **`W.Dashboard`**, plus `Okanvil:Skin(frame, kind)`, `Okanvil:Popup(title)`,
    `Okanvil:ReskinAll(alpha)`.
-3. **Edit source in `Projects\Okanvil` (repo root = the addon), never the live WoW
+3. **Edit source in `Projects\wow-addons\Okanvil` (repo root = the addon), never the live WoW
    AddOns copy.** They are separate copies; the user syncs via the Fork GUI.
 4. **Preserve the module-facing API:** `Okanvil:NewText/Backdrop/Font/Texture/Register/Toggle`.
 
@@ -108,7 +108,7 @@ vs `end/until/elseif`) must report depth 0. Then the user loads in-game.
 
 ## Workflow
 
-1. Read the relevant file(s) under `Projects\Okanvil` (repo root = the addon). Match surrounding style.
+1. Read the relevant file(s) under `Projects\wow-addons\Okanvil` (repo root = the addon). Match surrounding style.
 2. Prefer `Okanvil.W.*` and `W.Dashboard`; extend Widgets.lua if a needed widget is missing (keep the chained `:Point/:Size` API and register skins for alpha re-tint).
 3. There is **no local Lua interpreter** — validate structurally: block balance
    (`function/if/for/do` vs `end`), paren balance, and cross-file symbols. Then the

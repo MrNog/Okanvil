@@ -262,6 +262,21 @@ local function isBoE(link)
 	return false
 end
 
+-- Quest items (Rotface's Acidic Blood and the rest of the Shadowmourne chain) bind
+-- on pickup and only matter to whoever holds the quest. The tooltip's "Quest Item"
+-- line is the reliable mark; the item type is the fallback for an uncached tooltip.
+local QUEST_CLASS = GetAuctionItemClasses and select(12, GetAuctionItemClasses()) or "Quest"
+local function isQuestItem(link)
+	local itype = select(6, GetItemInfo(link))
+	if itype and itype == QUEST_CLASS then return true end
+	local lines = scanLines(link)
+	if not lines then return false end
+	for i = 2, math.min(6, #lines) do
+		if lines[i].text == ITEM_BIND_QUEST then return true end
+	end
+	return false
+end
+
 -- ============================================================
 -- BOSS SCANNER (ported from MRT Compat335.lua).
 -- On 3.3.5a the server does NOT fire ENCOUNTER_START/END. MRT reconstructs them
@@ -1516,6 +1531,8 @@ local function captureCorpse()
 				elseif d.action == "give" and not d.done then
 					Okanvil:Print("|cffff5555Auto-loot falhou:|r " .. (d.name or "item") .. " -> " .. d.who
 						.. " nao e candidato (fora de alcance/offline). Fica no boss.|r")
+				elseif d.bucket == "quest" then
+					Okanvil:Print("Auto-loot: " .. (d.name or "item") .. " is a quest item -- left on the boss for whoever has the quest.")
 				end
 			end
 		end
@@ -3824,7 +3841,7 @@ end
 -- are ML and the toggle is ON). Returns a DECISION: { action, who, bucket, name }
 -- without acting -- so callers can inspect it; the real path calls giveSlotTo.
 --   action: "give" (who) | "confirm" (who, ask first)
---         | "leave" (fragment, no collector: stay on boss)
+--         | "leave" (quest item, or fragment with no collector: stay on boss)
 --         | "roll" (nobody named: leave it in the window, roll it normally)
 --
 -- The POINT of this mode is to skip rolling at the pull: everything is vacuumed into
@@ -3840,6 +3857,9 @@ end
 local function autoGiveDecision(link, name)
 	local c = collectorsDB()
 	local trim = function(s) return (tostring(s or ""):gsub("^%s*(.-)%s*$", "%1")) end
+	-- A quest item handed to the collector is lost: it binds, and only the quest holder can use it.
+	-- It stays in the window for the quest holder, like a fragment with no collector.
+	if isQuestItem(link) then return { action = "leave", bucket = "quest", name = name } end
 	local bucket = collectorFor(link, name)   -- frag | boe | main
 	local main = trim(c.main)
 	if bucket == "frag" then

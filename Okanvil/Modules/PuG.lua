@@ -923,7 +923,8 @@ local function wantText(role)
 end
 
 -- The "need ..." clause of the line on its own: "need 1 Tank (DK) 2 Heal", or
--- "almost full" once every role is filled. Role runs only; a class run asks by
+-- "" once every role is filled -- a full raid is the leader's cue to stop the
+-- spam, not something the line announces. Role runs only; a class run asks by
 -- class and returns nil.
 local function needClause()
 	if db.classRun then return nil end
@@ -937,38 +938,42 @@ local function needClause()
 			bits[#bits + 1] = bit
 		end
 	end
-	if #bits == 0 then return "almost full" end
+	if #bits == 0 then return "" end
 	return "need " .. table.concat(bits, " ")
 end
 
--- Words a hand-written need clause names its roles with.
-local ROLE_WORDS = {
-	tank = true, tanks = true, heal = true, heals = true, healer = true, healers = true,
-	melee = true, ranged = true, range = true, dps = true, mdps = true, rdps = true,
-}
+-- The role words exactly as the built line spells them. Only these mark a clause
+-- as ours: "need 2 dps" or "need 1 tank" typed by hand is the leader's own
+-- wording and is never rewritten.
+local ROLE_WORDS = {}
+for _, w in pairs(ROLE_SHORT) do ROLE_WORDS[w] = true end
 
 -- Put the live need clause into a line the user edited, keeping every other word
--- they wrote ("Weekly", "wsp me", their own gs note). The clause is "need" followed
--- by counted roles -- "need 1 Tank (DK) 2 Heal, 3 Melee" -- or "almost full". A
--- line with neither is left exactly as typed.
+-- they wrote ("Weekly", "wsp me", their own gs note). Only the clause the builder
+-- wrote is replaced: "need" followed by counted roles in its own spelling --
+-- "need 1 Tank (DK) 2 Heal 3 Melee". Matching is case-sensitive, so a line the
+-- leader wrote from scratch is left exactly as typed. The saved line is never
+-- changed, only what is sent, so a clause dropped while the raid is full comes
+-- back when someone leaves.
 local function spliceNeed(text, clause)
 	if not clause or not text or text == "" then return text end
-	local lower = text:lower()
-	local s = lower:find("%f[%a]need%f[%A]")
+	local s = text:find("%f[%a]need%f[%A]")
 	if s then
 		local pos, last = s + 4, nil
 		while true do
-			-- one "<n> <role>", with whatever separator the user put before it
-			local a, b, word = lower:find("^[%s,/+&]*%d+%s*(%a+)", pos)
+			-- one "<n> <Role>" as the builder writes it
+			local a, b, word = text:find("^%s+%d+ (%a+)", pos)
 			if not a or not ROLE_WORDS[word] then break end
 			last, pos = b, b + 1
-			local c, d = lower:find("^%s*%b()", pos)       -- "(DK/Pala)"
+			local c, d = text:find("^ %b()", pos)       -- "(DK/Pala)"
 			if c then last, pos = d, d + 1 end
 		end
-		if last then return text:sub(1, s - 1) .. clause .. text:sub(last + 1) end
+		if last then
+			local out = text:sub(1, s - 1) .. clause .. text:sub(last + 1)
+			if clause == "" then out = out:gsub("  +", " "):gsub("^ ", ""):gsub(" $", "") end
+			return out
+		end
 	end
-	local a, b = lower:find("almost full", 1, true)
-	if a then return text:sub(1, a - 1) .. clause .. text:sub(b + 1) end
 	return text
 end
 M.SpliceNeed = spliceNeed
@@ -999,13 +1004,8 @@ local function buildMessage()
 			end
 		end
 	end
-	if #bits > 0 then
-		parts[#parts + 1] = "need " .. table.concat(bits, " ")
-	else
-		-- Everything is filled. Saying "need" with nothing after it reads as a typo,
-		-- so the line becomes a last-call instead.
-		parts[#parts + 1] = "almost full"
-	end
+	-- Everything filled leaves no clause at all: stopping the spam is up to the leader.
+	if #bits > 0 then parts[#parts + 1] = "need " .. table.concat(bits, " ") end
 
 	-- A class run asks by class, not by role, so its picks go at the end rather
 	-- than beside a role count that does not apply.
