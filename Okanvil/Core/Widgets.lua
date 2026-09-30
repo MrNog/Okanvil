@@ -689,8 +689,18 @@ local function ensureMenu()
 	m.sb = sb
 
 	m.rows = {}
-	-- close when clicking elsewhere
 	m:SetScript("OnHide", function() m.owner = nil end)
+	-- The menu lives on UIParent, so nothing hides it with its button: close it
+	-- when the button goes away (window closed, page rebuilt) or on a click
+	-- anywhere outside the menu and its button.
+	m:SetScript("OnUpdate", function(s)
+		local o = s.owner
+		if not (o and o:IsVisible()) then s:Hide(); return end
+		if (IsMouseButtonDown("LeftButton") or IsMouseButtonDown("RightButton"))
+			and not MouseIsOver(s) and not MouseIsOver(o) then
+			s:Hide()
+		end
+	end)
 	MENU = m
 	return m
 end
