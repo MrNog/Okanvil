@@ -284,6 +284,13 @@ function WG.Read()
 		local mine = UnitFactionGroup("player")
 		local other = (mine == "Horde") and "Alliance" or "Horde"
 		local holder = hasEssence() and mine or other
+		-- The buff drops for a moment when crossing zones (leaving Dalaran), so its
+		-- absence is weak evidence. Only a battle changes the holder: with a reading
+		-- taken since the last battle, a missing buff does not overturn it.
+		if holder == other and d.faction == mine and (d.at or 0) >= (d.lastBattle or 0) then
+			if WG.onChange then pcall(WG.onChange) end
+			return
+		end
 		if d.faction ~= holder and Okanvil.Trace then
 			Okanvil:Trace("WG", "holder " .. tostring(holder))
 		end

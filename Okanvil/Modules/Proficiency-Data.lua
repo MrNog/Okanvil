@@ -23,9 +23,9 @@
 --
 --   2. Armour is stored as the HIGHEST type a class wears. On 3.3.5a every
 --      class is past level 40, so a hunter is mail-only in practice even though
---      they wore leather at low level. isArmorUsable() still allows lighter
---      types, because an off-set piece in a lower armour class is a real choice
---      a raider may want (and guessing at intent is not this file's job).
+--      they wore leather at low level. CanUse() allows only that type: a
+--      lighter piece is auto-passed, so the council board lists only the
+--      classes the item is for.
 --
 -- 3.3.5a: GetItemInfo returns LOCALISED type/subtype strings, so the English
 -- keys below cannot be compared directly on a non-English client. P.Subtype()
@@ -38,8 +38,9 @@ local P = {}
 Okanvil.Prof = P
 
 -- ------------------------------------------------------------
--- ARMOUR. The heaviest type each class wears at raid level, plus everything
--- lighter. A cloak is never gated -- every class wears one (RCLoot carries the
+-- ARMOUR. Each class takes only its own type at raid level: a plate wearer is
+-- never asked about a cloth robe, it would only add a Pass to the board. A cloak
+-- is never gated -- every class wears one (RCLoot carries the
 -- same override, and it is the single most common false filter).
 -- ------------------------------------------------------------
 local CLOTH, LEATHER, MAIL, PLATE = 1, 2, 3, 4
@@ -48,7 +49,7 @@ local ARMOR_RANK = {
 	["Cloth"] = CLOTH, ["Leather"] = LEATHER, ["Mail"] = MAIL, ["Plate"] = PLATE,
 }
 
--- class -> heaviest armour worn (everything at or below is equippable)
+-- class -> the armour type it wears
 local ARMOR_MAX = {
 	WARRIOR     = PLATE,
 	PALADIN     = PLATE,
@@ -262,12 +263,12 @@ function P.CanUse(link, class)
 	local eng = P.Subtype(itemSub)
 	if not eng then return true end                   -- unknown subtype -> never filter
 
-	-- 3. Armour: allow the class's own type and anything lighter.
+	-- 3. Armour: the class's own type only.
 	local rank = ARMOR_RANK[eng]
 	if rank then
 		local maxRank = ARMOR_MAX[class]
 		if not maxRank then return true end
-		if rank <= maxRank then return true end
+		if rank == maxRank then return true end
 		return false, "armor"
 	end
 

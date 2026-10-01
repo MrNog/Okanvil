@@ -264,6 +264,59 @@ local function equippedFor(link)
 	return bestID, bestIlvl
 end
 
+-- A Mark of Sanctification has no slot to compare: it upgrades a T10 piece, the
+-- normal mark 251 -> 264 and the heroic one 264 -> 277. What the council wants is
+-- which pieces it would upgrade, so the value is the item level the piece has now.
+local MARK_FROM = {
+	[52025] = 251, [52026] = 251, [52027] = 251,   -- Vanquisher's / Protector's / Conqueror's
+	[52028] = 264, [52029] = 264, [52030] = 264,   -- the same three, heroic
+}
+local TIER_SLOTS = { "HeadSlot", "ShoulderSlot", "ChestSlot", "HandsSlot", "LegsSlot" }
+
+-- A set piece shows its set as "Name (2/5)"; Wrathful PvP sets carry resilience
+-- and share the 264 item level, so those are left out.
+local setPattern, resilPattern
+local tierTip
+local function isTierPiece(link)
+	if not setPattern then
+		setPattern = "^" .. Okanvil.U.escPattern(ITEM_SET_NAME or "%s (%d/%d)")
+			:gsub("%%%%s", ".+"):gsub("%%%%d", "%%d+") .. "$"
+		local r = (ITEM_MOD_RESILIENCE_RATING or "Resilience Rating")
+			:gsub("%%[sd]", ""):gsub("^%+%s*", ""):gsub("^%s+", ""):gsub("%s+$", "")
+		resilPattern = Okanvil.U.escPattern(r ~= "" and r or "Resilience")
+	end
+	if not tierTip then
+		tierTip = CreateFrame("GameTooltip", "OkanvilCouncilTierTip", nil, "GameTooltipTemplate")
+	end
+	tierTip:SetOwner(UIParent, "ANCHOR_NONE")
+	tierTip:ClearLines()
+	if not pcall(tierTip.SetHyperlink, tierTip, link) then return false end
+	local inSet = false
+	for i = 2, tierTip:NumLines() do
+		local fs = _G["OkanvilCouncilTierTipTextLeft" .. i]
+		local t = fs and fs:GetText()
+		if t then
+			if t:find(resilPattern) then return false end
+			if t:find(setPattern) then inSet = true end
+		end
+	end
+	return inSet
+end
+
+-- The equipped T10 pieces this mark would upgrade, as item ids.
+local function tierToUpgrade(link)
+	local from = MARK_FROM[Okanvil.U.itemIDFromLink(link)]
+	if not from then return nil end
+	local out = {}
+	for _, slot in ipairs(TIER_SLOTS) do
+		local have = linkInSlot(slot)
+		if have and select(4, GetItemInfo(have)) == from and isTierPiece(have) then
+			out[#out + 1] = Okanvil.U.itemIDFromLink(have)
+		end
+	end
+	return out
+end
+
 -- Our Enchanting skill, or nil. Asked ONCE, when the master looter starts council
 -- night (ENCQ below), so their Disenchant list shows the raid's enchanters,
 -- highest skill first, the way RCLootCouncil's does. The skill line is matched by
@@ -285,6 +338,15 @@ local function buildReply()
 		local eqID, eqIlvl = equippedFor(it.link)
 		local newIlvl = select(4, GetItemInfo(it.link))
 		local diff = (eqIlvl and newIlvl) and (newIlvl - eqIlvl) or ""
+		-- a mark sends the pieces it would upgrade as "T<id>+<id>" in the gear
+		-- field; an older board reads that as no item, which is what it showed anyway
+		local tier = tierToUpgrade(it.link)
+		if tier then
+			-- a bare "T" = checked, no tier; the board tells that apart from an
+			-- older client that sent nothing
+			eqID = "T" .. table.concat(tier, "+")
+			diff = ""
+		end
 		parts[#parts + 1] = ("%d=%s/%s/%s"):format(
 			-- "wait", NOT "pass", for an item this raider has not answered yet.
 			-- Defaulting to pass told the board they had declined every item the
@@ -886,7 +948,8 @@ C_.rounds = {}      -- round id -> { items = {link,...}, replies = {name -> {idx
 local board            -- the reused board frame
 local boardItem = 1    -- which item of the round is on screen
 local tabFirst  = 1    -- leftmost tab shown in the strip (paging window)
-local BR_H   = 40      -- board row height; tall enough to read across five columns
+local BR_H   = 28      -- board row height; compact so a full raid fits on screen
+local BOARD_MAX_ROWS = 12   -- rows drawn at once; the rest scroll
 local TAB_S  = 44      -- item tab icon size
 local TAB_TOP = 32     -- where the tab strip starts, under the title bar
 -- Board columns, as x offsets. One place to shift the table rather than four.
@@ -894,10 +957,10 @@ local TAB_TOP = 32     -- where the tab strip starts, under the title bar
 -- Blade..." truncated at 18 characters was the column being too narrow, not the
 -- name being too long.
 local COL_NAME = 0
-local COL_WANT = 170
-local COL_PRIO = 285
-local COL_GEAR = 340     -- equipped icon
-local COL_SPEC = 374     -- equipped item name, just right of its icon
+local COL_WANT = 215     -- room after the name for the "won tonight" icons
+local COL_PRIO = 320
+local COL_GEAR = 370     -- equipped icon
+local COL_SPEC = 396     -- equipped item name, just right of its icon
 local COL_DIFF = 640     -- the ilvl gap
 local COL_VOTE = 700     -- council votes: count, two names, the Vote button
 local BOARD_W  = 980
@@ -914,10 +977,16 @@ local function parseReply(payload)
 		if idx then
 			local key, eq, diff = body:match("^([^/]+)/([^/]*)/([^/]*)$")
 			if not key then key = body end      -- bare "<idx>=<response>"
+			local tier
+			if eq and eq:sub(1, 1) == "T" then
+				tier = {}
+				for id in eq:gmatch("%d+") do tier[#tier + 1] = { id = tonumber(id) } end
+			end
 			out[tonumber(idx)] = {
 				key  = key,
 				eq   = tonumber(eq),
 				diff = tonumber(diff),
+				tier = tier,
 			}
 		end
 	end
@@ -1418,14 +1487,23 @@ local function ensureBoard()
 	if prio.SetWordWrap then prio:SetWordWrap(false) end
 	f.prio = prio
 
-	-- The council present, one name each, ticked once they have voted on the
-	-- item on screen.
-	local council = W.Text(f, "", "body")
-	council:SetPoint("TOPLEFT", 12, -(TAB_TOP + TAB_S + 48))
-	council:SetPoint("RIGHT", f, "RIGHT", -12, 0)
-	council:SetJustifyH("LEFT")
-	if council.SetWordWrap then council:SetWordWrap(false) end
-	f.council = council
+	-- No line naming the council: the count says how many have voted, and the
+	-- VOTES column already names who voted for whom.
+
+	-- Who passed, in one dim line at the bottom right. Passes get no row: the
+	-- council only needs to know they are out, not read them.
+	local passLine = W.Text(f, "", "note", "dim")
+	passLine:SetPoint("BOTTOMRIGHT", -12, 16)
+	passLine:SetJustifyH("RIGHT")
+	if passLine.SetWordWrap then passLine:SetWordWrap(false) end
+	f.passLine = passLine
+
+	-- More candidates than BOARD_MAX_ROWS: the wheel scrolls the table.
+	f:EnableMouseWheel(true)
+	f:SetScript("OnMouseWheel", function(_, delta)
+		f._top = math.max(1, (f._top or 1) - delta)
+		C_.RepaintBoard()
+	end)
 
 	-- ---- award row (bottom) -------------------------------------------
 	-- The primary button NAMES the person it would give to. It is a suggestion in
@@ -1617,7 +1695,7 @@ local function ensureBoard()
 	-- state was one more thing on screen that did nothing.
 
 	-- Column headers.
-	local hy = -(TAB_TOP + TAB_S + 70)
+	local hy = -(TAB_TOP + TAB_S + 50)
 	local function col(text, x)
 		local t = W.Text(f, text, "note", "dim")
 		t:SetPoint("TOPLEFT", 12 + x, hy)
@@ -1718,6 +1796,7 @@ function C_.RepaintBoard(open)
 					-- The override is per item: switching items must not carry a
 					-- "give it anyway" that was armed for a different decision.
 					f._forceArm = nil
+					f._top = 1
 					C_.RepaintBoard()
 				end)
 				-- Tooltip off the board's RIGHT edge, into empty screen. It was
@@ -1792,7 +1871,7 @@ function C_.RepaintBoard(open)
 			local rec2 = P.ForLink(link)
 			local prio = rec2 and rec2.p
 			if prio and prio ~= "" then
-				prioLine = P.Plain and P.Plain(prio) or prio
+				prioLine = (P.Line and P.Line(prio)) or (P.Plain and P.Plain(prio)) or prio
 				for pos, nm in ipairs(P.Names(prio) or {}) do
 					-- Names carries an " (OS)" suffix; the bare name is the key.
 					local bare = nm:gsub("%s*%(OS%)$", "")
@@ -1808,13 +1887,18 @@ function C_.RepaintBoard(open)
 	-- is still deciding, and needs the count to say how many have actually made a
 	-- decision. Conflating the two is what let a name show Pass before it had
 	-- chosen anything.
-	local rows, answered, naCount, waiting = {}, 0, 0, 0
+	-- A Pass is an answer but gets no row: it only says who is out, and on a full
+	-- raid those rows were most of the window. They are named in f.passLine.
+	local rows, answered, naCount, waiting, passed = {}, 0, 0, 0, {}
 	for name, answers in pairs(rec.replies) do
 		local a = answers[boardItem]
-		if a and a.key and a.key ~= "na" then
+		if a and a.key == "pass" then
+			answered = answered + 1
+			passed[#passed + 1] = name
+		elseif a and a.key and a.key ~= "na" then
 			if a.key == "wait" then waiting = waiting + 1 else answered = answered + 1 end
 			rows[#rows + 1] = {
-				name = name, key = a.key, eq = a.eq, diff = a.diff,
+				name = name, key = a.key, eq = a.eq, diff = a.diff, tier = a.tier,
 				prio = prioPos[name],
 			}
 		elseif a and a.key == "na" then
@@ -1862,25 +1946,34 @@ function C_.RepaintBoard(open)
 	-- Who is on the council for this item, and who has voted on it.
 	local members = councilOf(rec)
 	local itemVotes = (rec.votes and rec.votes[boardItem]) or {}
-	local votedN, strip = 0, {}
-	do
-		local L = Okanvil.Loot
-		for _, m in ipairs(members) do
-			local did = itemVotes[m] ~= nil
-			if did then votedN = votedN + 1 end
-			local nm = L and L.ClassColorName and L.ClassColorName(m) or m
-			strip[#strip + 1] = (did
-				and "|TInterface\\RaidFrame\\ReadyCheck-Ready:14|t"
-				or "|TInterface\\RaidFrame\\ReadyCheck-Waiting:14|t") .. nm
-		end
+	local votedN = 0
+	for _, m in ipairs(members) do
+		if itemVotes[m] ~= nil then votedN = votedN + 1 end
 	end
-	f.council:SetText("|cff8a8d93COUNCIL|r   " .. table.concat(strip, "    "))
 
-	f.count:SetText(("%d answered%s|cff8a8d93%s|r   |cffe0b860%d/%d council voted|r"):format(
+	f.count:SetText(("%d answered%s|cff8a8d93%s%s|r   |cffe0b860%d/%d council voted|r"):format(
 		answered,
 		waiting > 0 and ("  |cffe0b860" .. waiting .. " deciding|r") or "",
+		#passed > 0 and ("  ·  " .. #passed .. " passed") or "",
 		naCount > 0 and ("  ·  " .. naCount .. " can't use") or "",
 		votedN, #members))
+
+	table.sort(passed)
+	if #passed > 0 then
+		local shown = {}
+		for k = 1, math.min(6, #passed) do shown[k] = passed[k] end
+		f.passLine:SetText("Passed: " .. table.concat(shown, ", ")
+			.. (#passed > 6 and ("  +" .. (#passed - 6)) or ""))
+	else
+		f.passLine:SetText("")
+	end
+
+	-- Only BOARD_MAX_ROWS are drawn; the wheel moves the window. `rows` stays the
+	-- full list so the default Give pick is still the top claim.
+	local maxTop = math.max(1, #rows - BOARD_MAX_ROWS + 1)
+	f._top = math.min(math.max(f._top or 1, 1), maxTop)
+	local vis = {}
+	for k = f._top, math.min(#rows, f._top + BOARD_MAX_ROWS - 1) do vis[#vis + 1] = rows[k] end
 
 	-- The full ladder under the item name: the PRIO column gives each candidate's
 	-- position, but the ladder shows the SHAPE of the decision -- who is level with
@@ -1888,13 +1981,14 @@ function C_.RepaintBoard(open)
 	f.prio:SetText((prioLine and not db().hidePrio)
 		and ("|cff8a8d93prio|r  " .. prioLine) or "")
 
-	for i = 1, math.max(#rows, #f.rows) do
+	local isMark = MARK_FROM[Okanvil.U.itemIDFromLink(link)] ~= nil
+	for i = 1, math.max(#vis, #f.rows) do
 		local r = f.rows[i]
-		if i > #rows then
+		if i > #vis then
 			if r then r:Hide() end
 		else
 			if not r then
-				local top = TAB_TOP + TAB_S + 88
+				local top = TAB_TOP + TAB_S + 68
 				r = CreateFrame("Frame", nil, f)
 				r:SetPoint("TOPLEFT", 12, -(top + (i - 1) * BR_H))
 				r:SetPoint("TOPRIGHT", -12, -(top + (i - 1) * BR_H))
@@ -1919,15 +2013,15 @@ function C_.RepaintBoard(open)
 				-- a council scanning ten rows finds the healers by shape before it
 				-- reads a single word.
 				r.cls = r:CreateTexture(nil, "ARTWORK")
-				r.cls:SetSize(26, 26)
+				r.cls:SetSize(20, 20)
 				r.cls:SetPoint("LEFT", COL_NAME, 0)
 				r.cls:SetTexture("Interface\\WorldStateFrame\\Icons-Classes")
-				r.who  = W.Text(r, "", "head");      r.who:SetPoint("LEFT", COL_NAME + 32, 0)
+				r.who  = W.Text(r, "", "head");      r.who:SetPoint("LEFT", COL_NAME + 26, 0)
 				r.what = W.Text(r, "", "head");      r.what:SetPoint("LEFT", COL_WANT, 0)
 				r.prio = W.Text(r, "", "head", "accent"); r.prio:SetPoint("LEFT", COL_PRIO, 0)
 				-- What they have in that slot: icon, then the item's own name.
 				r.eqIcon = r:CreateTexture(nil, "ARTWORK")
-				r.eqIcon:SetSize(26, 26)
+				r.eqIcon:SetSize(20, 20)
 				r.eqIcon:SetPoint("LEFT", COL_GEAR, 0)
 				r.eqIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 				r.spec = W.Text(r, "", "head");      r.spec:SetPoint("LEFT", COL_SPEC, 0)
@@ -2015,7 +2109,7 @@ function C_.RepaintBoard(open)
 				-- COUNCIL VOTES: a gold count, the first two voters, "+N" for the
 				-- rest. Hover it for every name.
 				r.vpill = CreateFrame("Frame", nil, r)
-				r.vpill:SetSize(22, 20)
+				r.vpill:SetSize(20, 18)
 				r.vpill:SetPoint("LEFT", COL_VOTE, 0)
 				local vbg = r.vpill:CreateTexture(nil, "ARTWORK")
 				vbg:SetAllPoints()
@@ -2030,7 +2124,7 @@ function C_.RepaintBoard(open)
 				if r.vnames.SetWordWrap then r.vnames:SetWordWrap(false) end
 
 				r.vbtn = W.Button(r, "Vote")
-				r.vbtn:SetSize(52, 22)
+				r.vbtn:SetSize(52, 20)
 				r.vbtn:SetPoint("RIGHT", -4, 0)
 				r.vbtn:SetFrameLevel(r:GetFrameLevel() + 5)
 				r.vbtn:SetScript("OnClick", function()
@@ -2071,7 +2165,7 @@ function C_.RepaintBoard(open)
 				-- tooltip would add here that is worth covering the table for.
 				f.rows[i] = r
 			end
-			local d = rows[i]
+			local d = vis[i]
 			if i % 2 == 1 then r.zebra:Show() else r.zebra:Hide() end
 
 			-- Class-coloured name + the class icon, both from the same cached class
@@ -2086,6 +2180,61 @@ function C_.RepaintBoard(open)
 				r.cls:Show()
 			else
 				r.cls:Hide()
+			end
+
+			-- ALREADY WON TONIGHT: a count (gold for one, red for two or more) and
+			-- the items themselves after the name, so the council can spread the
+			-- loot instead of stacking it on one raider. Hover an icon for the item.
+			do
+				local won = (L and L.WonTonight and L.WonTonight(d.name)) or {}
+				r.wonIcons = r.wonIcons or {}
+				if not r.wonN then
+					r.wonN = W.Text(r, "", "body")
+					r.wonN:SetPoint("LEFT", r.who, "RIGHT", 6, 0)
+				end
+				local nShow = math.min(3, #won)
+				if #won > 0 then
+					r.wonN:SetText(#won)
+					if #won >= 2 then r.wonN:SetTextColor(1, 0.42, 0.37) else r.wonN:SetTextColor(0.88, 0.72, 0.38) end
+				else
+					r.wonN:SetText("")
+				end
+				for k = 1, math.max(nShow, #r.wonIcons) do
+					local b = r.wonIcons[k]
+					if k <= nShow and not b then
+						b = CreateFrame("Button", nil, r)
+						b:SetSize(16, 16)
+						b:SetPoint("LEFT", k == 1 and r.wonN or r.wonIcons[k - 1], "RIGHT", k == 1 and 3 or 2, 0)
+						b.tex = b:CreateTexture(nil, "ARTWORK")
+						b.tex:SetAllPoints()
+						b.tex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+						b:SetScript("OnEnter", function(self)
+							if not self.link then return end
+							GameTooltip:SetOwner(self, "ANCHOR_NONE")
+							GameTooltip:ClearAllPoints()
+							GameTooltip:SetPoint("TOPLEFT", f, "TOPRIGHT", 8, 0)
+							local ok = pcall(function() GameTooltip:SetHyperlink(self.link) end)
+							if ok then GameTooltip:Show() else GameTooltip:Hide() end
+						end)
+						b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+						b:SetFrameLevel(r:GetFrameLevel() + 6)
+						r.wonIcons[k] = b
+					end
+					if b then
+						local dp = won[k]
+						if k <= nShow and dp then
+							local lk = (dp.item and dp.item ~= "") and dp.item or ("item:" .. tostring(dp.id))
+							if not tostring(lk):find("|H") and not tostring(lk):find("^item:") then lk = "item:" .. tostring(dp.id) end
+							b.link = lk
+							b.tex:SetTexture((dp.icon and ("Interface\\Icons\\" .. dp.icon))
+								or (GetItemIcon and dp.id and GetItemIcon(dp.id))
+								or "Interface\\Icons\\INV_Misc_QuestionMark")
+							b:Show()
+						else
+							b:Hide()
+						end
+					end
+				end
 			end
 
 			local info = RESP_BY_KEY[d.key]
@@ -2109,7 +2258,47 @@ function C_.RepaintBoard(open)
 			-- council arguing over a weapon wants to see the weapon being replaced;
 			-- "Retribution 5016" says nothing about whether this axe is an upgrade.
 			r._eqLink = nil
-			if d.eq then
+			-- a mark shows the T10 pieces it would upgrade, one icon each, like the
+			-- equipped item on any other row; no tier = nothing shown
+			r.tierIcons = r.tierIcons or {}
+			local tier = isMark and d.tier or {}
+			for k = 1, math.max(#tier, #r.tierIcons) do
+				local b = r.tierIcons[k]
+				local t = tier[k]
+				if t and not b then
+					b = CreateFrame("Button", nil, r)
+					b:SetSize(20, 20)
+					b:SetPoint("LEFT", COL_GEAR + (k - 1) * 24, 0)
+					b.tex = b:CreateTexture(nil, "ARTWORK")
+					b.tex:SetAllPoints()
+					b.tex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+					b:SetScript("OnEnter", function(self)
+						GameTooltip:SetOwner(self, "ANCHOR_NONE")
+						GameTooltip:ClearAllPoints()
+						GameTooltip:SetPoint("TOPLEFT", f, "TOPRIGHT", 8, 0)
+						GameTooltip:SetHyperlink("item:" .. self.id)
+						GameTooltip:Show()
+					end)
+					b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+					b:SetFrameLevel(r:GetFrameLevel() + 6)
+					r.tierIcons[k] = b
+				end
+				if b then
+					if t and t.id then
+						b.id = t.id
+						b.tex:SetTexture((GetItemIcon and GetItemIcon(t.id)) or select(10, GetItemInfo(t.id))
+							or "Interface\\Icons\\INV_Misc_QuestionMark")
+						b:Show()
+					else
+						b:Hide()
+					end
+				end
+			end
+			if isMark then
+				r.eqIcon:Hide()
+				-- no tier list at all = an Okanvil too old to check its tier
+				r.spec:SetText((d.tier == nil and d.key ~= "wait") and "|cff6f7176(old Okanvil)|r" or "")
+			elseif d.eq then
 				local eqName, eqLink, eqQ = GetItemInfo(d.eq)
 				r._eqLink = eqLink
 				local tex = select(10, GetItemInfo(d.eq)) or (GetItemIcon and GetItemIcon(d.eq))
@@ -2180,10 +2369,10 @@ function C_.RepaintBoard(open)
 	end
 	if not valid then f._pick = rows[1] and rows[1].name or nil end
 
-	for i = 1, math.min(#rows, #f.rows) do
+	for i = 1, math.min(#vis, #f.rows) do
 		local r = f.rows[i]
 		if r and r.sel then
-			if rows[i].name == f._pick then r.sel:Show() else r.sel:Hide() end
+			if vis[i].name == f._pick then r.sel:Show() else r.sel:Hide() end
 		end
 	end
 
@@ -2237,11 +2426,11 @@ function C_.RepaintBoard(open)
 
 	-- Empty board still needs a body: "nobody has answered yet" is a real state and
 	-- a window that collapses to nothing looks broken instead of waiting.
-	if #rows == 0 then
+	if #rows == 0 and #passed == 0 then
 		f.count:SetText("|cff8a8d93waiting...|r")
 	end
 	-- +46 at the bottom for the Give / Skip row.
-	f:SetHeight(TAB_TOP + TAB_S + 88 + math.max(#rows, 1) * BR_H + 46)
+	f:SetHeight(TAB_TOP + TAB_S + 68 + math.max(#vis, 1) * BR_H + 46)
 	f:Show()
 end
 

@@ -2182,7 +2182,45 @@ local function retireRollTargets(why)
 end
 -- resolve the drop for an announced item link, mark it the external-roll target, and
 -- tell the UI to select it. findOpenDrop (defined above) prefers an un-awarded copy.
-function L.NoteExternalRoll(link, winners)
+-- Can this item drop in the run `s` at all? RaidLoot-Data lists every boss drop per
+-- raid and difficulty. An item the table places elsewhere (Oxheart is ICC 10 only,
+-- linked in a 25) cannot be this run's loot. An item in no table at all (trash,
+-- BoEs) is let through: the table has no trash, so it cannot say no.
+local canDropHere
+do
+	local RAID_KEY = {
+		["Icecrown Citadel"] = "icc", ["Trial of the Crusader"] = "toc", ["Ulduar"] = "ulduar",
+		["Naxxramas"] = "naxx", ["The Obsidian Sanctum"] = "os", ["The Eye of Eternity"] = "eoe",
+		["Vault of Archavon"] = "voa", ["Onyxia's Lair"] = "ony", ["The Ruby Sanctum"] = "rs",
+	}
+	local DIFF_MODE = { "10n", "25n", "10h", "25h" }
+	local ANY_BOSS = { [49908] = true }   -- Primordial Saronite: any boss, any size
+	local dropsIn   -- id -> { ["icc:25n"] = true, ... }, built on first use
+	function canDropHere(s, id)
+		if not OkanvilRaidLoot or not (s and id) or ANY_BOSS[id] then return true end
+		if not dropsIn then
+			dropsIn = {}
+			for raid, bosses in pairs(OkanvilRaidLoot) do
+				for _, b in ipairs(bosses) do
+					for _, it in ipairs(b.items or {}) do
+						local set = dropsIn[it.id] or {}
+						dropsIn[it.id] = set
+						for m in (it.m or ""):gmatch("[^,]+") do set[raid .. ":" .. m] = true end
+					end
+				end
+			end
+		end
+		local set = dropsIn[id]
+		if not set then return true end
+		local raid, mode = RAID_KEY[s.zone or ""], DIFF_MODE[s.difficulty or 0]
+		if not (raid and mode) then return true end
+		return set[raid .. ":" .. mode] and true or false
+	end
+end
+
+-- mayMint: the call came from the master looter or a raid warning, the only ones
+-- trusted to put an item on the list that we never saw drop.
+function L.NoteExternalRoll(link, winners, mayMint)
 	if not link then return end
 	local id = itemIDFromLink(link)
 	if not id or id == 0 then return end
@@ -2288,6 +2326,17 @@ function L.NoteExternalRoll(link, winners)
 	-- dropped. Follow-only in that case: no capture, no record.
 	if not dp and not blind then
 		retireRollTargets("call " .. link .. ": not one of our drops, not followed")
+		return
+	end
+
+	-- An assist linking an item is usually showing it off ("[Oxheart]" = my weapon),
+	-- not handing it out, so only the ML or a raid warning adds one to the list.
+	if not dp and not mayMint then
+		rollTrace("call " .. link .. ": not our drop, not from the ML, not followed")
+		return
+	end
+	if not dp and not canDropHere(s, id) then
+		rollTrace("call " .. link .. ": does not drop in this raid/difficulty, not followed")
 		return
 	end
 
@@ -2622,6 +2671,13 @@ local function winnerCount(lower)
 	return n and tonumber(n) or nil
 end
 
+-- The master looter, or anyone over raid warning: whoever actually hands loot out.
+local function isLootCaller(who, event)
+	if event == "CHAT_MSG_RAID_WARNING" then return true end
+	local ml = L.MasterLooterName and L.MasterLooterName()
+	return (ml and who and noRealm(ml):lower() == noRealm(who):lower()) and true or false
+end
+
 local function onRollAnnounce(msg, sender, event)
 	if type(msg) ~= "string" then return end
 
@@ -2682,7 +2738,7 @@ local function onRollAnnounce(msg, sender, event)
 	-- any raid warning look like a roll call.
 	if lower:find("roll") or lower:find("%f[%w]ms%f[%W]") or lower:find("%f[%w]os%f[%W]")
 		or lower:find("%f[%w]offspec%f[%W]") or lower:find("%f[%w]mainspec%f[%W]") then
-		L.NoteExternalRoll(link, winnerCount(lower))
+		L.NoteExternalRoll(link, winnerCount(lower), isLootCaller(sender, event))
 		return
 	end
 
@@ -2703,8 +2759,12 @@ local function onRollAnnounce(msg, sender, event)
 	end
 
 	rest = rest:gsub("[%s%p%d]", "")
-	if rest == "" then
-		L.NoteExternalRoll(link, winnerCount(lower))
+	-- A bare link is a roll call only from the ML or over raid warning: assists and
+	-- leaders paste their own gear into raid chat all the time.
+	if rest == "" and not isLootCaller(sender, event) then
+		rollTrace(("%s from %s: bare link, not the ML, not a roll call"):format(link, tostring(sender)))
+	elseif rest == "" then
+		L.NoteExternalRoll(link, winnerCount(lower), true)
 	else
 		rollTrace(("%s from %s: not read as a roll call"):format(link, tostring(sender)))
 	end
@@ -3885,6 +3945,22 @@ local function collectorFor(link, name)
 	if nameHasAny(name, PATTERN_HINTS) then return "boe" end   -- patterns/plans = boe bucket
 	if isBoE(link) then return "boe" end                        -- qualquer BoE
 	return "main"                                                -- BoP gear -> rola
+end
+
+-- What `who` has been given in this run, for the council's "already won tonight"
+-- chip. Gear only: orbs, fragments, patterns and BoEs go to collectors, and a
+-- disenchant is nobody's loot. Hidden drops count -- hiding only tidies the mini roll.
+function L.WonTonight(who)
+	local out = {}
+	local s = who and who ~= "" and rollSession()
+	if not s then return out end
+	for _, dp in ipairs(s.drops or {}) do
+		if dp.receivedBy == who and not dp.de
+			and collectorFor(dp.item, dp.name) == "main" then
+			out[#out + 1] = dp
+		end
+	end
+	return out
 end
 
 -- Give slot `slot` (from the open loot window) to player `who` via master loot.
