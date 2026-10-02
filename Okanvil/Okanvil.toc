@@ -27,6 +27,8 @@ Core\UI\Setup.lua
 
 Modules\Inspect.lua
 Modules\Guild.lua
+Modules\Ranking.lua
+Modules\Ranking-UI.lua
 Modules\Attendance.lua
 Modules\AttendanceLetters.lua
 Modules\Bosses-Data.lua

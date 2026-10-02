@@ -107,6 +107,15 @@ local SHORTCUTS = {
 		end,
 	},
 	{
+		key  = "ranking",
+		icon = (Okanvil.ICONS and Okanvil.ICONS.ranking) or "Interface\\Icons\\Ability_Marksmanship",
+		gate = function() return Okanvil:IsModuleEnabled("Okanvil-Ranking") end,
+		run  = function()
+			if not Okanvil.win or not Okanvil.win:IsShown() then Okanvil:Toggle() end
+			Okanvil:ShowPanel("Okanvil-Ranking")
+		end,
+	},
+	{
 		key  = "invite",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.invite) or "Interface\\Icons\\Spell_ChargePositive",
 		gate = function() return Okanvil:IsModuleEnabled("__invite") end,
@@ -227,6 +236,7 @@ local function layoutTail(f)
 		pug    = "Okanvil-PuG",
 		notes  = "Okanvil-Notes",
 		recruit = "Okanvil-Recruit",
+		ranking = "Okanvil-Ranking",
 		invite = "__invite",
 		ids    = "Okanvil-IDs",
 		farm   = "Okanvil-Farm",
@@ -254,7 +264,7 @@ local function layoutTail(f)
 	local GROUP_OF = {
 		okanvil = 2,
 		loot = 3, notes = 3, finder = 3, pug = 3,   -- RAID
-		invite = 4, recruit = 4, prio = 4,          -- GUILD
+		invite = 4, recruit = 4, prio = 4, ranking = 4,   -- GUILD
 		ids = 5, farm = 5,                          -- TOOLS
 		buffs = 6, ready = 6, pull = 6,             -- acts on the raid
 	}

@@ -432,6 +432,7 @@ Okanvil.ICONS = {
 	farm       = "Interface\\Icons\\INV_Misc_Bag_10",
 	raidfinder = "Interface\\Icons\\Ability_Warrior_BattleShout",
 	attendance = "Interface\\Icons\\INV_Misc_PocketWatch_01",
+	ranking    = "Interface\\Icons\\Ability_Marksmanship",
 }
 
 Okanvil.NATIVE = {
@@ -509,7 +510,7 @@ Okanvil.NAV_GROUPS = {
 	{ section = "RAID",   items = { "Loot", "Notes", "Raid Finder", "PuG" } },
 	-- Loot Council is not here: it is the Council and Priority tabs of Loot.
 	-- GUILD keeps its header for the guild tools still to come.
-	{ section = "GUILD",  items = { "Attendance", "Recruit" } },
+	{ section = "GUILD",  items = { "Ranking", "Attendance", "Recruit" } },
 	-- Modules and Settings last: neither is a feature, they are what the addon
 	-- has and how it behaves. Settings is the very last row -- see below, where
 	-- anything unnamed is appended BEFORE it rather than after.
@@ -535,6 +536,7 @@ Okanvil.PANEL_KEY = {
 	["PuG"] = "Okanvil-PuG",
 	["Recruit"] = "Okanvil-Recruit",
 	["Attendance"] = "Okanvil-Attendance",
+	["Ranking"] = "Okanvil-Ranking",
 	["ID Finder"] = "Okanvil-IDs",
 	["Farm"] = "Okanvil-Farm",
 }
