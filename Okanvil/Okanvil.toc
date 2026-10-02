@@ -1,6 +1,6 @@
 ﻿## Interface: 30300
 ## Title: Okanvil
-## Notes: Raid & guild toolkit -- forged by Okanor. The void in your stack trace.
+## Notes: Raid & guild toolkit -- from Okanforge. The void in your stack trace.
 ## Author: Okanor
 ## Version: 1.2.1
 ## SavedVariables: Okanvil_DB, RecruitDB, OkanvilIDsDB, OkanvilRaidFinderDB, OkanvilBugDB, OkanvilPuGDB, OkanvilNotesDB

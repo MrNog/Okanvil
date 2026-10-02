@@ -71,7 +71,7 @@ function Okanvil:BuildSettings()
 	bIcon:SetTexture(Okanvil.BRAND_ICON); bIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	local bName = W.FixedText(badge, "Okanvil", "head", "accent"); bName:SetPoint("LEFT", bIcon, "RIGHT", 10, 8); bName:Color(1, 0.82, 0)
 	local bVer = W.FixedText(badge, "v" .. (self.version or "1.0"), "note", "dim"); bVer:SetPoint("LEFT", bName, "RIGHT", 5, 0)
-	local bBy = W.FixedText(badge, "forged by |cffe0b860Okanor|r", "note", "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
+	local bBy = W.FixedText(badge, "from |cffe0b860Okanforge|r", "note", "dim"); bBy:SetPoint("LEFT", bIcon, "RIGHT", 10, -10)
 	-- size the badge to fit its contents (icon + the wider of the two text rows)
 	local wName = (bName:GetStringWidth() or 60) + (bVer:GetStringWidth() or 20) + 5
 	local wBy = bBy:GetStringWidth() or 80

@@ -70,9 +70,9 @@ end
 -- and the full list only lands a few frames later on GUILD_ROSTER_UPDATE. A synchronous
 -- BuildRosterJSON() therefore caught only the online members (12 of 250 -> the hub
 -- read the missing 238 as "Left the guild"). So we force offline on, request a refresh,
--- and wait until the roster reports MORE members than are online (offline loaded) before
--- building. cb(json, count) fires once the full list is ready (or after a timeout, so a
--- guild that really is all-online still exports).
+-- and wait until at least one OFFLINE member shows up in the list before building.
+-- cb(json, count) fires once the full list is ready (or after a timeout, so a guild that
+-- really is all-online still exports).
 function G.ExportRoster(cb)
 	if not (IsInGuild and IsInGuild()) then
 		local json, count = G.BuildRosterJSON()
@@ -85,25 +85,35 @@ function G.ExportRoster(cb)
 
 	local After = Okanvil.Comms and Okanvil.Comms.After
 	local attempts = 0
-	local MAX_ATTEMPTS = 12          -- ~3s at 0.25s spacing
+	local MAX_ATTEMPTS = 24          -- ~6s at 0.25s spacing
+	-- 3.3.5a GetNumGuildMembers() returns ONE number (no online count), so "loaded" is
+	-- read off the rows: the offline list has arrived once any row is not online.
 	local function ready()
-		-- GetNumGuildMembers() -> (total, online). total counts offline only when the
-		-- show-offline flag is on AND the offline list has arrived. When they match we
-		-- either have everyone loaded or the guild really is all online.
 		local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
-		local online = (GetNumGuildMembers and select(2, GetNumGuildMembers())) or 0
-		return total > online or online == 0
+		for i = 1, total do
+			local name, _, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+			if name and not online then return true end
+		end
+		return false
 	end
-	local function finish()
+	local function finish(loaded)
 		local json, count = G.BuildRosterJSON()
+		if not loaded then
+			Okanvil:Print("Roster export: the offline members never loaded, so only " .. count
+				.. " members are in it. /reload and export again.")
+		end
 		if cb then cb(json, count) end
 	end
 	local function poll()
 		attempts = attempts + 1
-		if ready() or attempts >= MAX_ATTEMPTS or not After then
-			finish()
+		local ok = ready()
+		if ok or attempts >= MAX_ATTEMPTS or not After then
+			finish(ok)
 			return
 		end
+		-- the Home guild list restores "Show Offline" to off on every roster update,
+		-- which our own GuildRoster() request triggers: force it back on each tick
+		if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
 		if GuildRoster then GuildRoster() end
 		After(0.25, poll)
 	end
