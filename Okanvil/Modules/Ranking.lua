@@ -168,12 +168,13 @@ function R.Move(size, kind, key, rank, period)
 end
 
 -- Find a player on a board by toon name, then by their main (an alt's own name
--- is not on the board: the site files a person under their main).
-function R.Find(size, kind, name, period)
+-- is not on the board: the site files a person under their main). exact = the
+-- toon's own name only, for a card that shows that character's numbers.
+function R.Find(size, kind, name, period, exact)
 	local list = R.Board(size, kind, period)
 	if not list then return nil end
 	local keys = { R.Norm(name) }
-	local main = Okanvil.U and Okanvil.U.mainOf and Okanvil.U.mainOf(name)
+	local main = not exact and Okanvil.U and Okanvil.U.mainOf and Okanvil.U.mainOf(name)
 	if main then keys[2] = R.Norm(main) end
 	for _, k in ipairs(keys) do
 		for i, p in ipairs(list) do

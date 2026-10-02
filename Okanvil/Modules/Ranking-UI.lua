@@ -481,7 +481,7 @@ function Okanvil:BuildRanking(host)
 		for _, sz in ipairs(R.SIZES) do if sz ~= state.size then sizes[#sizes + 1] = sz end end
 		for _, sz in ipairs(sizes) do
 			for _, k in ipairs(R.BOARDS) do
-				local q, qr, qo = R.Find(sz, k, myName, state.period)
+				local q, qr, qo = R.Find(sz, k, myName, state.period, true)
 				if q and (not p or q.fights > p.fights) then p, rank, of, kind, size = q, qr, qo, k, sz end
 			end
 			if p then break end
