@@ -519,6 +519,9 @@ function P.Sorted(filter, tier)
 		end
 		local ga, gb = a.go or 99, b.go or 99
 		if ga ~= gb then return ga < gb end
+		-- every Normal copy first, then every Heroic one, not paired up by name
+		local ha, hb = (a.n or ""):find("%(Heroic%)$") and 1 or 0, (b.n or ""):find("%(Heroic%)$") and 1 or 0
+		if ha ~= hb then return ha < hb end
 		return (a.n or "") < (b.n or "")
 	end)
 	return out
@@ -590,7 +593,6 @@ local function headH() return fsz(4) + 10 end
 
 function P.BuildTab(p)
 	local status = W.Text(p, "", fsz(0), "dim")
-	status:SetPoint("TOPLEFT", 8, -8)
 
 	-- controls -----------------------------------------------------------
 	-- The paste box was a permanently open well for something done once a week,
@@ -598,14 +600,14 @@ function P.BuildTab(p)
 	-- Import and Clear sit on the status line, hard right: they are used once a
 	-- week, so they get the corner and the list keeps the full width below.
 	local imp = W.Button(p, "Import list", "primary")
-	imp:SetSize(100, 22); imp:SetPoint("TOPRIGHT", -8, -4)
+	imp:SetSize(100, 22); imp:SetPoint("TOPRIGHT", -8, -8)
 
 	local clear = W.Button(p, "Clear")
 	-- anchored LEFT of Import, so the offset must be negative or it overlaps it
 	clear:SetSize(70, 22); clear:SetPoint("RIGHT", imp, "LEFT", -6, 0)
 
 	local search = W.EditBox(p)
-	search:SetSize(240, 22); search:SetPoint("TOPLEFT", 8, -28)
+	search:SetSize(170, 22); search:SetPoint("TOPLEFT", 8, -8)
 	search.edit:SetScript("OnEscapePressed", function(s) s:SetText(""); s:ClearFocus() end)
 
 	-- Reserved / prio-roll toggle, same three states as the website's tabs.
@@ -613,30 +615,30 @@ function P.BuildTab(p)
 	local tierBtns = {}
 	local function setTier(t)
 		tier = t
-		for k, b in pairs(tierBtns) do b:SetKind(k == t and "primary" or nil) end
+		for k, b in pairs(tierBtns) do b:SetKind(k == t and "tabOn" or "tab") end
 		if p._rebuild then p._rebuild() end
 	end
 	local function tierBtn(label, key, w, anchor, gap)
-		local b = W.Button(p, label, key == "all" and "primary" or nil)
-		b:SetSize(w, 22)
+		local b = W.Button(p, label, key == "all" and "tabOn" or "tab")
+		b:SetSize(math.ceil(b.text:GetStringWidth()) + 14, 22)
 		b:SetPoint("LEFT", anchor, "RIGHT", gap or 6, 0)
 		b:SetScript("OnClick", function() setTier(key) end)
 		tierBtns[key] = b
 		return b
 	end
-	local bAll = tierBtn("All", "all", 44, search, 10)
-	local bRes = tierBtn("Reserved", "R", 74, bAll)
-	local bRoll = tierBtn("Prio roll", "P", 70, bRes)
+	local bAll = tierBtn("All", "all", nil, search, 10)
+	local bRes = tierBtn("Reserved", "R", nil, bAll, 2)
+	local bRoll = tierBtn("Prio roll", "P", nil, bRes, 2)
 
 	-- Group by boss (what the raid is fighting) or by type (what "a trinket
 	-- dropped" means), the same switch as the website's. Remembered.
 	local groupBtns = {}
 	local function paintGroup()
-		for k, b in pairs(groupBtns) do b:SetKind(k == P.GroupBy() and "primary" or nil) end
+		for k, b in pairs(groupBtns) do b:SetKind(k == P.GroupBy() and "tabOn" or "tab") end
 	end
 	local function groupBtn(label, key, w, anchor, gap)
-		local b = W.Button(p, label)
-		b:SetSize(w, 22)
+		local b = W.Button(p, label, "tab")
+		b:SetSize(math.ceil(b.text:GetStringWidth()) + 14, 22)
 		b:SetPoint("LEFT", anchor, "RIGHT", gap or 6, 0)
 		b:SetScript("OnClick", function()
 			P.SetGroupBy(key)
@@ -646,9 +648,16 @@ function P.BuildTab(p)
 		groupBtns[key] = b
 		return b
 	end
-	local bBoss = groupBtn("Boss", "boss", 50, bRoll, 16)
-	groupBtn("Type", "type", 50, bBoss)
+	local bBoss = groupBtn("Boss", "boss", nil, bRoll, 16)
+	local bType = groupBtn("Type", "type", nil, bBoss, 2)
 	paintGroup()
+
+	-- One row: search and filters on the left, Import and Clear on the right, and
+	-- the count in the gap between them (cut short rather than wrapped if narrow).
+	status:SetPoint("LEFT", bType, "RIGHT", 12, 0)
+	status:SetPoint("RIGHT", clear, "LEFT", -12, 0)
+	status:SetJustifyH("RIGHT")
+	if status.SetWordWrap then status:SetWordWrap(false) end
 
 	-- Three buttons used to live here and no longer do:
 	--   SAY / Officer -- a channel switch for testing the format. Send always goes
@@ -662,7 +671,7 @@ function P.BuildTab(p)
 	-- Five controls left, one row, and the list starts higher up the page.
 
 	-- list ---------------------------------------------------------------
-	local listTop = 28 + 22 + 8
+	local listTop = 8 + 22 + 8
 	local well = W.Frame(p, "well")
 	well:SetPoint("TOPLEFT", 8, -listTop)
 	well:SetPoint("BOTTOMRIGHT", p, "BOTTOMRIGHT", -8, 8)
@@ -829,9 +838,7 @@ function P.BuildTab(p)
 			status:SetText("|cffffd200" .. n .. " items|r |cffff5555-- old format, "
 				.. "re-export from the site for groups and colours|r")
 		elseif n > 0 then
-			local when = P.Generated()
-			status:SetText("|cff7cfc8a" .. n .. " items|r"
-				.. ((when and when ~= "") and (" |cff8a8d93from " .. when .. "|r") or ""))
+			status:SetText("|cff7cfc8a" .. n .. " items|r")
 		else
 			status:SetText("|cff8a8d93No list yet -- Import list, and paste the site's export.|r")
 		end
@@ -882,7 +889,12 @@ function P.BuildTab(p)
 			-- beside the name: what the heading does not say (the type under a boss)
 			r.boss:SetText((byBoss and rec.g or rec.bo) or "")
 			r.prio:SetText(P.Line(rec.p))
-			if rec.ic and rec.ic ~= "" then
+			-- the client's own icon for the item id first: the page's icon name is a
+			-- guess for items it never saw looted (the T10 Marks came out as a shield)
+			local itemIcon = rec.id and GetItemIcon and GetItemIcon(rec.id)
+			if itemIcon then
+				r.icon:SetTexture(itemIcon)
+			elseif rec.ic and rec.ic ~= "" then
 				r.icon:SetTexture("Interface\\Icons\\" .. rec.ic)
 			else
 				r.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")

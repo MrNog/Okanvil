@@ -20,10 +20,21 @@ local ART = "Interface\\AddOns\\Okanvil\\Media\\Ranking\\"
 local LEFT_W, GAP, PAD = 230, 14, 12
 local CARD_H, CARD_GAP, ROW_H = 170, 8, 30
 local PORTRAIT_H = 250
+-- The name, numbers and boss list start this far up INTO the portrait, over its
+-- darkened foot, so the whole list fits under it without scrolling.
+local LIFT = 40
 local INK = { 0.035, 0.037, 0.043 }   -- the near-black the cards sit on
 local BEST_MAX = 12
 local NAME_W, VAL_W = 84, 26
-local TRACK_W = LEFT_W - 24 - NAME_W - 4 - VAL_W - 6
+-- one boss row in the list: spread up to BAR_STEP_MAX when there is room,
+-- never tighter than BAR_STEP (then the list scrolls)
+local BAR_STEP, BAR_STEP_MAX = 18, 26
+-- a boss row: the card's inner width less a gutter for the scrollbar
+local BAR_W = LEFT_W - 12 - 26
+-- a row stops short of the list's edge: the list clips there, and a right-aligned
+-- number draws a pixel or two past its own box
+local ROW_W = BAR_W - 6
+local TRACK_W = ROW_W - NAME_W - 4 - VAL_W - 6
 -- the rank numeral on each top-three card
 local MEDAL = {
 	{ 0.90, 0.75, 0.40 },   -- gold
@@ -247,18 +258,22 @@ function Okanvil:BuildRanking(host)
 	-- full colour; only its lower part darkens under your name and rank
 	local yFade = inkFade(you, "VERTICAL", 1, 0)
 	yFade:SetPoint("BOTTOMLEFT", yArt, "BOTTOMLEFT"); yFade:SetPoint("BOTTOMRIGHT", yArt, "BOTTOMRIGHT")
-	yFade:SetHeight(110)
+	yFade:SetHeight(110 + LIFT)
+	-- where the text below the picture begins: LIFT up from its bottom edge
+	local yBase = CreateFrame("Frame", nil, you)
+	yBase:SetSize(1, 1)
+	yBase:SetPoint("BOTTOMLEFT", yArt, "BOTTOMLEFT", 0, LIFT)
 	local yBar = fill(you, "ARTWORK", 1, 1, 1, 1)
 	yBar:SetHeight(2); yBar:SetPoint("TOPLEFT", 1, -1); yBar:SetPoint("TOPRIGHT", -1, -1)
 	local yRank = W.Text(you, "", "huge", "accent")
-	yRank:SetPoint("BOTTOMLEFT", yArt, "BOTTOMLEFT", 12, 6)
+	yRank:SetPoint("BOTTOMLEFT", yBase, "BOTTOMLEFT", 12, 6)
 	local yOf = W.Text(you, "", "label", "dim"); yOf:SetPoint("BOTTOMLEFT", yRank, "BOTTOMRIGHT", 6, 3)
 	local yIcon = you:CreateTexture(nil, "ARTWORK"); yIcon:SetSize(18, 18)
 	yIcon:SetPoint("BOTTOMLEFT", yRank, "TOPLEFT", 0, 6)
 	local yName = W.Text(you, "", "head"); yName:SetPoint("LEFT", yIcon, "RIGHT", 6, 0)
 	local yMove = W.Text(you, "", "label"); yMove:SetPoint("LEFT", yName, "RIGHT", 6, 0)
 	local yNone = W.Text(you, "", "label", "dim")
-	yNone:SetPoint("BOTTOMLEFT", yArt, "BOTTOMLEFT", 12, 10)
+	yNone:SetPoint("BOTTOMLEFT", yBase, "BOTTOMLEFT", 12, 10)
 	yNone:SetPoint("RIGHT", you, "RIGHT", -12, 0)
 	yNone:SetJustifyH("LEFT")
 
@@ -269,7 +284,7 @@ function Okanvil:BuildRanking(host)
 		local t = CreateFrame("Frame", nil, you)
 		t:SetSize(TILE_W, 36)
 		local col, rowi = (i - 1) % 2, math.floor((i - 1) / 2)
-		t:SetPoint("TOPLEFT", yArt, "BOTTOMLEFT", 11 + col * (TILE_W + 6), -8 - rowi * 42)
+		t:SetPoint("TOPLEFT", yBase, "BOTTOMLEFT", 11 + col * (TILE_W + 6), -8 - rowi * 42)
 		local bg = fill(t, "BACKGROUND", 1, 1, 1, 0.04); bg:SetAllPoints()
 		t.l = W.Text(t, "", "note", "dim"); t.l:SetPoint("TOPLEFT", 7, -5)
 		t.v = W.Text(t, "", "head"); t.v:SetPoint("BOTTOMLEFT", 7, 4)
@@ -277,13 +292,22 @@ function Okanvil:BuildRanking(host)
 	end
 	local bestLbl = W.Text(you, "BEST BOSSES", "note", "dim")
 	bestLbl:SetPoint("TOPLEFT", tiles[3], "BOTTOMLEFT", 1, -14)
+	-- the boss rows scroll inside the card, so a long raid never runs past it
+	local bsf, bchild, bsb, brange = scrollList(you)
+	-- a fixed width, set outright: a width derived from anchors read too wide
+	-- here and the values on the right were cut off
+	bsf:SetPoint("TOPLEFT", bestLbl, "BOTTOMLEFT", 0, -6)
+	bsf:SetPoint("BOTTOM", you, "BOTTOM", 0, 10)
+	bsf:SetWidth(BAR_W)
+	-- its height is only known once laid out (and changes with the window): re-spread the rows
+	bsf:HookScript("OnSizeChanged", function() if refresh then refresh() end end)
+	bsb:SetPoint("TOPLEFT", bsf, "TOPRIGHT", 6, 0); bsb:SetPoint("BOTTOMLEFT", bsf, "BOTTOMRIGHT", 6, 0)
 	local bars = {}
-	local prev = bestLbl
 	for i = 1, BEST_MAX do
-		local b = CreateFrame("Frame", nil, you)
+		local b = CreateFrame("Frame", nil, bchild)
 		b:SetHeight(16)
-		b:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, i == 1 and -6 or -2)
-		b:SetPoint("RIGHT", you, "RIGHT", -12, 0)
+		b:SetPoint("TOPLEFT", 0, -(i - 1) * BAR_STEP)
+		b:SetWidth(ROW_W)
 		b.name = W.Text(b, "", "note"); b.name:SetPoint("LEFT", 0, 0); b.name:SetWidth(NAME_W)
 		b.name:SetJustifyH("LEFT"); b.name:SetTextColor(0.80, 0.81, 0.83)
 		if b.name.SetWordWrap then b.name:SetWordWrap(false) end
@@ -293,7 +317,6 @@ function Okanvil:BuildRanking(host)
 		b.bar = fill(b, "ARTWORK", 1, 1, 1, 1); b.bar:SetHeight(4)
 		b.bar:SetPoint("LEFT", b.track, "LEFT", 0, 0)
 		bars[i] = b
-		prev = b
 	end
 
 	-- ---- right: switches, top three, then the rest ----
@@ -483,12 +506,18 @@ function Okanvil:BuildRanking(host)
 			yNone:Show()
 			yNone:SetText("Not on the ranking yet.")
 			yIcon:ClearAllPoints(); yIcon:SetPoint("BOTTOMLEFT", yNone, "TOPLEFT", 0, 6)
-			bestLbl:ClearAllPoints(); bestLbl:SetPoint("TOPLEFT", yArt, "BOTTOMLEFT", 12, -12)
+			bestLbl:ClearAllPoints(); bestLbl:SetPoint("TOPLEFT", yBase, "BOTTOMLEFT", 12, -12)
 		end
 		local parses = R.Parses(size or state.size, myName)
-		if parses and #parses > 0 then bestLbl:Show() else bestLbl:Hide() end
+		if parses and #parses > 0 then bestLbl:Show(); bsf:Show() else bestLbl:Hide(); bsf:Hide() end
+		-- in the raid's boss order, not best first: easier to find a boss
+		local ordered = {}
+		for i, c in ipairs(parses or {}) do ordered[i] = c end
+		table.sort(ordered, function(a, b) return (a.i or 99) < (b.i or 99) end)
+		local shown = 0
 		for i = 1, BEST_MAX do
-			local b, c = bars[i], parses and parses[i]
+			local b, c = bars[i], ordered[i]
+			if c then shown = i end
 			if c then
 				local r, g, bl = R.PctColor(c.pct)
 				b.name:SetText(R.ShortBoss(c.boss))
@@ -501,6 +530,20 @@ function Okanvil:BuildRanking(host)
 				b:Hide()
 			end
 		end
+		-- spread the rows over the height the card has, so a short raid does not
+		-- leave the bottom of the card empty
+		local room = bsf:GetHeight() or 0
+		local step = BAR_STEP
+		if shown > 0 and room > 0 then
+			step = math.max(BAR_STEP, math.min(BAR_STEP_MAX, math.floor(room / shown)))
+		end
+		for i = 1, BEST_MAX do
+			bars[i]:ClearAllPoints()
+			bars[i]:SetPoint("TOPLEFT", 0, -(i - 1) * step)
+		end
+		bchild:SetHeight(math.max(1, shown * step))
+		bsb:SetValue(0)
+		brange()
 	end
 
 	refresh = function()

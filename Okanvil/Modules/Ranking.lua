@@ -105,7 +105,7 @@ function R.Parse(text)
 			local cells = {}
 			for idx, pct, h in (f[4] or ""):gmatch("(%d+):([%d%.]+)(h?)") do
 				local boss = d.bosses[(tonumber(idx) or -1) + 1]
-				if boss then cells[#cells + 1] = { boss = boss, pct = tonumber(pct) or 0, hc = h == "h" } end
+				if boss then cells[#cells + 1] = { boss = boss, i = tonumber(idx), pct = tonumber(pct) or 0, hc = h == "h" } end
 			end
 			table.sort(cells, function(a, b) return a.pct > b.pct end)
 			bySize[f[3]] = cells
@@ -331,7 +331,22 @@ function R.PctColor(p)
 end
 
 -- "Lord Marrowgar" -> "Marrowgar", "Ignis the Furnace Master" -> "Ignis"
+-- Names too long for a narrow column, by the name raiders use.
+local SHORT = {
+	["Blood Prince Council"] = "Princes",
+	["Blood-Queen Lana'thel"] = "Blood Queen",
+	["Valithria Dreamwalker"] = "Dreamwalker",
+	["Icecrown Gunship Battle"] = "Gunship",
+	["Gunship Battle"] = "Gunship",
+	["Northrend Beasts"] = "Beasts",
+	["Faction Champions"] = "Champions",
+	["Twin Val'kyr"] = "Twins",
+	["Assembly of Iron"] = "Iron Council",
+	["Flame Leviathan"] = "Leviathan",
+}
+
 function R.ShortBoss(name)
+	if SHORT[name] then return SHORT[name] end
 	return (name:gsub("^Lord ", ""):gsub("^Lady ", ""):gsub("^Professor ", "")
 		:gsub("^Deathbringer ", ""):gsub("^The ", ""):gsub(" the .*$", ""))
 end
