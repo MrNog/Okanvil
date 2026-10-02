@@ -341,6 +341,17 @@ function P.Paint(token)
 	end
 	local name, cls = body:match("^(.-)|(.*)$")
 	name = name or body
+	-- A tier token's ladder is the classes it serves ("Paladin/Priest/Warlock"),
+	-- not players: paint each class in its own colour.
+	if not cls and body:find("/", 1, true) then
+		local parts, all = {}, true
+		for c in body:gmatch("[^/]+") do
+			local hex = CLASS_HEX[c:lower()]
+			if not hex then all = false; break end
+			parts[#parts + 1] = "|cff" .. hex .. c .. "|r"
+		end
+		if all and #parts > 0 then return table.concat(parts, "|cff4a4d53/|r"), mark end
+	end
 	local hex = cls and CLASS_HEX[cls:lower()] or nil
 	local painted = hex and ("|cff" .. hex .. name .. "|r") or name
 	if mark == "has" then
@@ -1042,3 +1053,61 @@ if Comms then
 		Comms.After(3, function() P.Announce_Sync() end)
 	end))
 end
+
+-- ------------------------------------------------------------
+-- Class colours on an item tooltip's "Classes:" line
+-- ------------------------------------------------------------
+-- Tier tokens and class-locked items list who can use them in flat white text.
+-- Paint each class in its colour, the same way the prio ladder does.
+local classesPrefix = ITEM_CLASSES_ALLOWED and ITEM_CLASSES_ALLOWED:gsub("%%s.*$", "")
+
+-- localized class name (lowercase) -> hex, built once from the client's own names
+local localHex
+local function hexFor(name)
+	if not localHex then
+		localHex = {}
+		for token, c in pairs(RAID_CLASS_COLORS or {}) do
+			local hex = string.format("%02x%02x%02x", c.r * 255, c.g * 255, c.b * 255)
+			for _, list in ipairs({ LOCALIZED_CLASS_NAMES_MALE or {}, LOCALIZED_CLASS_NAMES_FEMALE or {} }) do
+				if list[token] then localHex[list[token]:lower()] = hex end
+			end
+		end
+	end
+	local n = name:lower()
+	return localHex[n] or CLASS_HEX[n]
+end
+
+local function paintClasses(tip)
+	if not (classesPrefix and classesPrefix ~= "") then return end
+	local base = tip:GetName()
+	if not base then return end
+	for i = 2, tip:NumLines() do
+		local fs = _G[base .. "TextLeft" .. i]
+		local text = fs and fs:GetText()
+		if text and text:sub(1, #classesPrefix) == classesPrefix and not text:find("|c", 1, true) then
+			local out = {}
+			for c in text:sub(#classesPrefix + 1):gmatch("[^,]+") do
+				c = c:match("^%s*(.-)%s*$")
+				local hex = hexFor(c)
+				out[#out + 1] = hex and ("|cff" .. hex .. c .. "|r") or c
+			end
+			fs:SetText(classesPrefix .. table.concat(out, ", "))
+			return
+		end
+	end
+end
+
+local hooked = {}
+local function hookTip(tip)
+	if tip and not hooked[tip] and tip.HookScript then
+		hooked[tip] = true
+		tip:HookScript("OnTooltipSetItem", paintClasses)
+	end
+end
+hookTip(GameTooltip)
+hookTip(ItemRefTooltip)
+-- AtlasLoot draws on its own tooltip, created when it loads
+local tev = CreateFrame("Frame")
+tev:RegisterEvent("PLAYER_LOGIN")
+tev:RegisterEvent("ADDON_LOADED")
+tev:SetScript("OnEvent", function() hookTip(_G.AtlasLootTooltip) end)
