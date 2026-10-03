@@ -10,8 +10,9 @@
 --  So this is the CORRECTION layer -- resolveBoss() guesses, and captureDrop() checks
 --  the guess against the item. Only ids that map to exactly ONE boss are listed;
 --  shared/ambiguous ids are omitted so a lookup here is always authoritative.
---  Tier tokens, gems, patterns and BoEs are absent by design -- they are not gear
---  keyed to one boss, so they stay on whatever the scanner said.
+--  Shared tier tokens, gems, patterns and BoEs are absent by design -- they are not
+--  keyed to one boss, so they stay on whatever the scanner said. A token only one
+--  boss drops (Ulduar's Wayward pieces) is listed like gear.
 --
 --  Generated from the RATS hub loot tables (public/loot/data/<raid>/full.json).
 --  Covers Icecrown Citadel, Trial of the Crusader, Ulduar (all sizes/difficulties).
@@ -445,5 +446,184 @@ OkanvilItemBoss = {
 	[46030]="Yogg-Saron", [46031]="Yogg-Saron", [46067]="Yogg-Saron",
 	[46068]="Yogg-Saron", [46095]="Yogg-Saron", [46096]="Yogg-Saron",
 	[46097]="Yogg-Saron", [46312]="Yogg-Saron",
+
+	-- ============================================================
+	-- Weapons, heroic-only gear and Ulduar tier tokens, from RaidLoot-Data:
+	-- every id there that one boss alone drops. Chest loot (Valithria, the
+	-- Gunship) has no corpse, so only this table can file it under its boss.
+	-- ============================================================
+	-- Algalon the Observer (8)
+	[45588]="Algalon the Observer", [45608]="Algalon the Observer", [45614]="Algalon the Observer",
+	[45618]="Algalon the Observer", [46320]="Algalon the Observer", [46321]="Algalon the Observer",
+	[46322]="Algalon the Observer", [46323]="Algalon the Observer",
+
+	-- Anub'arak (49)
+	[47314]="Anub'arak", [47322]="Anub'arak", [47329]="Anub'arak",
+	[47472]="Anub'arak", [47473]="Anub'arak", [47474]="Anub'arak",
+	[47475]="Anub'arak", [47476]="Anub'arak", [47477]="Anub'arak",
+	[47478]="Anub'arak", [47479]="Anub'arak", [47480]="Anub'arak",
+	[47481]="Anub'arak", [47482]="Anub'arak", [47483]="Anub'arak",
+	[47484]="Anub'arak", [47485]="Anub'arak", [47486]="Anub'arak",
+	[47487]="Anub'arak", [47489]="Anub'arak", [47490]="Anub'arak",
+	[47491]="Anub'arak", [47492]="Anub'arak", [47894]="Anub'arak",
+	[47898]="Anub'arak", [47899]="Anub'arak", [47900]="Anub'arak",
+	[47903]="Anub'arak", [47905]="Anub'arak", [47907]="Anub'arak",
+	[47911]="Anub'arak", [48039]="Anub'arak", [48040]="Anub'arak",
+	[48041]="Anub'arak", [48042]="Anub'arak", [48043]="Anub'arak",
+	[48044]="Anub'arak", [48045]="Anub'arak", [48046]="Anub'arak",
+	[48047]="Anub'arak", [48048]="Anub'arak", [48049]="Anub'arak",
+	[48050]="Anub'arak", [48051]="Anub'arak", [48052]="Anub'arak",
+	[48053]="Anub'arak", [48054]="Anub'arak", [48055]="Anub'arak",
+	[48056]="Anub'arak",
+
+	-- Blood Prince Council (12)
+	[49919]="Blood Prince Council", [50173]="Blood Prince Council", [50184]="Blood Prince Council",
+	[50603]="Blood Prince Council", [50710]="Blood Prince Council", [50719]="Blood Prince Council",
+	[51021]="Blood Prince Council", [51022]="Blood Prince Council", [51326]="Blood Prince Council",
+	[51852]="Blood Prince Council", [51857]="Blood Prince Council", [51858]="Blood Prince Council",
+
+	-- Blood-Queen Lana'thel (10)
+	[50178]="Blood-Queen Lana'thel", [50181]="Blood-Queen Lana'thel", [50725]="Blood-Queen Lana'thel",
+	[50727]="Blood-Queen Lana'thel", [51384]="Blood-Queen Lana'thel", [51385]="Blood-Queen Lana'thel",
+	[51553]="Blood-Queen Lana'thel", [51838]="Blood-Queen Lana'thel", [51845]="Blood-Queen Lana'thel",
+	[51846]="Blood-Queen Lana'thel",
+
+	-- Deathbringer Saurfang (6)
+	[50412]="Deathbringer Saurfang", [50672]="Deathbringer Saurfang", [50798]="Deathbringer Saurfang",
+	[50805]="Deathbringer Saurfang", [51898]="Deathbringer Saurfang", [51905]="Deathbringer Saurfang",
+
+	-- Faction Champions (27)
+	[47285]="Faction Champions", [47442]="Faction Champions", [47443]="Faction Champions",
+	[47444]="Faction Champions", [47445]="Faction Champions", [47446]="Faction Champions",
+	[47447]="Faction Champions", [47448]="Faction Champions", [47449]="Faction Champions",
+	[47450]="Faction Champions", [47451]="Faction Champions", [47452]="Faction Champions",
+	[47453]="Faction Champions", [47454]="Faction Champions", [47455]="Faction Champions",
+	[47456]="Faction Champions", [47874]="Faction Champions", [48012]="Faction Champions",
+	[48013]="Faction Champions", [48014]="Faction Champions", [48015]="Faction Champions",
+	[48016]="Faction Champions", [48017]="Faction Champions", [48018]="Faction Champions",
+	[48019]="Faction Champions", [48020]="Faction Champions", [48021]="Faction Champions",
+
+	-- Festergut (9)
+	[50035]="Festergut", [50040]="Festergut", [50226]="Festergut",
+	[50692]="Festergut", [50695]="Festergut", [50810]="Festergut",
+	[50966]="Festergut", [51887]="Festergut", [51893]="Festergut",
+
+	-- Freya (8)
+	[45644]="Freya", [45645]="Freya", [45646]="Freya",
+	[45653]="Freya", [45654]="Freya", [45655]="Freya",
+	[45788]="Freya", [45814]="Freya",
+
+	-- Gunship Battle (6)
+	[50411]="Gunship Battle", [50654]="Gunship Battle", [50787]="Gunship Battle",
+	[50793]="Gunship Battle", [51910]="Gunship Battle", [51916]="Gunship Battle",
+
+	-- Hodir (8)
+	[45632]="Hodir", [45633]="Hodir", [45634]="Hodir",
+	[45650]="Hodir", [45651]="Hodir", [45652]="Hodir",
+	[45786]="Hodir", [45815]="Hodir",
+
+	-- Lady Deathwhisper (10)
+	[49982]="Lady Deathwhisper", [49992]="Lady Deathwhisper", [50034]="Lady Deathwhisper",
+	[50638]="Lady Deathwhisper", [50641]="Lady Deathwhisper", [50648]="Lady Deathwhisper",
+	[50776]="Lady Deathwhisper", [50781]="Lady Deathwhisper", [51922]="Lady Deathwhisper",
+	[51927]="Lady Deathwhisper",
+
+	-- Lord Jaraxxus (32)
+	[47266]="Lord Jaraxxus", [47267]="Lord Jaraxxus", [47275]="Lord Jaraxxus",
+	[47276]="Lord Jaraxxus", [47427]="Lord Jaraxxus", [47428]="Lord Jaraxxus",
+	[47429]="Lord Jaraxxus", [47430]="Lord Jaraxxus", [47431]="Lord Jaraxxus",
+	[47432]="Lord Jaraxxus", [47433]="Lord Jaraxxus", [47434]="Lord Jaraxxus",
+	[47435]="Lord Jaraxxus", [47437]="Lord Jaraxxus", [47438]="Lord Jaraxxus",
+	[47439]="Lord Jaraxxus", [47440]="Lord Jaraxxus", [47441]="Lord Jaraxxus",
+	[47871]="Lord Jaraxxus", [48000]="Lord Jaraxxus", [48001]="Lord Jaraxxus",
+	[48002]="Lord Jaraxxus", [48003]="Lord Jaraxxus", [48004]="Lord Jaraxxus",
+	[48005]="Lord Jaraxxus", [48006]="Lord Jaraxxus", [48007]="Lord Jaraxxus",
+	[48008]="Lord Jaraxxus", [48009]="Lord Jaraxxus", [48010]="Lord Jaraxxus",
+	[48011]="Lord Jaraxxus", [49237]="Lord Jaraxxus",
+
+	-- Lord Marrowgar (12)
+	[49968]="Lord Marrowgar", [50415]="Lord Marrowgar", [50608]="Lord Marrowgar",
+	[50709]="Lord Marrowgar", [50759]="Lord Marrowgar", [50760]="Lord Marrowgar",
+	[50761]="Lord Marrowgar", [50771]="Lord Marrowgar", [51932]="Lord Marrowgar",
+	[51936]="Lord Marrowgar", [51937]="Lord Marrowgar", [51938]="Lord Marrowgar",
+
+	-- Mimiron (8)
+	[45641]="Mimiron", [45642]="Mimiron", [45643]="Mimiron",
+	[45647]="Mimiron", [45648]="Mimiron", [45649]="Mimiron",
+	[45787]="Mimiron", [45816]="Mimiron",
+
+	-- Northrend Beasts (31)
+	[47255]="Northrend Beasts", [47257]="Northrend Beasts", [47259]="Northrend Beasts",
+	[47261]="Northrend Beasts", [47264]="Northrend Beasts", [47412]="Northrend Beasts",
+	[47413]="Northrend Beasts", [47414]="Northrend Beasts", [47415]="Northrend Beasts",
+	[47416]="Northrend Beasts", [47417]="Northrend Beasts", [47419]="Northrend Beasts",
+	[47420]="Northrend Beasts", [47421]="Northrend Beasts", [47422]="Northrend Beasts",
+	[47423]="Northrend Beasts", [47424]="Northrend Beasts", [47426]="Northrend Beasts",
+	[47856]="Northrend Beasts", [47988]="Northrend Beasts", [47989]="Northrend Beasts",
+	[47990]="Northrend Beasts", [47991]="Northrend Beasts", [47992]="Northrend Beasts",
+	[47993]="Northrend Beasts", [47994]="Northrend Beasts", [47995]="Northrend Beasts",
+	[47996]="Northrend Beasts", [47997]="Northrend Beasts", [47998]="Northrend Beasts",
+	[47999]="Northrend Beasts",
+
+	-- Professor Putricide (8)
+	[50068]="Professor Putricide", [50179]="Professor Putricide", [50704]="Professor Putricide",
+	[50708]="Professor Putricide", [51010]="Professor Putricide", [51011]="Professor Putricide",
+	[51868]="Professor Putricide", [51869]="Professor Putricide",
+
+	-- Rotface (15)
+	[50016]="Rotface", [50028]="Rotface", [50033]="Rotface",
+	[50231]="Rotface", [50676]="Rotface", [50684]="Rotface",
+	[50685]="Rotface", [50998]="Rotface", [50999]="Rotface",
+	[51003]="Rotface", [51004]="Rotface", [51875]="Rotface",
+	[51876]="Rotface", [51880]="Rotface", [51881]="Rotface",
+
+	-- Sindragosa (7)
+	[50423]="Sindragosa", [50635]="Sindragosa", [51026]="Sindragosa",
+	[51784]="Sindragosa", [51788]="Sindragosa", [51815]="Sindragosa",
+	[51819]="Sindragosa",
+
+	-- The Lich King (37)
+	[49981]="The Lich King", [49997]="The Lich King", [50012]="The Lich King",
+	[50070]="The Lich King", [50425]="The Lich King", [50426]="The Lich King",
+	[50427]="The Lich King", [50428]="The Lich King", [50429]="The Lich King",
+	[50730]="The Lich King", [50731]="The Lich King", [50732]="The Lich King",
+	[50733]="The Lich King", [50734]="The Lich King", [50735]="The Lich King",
+	[50736]="The Lich King", [50737]="The Lich King", [50738]="The Lich King",
+	[50818]="The Lich King", [51795]="The Lich King", [51796]="The Lich King",
+	[51797]="The Lich King", [51798]="The Lich King", [51799]="The Lich King",
+	[51800]="The Lich King", [51801]="The Lich King", [51802]="The Lich King",
+	[51803]="The Lich King", [51939]="The Lich King", [51940]="The Lich King",
+	[51941]="The Lich King", [51942]="The Lich King", [51943]="The Lich King",
+	[51944]="The Lich King", [51945]="The Lich King", [51946]="The Lich King",
+	[51947]="The Lich King",
+
+	-- Thorim (8)
+	[45638]="Thorim", [45639]="Thorim", [45640]="Thorim",
+	[45659]="Thorim", [45660]="Thorim", [45661]="Thorim",
+	[45784]="Thorim", [45817]="Thorim",
+
+	-- Twin Val'kyr (36)
+	[47300]="Twin Val'kyr", [47302]="Twin Val'kyr", [47309]="Twin Val'kyr",
+	[47457]="Twin Val'kyr", [47458]="Twin Val'kyr", [47459]="Twin Val'kyr",
+	[47460]="Twin Val'kyr", [47461]="Twin Val'kyr", [47462]="Twin Val'kyr",
+	[47463]="Twin Val'kyr", [47464]="Twin Val'kyr", [47465]="Twin Val'kyr",
+	[47466]="Twin Val'kyr", [47467]="Twin Val'kyr", [47468]="Twin Val'kyr",
+	[47469]="Twin Val'kyr", [47470]="Twin Val'kyr", [47471]="Twin Val'kyr",
+	[47883]="Twin Val'kyr", [47884]="Twin Val'kyr", [47886]="Twin Val'kyr",
+	[47892]="Twin Val'kyr", [47913]="Twin Val'kyr", [48022]="Twin Val'kyr",
+	[48023]="Twin Val'kyr", [48024]="Twin Val'kyr", [48025]="Twin Val'kyr",
+	[48026]="Twin Val'kyr", [48027]="Twin Val'kyr", [48028]="Twin Val'kyr",
+	[48030]="Twin Val'kyr", [48032]="Twin Val'kyr", [48034]="Twin Val'kyr",
+	[48036]="Twin Val'kyr", [48038]="Twin Val'kyr", [49233]="Twin Val'kyr",
+
+	-- Valithria Dreamwalker (10)
+	[50183]="Valithria Dreamwalker", [50472]="Valithria Dreamwalker", [50621]="Valithria Dreamwalker",
+	[50631]="Valithria Dreamwalker", [51561]="Valithria Dreamwalker", [51562]="Valithria Dreamwalker",
+	[51582]="Valithria Dreamwalker", [51828]="Valithria Dreamwalker", [51833]="Valithria Dreamwalker",
+	[51834]="Valithria Dreamwalker",
+
+	-- Yogg-Saron (6)
+	[45635]="Yogg-Saron", [45636]="Yogg-Saron", [45637]="Yogg-Saron",
+	[45656]="Yogg-Saron", [45657]="Yogg-Saron", [45658]="Yogg-Saron",
 
 }
