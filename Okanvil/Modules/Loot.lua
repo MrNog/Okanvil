@@ -1682,11 +1682,79 @@ local function bossHasTable(boss)
 	return tableBosses[boss] == true
 end
 
+-- Can this item drop in the run `s` at all? RaidLoot-Data lists every boss drop per
+-- raid and difficulty. An item the table places elsewhere (Oxheart is ICC 10 only,
+-- linked in a 25) cannot be this run's loot. An item in no table at all (trash,
+-- BoEs) is let through: the table has no trash, so it cannot say no.
+local canDropHere
+do
+	local RAID_KEY = {
+		["Icecrown Citadel"] = "icc", ["Trial of the Crusader"] = "toc", ["Ulduar"] = "ulduar",
+		["Naxxramas"] = "naxx", ["The Obsidian Sanctum"] = "os", ["The Eye of Eternity"] = "eoe",
+		["Vault of Archavon"] = "voa", ["Onyxia's Lair"] = "ony", ["The Ruby Sanctum"] = "rs",
+	}
+	local DIFF_MODE = { "10n", "25n", "10h", "25h" }
+	local ANY_BOSS = { [49908] = true }   -- Primordial Saronite: any boss, any size
+	local dropsIn   -- id -> { ["icc:25n"] = true, ... }, built on first use
+	function canDropHere(s, id)
+		if not OkanvilRaidLoot or not (s and id) or ANY_BOSS[id] then return true end
+		if not dropsIn then
+			dropsIn = {}
+			for raid, bosses in pairs(OkanvilRaidLoot) do
+				for _, b in ipairs(bosses) do
+					for _, it in ipairs(b.items or {}) do
+						local set = dropsIn[it.id] or {}
+						dropsIn[it.id] = set
+						for m in (it.m or ""):gmatch("[^,]+") do set[raid .. ":" .. m] = true end
+					end
+				end
+			end
+		end
+		local set = dropsIn[id]
+		if not set then return true end
+		local raid, mode = RAID_KEY[s.zone or ""], DIFF_MODE[s.difficulty or 0]
+		if not (raid and mode) then return true end
+		return set[raid .. ":" .. mode] and true or false
+	end
+end
+
+-- MASTER LOOTER WITHOUT OKANVIL. A fast ML loots the corpse before anyone else can open
+-- it, and with no Okanvil on his client nothing broadcasts what was on it. The only record
+-- the raid gets is his own chat: one "ML receives loot: [item]" line per item he takes off
+-- the corpse. Returns the boss those lines belong to, or nil when this line is not that:
+--   * the group is on master loot and `player` is the ML (and the ML is not us -- our
+--     own corpse scan already sees everything we loot);
+--   * a boss died or was fought within BOSS_LABEL_TTL;
+--   * nobody scanned that boss's corpse -- once it is scanned (by us or a broadcast)
+--     the corpse rows are the truth and the ML's lines only tag them;
+--   * the item can drop here, and from this boss when we have its table.
+-- In that state each line is one physical copy: two trophies looted by the ML are two
+-- lines, so the caller mints a row per line instead of folding them into one.
+local function mlChatBoss(s, player, id)
+	local ml = L.MasterLooterName and L.MasterLooterName()
+	if not ml or noRealm(ml):lower() ~= player:lower() then return nil end
+	if player:lower() == (UnitName("player") or ""):lower() then return nil end
+	local now = (GetTime and GetTime()) or 0
+	local boss = encounterBoss
+	if not boss or boss == "" or boss == "Trash" then return nil end
+	if (now - lastBossContactAt) > BOSS_LABEL_TTL then return nil end
+	for i = 1, #s.drops do
+		local dp = s.drops[i]
+		if dp.boss == boss and dp.corpse then return nil end
+	end
+	if not canDropHere(s, id) then return nil end
+	if bossHasTable(boss) and OkanvilItemBoss[id] ~= boss then return nil end
+	return boss
+end
+
 local function tagReceiver(player, link)
 	local id = itemIDFromLink(link)
 	if id == 0 then return end
 	player = noRealm(player)
-	if recvDedupe(player, id) then return end
+	local chatBoss = mlChatBoss(activeBucket(), player, id)
+	-- The 5s dedupe folds "X won" + "X receives loot" into one; an ML looting a corpse
+	-- has no "won" line, and a second line within 5s is a second copy.
+	if recvDedupe(player, id) and not chatBoss then return end
 	-- Shard from a Disenchant roll this player just won -> not boss loot, skip it.
 	-- (The gauntlets were DE'd; the Dream Shard that follows is the product, and was
 	-- being recorded as a fresh drop under the current boss.)
@@ -1706,6 +1774,12 @@ local function tagReceiver(player, link)
 	-- STRICT: never claim a copy that already belongs to somebody else -- with several
 	-- copies of one item, the last receiver would otherwise overwrite the first.
 	local target = findOpenDrop(s, id, true) or findAnyOpenDrop(s, id)
+	-- ML looting a corpse nobody scanned: every line is a new copy. A row this path
+	-- already made (fromML) is a previous copy, never this one.
+	if chatBoss and (not target or target.fromML) then
+		target = storeDrop(chatBoss, id, link, name, rarity, isBoE(link), nil, nil, true)
+		if target then target.fromML = true end
+	end
 	-- Copies of this item exist and every one is already won: this line is a repeat of a
 	-- hand-out we have recorded (an item is announced more than once -- "X won" and then
 	-- "X receives loot"). The rows come from what we actually SAW drop, so a receiver never
@@ -1739,6 +1813,18 @@ local function tagReceiver(player, link)
 		-- item tells them apart. A boss with no table (Naxx, older raids) keeps the old
 		-- behaviour: there is nothing to check against.
 		if bossHasTable(boss) and OkanvilItemBoss[id] ~= boss then return end
+		-- The boss's own table is not enough: a weekly sack opened right after Blood-Queen
+		-- hands out her 25-man choker in a 10. Wrong size or difficulty = not this kill's loot.
+		if not canDropHere(s, id) then return end
+		-- Same size, same boss: a sack opened in the 25 still hands out a legit 25 item.
+		-- But once this boss's corpse has been scanned (by us or broadcast by whoever
+		-- opened it), its whole loot is known, and we only get here when no row for this
+		-- id exists -- so it was not on the corpse. A give still in flight loses nothing:
+		-- the corpse broadcast creates its row when it lands.
+		for i = 1, #s.drops do
+			local prev = s.drops[i]
+			if prev.boss == boss and prev.corpse then return end
+		end
 		-- No allowDup: we only reach here when NO row for this id exists at all, so this is a
 		-- first sighting, never an extra copy of something already listed.
 		target = storeDrop(boss, id, link, name, rarity, isBoE(link))
@@ -2182,42 +2268,6 @@ local function retireRollTargets(why)
 end
 -- resolve the drop for an announced item link, mark it the external-roll target, and
 -- tell the UI to select it. findOpenDrop (defined above) prefers an un-awarded copy.
--- Can this item drop in the run `s` at all? RaidLoot-Data lists every boss drop per
--- raid and difficulty. An item the table places elsewhere (Oxheart is ICC 10 only,
--- linked in a 25) cannot be this run's loot. An item in no table at all (trash,
--- BoEs) is let through: the table has no trash, so it cannot say no.
-local canDropHere
-do
-	local RAID_KEY = {
-		["Icecrown Citadel"] = "icc", ["Trial of the Crusader"] = "toc", ["Ulduar"] = "ulduar",
-		["Naxxramas"] = "naxx", ["The Obsidian Sanctum"] = "os", ["The Eye of Eternity"] = "eoe",
-		["Vault of Archavon"] = "voa", ["Onyxia's Lair"] = "ony", ["The Ruby Sanctum"] = "rs",
-	}
-	local DIFF_MODE = { "10n", "25n", "10h", "25h" }
-	local ANY_BOSS = { [49908] = true }   -- Primordial Saronite: any boss, any size
-	local dropsIn   -- id -> { ["icc:25n"] = true, ... }, built on first use
-	function canDropHere(s, id)
-		if not OkanvilRaidLoot or not (s and id) or ANY_BOSS[id] then return true end
-		if not dropsIn then
-			dropsIn = {}
-			for raid, bosses in pairs(OkanvilRaidLoot) do
-				for _, b in ipairs(bosses) do
-					for _, it in ipairs(b.items or {}) do
-						local set = dropsIn[it.id] or {}
-						dropsIn[it.id] = set
-						for m in (it.m or ""):gmatch("[^,]+") do set[raid .. ":" .. m] = true end
-					end
-				end
-			end
-		end
-		local set = dropsIn[id]
-		if not set then return true end
-		local raid, mode = RAID_KEY[s.zone or ""], DIFF_MODE[s.difficulty or 0]
-		if not (raid and mode) then return true end
-		return set[raid .. ":" .. mode] and true or false
-	end
-end
-
 -- mayMint: the call came from the master looter or a raid warning, the only ones
 -- trusted to put an item on the list that we never saw drop.
 function L.NoteExternalRoll(link, winners, mayMint)

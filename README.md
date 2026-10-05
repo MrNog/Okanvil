@@ -108,6 +108,12 @@ points the web-hub link at your own site. Don't like the forge art behind the wi
 or tone it down in *Settings → General*. The name *Okanvil* stays — the swarm underneath it is
 whatever you make it. 🧀
 
+**Not RATS?** Most of Okanvil needs nothing but the game. A few officer tools paste data in from the
+RATS web hub or export it back, mainly the **Ranking** boards and the **Loot priority** list. The
+Ranking portraits are RATS raiders, and any other raider gets their class art instead. Skip those
+tools, or feed them the same text from your own site. The formats are in
+**[`docs/GUILD_DATA.md`](docs/GUILD_DATA.md)**.
+
 <br>
 
 ## 🛠️ For tinkerers
@@ -139,6 +145,7 @@ Custom art has to be **BLP2 DXT5** (square or power-of-two, up to 1024) to load 
 - Slash commands → **[`docs/SLASH_COMMANDS.md`](docs/SLASH_COMMANDS.md)**
 - SavedVariables layout (account-wide vs per-character — read before wiping/debugging saved data) → **[`docs/STORAGE.md`](docs/STORAGE.md)**
 - How the loot council works → **[`docs/LOOT_COUNCIL.md`](docs/LOOT_COUNCIL.md)**
+- Imports/exports and Ranking art for another guild → **[`docs/GUILD_DATA.md`](docs/GUILD_DATA.md)**
 
 <br>
 

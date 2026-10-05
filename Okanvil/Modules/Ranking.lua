@@ -353,6 +353,7 @@ function R.ShortBoss(name)
 end
 local shortBoss = R.ShortBoss
 
+-- The hovered toon's own numbers only: an alt never shows its main's ranks.
 local function addTooltip(tip, name)
 	local d = R.Data()
 	if not d then return end
@@ -361,7 +362,7 @@ local function addTooltip(tip, name)
 	for _, sz in ipairs(R.SIZES) do
 		local found = {}
 		for _, k in ipairs(R.BOARDS) do
-			local p, rank, of = R.Find(sz, k, name)
+			local p, rank, of = R.Find(sz, k, name, nil, true)
 			if p then found[#found + 1] = { kind = k, p = p, rank = rank, of = of } end
 		end
 		if #found > 0 then size, roles = sz, found; break end
