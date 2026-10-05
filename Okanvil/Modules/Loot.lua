@@ -3593,6 +3593,17 @@ function L.InLiveRun()
 	return shouldRecordHere()
 end
 
+-- The raid run we are standing in, for LootSync: its session (minted when `create`)
+-- and the moment its lockout week began. nil outside a recorded raid -- dungeons are
+-- one-night runs and have nothing to carry over.
+function L.RaidRunSession(create)
+	if not (isRaidHere() and shouldRecordHere()) then return nil end
+	local key = runKey()
+	if not (key and (key:find("^lock|") or key:find("^week|"))) then return nil end
+	return currentSession(create)
+end
+function L.WeekStart() return weekStart() end
+
 function L.DeleteSession(sess)
 	local list = sessions()
 	for i = #list, 1, -1 do if list[i] == sess then table.remove(list, i); break end end

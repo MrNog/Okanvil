@@ -38,6 +38,7 @@ Modules\Council.lua
 Modules\LootPrio.lua
 Modules\SoftRes.lua
 Modules\Loot.lua
+Modules\LootSync.lua
 Modules\LootRoll.lua
 Modules\SoftRes-UI.lua
 Modules\LootTrade.lua
