@@ -4019,6 +4019,15 @@ local ORB_IDS = {
 	[49908] = true,  -- Primordial Saronite
 	[46110] = true,  -- Alchemist's Cache
 }
+-- Shadowmourne quest drops. Their item class is Miscellaneous, not Quest, so
+-- isQuestItem misses them -- but only the raider on the quest is a master-loot
+-- candidate, so a give to the collector always fails.
+-- (on L, not locals: this file is at Lua's 200-local limit)
+L.QUEST_DROP_IDS = {
+	[50226] = true,  -- Festergut's Acidic Blood
+	[50231] = true,  -- Rotface's Acidic Blood
+}
+L.QUEST_NAME_HINTS = { "acidic blood" }
 local FRAG_NAME_HINTS = { "fragment of val'anyr", "fragments of val'anyr", "shadowfrost shard" }
 local ORB_NAME_HINTS  = { "runed orb", "crusader orb", "primordial saronite" }
 local PATTERN_HINTS   = { "pattern:", "plans:", "recipe:", "schematic:", "formula:", "design:" }
@@ -4082,7 +4091,10 @@ local function autoGiveDecision(link, name)
 	local trim = function(s) return (tostring(s or ""):gsub("^%s*(.-)%s*$", "%1")) end
 	-- A quest item handed to the collector is lost: it binds, and only the quest holder can use it.
 	-- It stays in the window for the quest holder, like a fragment with no collector.
-	if isQuestItem(link) then return { action = "leave", bucket = "quest", name = name } end
+	local qid = itemIDFromLink(link)
+	if isQuestItem(link) or (qid ~= 0 and L.QUEST_DROP_IDS[qid]) or nameHasAny(name, L.QUEST_NAME_HINTS) then
+		return { action = "leave", bucket = "quest", name = name }
+	end
 	local bucket = collectorFor(link, name)   -- frag | boe | main
 	local main = trim(c.main)
 	if bucket == "frag" then

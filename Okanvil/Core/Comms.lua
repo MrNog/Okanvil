@@ -481,6 +481,57 @@ function C.RequestVersions(scope, onDone, timeout)
 	return true
 end
 
+-- ------------------------------------------------------------
+-- Automatic update notice. Each client says its version once on login, on the
+-- hidden addon channel to the guild. Whoever hears a newer build than their own
+-- sees the toast in their own client, once per session -- nobody is ever sent a
+-- chat line. When an older build logs in, ONE newer client answers on the same
+-- channel: each waits a random moment and stays quiet if someone else already
+-- answered, so a login costs a couple of messages, not one whisper per guildie.
+-- The lite build numbers itself separately, so it neither says nor hears this.
+-- ------------------------------------------------------------
+local verToasted = false
+local verAnswerAt = 0      -- GetTime() of the last VERA heard, for the dedupe
+
+local function toastWhenCalm(newest)
+	if verToasted then return end
+	-- passive work waits out the fight: a toast mid-pull is noise
+	if UnitAffectingCombat and UnitAffectingCombat("player") then
+		C.After(10, function() toastWhenCalm(newest) end)
+		return
+	end
+	verToasted = true
+	showUpdateToast(newest)
+	Okanvil:Print(("|cffe0b860Okanvil %s is available|r (you have %s) -- %s")
+		:format(newest, tostring(Okanvil.version or "?"), Okanvil.DOWNLOAD_URL))
+end
+
+C.On("VERA", function(sender, ver)
+	if Okanvil.LITE or not verParts(ver) then return end
+	verAnswerAt = GetTime() or 0
+	local mine = Okanvil.version
+	if verOlder(mine, ver) then
+		toastWhenCalm(ver)
+	elseif verOlder(ver, mine) then
+		local heard = verAnswerAt
+		C.After(2 + math.random() * 6, function()
+			if verAnswerAt ~= heard then return end   -- someone else answered
+			C.SendGuild("VERA", tostring(mine))
+		end)
+	end
+end)
+
+do
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("PLAYER_ENTERING_WORLD")
+	f:SetScript("OnEvent", function(self)
+		self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+		if Okanvil.LITE or not verParts(Okanvil.version) then return end
+		-- the guild roster is not ready the moment we zone in
+		C.After(20, function() C.SendGuild("VERA", tostring(Okanvil.version)) end)
+	end)
+end
+
 -- Everyone we asked, for "who didn't reply". scope mirrors RequestVersions:
 -- "group" = current raid/party, "guild" = ONLINE guild members (offline ones
 -- can't answer, so listing them as "no reply" would just be noise).
