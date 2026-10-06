@@ -493,6 +493,9 @@ function P.Sorted(filter, tier)
 	-- wants, not every mace plus everything Rellik is on.
 	local terms = {}
 	for w in filter:gmatch("%S+") do terms[#terms + 1] = w end
+	-- Typing a name means "find this item": a reserved item hidden behind the
+	-- Prio roll filter looked like it was missing from the export.
+	if #terms > 0 then tier = "all" end
 
 	for key, rec in pairs(d.items) do
 		local okTier = (tier == nil or tier == "all")
