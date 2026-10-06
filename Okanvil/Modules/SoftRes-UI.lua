@@ -18,7 +18,8 @@ local P = {}
 Okanvil.SoftResPanel = P
 
 local PANEL_W, PAD, ICON, GAP = 290, 8, 20, 6
-local MIN_H, MAX_H, HDR_H = 140, 440, 26
+-- MAX_H fits ~12 reserved items before the list scrolls (a 10-man list, usually)
+local MIN_H, MAX_H, HDR_H = 140, 560, 26
 local NAMES_W = PANEL_W - PAD * 2 - ICON - GAP - 10   -- 10 = the scrollbar lane
 
 local panel
@@ -98,8 +99,33 @@ local function build()
 	title:SetPoint("LEFT", PAD, 0); title:Color(1, 0.82, 0)
 	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
 	close:SetScript("OnClick", function() P.Hide(true) end)
+	local csv = W.Button(hdr, "CSV"); csv:SetSize(38, 20); csv:SetPoint("RIGHT", close, "LEFT", -4, 0)
+	csv:Tooltip("Load the soft reserves: paste the CSV from softres.it\n(Export > CSV). It replaces the list you have.")
+	csv:SetScript("OnClick", function() P.SetImporting(not f.importing) end)
 	f.count = W.Text(hdr, "", "note", "dim")
-	f.count:SetPoint("RIGHT", close, "LEFT", -8, 0)
+	f.count:SetPoint("RIGHT", csv, "LEFT", -8, 0)
+
+	-- The paste view takes the list's place while it is open.
+	local imp = CreateFrame("Frame", nil, f)
+	imp:SetPoint("TOPLEFT", PAD, -(HDR_H + 6)); imp:SetPoint("BOTTOMRIGHT", -PAD, PAD)
+	local hint = W.Text(imp, "softres.it: Export > CSV, then paste it here.", "note", "dim")
+	hint:SetPoint("TOPLEFT", 0, 0)
+	local box = W.MultiEdit(imp)
+	box:SetPoint("TOPLEFT", 0, -16); box:SetPoint("BOTTOMRIGHT", 0, 30)
+	local go = W.Button(imp, "Import", "primary"); go:SetSize(90, 22); go:SetPoint("BOTTOMRIGHT", 0, 0)
+	local no = W.Button(imp, "Cancel"); no:SetSize(70, 22); no:SetPoint("RIGHT", go, "LEFT", -6, 0)
+	go:SetScript("OnClick", function()
+		local ni, np = SR.Import(box:GetText())
+		if not ni then Okanvil:Print("|cffff5555" .. tostring(np) .. "|r"); return end
+		Okanvil:Print(("Soft reserves loaded: %d items, %d raiders."):format(ni, np)
+			.. (SR.CanShare() and " Sent to the raid." or ""))
+		P.SetImporting(false)
+	end)
+	no:SetScript("OnClick", function() P.SetImporting(false) end)
+	imp:Hide()
+	f.imp, f.impBox = imp, box
+	-- Never keep the keyboard once the panel is gone.
+	f:SetScript("OnHide", function() box.edit:ClearFocus() end)
 
 	-- flat scroll: plain ScrollFrame, our own thumb, the wheel moves it
 	local sf = CreateFrame("ScrollFrame", nil, f)
@@ -157,7 +183,9 @@ local function rowAt(i)
 	r.icon:SetSize(ICON, ICON); r.icon:SetPoint("TOPLEFT", 0, -3)
 	r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 	r.status = W.Text(r, "", "note")
-	r.status:SetPoint("TOPRIGHT", 0, -3)
+	-- a few px in: the scroll area clips at its edge, and the last letter of
+	-- a name drawn flush against it was cut
+	r.status:SetPoint("TOPRIGHT", -4, -3)
 	r.status:SetJustifyH("RIGHT")
 	r.name = W.Text(r, "", 11)
 	r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", GAP, 0)
@@ -187,9 +215,31 @@ local function dock()
 	end
 end
 
+local IMPORT_H = 230
+
+-- Swap the list for the paste view, or back. The box is never focused for you:
+-- click into it to paste.
+function P.SetImporting(on)
+	if not panel then return end
+	local f = panel
+	f.importing = on and true or false
+	f.impBox:SetText("")
+	f.impBox.edit:ClearFocus()
+	if on then
+		f.sf:Hide(); f.sb:Hide()
+		f.imp:Show()
+		f:SetHeight(IMPORT_H)
+	else
+		f.imp:Hide()
+		f.sf:Show()
+		P.Refresh()
+	end
+end
+
 function P.Refresh()
 	if not (panel and panel:IsShown()) then return end
 	local f = panel
+	if f.importing then return end
 	local items = SR.All()
 	local st = dropStatus()
 	local here, grouped = groupSet()
@@ -258,6 +308,18 @@ function P.Refresh()
 		y = y + rh + 2
 	end
 	f._cold = cold
+	-- Room under the last row: the measured string heights come out a few px
+	-- short of what is drawn, and the last name was cut by the panel's bottom.
+	y = y + 8
+
+	if #items == 0 then
+		f.empty = f.empty or W.Text(f.child, "No soft reserves loaded.\nClick CSV to paste the list from softres.it.", "note", "dim")
+		f.empty:SetPoint("TOPLEFT", 0, -4); f.empty:SetWidth(width); f.empty:SetJustifyH("LEFT")
+		f.empty:Show()
+		y = 40
+	elseif f.empty then
+		f.empty:Hide()
+	end
 
 	local nMissing = 0
 	for _ in pairs(missing) do nMissing = nMissing + 1 end
@@ -279,7 +341,7 @@ end
 -- mini roll on screen to sit beside.
 local function allowed()
 	local rm = rollWin()
-	return isML() and SR.Summary() ~= nil and rm and rm:IsShown()
+	return isML() and (SR.Summary() ~= nil or Okanvil.LITE) and rm and rm:IsShown()
 end
 
 function P.Show()
@@ -332,7 +394,7 @@ end
 SLASH_OKRES1 = "/okres"
 SlashCmdList["OKRES"] = function()
 	if not isML() then Okanvil:Print("Soft reserves: only the master looter has this list."); return end
-	if not SR.Summary() then Okanvil:Print("Soft reserves: none loaded -- paste the CSV on the Loot page."); return end
+	if not (SR.Summary() or Okanvil.LITE) then Okanvil:Print("Soft reserves: none loaded -- paste the CSV on the Loot page."); return end
 	local rm = rollWin()
 	if not (rm and rm:IsShown()) and Okanvil.RollMgr and Okanvil.RollMgr.Toggle then Okanvil.RollMgr.Toggle() end
 	P.Toggle()

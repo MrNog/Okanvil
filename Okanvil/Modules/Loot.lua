@@ -2149,7 +2149,18 @@ end
 local ROLL_WINDOW = 120
 local activeRoll = nil
 
+-- Solo master-loot test (/okloottest ml): the master looter's controls without a
+-- group, for testing and screenshots. Solo only, so a test left on can never hand
+-- ML controls to a raider in a real group. Nothing it does reaches chat.
+function L.SoloTestML()
+	if not L._testML then return false end
+	local inGroup = (GetNumRaidMembers and GetNumRaidMembers() > 0)
+		or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+	return not inGroup
+end
+
 local function announceChannel()
+	if L.SoloTestML() then return nil end
 	if GetNumRaidMembers and GetNumRaidMembers() > 0 then
 		return ((IsRaidLeader and IsRaidLeader()) or (IsRaidOfficer and IsRaidOfficer()))
 			and "RAID_WARNING" or "RAID"
@@ -2474,10 +2485,10 @@ function L.StartRoll(link, mode)
 	end
 	local secs = L.RollTimer()
 	local chan = announceChannel()
-	if chan then
+	if chan or L.SoloTestML() then
 		local msg = srOnly and SRM.RollCall(link) or L.RollMsg(mode):gsub("%[item%]", link)
 		if secs > 0 then msg = msg .. ("  (%ds)"):format(secs) end
-		SendChatMessage(msg, chan)
+		if chan then SendChatMessage(msg, chan) else Okanvil:Print("|cffe0b860[TEST]|r " .. msg) end
 	end
 	if secs > 0 and Okanvil.Comms and Okanvil.Comms.After then
 		local roll = activeRoll
@@ -3299,7 +3310,7 @@ local function commitAward(id, winner, de)
 	-- council board's own test award. The win is recorded so the mini roll shows it,
 	-- and a copy in the bags gets the trade mark (it goes when the test ends).
 	local CC = Okanvil.Council
-	if CC and CC.testMode then
+	if (CC and CC.testMode) or L.SoloTestML() then
 		freezeManualRolls(id)
 		markWinner(id, winner, de)
 		if Okanvil.Trade and inMyBags(id) then Okanvil.Trade.Add(id, winner, nm, true) end
@@ -3549,6 +3560,20 @@ function L.ClearActiveDrops()
 	for _, dp in ipairs(s.drops or {}) do
 		if not dp.hidden then dp.hidden = true; any = true end
 	end
+	activeRoll = nil
+	if L.onLoot then L.onLoot() end
+	return any
+end
+
+-- DELETE every run this character saved, plus anything still buffered. The lite
+-- build's Clear: there the mini roll is the only view of the loot, so a list
+-- cleared by hand is gone for good. Never touches anyone else's list.
+function L.DiscardDrops()
+	local list = sessions()
+	local any = #list > 0 or #pendingDrops > 0
+	wipe(list)
+	wipe(pendingDrops)
+	pendingZone = nil
 	activeRoll = nil
 	if L.onLoot then L.onLoot() end
 	return any
@@ -4438,6 +4463,9 @@ end
 --   /okloottest Trauma       -- drop that item by name
 --   /okloottest world        -- toggle recording outside instances (needed to test solo)
 --   /okloottest clear        -- wipe the session these fakes went into
+--   /okloottest ml           -- toggle the master looter's window, solo only
+--   /okloottest roll         -- open a roll on the selected (or last) test item,
+--                               as if it had been called, so /roll lands on it
 SLASH_OKLOOTTEST1 = "/okloottest"
 SlashCmdList["OKLOOTTEST"] = function(msg)
 	local raw = msg or ""
@@ -4460,6 +4488,30 @@ SlashCmdList["OKLOOTTEST"] = function(msg)
 		else
 			Okanvil:Print("Loot test: no open session to clear.")
 		end
+		return
+	end
+
+	-- /okloottest ml -- the master looter's window, solo (L.SoloTestML).
+	if low == "ml" then
+		L._testML = not L._testML or nil
+		Okanvil:Print("Loot test: master looter view is "
+			.. (L._testML and "|cff7cfc8aON|r (solo only; nothing goes to chat)" or "|cffff5555OFF|r") .. ".")
+		local RM = Okanvil.RollMgr
+		if RM and RM.ApplyMode then
+			local ok, err = pcall(RM.ApplyMode)
+			if not ok and Okanvil.Err then Okanvil:Err("loottest ml", err) end
+		end
+		return
+	end
+
+	-- Solo there is no master looter to call a roll, and a /roll with nothing
+	-- called counts for nothing. This calls it, silently, so rolls can be tested.
+	if low == "roll" then
+		local sel = L.RollSelected and L.RollSelected()
+		local link = (sel and sel.item) or L.lastTestLink
+		if not link then Okanvil:Print("Loot test: drop an item first."); return end
+		L.NoteExternalRoll(link, nil, false)
+		Okanvil:Print("Loot test: " .. link .. " is open for rolls -- /roll now.")
 		return
 	end
 
@@ -4517,6 +4569,7 @@ SlashCmdList["OKLOOTTEST"] = function(msg)
 		return
 	end
 
+	L.lastTestLink = link
 	Okanvil:Print("Loot test: " .. (link or name) .. " dropped.")
 	local P = Okanvil.LootPrio
 	local rec = P and P.For and P.For(name)
@@ -4525,5 +4578,6 @@ SlashCmdList["OKLOOTTEST"] = function(msg)
 	else
 		Okanvil:Print("  |cff8a8d93no prio entry for this item|r")
 	end
-	if Okanvil.RollMgr and Okanvil.RollMgr.Toggle then Okanvil.RollMgr.Toggle() end
+	-- Show, never toggle: a second test drop must not close the window.
+	if Okanvil.RollMgr and Okanvil.RollMgr.OnLootWindow then Okanvil.RollMgr.OnLootWindow() end
 end

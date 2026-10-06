@@ -435,7 +435,9 @@ C.ShowUpdateToast = showUpdateToast
 -- someone asked -> whisper our version straight back
 C.On("VERQ", function(sender)
 	if not sender or sender == "" then return end
-	C.Whisper("VERR", sender, tostring(Okanvil.version or "?"))
+	-- The lite build names itself: its version numbers are its own, and a bare
+	-- "1.4.0" from it would read as a newer Okanvil to whoever asked.
+	C.Whisper("VERR", sender, (Okanvil.LITE and (Okanvil.LITE .. " ") or "") .. tostring(Okanvil.version or "?"))
 end)
 
 -- a reply came in -> record it and let the UI repaint

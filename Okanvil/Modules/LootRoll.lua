@@ -104,6 +104,7 @@ local function amML()
 			or (GetNumPartyMembers and GetNumPartyMembers() > 0)
 		if not inGroup then return true end
 	end
+	if L and L.SoloTestML and L.SoloTestML() then return true end
 	if L and L.IsMasterLooter then return L.IsMasterLooter() end
 	return false
 end
@@ -324,8 +325,35 @@ local function buildWindow()
 	-- export keep them). End-of-raid tidying, so it sits in the title bar, out of
 	-- the way of the buttons used on every boss. Master looter only (RM.Rebuild).
 	local clrB = W.Button(hdr, "Clear"); clrB:SetSize(44, 20); clrB:SetPoint("RIGHT", srB, "LEFT", -4, 0)
-	clrB:Tooltip("Empty the list for a new raid.\nThe loot history and the export keep everything.")
-	clrB:SetScript("OnClick", function()
+	if Okanvil.LITE then
+		clrB:Tooltip("Delete your saved loot list and soft reserves.\n"
+			.. "Only yours: nobody else's list changes.\nClick twice to confirm.")
+	else
+		clrB:Tooltip("Empty the list for a new raid.\nThe loot history and the export keep everything.")
+	end
+	clrB:SetScript("OnClick", function(s)
+		-- Lite: everyone has Clear and it deletes, so it asks with a second click
+		-- on the same button instead of a dialog.
+		if Okanvil.LITE then
+			local now = GetTime()
+			if not (s._armedAt and now - s._armedAt <= 3) then
+				s._armedAt = now
+				s.text:SetText("|cffff5555Sure?|r")
+				Okanvil.Comms.After(3, function()
+					if s._armedAt == now then s._armedAt = nil; s.text:SetText("Clear") end
+				end)
+				return
+			end
+			s._armedAt = nil
+			s.text:SetText("Clear")
+			local any = L.DiscardDrops and L.DiscardDrops()
+			local SRM = Okanvil.SoftRes
+			if SRM and SRM.Summary() then SRM.Clear(); any = true end
+			Okanvil:Print(any and "List cleared." or "Nothing to clear.")
+			local ok, err = pcall(RM.Rebuild)
+			if not ok and Okanvil.Err then Okanvil:Err("RollMgr clear", err) end
+			return
+		end
 		Okanvil:Confirm("Clear the mini roll list?\n"
 			.. "|cff8a8d93The loot history keeps everything -- this only empties the window.|r",
 			"Clear list",
@@ -830,7 +858,7 @@ function RM.Rebuild()
 		f.yourRollH = y0 - y
 	end
 	if f.clrBtn then
-		if ml then f.clrBtn:Show() else f.clrBtn:Hide() end
+		if ml or Okanvil.LITE then f.clrBtn:Show() else f.clrBtn:Hide() end
 	end
 	-- (fragment/BoE collector tally is NOT shown here -- it lives on the Loot page's
 	--  COLLECTED panel. The mini manager stays focused on rolling.)
@@ -851,7 +879,9 @@ end
 function RM.SyncSRButton()
 	if not (win and win.srBtn) then return end
 	local SRM = Okanvil.SoftRes
-	if isML() and SRM and SRM.Summary() then win.srBtn:Show() else win.srBtn:Hide() end
+	-- Lite has no Loot page to paste the CSV on, so the ML gets SR (and its Load
+	-- CSV) before any list is loaded.
+	if isML() and SRM and (SRM.Summary() or Okanvil.LITE) then win.srBtn:Show() else win.srBtn:Hide() end
 	-- Clear sits next to SR when SR is there, else straight next to X: anchored to
 	-- a hidden SR it kept SR's empty slot as a gap.
 	if win.clrBtn then

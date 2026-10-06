@@ -1303,21 +1303,37 @@ function W.Hairline(frame, side, inset)
 end
 
 local FORGE_ART = "Interface\\AddOns\\Okanvil\\Media\\setup-bg"
+-- Okanvil.ForgeArtStyle, when set, swaps the picture for another one:
+--   { tex = path, aspect = width / height of the picture as painted,
+--     washL = fade on the left, washR = fade on the right }
+-- The art is then drawn at full strength under that wash, and cropped to the
+-- window's shape from the picture's real aspect. The lite build sets it.
 function W.ForgeArt(f, alpha)
+	local st = Okanvil.ForgeArtStyle
 	-- BACKGROUND for the art, BORDER for the fade: separate layers, so the fade
 	-- is always on top (one layer = undefined order). The backdrop sits below both.
 	local art = f:CreateTexture(nil, "BACKGROUND")
 	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
-	art:SetTexture(FORGE_ART)
+	art:SetTexture(st and st.tex or FORGE_ART)
 	local fade = f:CreateTexture(nil, "BORDER")
 	fade:SetPoint("TOPLEFT", 1, -1); fade:SetPoint("BOTTOMRIGHT", -1, 1)
 	fade:SetTexture(FLAT)
 	local d = C.panelD
-	fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.92, d[1], d[2], d[3], 0.40)
+	fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], st and st.washL or 0.92,
+		d[1], d[2], d[3], st and st.washR or 0.40)
 	local function crop()
 		local w, h = f:GetWidth() or 0, f:GetHeight() or 0
 		if w <= 0 or h <= 0 then return end
-		if w >= h then
+		if st then
+			-- narrower than the picture: keep its right edge; wider: its middle band
+			local A, want = st.aspect or 1, w / h
+			if want < A then
+				art:SetTexCoord(1 - want / A, 1, 0, 1)
+			else
+				local span = A / want
+				art:SetTexCoord(0, 1, 0.5 - span / 2, 0.5 + span / 2)
+			end
+		elseif w >= h then
 			local span = h / w
 			local top = math.max(0, math.min(1 - span, 0.55 - span / 2))
 			art:SetTexCoord(0, 1, top, top + span)
@@ -1329,7 +1345,7 @@ function W.ForgeArt(f, alpha)
 	local function refresh()
 		local off = Okanvil.db and (Okanvil.db.ratArt or "on") == "off"
 		if off then art:Hide(); fade:Hide(); return end
-		art:SetAlpha(alpha or 0.22); art:Show(); fade:Show(); crop()
+		art:SetAlpha(st and 1 or alpha or 0.22); art:Show(); fade:Show(); crop()
 	end
 	f:HookScript("OnSizeChanged", crop)
 	f:HookScript("OnShow", refresh)

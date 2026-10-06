@@ -830,7 +830,9 @@ core:SetScript("OnEvent", function(_, event, arg1)
 			end
 		end
 
-		Okanvil:Print("loaded -- |cff00ff00/okanvil|r. " .. Okanvil:CountPlugins() .. " plugin(s).")
+		if not Okanvil.LITE then
+			Okanvil:Print("loaded -- |cff00ff00/okanvil|r. " .. Okanvil:CountPlugins() .. " plugin(s).")
+		end
 
 		-- A few seconds in, so it lands after the login spam and the loading
 		-- screen rather than under them.
