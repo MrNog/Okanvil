@@ -56,6 +56,7 @@ local defaults = {
 	wantRole = "tank",       -- which role's classes the Want row is showing right now
 	classRun = false,        -- VoA-style "one of each class" instead of role targets
 	classPer = 1,            -- how many of each class a class run wants
+	voaAsk = {},             -- [VoA slot key] = true: empty places the leader clicked to name
 	presets = {},            -- [name] = a saved setup (raid, size, needs, note...)
 }
 
@@ -573,6 +574,8 @@ function M.SavePreset(name)
 	for k, v in pairs(db.wantClasses or {}) do p.wantClasses[k] = v end
 	p.reserve = {}
 	for k, v in pairs(db.reserve or {}) do p.reserve[k] = v end
+	p.voaAsk = {}
+	for k, v in pairs(db.voaAsk or {}) do p.voaAsk[k] = v end
 	p.reserveItems = {}
 	for i, v in ipairs(db.reserveItems or {}) do p.reserveItems[i] = v end
 	db.presets[name] = p
@@ -591,6 +594,8 @@ function M.LoadPreset(name)
 	for k, v in pairs(p.wantClasses or {}) do db.wantClasses[k] = v end
 	db.reserve = {}
 	for k, v in pairs(p.reserve or {}) do db.reserve[k] = v end
+	db.voaAsk = {}
+	for k, v in pairs(p.voaAsk or {}) do db.voaAsk[k] = v end
 	db.reserveItems = {}
 	for i, v in ipairs(p.reserveItems or {}) do db.reserveItems[i] = v end
 	-- A preset saved before the two became mutually exclusive can carry both, and
@@ -746,6 +751,26 @@ end
 -- Up to this many empty places the line names them; above it the run is still
 -- forming, everyone is welcome, and a list of fifteen classes is just noise.
 local VOA_NAME_AT = 6
+
+-- The empty places the leader clicked on the board, named the same way as
+-- VoAMissing. A clicked place that has since filled says nothing, so the line
+-- falls back to the automatic list once every pick is taken.
+function M.VoAAsked()
+	local ask = db.voaAsk or {}
+	local out, tanks = {}, 0
+	for _, p in ipairs(M.VoABoard()) do
+		if not p.who and ask[p.def.key] then
+			if p.def.tank then tanks = tanks + 1 else out[#out + 1] = p.def.short end
+		end
+	end
+	if tanks > 0 then out[#out + 1] = tanks .. " Tank" end
+	return out
+end
+
+function M.ToggleVoAAsk(key)
+	db.voaAsk = db.voaAsk or {}
+	db.voaAsk[key] = (not db.voaAsk[key]) or nil
+end
 
 -- ------------------------------------------------------------
 -- Reserved loot
@@ -987,8 +1012,10 @@ local function buildMessage()
 	if db.classRun then
 		-- A class run asks by PvP set, not by role: "need Ret, Boomkin, 1 Tank" is
 		-- the whole point of the run, and role counts say nothing about it.
+		local asked = M.VoAAsked()
 		local miss, n = M.VoAMissing()
-		if n > VOA_NAME_AT then bits[1] = "all"
+		if #asked > 0 then bits[1] = table.concat(asked, ", ")
+		elseif n > VOA_NAME_AT then bits[1] = "all"
 		elseif #miss > 0 then bits[1] = table.concat(miss, ", ") end
 	else
 		-- Every role carries its own picks, so one line can say "2 Tank (Druid)

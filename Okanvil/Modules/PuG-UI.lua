@@ -571,6 +571,13 @@ local function buildBoard(p)
 		-- hover lists everyone on the place, so a duplicate can be found by name
 		card:EnableMouse(true)
 		card:SetScript("OnEnter", function(self)
+			if self._empty then
+				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+				GameTooltip:AddLine(self._tipTitle or "", 1, 0.82, 0)
+				GameTooltip:AddLine("Click to name this place in the line.", 0.6, 0.6, 0.6)
+				GameTooltip:Show()
+				return
+			end
 			if not self._tip then return end
 			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 			GameTooltip:AddLine(self._tipTitle or "", 1, 0.82, 0)
@@ -578,6 +585,14 @@ local function buildBoard(p)
 			GameTooltip:Show()
 		end)
 		card:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		-- an empty place toggles whether the line asks for it, like the role
+		-- columns' Ask for chips
+		card:SetScript("OnMouseUp", function(self, button)
+			if button ~= "LeftButton" or not self._empty or not self._key then return end
+			pickTakesOver()   -- a class run's own text has no need clause to update
+			M.ToggleVoAAsk(self._key)
+			M.RefreshUI()
+		end)
 		F.voaCards[i] = card
 	end
 	F.voaUnplaced = W.Text(grid, "", "note", "dim")
@@ -1318,6 +1333,8 @@ function M.RefreshUI()
 						or (class_color(def.class) .. def.label .. "|r"))
 					card._tipTitle = def.label
 					card._tip = nil
+					card._key = def.key
+					card._empty = not who
 					if who then
 						card.name:SetText(class_color(who.class) .. who.name .. "|r")
 						card.sub:SetText(M.SubLabel and M.SubLabel(who.name) or "")
@@ -1344,6 +1361,11 @@ function M.RefreshUI()
 						end
 						local e = cc or { r = 0.37, g = 0.66, b = 1 }
 						card:SetBackdropBorderColor(e.r, e.g, e.b, #pc.dupes > 0 and 1 or 0.55)
+					elseif d.voaAsk and d.voaAsk[def.key] then
+						card.name:SetText("|cffe0b860asking|r")
+						card.sub:SetText("|cff8a8d93in the line|r")
+						card.dup:SetText("")
+						card:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 1)
 					else
 						card.name:SetText("|cff5e6166empty|r")
 						card.sub:SetText("")
