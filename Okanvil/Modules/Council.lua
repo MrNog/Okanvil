@@ -246,22 +246,27 @@ local function gearFor(link)
 end
 
 -- The one this item would actually replace: the WEAKER of the two, since that is
--- the one a raider swaps out. Returns id + ilvl for the wire.
+-- the one a raider swaps out. Returns id + ilvl for the wire, plus the id of
+-- the OTHER item in a two-slot pair (rings, trinkets, weapons).
 local function equippedFor(link)
 	local a, b = gearFor(link)
-	local bestID, bestIlvl
+	local bestID, bestIlvl, otherID
 	-- Checked one at a time, not through ipairs{a, b}: ipairs stops at the first
 	-- nil, so an empty main hand would have hidden a real off-hand.
 	for _, have in pairs({ a or false, b or false }) do
 		if have then
 			local hl = select(4, GetItemInfo(have))
+			local id = Okanvil.U.itemIDFromLink(have)
 			if hl and (not bestIlvl or hl < bestIlvl) then
+				otherID = bestID
 				bestIlvl = hl
-				bestID = Okanvil.U.itemIDFromLink(have)
+				bestID = id
+			else
+				otherID = id
 			end
 		end
 	end
-	return bestID, bestIlvl
+	return bestID, bestIlvl, otherID
 end
 
 -- A Mark of Sanctification has no slot to compare: it upgrades a T10 piece, the
@@ -333,9 +338,9 @@ end
 
 local function buildReply()
 	if not current then return "" end
-	local parts = {}
+	local parts, second = {}, {}
 	for _, it in ipairs(current.items) do
-		local eqID, eqIlvl = equippedFor(it.link)
+		local eqID, eqIlvl, otherID = equippedFor(it.link)
 		local newIlvl = select(4, GetItemInfo(it.link))
 		local diff = (eqIlvl and newIlvl) and (newIlvl - eqIlvl) or ""
 		-- a mark sends the pieces it would upgrade as "T<id>+<id>" in the gear
@@ -346,7 +351,11 @@ local function buildReply()
 			-- older client that sent nothing
 			eqID = "T" .. table.concat(tier, "+")
 			diff = ""
+			otherID = nil
 		end
+		-- The other ring/trinket rides in its own "S<idx>=<id>" part, which an
+		-- older board's parser skips, so the main field keeps its old meaning.
+		if otherID then second[#second + 1] = ("S%d=%s"):format(it.idx, otherID) end
 		parts[#parts + 1] = ("%d=%s/%s/%s"):format(
 			-- "wait", NOT "pass", for an item this raider has not answered yet.
 			-- Defaulting to pass told the board they had declined every item the
@@ -355,6 +364,7 @@ local function buildReply()
 			-- distinction (its WAIT response, "candidate is selecting").
 			it.idx, it.answer or "wait", eqID or "", tostring(diff))
 	end
+	for _, p in ipairs(second) do parts[#parts + 1] = p end
 	return table.concat(parts, SEP_ANS)
 end
 
@@ -969,10 +979,12 @@ local BOARD_W  = 980
 -- older client (or one that could not read its own slot) still parses. An
 -- "E=<skill>" part is the raider's Enchanting skill, kept as out.ench.
 local function parseReply(payload)
-	local out = {}
+	local out, second = {}, {}
 	for pair in tostring(payload or ""):gmatch("[^" .. SEP_ANS .. "]+") do
 		local ench = pair:match("^E=(%d+)$")
 		if ench then out.ench = tonumber(ench) end
+		local sIdx, sID = pair:match("^S(%d+)=(%d+)$")
+		if sIdx then second[tonumber(sIdx)] = tonumber(sID) end
 		local idx, body = pair:match("^(%d+)=(.+)$")
 		if idx then
 			local key, eq, diff = body:match("^([^/]+)/([^/]*)/([^/]*)$")
@@ -989,6 +1001,9 @@ local function parseReply(payload)
 				tier = tier,
 			}
 		end
+	end
+	for idx, id in pairs(second) do
+		if out[idx] then out[idx].eq2 = id end
 	end
 	return out
 end
@@ -1898,7 +1913,7 @@ function C_.RepaintBoard(open)
 		elseif a and a.key and a.key ~= "na" then
 			if a.key == "wait" then waiting = waiting + 1 else answered = answered + 1 end
 			rows[#rows + 1] = {
-				name = name, key = a.key, eq = a.eq, diff = a.diff, tier = a.tier,
+				name = name, key = a.key, eq = a.eq, eq2 = a.eq2, diff = a.diff, tier = a.tier,
 				prio = prioPos[name],
 			}
 		elseif a and a.key == "na" then
@@ -2024,7 +2039,13 @@ function C_.RepaintBoard(open)
 				r.eqIcon:SetSize(20, 20)
 				r.eqIcon:SetPoint("LEFT", COL_GEAR, 0)
 				r.eqIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+				-- the other ring/trinket, when the slot comes in a pair
+				r.eqIcon2 = r:CreateTexture(nil, "ARTWORK")
+				r.eqIcon2:SetSize(20, 20)
+				r.eqIcon2:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+				r.eqIcon2:Hide()
 				r.spec = W.Text(r, "", "head");      r.spec:SetPoint("LEFT", COL_SPEC, 0)
+				r.spec2 = W.Text(r, "", "head");     r.spec2:SetPoint("LEFT", r.eqIcon2, "RIGHT", 6, 0)
 				r.diff = W.Text(r, "", "head");      r.diff:SetPoint("LEFT", COL_DIFF, 0)
 
 				-- Hover the EQUIPPED area for that item's stats. Anchored off the
@@ -2042,8 +2063,19 @@ function C_.RepaintBoard(open)
 					GameTooltip:SetPoint("TOPLEFT", f, "TOPRIGHT", 8, 0)
 					GameTooltip:SetHyperlink(r._eqLink)
 					GameTooltip:Show()
+					-- the pair's other item beside it
+					if r._eqLink2 and ShoppingTooltip1 then
+						ShoppingTooltip1:SetOwner(GameTooltip, "ANCHOR_NONE")
+						ShoppingTooltip1:ClearAllPoints()
+						ShoppingTooltip1:SetPoint("TOPLEFT", GameTooltip, "TOPRIGHT", 4, 0)
+						ShoppingTooltip1:SetHyperlink(r._eqLink2)
+						ShoppingTooltip1:Show()
+					end
 				end)
-				eqHot:SetScript("OnLeave", function() GameTooltip:Hide() end)
+				eqHot:SetScript("OnLeave", function()
+					GameTooltip:Hide()
+					if ShoppingTooltip1 then ShoppingTooltip1:Hide() end
+				end)
 				-- Raised ABOVE the row-wide inspect button, which is created after
 				-- this one and would otherwise sit on top and eat the hover.
 				eqHot:SetFrameLevel(r:GetFrameLevel() + 5)
@@ -2257,7 +2289,8 @@ function C_.RepaintBoard(open)
 			-- WHAT THEY HAVE IN THAT SLOT -- the item itself, not a gearscore. A
 			-- council arguing over a weapon wants to see the weapon being replaced;
 			-- "Retribution 5016" says nothing about whether this axe is an upgrade.
-			r._eqLink = nil
+			r._eqLink, r._eqLink2 = nil, nil
+			r.eqIcon2:Hide(); r.spec2:SetText("")
 			-- a mark shows the T10 pieces it would upgrade, one icon each, like the
 			-- equipped item on any other row; no tier = nothing shown
 			r.tierIcons = r.tierIcons or {}
@@ -2307,9 +2340,25 @@ function C_.RepaintBoard(open)
 				-- first words are what identifies an item.
 				local hex = (eqQ and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[eqQ])
 					and ("|c" .. ITEM_QUALITY_COLORS[eqQ].hex:gsub("^|c", "")) or "|cffffffff"
+				-- Two items (rings, trinkets) share the column, so each gets half.
+				local maxLen = d.eq2 and 14 or 32
 				local short = eqName or "?"
-				if #short > 32 then short = short:sub(1, 31) .. "..." end
+				if #short > maxLen then short = short:sub(1, maxLen - 1) .. "..." end
 				r.spec:SetText(hex .. short .. "|r")
+				if d.eq2 then
+					local n2, l2, q2, _, _, _, _, _, _, tex2 = GetItemInfo(d.eq2)
+					r._eqLink2 = l2
+					tex2 = tex2 or (GetItemIcon and GetItemIcon(d.eq2))
+					r.eqIcon2:ClearAllPoints()
+					r.eqIcon2:SetPoint("LEFT", r.spec, "RIGHT", 8, 0)
+					if tex2 then r.eqIcon2:SetTexture(tex2) else r.eqIcon2:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark") end
+					r.eqIcon2:Show()
+					local hex2 = (q2 and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q2])
+						and ("|c" .. ITEM_QUALITY_COLORS[q2].hex:gsub("^|c", "")) or "|cffffffff"
+					local s2 = n2 or "?"
+					if #s2 > maxLen then s2 = s2:sub(1, maxLen - 1) .. "..." end
+					r.spec2:SetText(hex2 .. s2 .. "|r")
+				end
 			else
 				r.eqIcon:Hide()
 				r.spec:SetText("|cff6f7176(nothing)|r")

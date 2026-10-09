@@ -540,14 +540,21 @@ function W.EditBox(parent, onEnter)
 	-- the top-left -- where the cursor sits -- did nothing at all, and a short
 	-- value left most of the field dead. The frame behind it catches the click
 	-- and hands over focus, putting the cursor nearest to where you clicked.
+	-- 3.3.5a EditBoxes have no GetStringWidth, so the text is measured on a
+	-- hidden FontString set to the same font.
+	local measure = box:CreateFontString(nil, "OVERLAY")
+	measure:Hide()
 	box:EnableMouse(true)
 	box:SetScript("OnMouseDown", function(_, button)
 		if button ~= "LeftButton" then return end
 		e:SetFocus()
 		-- Clicking past the end of the text puts the cursor at the end, which is
 		-- what the empty space to the right of a value means.
+		local font, size, flags = e:GetFont()
+		if font then measure:SetFont(font, size, flags) end
+		measure:SetText(e:GetText() or "")
 		local x = GetCursorPosition() / (e:GetEffectiveScale() or 1)
-		if x > (e:GetLeft() or 0) + (e:GetStringWidth() or 0) then
+		if x > (e:GetLeft() or 0) + (measure:GetStringWidth() or 0) then
 			e:SetCursorPosition(e:GetText() and #e:GetText() or 0)
 		end
 	end)
