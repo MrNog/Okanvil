@@ -1323,9 +1323,10 @@ function Okanvil:BuildAttendance(host)
 		tertiaryTip = "You raided with the guild this week: use this character's lockouts of the mandatory "
 			.. "raids as the guild's IDs for the week.",
 		statusText = function()
-			local n = 0
-			for _ in pairs(A.Letters.Inbox()) do n = n + 1 end
-			return "|cff8a8d93" .. n .. " letter" .. (n == 1 and "" or "s") .. "|r"
+			-- this lockout's letters only: the inbox holds several weeks
+			local wk, n = weekOf(time()), 0
+			for _, l in pairs(A.Letters.Inbox()) do if l.week == wk then n = n + 1 end end
+			return "|cff8a8d93" .. n .. " letter" .. (n == 1 and "" or "s") .. " this week|r"
 		end,
 		tabs = {
 			{ key = "main", label = "Main run", height = 400,
