@@ -1289,8 +1289,9 @@ function Okanvil:ShowMinimapTip(owner)
 
 	-- ---------- the grid ----------
 	local LO = self.Lockouts
-	local toons, raidOrder, cell, sizes, soonest
-	if LO and LO.Grid then toons, raidOrder, cell, sizes, soonest = LO:Grid() else toons = {} end
+	local toons, raidOrder, cell, sizes, soonest, daily
+	if LO and LO.Grid then toons, raidOrder, cell, sizes, soonest, daily = LO:Grid(true) else toons = {} end
+	daily = daily or {}
 	if #toons > 0 then
 		y = y - 8
 		local hdr = line("|cffc0943aSaved raids|r", TIP_FONT)
@@ -1318,6 +1319,8 @@ function Okanvil:ShowMinimapTip(owner)
 			probe:SetText(s)
 			nameW = math.max(nameW, probe:GetStringWidth())
 		end
+		probe:SetText("Daily HC")
+		nameW = math.max(nameW, probe:GetStringWidth())
 
 		-- Sub-column width: the widest size label, same for all -- uniform cells are
 		-- what let the eye scan a column straight down.
@@ -1398,6 +1401,20 @@ function Okanvil:ShowMinimapTip(owner)
 			end
 			y = y - TIP_ROW_H
 		end
+
+		-- the daily random heroic: a tick under each toon that has done it today,
+		-- centred in the toon's block like its name
+		local dl = line("Daily HC", TIP_FONT)
+		dl:ClearAllPoints(); dl:SetPoint("TOPLEFT", TIP_PAD, y)
+		dl:SetWidth(nameW); dl:Justify("LEFT")
+		if dl.SetWordWrap then dl:SetWordWrap(false) end
+		for _, toon in ipairs(toons) do
+			local fs = line(daily[toon.name] and "|TInterface\\RaidFrame\\ReadyCheck-Ready:" .. TIP_FONT .. "|t" or "", TIP_FONT)
+			fs:ClearAllPoints()
+			fs:SetPoint("TOPLEFT", colX[toon.name], y)
+			fs:SetWidth(blockW[toon.name]); fs:Justify("CENTER")
+		end
+		y = y - TIP_ROW_H
 
 		-- Every WotLK raid lockout resets on the same weekly server tick, so a
 		-- per-row countdown would repeat the same value N times. One footer instead.

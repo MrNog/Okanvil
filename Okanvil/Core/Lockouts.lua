@@ -83,6 +83,44 @@ function L:Scan()
 end
 
 -- ------------------------------------------------------------
+-- Daily heroic: has THIS toon done its random heroic today?
+--
+-- The random-heroic reward reports doneToday, but only for the toon you are on,
+-- so it is cached account-wide like the raid lockouts and stamped with the next
+-- daily reset. A record is only ever written, never cleared: before the reward
+-- info arrives the API can say "not done", and the stored reset already expires
+-- the record at the right moment.
+-- ------------------------------------------------------------
+local RANDOM_HEROIC = 262   -- LFG dungeon id of the Wrath random heroic
+
+function L:ScanDaily()
+	local db = Okanvil.db
+	if not db or not GetLFGDungeonRewards then return end
+	local name = UnitName("player")
+	if not name then return end
+	local done = GetLFGDungeonRewards(RANDOM_HEROIC)
+	local reset = GetQuestResetTime and GetQuestResetTime()
+	if done and reset and reset > 0 then
+		local _, class = UnitClass("player")
+		db.dailyHC = db.dailyHC or {}
+		db.dailyHC[name] = { class = class, resets = time() + reset }
+	end
+end
+
+-- toon name -> class, for every toon whose daily heroic is done and not yet reset
+function L:DailyDone()
+	local db = Okanvil.db
+	local out = {}
+	if not db or not db.dailyHC then return out end
+	local now = time()
+	for charName, row in pairs(db.dailyHC) do
+		if (row.resets or 0) > now then out[charName] = row.class
+		else db.dailyHC[charName] = nil end
+	end
+	return out
+end
+
+-- ------------------------------------------------------------
 -- Read: every toon with at least one UNEXPIRED raid lockout.
 -- Expiry is decided here, at read time, against the stored absolute reset --
 -- a cached row from a toon you haven't logged in for a week self-cleans.
@@ -131,11 +169,33 @@ end
 --                at two sizes, so size is a dimension, not a string
 --   sizes     -- every size label in use, ascending: "10", "10H", "25", "25H"
 --   soonest   -- the earliest reset, as a time() value
+--   daily     -- only with withDaily (the minimap tooltip; Home stays raids only):
+--                daily[toon] = true when that toon's daily heroic is done; a toon
+--                with only that (no raid lockout) still gets a column
 -- The label carries the difficulty, not just the size: a 25 normal and a 25
 -- heroic are different lockouts and must not share a cell.
 -- ------------------------------------------------------------
-function L:Grid()
+function L:Grid(withDaily)
 	local toons = self:Get()
+	local daily = {}
+	local listed = {}
+	for _, toon in ipairs(toons) do listed[toon.name] = true end
+	local added
+	for charName, class in pairs(withDaily and self:DailyDone() or {}) do
+		daily[charName] = true
+		if not listed[charName] then
+			toons[#toons + 1] = { name = charName, class = class, instances = {} }
+			added = true
+		end
+	end
+	if added then
+		local me = UnitName("player")
+		table.sort(toons, function(a, b)
+			if a.name == me then return true end
+			if b.name == me then return false end
+			return a.name < b.name
+		end)
+	end
 	local raids, cell, sizeSeen, soonest = {}, {}, {}, nil
 	for _, toon in ipairs(toons) do
 		for _, inst in ipairs(toon.instances) do
@@ -169,7 +229,7 @@ function L:Grid()
 		if na ~= nb then return na < nb end
 		return (a:find("H") == nil) and (b:find("H") ~= nil)
 	end)
-	return toons, raids, cell, sizes, soonest
+	return toons, raids, cell, sizes, soonest, daily
 end
 
 -- "4d 12h" / "12h 30m" / "45m" -- raid lockouts are long, so seconds are noise.
@@ -204,10 +264,21 @@ ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("UPDATE_INSTANCE_INFO")   -- the async answer to RequestRaidInfo
 ev:RegisterEvent("RAID_INSTANCE_WELCOME")  -- zoned into an instance that saves you
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")  -- covers zoning out of the raid too
+ev:RegisterEvent("LFG_UPDATE_RANDOM_INFO") -- the random-heroic reward info landed
+ev:RegisterEvent("LFG_COMPLETION_REWARD")  -- a random dungeon was just finished
 
 ev:SetScript("OnEvent", function(_, event)
 	if event == "UPDATE_INSTANCE_INFO" then
 		L:Scan()
+		return
+	end
+	-- the async answer to RequestLFDPlayerLockInfo, and a finished dungeon
+	if event == "LFG_UPDATE_RANDOM_INFO" then
+		L:ScanDaily()
+		return
+	end
+	if event == "LFG_COMPLETION_REWARD" then
+		if RequestLFDPlayerLockInfo then RequestLFDPlayerLockInfo() end
 		return
 	end
 	-- Everything else only ASKS the server; the scan happens when the reply lands
@@ -215,9 +286,13 @@ ev:SetScript("OnEvent", function(_, event)
 	-- not populated at PLAYER_LOGIN yet.
 	if event == "PLAYER_LOGIN" then
 		if Okanvil.Comms and Okanvil.Comms.After then
-			Okanvil.Comms.After(5, function() RequestRaidInfo() end)
+			Okanvil.Comms.After(5, function()
+				RequestRaidInfo()
+				if RequestLFDPlayerLockInfo then RequestLFDPlayerLockInfo() end
+			end)
 		else
 			RequestRaidInfo()
+			if RequestLFDPlayerLockInfo then RequestLFDPlayerLockInfo() end
 		end
 	else
 		RequestRaidInfo()
