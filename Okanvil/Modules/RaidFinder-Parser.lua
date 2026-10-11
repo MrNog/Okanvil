@@ -107,6 +107,9 @@ local recruit_words = {
 	"looking%s+for%s+[^%.]-%f[%w]raiders%f[%W]",
 	-- "(3 raids)" / "3 raids per week" -- a weekly schedule only a guild quotes
 	"%d%s*raids?%s*%)", "%d%s*raids?%s*per%s*week", "%d%s*raids?%s*a%s*week",
+	-- "sign up on our discord" / Raid-Helper: a scheduled event taking signups,
+	-- not a group forming now. A bare "discord req." pug call stays listed.
+	"%f[%w]sign%s*%-?%s*ups?%f[%W]", "raid%s*%-?%s*helper",
 }
 -- Weekday schedules, appended to the list above. "RT mon" (raid times) labels the
 -- nights a guild raids, and THREE days joined by + or / ("mon+wed+sun") is that same
@@ -136,6 +139,38 @@ end
 -- hire, not a raid leader forming a group. Discard on sight (like WTS spam).
 local trade_words = { "wts ", "wtb ", "selling ", "buying ",
 	"%f[%w]lfw%f[%W]", "looking%s+for%s+work" }
+
+-- Only English listings are shown. A message is foreign when it carries an accented
+-- Latin or Cyrillic letter (UTF-8 lead byte + continuation; symbols like » or ★ use
+-- other lead bytes and stay allowed), or any of these everyday words that never
+-- turn up in an English raid call. Whole words only, so "pre-bis" or "discord.com"
+-- can't trip it.
+local foreign_letters = "[\195\196\197\208\209][\128-\191]"
+local foreign_words = {
+	-- spanish / portuguese
+	"para", "con", "por", "los", "las", "una", "uma", "del", "que", "necesito",
+	"necesitamos", "busco", "buscamos", "precisa", "precisamos", "procura", "todos",
+	-- slovak / czech
+	"hlada", "hladame", "hleda", "hledame", "hracov", "hracu", "hraci", "potrebujeme",
+	"doplnenie", "ktory", "alebo",
+	-- polish
+	"dla", "szukamy", "szukam", "jest", "graczy",
+	-- german
+	"und", "mit", "suchen", "suche", "wir", "noch", "spieler",
+	-- french
+	"pour", "avec", "cherche", "cherchons", "nous", "joueurs",
+}
+for i, w in ipairs(foreign_words) do foreign_words[i] = "%f[%w]" .. w .. "%f[%W]" end
+
+local function is_foreign(raw)
+	-- invite codes are random letters; one could spell a listed word
+	raw = raw:gsub("discord%.gg/%S+", ""):gsub("discord%.com/invite/%S+", "")
+	if raw:find(foreign_letters) then return true end
+	for _, p in ipairs(foreign_words) do
+		if raw:find(p) then return true end
+	end
+	return false
+end
 
 -- Streamers pasting a POV/VOD link. The line often names a raid ("ICC 25 hc pov
 -- live now"), so the raid lexer would happily list it as a group forming.
@@ -484,7 +519,7 @@ local class_specs = {
 	{ role="healer", class="PALADIN", label="Holy Paladin",  pats={ "%f[%w]hpal%a*", "holy%s?pala%a*" } },
 	{ role="healer", class="DRUID",   label="Resto Druid",   pats={ "%f[%w]rdru?id%a*", "%f[%w]resto%s?dru%a*", "%f[%w]tree%f[%W]" } },
 	{ role="healer", class="SHAMAN",  label="Resto Shaman",  pats={ "%f[%w]rsham%a*", "%f[%w]resto%s?sham%a*" } },
-	{ role="healer", class="PRIEST",  label="Disc Priest",   pats={ "%f[%w]disc%f[%W]", "%f[%w]dpriest%a*" } },
+	{ role="healer", class="PRIEST",  label="Disc Priest",   pats={ "%f[%w]disc%f[%W]", "%f[%w]disco%f[%W]", "%f[%w]dpriest%a*" } },
 	{ role="healer", class="PRIEST",  label="Holy Priest",   pats={ "%f[%w]hpriest%a*", "holy%s?priest" } },
 	-- dps specs
 	{ role="dps", class="PRIEST", label="Shadow Priest", pats={ "%f[%w]spriest%a*", "shadow%s?priest", "%f[%w]spri%a*" } },
@@ -916,6 +951,7 @@ function RF.parse(message)
 
 	-- 1. early reject
 	if matches_any(raw, recruit_words) or matches_any(raw, trade_words) then return end
+	if is_foreign(raw) then return end
 
 	-- 5-man content, rejected BEFORE the raid lexer: several dungeons share an
 	-- abbreviation with a raid ("ToC 5" vs "ToC"), and the loose raid patterns
@@ -1037,10 +1073,18 @@ local samples = {
 		"LFM VOA10(classrun) - NEED : warlock-last spot /w me GS!",
 	-- real spam: "Bomy" (boomkin typo) + "Feral" must both be DPS; "recip" = Patterns
 	"LFM ALL TOGC 10 50/50 Need 1 Tank Bomy/ Feral 4.7 + gs / w Orbs recip Ress ! Achiv !!",
+	-- discord invite whose code spells a listed foreign word must still parse
+	"LFM ICC 10 need heal 5k gs discord.gg/Und wsp",
 	-- should REJECT
 	"LFW experienced tank, will do ur toc25 run cheap /w me",   -- Looking For Work = seller
 	"<Rats> is a pve guild recruiting all classes, we raid icc 25 and toc",
 	"WTS [Shadowmourne] cheap",
+	"Hlada hracov na doplnenie CORE >>> ICC 25m 12/12 (6HC)",   -- foreign, no accents
+	"LFM ICC 25 necesito tank 5.5k gs",
+	"\208\189\209\131\208\182\208\181\208\189 \209\130\208\176\208\189\208\186 icc 25",   -- cyrillic
+	"LFM T\195\182C 25 brauche heal",
+	"ICC 25 HC sunday 19:00, signups on discord.gg/AbCd12",
+	"ToGC 25 saturday, sign up via Raid-Helper discord.gg/xyz",
 	"5.8k dps rogue looking for icc 25 group",
 }
 
