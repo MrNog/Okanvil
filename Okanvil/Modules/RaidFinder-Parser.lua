@@ -96,7 +96,9 @@ local recruit_words = {
 	-- players to fill our roster(3 raids). RT mon+wed+sun". The vocabulary below is
 	-- what a guild uses about ITSELF and a pug leader never does -- a leader forming
 	-- a group now wants bodies for THIS run, not a standing roster on fixed nights.
-	"%f[%w]roster%f[%W]",
+	"%f[%w]rosters?%f[%W]",
+	-- "[PVE]" / "[PvP]" / "[PvE]" -- a guild tagging its own type; a pug leader never does
+	"%[pv[ep]%]",
 	"fill%s+our%s+%w+", "fill%s+the%s+%w+",
 	-- A weekday PAIR joined by + or / ("mon+wed+sun", "wed/sun") is a standing
 	-- schedule. A leader forming a group now never posts one. Built below rather
@@ -120,7 +122,7 @@ local recruit_words = {
 -- listing. Three days is a weekly rota; two can still be one run.
 do
 	local DAYS = { "mon", "tue", "wed", "thu", "fri", "sat", "sun" }
-	local JOIN = "%s*[%+/]%s*"
+	local JOIN = "%s*[%+/%-]%s*"
 	for _, a in ipairs(DAYS) do
 		recruit_words[#recruit_words + 1] = "%f[%w]rt%f[%W]%s*[:=]?%s*" .. a
 		for _, b in ipairs(DAYS) do
@@ -264,15 +266,15 @@ local raids = {
 	-- earliest-match tie; Ulduar "hard mode" is per-boss, but pug spam labels the
 	-- whole run "Uld25 HM" so we treat it as the heroic tier for filtering.)
 	{ id="ulduar25hc", instance="Ulduar", size=25, hc=true,
-	  pats={ "uld?u?a?r%s*25%s*hm", "uld?u?a?r%s*25%s*hc",
-	         "uld?u?a?r%s*25.-%f[%w]alga%a*", "algalon%s*25" } },
+	  pats={ "%f[%w]uld%a*%s*25%s*hm", "%f[%w]uld%a*%s*25%s*hc",
+	         "%f[%w]uld%a*%s*25.-%f[%w]alga%a*", "algalon%s*25" } },
 	{ id="ulduar10hc", instance="Ulduar", size=10, hc=true,
-	  pats={ "uld?u?a?r%s*10%s*hm", "uld?u?a?r%s*10%s*hc",
-	         "uld?u?a?r%s*10.-%f[%w]alga%a*", "algalon%s*10" } },
+	  pats={ "%f[%w]uld%a*%s*10%s*hm", "%f[%w]uld%a*%s*10%s*hc",
+	         "%f[%w]uld%a*%s*10.-%f[%w]alga%a*", "algalon%s*10" } },
 	{ id="ulduar25", instance="Ulduar", size=25,
-	  pats={ "uld?u?a?r%s*25", "ulduar%s*25" } },
+	  pats={ "%f[%w]uld%a*%s*25", "ulduar%s*25" } },
 	{ id="ulduar10", instance="Ulduar", size=10,
-	  pats={ "uld?u?a?r%s*10", "%f[%w]ulduar%f[%W]", "%f[%w]uld%f[%W]" } },
+	  pats={ "%f[%w]uld%a*%s*10", "%f[%w]ulduar%f[%W]", "%f[%w]uld%f[%W]" } },
 	{ id="ulduar10wq", instance="Ulduar", size=10, weekly=true,
 	  pats={ "ulduar%s*1?0?%s*weekly", "flame leviathan", "razorscale", "xt%-002", "ignis" } },
 
@@ -282,7 +284,7 @@ local raids = {
 	{ id="naxx10", instance="Naxxramas", size=10,
 	  pats={ "naxx?%s*10", "%f[%w]naxx?%f[%W]" } },
 	{ id="naxx10wq", instance="Naxxramas", size=10, weekly=true,
-	  pats={ "naxx?%s*1?0?%s*weekly", "patchwerk", "noth", "razuvious", "anub'rekhan" } },
+	  pats={ "naxx?%s*1?0?%s*weekly", "patchwerk", "%f[%w]noth%f[%W]", "razuvious", "anub'rekhan" } },
 
 	-- Ruby Sanctum (optional; keep since it's current-tier gate content)
 	{ id="rs25hc", instance="The Ruby Sanctum", size=25, hc=true,
@@ -360,6 +362,20 @@ local raids = {
 	  pats={ "ruins%s*of%s*ahn'?qiraj", "%f[%w]aq%s*20%f[%W]", "%f[%w]aq20%f[%W]" } },
 }
 
+-- The raid patterns expect the size AFTER the raid ("icc25"). Spam also puts it in
+-- front ("25ICC", "25 icc", "25man icc", "25m icc"), so swap those into raid-first
+-- order. Only known raid abbreviations, so "need 10 dps" is left alone.
+local SIZE_FIRST = {
+	icc = true, toc = true, togc = true, uld = true, ulduar = true, naxx = true, nax = true,
+	rs = true, voa = true, os = true, eoe = true, ony = true, onyxia = true,
+}
+local function size_last(msg)
+	local s = msg:gsub("%f[%w](%d%d)%s*%-?man%f[%W]", "%1"):gsub("%f[%w](%d%d)m%f[%W]", "%1")
+	return (s:gsub("%f[%w](%d%d)%s*(%a+)", function(n, w)
+		if (n == "10" or n == "25") and SIZE_FIRST[w] then return w .. " " .. n end
+	end))
+end
+
 -- strip size/difficulty to compare "same instance" for the multi-raid check
 local function short_id(id) return (id:gsub("%d.*$", "")) end
 
@@ -400,7 +416,8 @@ end
 -- ------------------------------------------------------------
 local role_words = {
 	tank   = { "%f[%w]tanks?%f[%W]", "%f[%w][mo]t%f[%W]", "%f[%w]bear%f[%W]", "prot%f[%W]", "protection",
-	           "%f[%w]ppal%a*" },                                  -- ppal/ppala/ppally = prot paladin
+	           "%f[%w]ppal%a*",                                    -- ppal/ppala/ppally = prot paladin
+	           "blood%s?dk", "%f[%w]bdk%f[%W]" },
 	healer = { "%f[%w]heals?%f[%W]", "%f[%w]healers?%f[%W]",
 	           "%f[%w]hpal%a*", "%f[%w]hpaly?%a*", "holy%s?pala",   -- hpala/hpaladin/hpally
 	           "%f[%w]rdru?id%f[%W]", "%f[%w]rsham%f[%W]", "%f[%w]tree%f[%W]",
@@ -418,7 +435,9 @@ local role_words = {
 	           "%f[%w]rogue%a*", "%f[%w]rog%f[%W]", "%f[%w]rogu%f[%W]",   -- rog / rogu = rogue
 	           "%f[%w]crogue%a*", "%f[%w]crog%f[%W]",                    -- crogue/crog = COMBAT rogue
 	           "%f[%w]fury%a*",
-	           "%f[%w]ret%f[%W]", "%f[%w]retri%a*", "%f[%w]retro?%a*" },  -- ret / retri / retro(typo)
+	           "%f[%w]ret%f[%W]", "%f[%w]retri%a*", "%f[%w]retro?%a*",  -- ret / retri / retro(typo)
+	           "%f[%w]unholy%f[%W]", "%f[%w]uh%f[%W]", "%f[%w]udk%f[%W]",  -- unholy DK
+	           "frost%s?dk", "%f[%w]fdk%f[%W]" },                          -- a bare "dk" stays unread: it can be a tank
 }
 
 -- A role can be named to say the group is FULL of it, which means the exact
@@ -455,7 +474,7 @@ end
 -- Matched as a prefix of the glued word, so plurals and spellings follow.
 local GLUED_SPECS = { "ppal", "hpal", "ptal", "prot", "rsham", "rdru", "disc", "hpriest",
 	"spri", "boom", "bdk", "ret", "fury", "feral", "mage", "lock", "hunt", "rog", "ele",
-	"tree", "bear", "kitty" }
+	"tree", "bear", "kitty", "udk", "fdk", "unholy" }
 local function gluedSpec(w)
 	w = w:lower()
 	for _, pre in ipairs(GLUED_SPECS) do
@@ -535,6 +554,8 @@ local class_specs = {
 	{ role="dps", class="PALADIN",label="Ret Paladin",   pats={ "%f[%w]ret%f[%W]", "%f[%w]retri%a*" } },
 	{ role="dps", class="WARRIOR",label="Fury Warrior",  pats={ "%f[%w]fury%a*" } },
 	{ role="dps", class="DRUID",  label="Feral Cat",     pats={ "%f[%w]kitty%f[%W]", "%f[%w]feral%a*" } },
+	{ role="dps", class="DEATHKNIGHT", label="Unholy DK", pats={ "%f[%w]unholy%f[%W]", "%f[%w]uh%f[%W]", "%f[%w]udk%f[%W]" } },
+	{ role="dps", class="DEATHKNIGHT", label="Frost DK",  pats={ "frost%s?dk", "%f[%w]fdk%f[%W]" } },
 	-- tank specs
 	{ role="tank", class="PALADIN",    label="Prot Paladin", pats={ "prot%s?pala%a*", "%f[%w]ptal%a*", "%f[%w]ppal%a*", "%dppal%a*" } },
 	{ role="tank", class="WARRIOR",    label="Prot Warrior", pats={ "prot%s?war%a*" } },
@@ -974,6 +995,7 @@ function RF.parse(message)
 	-- neutralize loot-priority lingo (SR>MS>OS etc.) so "OS" isn't misread as a
 	-- second raid (Obsidian Sanctum) and the line falsely rejected as multi-raid.
 	msg = strip_loot_lingo(msg)
+	msg = size_last(msg)
 
 	-- 2. raid
 	local raid, m1, distinct = lex_raid(msg)
@@ -1075,9 +1097,15 @@ local samples = {
 	"LFM ALL TOGC 10 50/50 Need 1 Tank Bomy/ Feral 4.7 + gs / w Orbs recip Ress ! Achiv !!",
 	-- discord invite whose code spells a listed foreign word must still parse
 	"LFM ICC 10 need heal 5k gs discord.gg/Und wsp",
+	-- size written before the raid
+	"LFM 25ICC NEED ALL 5.2GS+ BOE PS RES / w me gs spec 19/25",
+	"lfm 10 man toc need heal wsp",
+	-- a spelled-out DK spec is a role: Unholy = DPS (and must not read as a healer)
+	"ICC 10 9/12 HC (b+p HR) NEED +5.3KGS + ACH + DISCORD FAST RUN 1 PPAL 1 HPALA or DISCO , 1 UNHOLY DK",
 	-- should REJECT
 	"LFW experienced tank, will do ur toc25 run cheap /w me",   -- Looking For Work = seller
 	"<Rats> is a pve guild recruiting all classes, we raid icc 25 and toc",
+	"[RU][PVE] Rock-n-Troll LF ICC ready players. ICC 25 12/12HC. 4 main rosters(mon-tue-wed-sun) 19:30 msk",
 	"WTS [Shadowmourne] cheap",
 	"Hlada hracov na doplnenie CORE >>> ICC 25m 12/12 (6HC)",   -- foreign, no accents
 	"LFM ICC 25 necesito tank 5.5k gs",
