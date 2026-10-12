@@ -35,6 +35,26 @@ function U.escPattern(t)
 	return (tostring(t or ""):gsub("([%%%(%)%.%+%-%*%?%[%]%^%$])", "%%%1"))
 end
 
+-- Break text into lines of at most `width` characters, splitting on spaces.
+-- GameTooltip's own wrap cuts a long line off with "..." after a few rows, so
+-- callers that need the whole text add these lines one by one, unwrapped.
+-- A single word longer than `width` gets a line to itself, uncut.
+function U.wrapLines(text, width)
+	local lines, cur = {}, ""
+	for word in tostring(text or ""):gmatch("%S+") do
+		if cur == "" then
+			cur = word
+		elseif #cur + 1 + #word <= width then
+			cur = cur .. " " .. word
+		else
+			lines[#lines + 1] = cur
+			cur = word
+		end
+	end
+	if cur ~= "" then lines[#lines + 1] = cur end
+	return lines
+end
+
 -- Accepts a link, a bare "item:50735", or a plain item ID (string or number).
 -- The number case is not hypothetical: GetInventoryItemID and the council's wire
 -- both hand IDs straight over, and `link:match` on a number throws "attempt to

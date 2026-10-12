@@ -68,11 +68,13 @@ local SHORTCUTS = {
 		-- Gate on the MODULE, not on the function existing. The file loads either
 		-- way, so the function is always there -- switching the module off in
 		-- Modules left its button on the bar, still working.
-		gate = function()
-			return Okanvil.RaidFinderMini_Toggle ~= nil
-				and Okanvil:IsModuleEnabled("Okanvil-RaidFinder")
+		gate = function() return Okanvil:IsModuleEnabled("Okanvil-RaidFinder") end,
+		-- Opens the full Raid Finder page; the floating Mini Browser stays one
+		-- click away on that page's header button.
+		run  = function()
+			if not Okanvil.win or not Okanvil.win:IsShown() then Okanvil:Toggle() end
+			Okanvil:ShowPanel("Okanvil-RaidFinder")
 		end,
-		run  = function() Okanvil.RaidFinderMini_Toggle() end,
 	},
 	{
 		key  = "pug",
@@ -176,14 +178,14 @@ end
 -- Who is allowed to mark differs between a party and a raid:
 --   party  -- ANY member may set a raid target icon, not just the leader.
 --   raid   -- only the leader and assists; the server drops it from anyone else.
--- Solo counts as allowed so the bar can be set up and tried out of a group.
+--   solo   -- nobody to mark for, so the marks, Ready Check and Pull stay hidden.
 local function canMark()
 	if (GetNumRaidMembers() or 0) > 0 then
 		if IsRaidLeader and IsRaidLeader() then return true end
 		if IsRaidOfficer and IsRaidOfficer() then return true end
 		return false
 	end
-	return true    -- party (5-man dungeon) or solo
+	return (GetNumPartyMembers() or 0) > 0
 end
 -- Lay out the whole bar. A shortcut whose module is switched off is hidden and the
 -- rest slide left to close the gap, so the bar is never wider than the buttons that

@@ -677,7 +677,7 @@ local function buildBottom(p)
 	F.sendBtn = W.Button(p, "Send once", "primary"):Size(82, 22)
 	F.sendBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -92, -6)
 	F.sendBtn:OnClick(function() M.SendNow() end)
-	F.sendBtn:Tooltip("Post the line once, right now, in General and Global.\nSTART spamming (top right) repeats it every 60s.")
+	F.sendBtn:Tooltip("Post the line once, right now, in General and Global.\nSTART spamming (top right) repeats it: General, then Global 30s later, each every 45s.")
 
 	F.resetBtn = W.Button(p, "Rebuild", nil):Size(82, 22)
 	F.resetBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -6, -6)
@@ -1447,6 +1447,224 @@ function M.RefreshUI()
 end
 
 -- ------------------------------------------------------------
+-- Whispers panel (the drawer on the right): everyone who whispered while the
+-- line was running, and whether they were invited, joined or turned it down.
+-- ------------------------------------------------------------
+local WHISPER_W = 250
+local WROW_H = 36
+local WROW_OPEN_H = 56
+
+local STATUS_LOOK = {
+	new      = { "new",      "|cffe0b860" },
+	invited  = { "invited",  "|cff4a90d9" },
+	joined   = { "joined",   "|cff7cfc8a" },
+	declined = { "declined", "|cffe05555" },
+	busy     = { "in group", "|cffe05555" },
+	offline  = { "offline",  "|cffe05555" },
+}
+
+-- The filter buttons. "out" gathers the three ways an invite can fail.
+local WHISPER_FILTERS = {
+	{ key = "all",     label = "All" },
+	{ key = "new",     label = "New" },
+	{ key = "invited", label = "Invited" },
+	{ key = "out",     label = "Out" },
+}
+local OUT = { declined = true, busy = true, offline = true }
+
+local function ago(t)
+	local s = math.max(0, time() - (t or time()))
+	if s < 60 then return s .. "s" end
+	if s < 3600 then return math.floor(s / 60) .. "m" end
+	return math.floor(s / 3600) .. "h"
+end
+
+local function whisperRow(pool, i, parent)
+	local row = pool[i]
+	if row then return row end
+
+	row = CreateFrame("Button", nil, parent)
+	row:SetHeight(WROW_H)
+	local hl = row:CreateTexture(nil, "BACKGROUND")
+	hl:SetAllPoints(); hl:SetTexture(FLAT); hl:SetVertexColor(1, 1, 1, 0)
+	row.hl = hl
+	local rule = row:CreateTexture(nil, "BORDER")
+	rule:SetTexture(FLAT); rule:SetHeight(1)
+	do local b = C.border; rule:SetVertexColor(b[1], b[2], b[3], 1) end
+	rule:SetPoint("BOTTOMLEFT", 0, 0); rule:SetPoint("BOTTOMRIGHT", 0, 0)
+
+	row.x = W.Button(row, "x", nil):Size(18, 18)
+	row.x:SetPoint("TOPRIGHT", -2, -4)
+	row.x:Tooltip("Remove from the list.\nThey come back if they whisper again.")
+	row.w = W.Button(row, "/w", nil):Size(26, 18)
+	row.w:SetPoint("RIGHT", row.x, "LEFT", -3, 0)
+	row.w:Tooltip("Whisper them.")
+	row.inv = W.Button(row, "Inv", "primary"):Size(30, 18)
+	row.inv:SetPoint("RIGHT", row.w, "LEFT", -3, 0)
+
+	row.top = W.Text(row, "", "label")
+	row.top:SetPoint("TOPLEFT", 6, -5)
+	row.top:SetPoint("RIGHT", row.inv, "LEFT", -4, 0)
+	row.top:SetJustifyH("LEFT")
+	if row.top.SetWordWrap then row.top:SetWordWrap(false) end
+
+	row.sub = W.Text(row, "", "note", "dim")
+	row.sub:SetPoint("TOPLEFT", 6, -20)
+	row.sub:SetPoint("RIGHT", -4, 0)
+	row.sub:SetJustifyH("LEFT")
+	if row.sub.SetWordWrap then row.sub:SetWordWrap(false) end
+
+	-- What they wrote, shown when the row is opened.
+	row.said = W.Text(row, "", "note")
+	row.said:SetPoint("TOPLEFT", 6, -35)
+	row.said:SetPoint("RIGHT", -4, 0)
+	row.said:SetJustifyH("LEFT")
+	if row.said.SetWordWrap then row.said:SetWordWrap(false) end
+
+	row:SetScript("OnEnter", function(s) s.hl:SetVertexColor(1, 1, 1, 0.05) end)
+	row:SetScript("OnLeave", function(s) s.hl:SetVertexColor(1, 1, 1, s._open and 0.03 or 0) end)
+	row:SetScript("OnClick", function(s)
+		F.wOpen = (F.wOpen ~= s._name) and s._name or nil
+		M.RefreshWhispers()
+	end)
+	row.inv:OnClick(function() M.InviteApplicant(row._name) end)
+	row.w:OnClick(function() if row._name then ChatFrame_SendTell(row._name) end end)
+	row.x:OnClick(function() M.DismissApplicant(row._name) end)
+
+	pool[i] = row
+	return row
+end
+
+function M.RefreshWhispers()
+	if not (F and F.wChild) then return end
+	local counts = M.WhisperCounts()
+	F.wCount:SetText(counts.all > 0 and tostring(counts.all) or "")
+
+	for _, f in ipairs(WHISPER_FILTERS) do
+		local b = F.wFilterBtns[f.key]
+		local n = f.key == "out" and ((counts.declined or 0) + (counts.busy or 0) + (counts.offline or 0))
+			or counts[f.key] or 0
+		b.text:SetText(f.key == "all" and f.label or (n > 0 and (f.label .. " " .. n) or f.label))
+		b:SetKind(F.wFilter == f.key and "primary" or nil)
+	end
+
+	local list = {}
+	for _, a in ipairs(M.Whispers()) do
+		local keep = F.wFilter == "all" or a.status == F.wFilter or (F.wFilter == "out" and OUT[a.status])
+		if keep then list[#list + 1] = a end
+	end
+
+	local y = 0
+	for i, a in ipairs(list) do
+		local row = whisperRow(F.wRows, i, F.wChild)
+		local open = F.wOpen == a.name
+		row._name, row._open = a.name, open
+		row:ClearAllPoints()
+		row:SetPoint("TOPLEFT", 0, -y); row:SetPoint("TOPRIGHT", 0, -y)
+		row:SetHeight(open and WROW_OPEN_H or WROW_H)
+		row.hl:SetVertexColor(1, 1, 1, open and 0.03 or 0)
+
+		local look = STATUS_LOOK[a.status] or STATUS_LOOK.new
+		row.top:SetText(class_color(a.class) .. a.name .. "|r  " .. look[2] .. look[1] .. "|r  |cff6f7176" .. ago(a.t) .. "|r")
+		local sub = M.SubLabel(a.name)
+		row.sub:SetText(sub ~= "" and sub or "|cff6f7176spec not read|r")
+		row.said:SetText(open and ("|cffff80ff" .. (a.said or "") .. "|r") or "")
+
+		-- Inv on anyone not invited or in the group: a "declined" can be asked again.
+		if a.status == "invited" or a.status == "joined" then row.inv:Hide() else row.inv:Show() end
+		row:Show()
+		y = y + (open and WROW_OPEN_H or WROW_H)
+	end
+	for i = #list + 1, #F.wRows do F.wRows[i]:Hide() end
+
+	local empty = #list == 0
+	if empty then F.wEmptyIcon:Show() else F.wEmptyIcon:Hide() end
+	if counts.all == 0 then
+		F.wEmpty:SetText(empty and "No whispers yet" or "")
+		F.wEmptyHint:SetText(empty and "Start spamming and everyone who\nasks to join shows up here." or "")
+	else
+		F.wEmpty:SetText(empty and "Nobody here" or "")
+		F.wEmptyHint:SetText(empty and "Try another filter." or "")
+	end
+	F.wRelayout(y)
+end
+
+local function buildWhispers(p)
+	F.wFilter, F.wRows = "all", {}
+
+	-- Header in the page style: icon, gold title, one grey line, a hairline.
+	local head = W.Frame(p, "bare")
+	head:SetPoint("TOPLEFT", 0, 0); head:SetPoint("TOPRIGHT", 0, 0)
+	head:SetHeight(40)
+	W.Hairline(head, "BOTTOM", 2)
+	local icon = head:CreateTexture(nil, "OVERLAY")
+	icon:SetSize(24, 24); icon:SetPoint("LEFT", 4, 0)
+	icon:SetTexture("Interface\\Icons\\INV_Letter_15"); icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	local title = W.Text(head, "Whispers", "title", "accent")
+	title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 8, 1)
+	local sub = W.Text(head, "Who asked to join", "note", "dim")
+	sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -2)
+	F.wCount = W.Text(head, "", "title", "dim")
+	F.wCount:SetPoint("RIGHT", -6, 0)
+
+	-- Filters: one segmented row across the full width.
+	F.wFilterBtns = {}
+	local seg = (WHISPER_W - 3 * 3) / #WHISPER_FILTERS
+	for i, f in ipairs(WHISPER_FILTERS) do
+		local b = W.Button(p, f.label, nil):Size(seg, 20)
+		b:SetPoint("TOPLEFT", (i - 1) * (seg + 3), -48)
+		b:OnClick(function() F.wFilter = f.key; M.RefreshWhispers() end)
+		F.wFilterBtns[f.key] = b
+	end
+
+	-- Footer: Clear on the left, the bulk invite on the right.
+	local foot = W.Frame(p, "bare")
+	foot:SetPoint("BOTTOMLEFT", 0, 0); foot:SetPoint("BOTTOMRIGHT", 0, 0)
+	foot:SetHeight(30)
+	W.Hairline(foot, "TOP", 2)
+
+	local invAll = W.Button(foot, "Invite needed", "primary"):Size(110, 22)
+	invAll:SetPoint("RIGHT", 0, -2)
+	invAll:OnClick(function()
+		local n = M.InviteNeeded()
+		if n == 0 then
+			DEFAULT_CHAT_FRAME:AddMessage("|cffF1C40F[PuG]|r Nobody new fits a role you still need.")
+		end
+	end)
+	invAll:Tooltip("Invite every new whisperer whose role you still need,\noldest whisper first. Invites already out count.\nPeople whose spec was not read are left to you.")
+
+	local clear = W.Button(foot, "Clear", nil):Size(60, 22)
+	clear:SetPoint("LEFT", 0, -2)
+	clear:OnClick(function() F.wOpen = nil; M.ClearWhispers() end)
+	clear:Tooltip("Empty the list.\nAnyone who whispers again comes back.")
+
+	local card, child, relayout = makeList(p, 0, WHISPER_W, -76, 34)
+	F.wChild, F.wRelayout = child, relayout
+
+	-- Empty state, centred in the list.
+	F.wEmptyIcon = card:CreateTexture(nil, "ARTWORK")
+	F.wEmptyIcon:SetSize(36, 36); F.wEmptyIcon:SetPoint("CENTER", 0, 30)
+	F.wEmptyIcon:SetTexture("Interface\\Icons\\INV_Letter_15"); F.wEmptyIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	F.wEmptyIcon:SetDesaturated(true); F.wEmptyIcon:SetAlpha(0.35)
+	F.wEmpty = W.Text(card, "", "label", "dim")
+	F.wEmpty:SetPoint("TOP", F.wEmptyIcon, "BOTTOM", 0, -10)
+	F.wEmptyHint = W.Text(card, "", "note", "dim")
+	F.wEmptyHint:SetPoint("TOP", F.wEmpty, "BOTTOM", 0, -4)
+	F.wEmptyHint:SetJustifyH("CENTER")
+
+	-- Keep the "12s ago" honest while the panel is open.
+	local tick = 0
+	p:SetScript("OnUpdate", function(_, e)
+		tick = tick + e
+		if tick < 5 then return end
+		tick = 0
+		M.RefreshWhispers()
+	end)
+	p:SetScript("OnShow", function() M.RefreshWhispers() end)
+	M.RefreshWhispers()
+end
+
+-- ------------------------------------------------------------
 -- Build
 -- ------------------------------------------------------------
 function M.BuildUI(parent)
@@ -1459,13 +1677,14 @@ function M.BuildUI(parent)
 		icon = (Okanvil.ICONS and Okanvil.ICONS.pug) or "Interface\\Icons\\Ability_Warrior_RallyingCry",
 		drawerWidth = 0,          -- one full-width page; the board needs the room
 		footerHeight = 0,
+		-- the Whispers panel is its own window docked to Okanvil's right edge
+		onSecondary = function() M.ToggleWhispers() end,
+		secondaryText = function() return db().whispersHidden and "Show whispers" or "Hide whispers" end,
+		secondaryWidth = 110,
 		landingLabel = "Raid",
 		primaryText = function() return M.IsActive() and "STOP spamming" or "START spamming" end,
 		primaryKind = function() return M.IsActive() and "primary" or "secondary" end,
 		onPrimary = function() M.Toggle(); M.RefreshUI() end,
-		-- No Messages button. Whispers from people wanting in are read in the chat
-		-- frame, where every other whisper already is -- a second inbox for the
-		-- same messages was one more place to look, not one fewer.
 		statusText = function()
 			if M.IsActive() then return "|cff7cfc8aSpamming ON|r" end
 			return "|cffff5555Spamming OFF|r"
@@ -1482,6 +1701,46 @@ function M.BuildUI(parent)
 		},
 	})
 	F.dash = dash
+
+	-- The Whispers window. Parented to the PuG page so it shows and hides with
+	-- it (and with Okanvil), but anchored outside the main window's right edge,
+	-- so the board keeps its full width.
+	local side = CreateFrame("Frame", nil, parent)
+	Okanvil:Skin(side)
+	side:SetWidth(WHISPER_W + 12)
+	side:EnableMouse(true)
+	local inner = W.Frame(side, "bare")
+	inner:SetPoint("TOPLEFT", 6, -6); inner:SetPoint("BOTTOMRIGHT", -6, 6)
+	F.wSide = side
+
+	-- Dock on the right; flip to the left when the window sits against the
+	-- screen's right edge and the panel would hang off it.
+	local function dock()
+		local win = Okanvil.win
+		if not win then return end
+		side:ClearAllPoints()
+		local right = (win:GetRight() or 0) * win:GetEffectiveScale()
+		local room = UIParent:GetRight() * UIParent:GetEffectiveScale() - right
+		if room >= side:GetWidth() * win:GetEffectiveScale() then
+			side:SetPoint("TOPLEFT", win, "TOPRIGHT", 2, 0)
+			side:SetPoint("BOTTOMLEFT", win, "BOTTOMRIGHT", 2, 0)
+		else
+			side:SetPoint("TOPRIGHT", win, "TOPLEFT", -2, 0)
+			side:SetPoint("BOTTOMRIGHT", win, "BOTTOMLEFT", -2, 0)
+		end
+	end
+	side:SetScript("OnShow", dock)
+	dock()
+
+	buildWhispers(inner)
+	if db().whispersHidden then side:Hide() end
+
+	function M.ToggleWhispers()
+		local d = db()
+		d.whispersHidden = not d.whispersHidden
+		if d.whispersHidden then side:Hide() else side:Show() end
+		dash:Refresh()
+	end
 
 	-- The single page is stacked inside dash.main: top strip, needs, board, bottom.
 	local main = dash.main

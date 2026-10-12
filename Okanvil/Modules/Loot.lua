@@ -2777,6 +2777,20 @@ local function onRollAnnounce(msg, sender, event)
 			cur.rollDone = true
 			rollTrace("roll-off ended on " .. dropTag(cur))
 		end
+		-- "Toroblanco won [Handguards of Winter's Respite] with 33." -- an ML rolling by
+		-- hand names the winner here and nowhere else, so it is recorded like a loot
+		-- council award. Only the people who hand loot out are believed.
+		-- If its roll call was never read, the item is not on the list yet: the same
+		-- checks as a call add it first (ML or raid warning, drops in this raid).
+		local who = msg:match("^(%S+) won |c%x+|Hitem:")
+		if who and wl and L.MarkWinner and canOpenRoll(sender, event) then
+			if not (cur and cur.id == tonumber(wl)) then
+				L.NoteExternalRoll(msg:match("|c%x+|Hitem:.-|h.-|h|r"), nil, isLootCaller(sender, event))
+			end
+			L.MarkWinner(tonumber(wl), noRealm(who))
+			rollTrace(("winner announced by %s: %s won %s"):format(tostring(sender), who, wl))
+			if L.onLoot then L.onLoot() end
+		end
 		return
 	end
 	if lower:find("%f[%w]passed%f[%W]") or lower:find("disenchant") then return end
