@@ -163,6 +163,83 @@ local function syncRoster()
 	changed()
 end
 
+-- ------------------------------------------------------------
+-- A joiner fills an ask
+--
+-- Asking for "bdk" in the Tank column and then getting one should take "bdk" out
+-- of the LFM line by itself. When someone new joins while the line is running,
+-- the first ask in their board column that matches their class (and, for the two
+-- priest healers, their spec) is cleared. A joiner whose column is not known yet
+-- (an uninspected hybrid who never whispered) is checked again until it is.
+-- ------------------------------------------------------------
+local SPEC_CLASS = {}
+for _, s in ipairs(OkanvilClassSpecs or {}) do SPEC_CLASS[s.token] = s.class end
+-- the only asks that share a class AND a column, told apart by the spec word
+local SPEC_WORD = { PRIEST_DISC = "disc", PRIEST_HOLY = "holy" }
+
+local settled            -- [name] = true once a joiner has been checked; nil = not spamming
+
+local function specWordOf(name)
+	local I = Okanvil.Inspect
+	local spec = I and I.Get and I.Get(name)
+	if not spec then
+		local a = M.Applicant(name)
+		spec = a and a.spec
+	end
+	return spec and spec:lower() or nil
+end
+
+local function fillAsk(p)
+	local picks = M.RolePicks(p.role)
+	for _, tok in ipairs(M.ASKS[p.role] or {}) do
+		if picks[tok] and (SPEC_CLASS[tok] or tok) == p.class then
+			local word = SPEC_WORD[tok]
+			local spec = word and specWordOf(p.name)
+			-- a priest of the OTHER healing spec does not fill this ask
+			if not (word and spec and not spec:find(word, 1, true)) then
+				picks[tok] = nil
+				return true
+			end
+		end
+	end
+	return false
+end
+
+-- Put a player on the inspect watch unless their spec is already known and
+-- fresh. The watch reads one player at a time as they come in range, so this
+-- replaces the old "Read specs" button without a burst of inspects.
+local watched = {}
+local function readSpec(name)
+	local I = Okanvil.Inspect
+	if not (name and I and I.Watch) or watched[name] then return end
+	watched[name] = true
+	if I.IsFresh and I.IsFresh(name) then return end
+	I.Watch({ name })
+end
+
+function M.CheckJoinersFillAsks()
+	if not (M.db and M.db.active) then settled, watched = nil, {}; return end
+	local list = M.RosterList()
+	if not settled then
+		-- spamming just started: whoever is already here asked for nothing, but
+		-- their specs are worth reading for the board
+		settled = {}
+		for _, p in ipairs(list) do settled[p.name] = true; readSpec(p.name) end
+		return
+	end
+	local changed = false
+	for _, p in ipairs(list) do
+		if p.name and not settled[p.name] then
+			readSpec(p.name)
+			if p.class and p.role then
+				settled[p.name] = true
+				if fillAsk(p) then changed = true end
+			end
+		end
+	end
+	if changed and M.RefreshUI then M.RefreshUI() end
+end
+
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("CHAT_MSG_SYSTEM")
 ev:RegisterEvent("RAID_ROSTER_UPDATE")
@@ -182,5 +259,16 @@ ev:SetScript("OnEvent", function(_, event, msg)
 		end
 	else
 		syncRoster()
+		M.CheckJoinersFillAsks()
 	end
+end)
+
+-- Joiners whose column was not known at join time get another look every few
+-- seconds while spamming (an inspect or a whisper may have placed them since).
+local tick = 0
+ev:SetScript("OnUpdate", function(_, e)
+	tick = tick + e
+	if tick < 3 then return end
+	tick = 0
+	if M.db then M.CheckJoinersFillAsks() end
 end)

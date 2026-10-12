@@ -1123,6 +1123,8 @@ local function sendTo(name, msg)
 	local id = resolveChannelId(name)
 	if id and id > 0 then
 		SendChatMessage(msg, "CHANNEL", nil, id)
+		-- remembered so the answers are still collected after a one-off Send once
+		db.lastPostAt = time()
 		return true
 	end
 	return false
@@ -1562,8 +1564,10 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		if not db then return end
 		-- module switched off in Modules = stay silent
 		if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
-		-- Only act while forming. Off-hours whispers are just chat.
-		if not db.active then return end
+		-- Only act while forming: spamming, or within 10 minutes of the last post
+		-- (a "Send once" gets answers too, and replies keep coming after STOP).
+		-- Off-hours whispers are just chat.
+		if not db.active and time() - (db.lastPostAt or 0) > 600 then return end
 
 		-- A whisper that asks to join files its sender in the Whispers panel
 		-- (PuG-Whispers.lua), with what the line says about them: "ret pala 5.4"

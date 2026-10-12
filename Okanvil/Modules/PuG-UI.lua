@@ -20,6 +20,16 @@ local C = Okanvil.Colors
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
 
 local ROLES = { "tank", "healer", "melee", "ranged" }
+
+-- The page's controls (raid picker, sizes, Send once, reserves, header buttons)
+-- read one size up from the shared button label, and stand taller. The board in
+-- the middle keeps the standard sizes.
+local MENU_FONT, MENU_H = 13, 26
+local function menu(b)
+	local t = b and (b.text or b.textFS)
+	if t then t._okSize = MENU_FONT; t:SetFont(Okanvil:Font(), MENU_FONT) end
+	return b
+end
 local ROLE_COLOR = {
 	tank   = "|cff4a90d9",
 	healer = "|cff7cfc8a",
@@ -127,80 +137,42 @@ local function buildTopStrip(p)
 			M.FitNeedsToSize()
 			M.RefreshUI()
 		end)
-	F.raidDD:SetSize(186, 22)
-	F.raidDD:SetPoint("TOPLEFT", 4, -4)
+	F.raidDD:SetSize(220, MENU_H)
+	F.raidDD:SetPoint("TOPLEFT", 4, -5)
+	menu(F.raidDD)
+	-- the raid name is what the whole page is about: one size up again
+	F.raidDD.textFS._okSize = 14; F.raidDD.textFS:SetFont(Okanvil:Font(), 14)
 
-	F.size10 = W.Button(p, "10", nil):Size(34, 22):Point("TOPLEFT", 196, -4)
-	F.size25 = W.Button(p, "25", nil):Size(34, 22):Point("TOPLEFT", 232, -4)
+	F.size10 = menu(W.Button(p, "10", nil):Size(44, MENU_H))
+	F.size25 = menu(W.Button(p, "25", nil):Size(44, MENU_H))
 	F.size10:OnClick(function() pickTakesOver(); d.classRun = false; d.size = 10; M.ApplySizeComp(); M.RefreshUI() end)
 	F.size25:OnClick(function() pickTakesOver(); d.classRun = false; d.size = 25; M.ApplySizeComp(); M.RefreshUI() end)
 	-- VoA only: the "18" class run, one raider per PvP set (see M.VoABoard). The
 	-- instance is still the 25-man vault; 18 is how many places the run has.
-	F.size18 = W.Button(p, "18", nil):Size(34, 22):Point("TOPLEFT", 268, -4)
+	F.size18 = menu(W.Button(p, "18", nil):Size(44, MENU_H))
 	F.size18:OnClick(function() pickTakesOver(); d.classRun = true; d.size = 25; M.RefreshUI() end)
 	F.size18:Tooltip("VoA 18: one raider per PvP set, plus two tanks.\n"
 		.. "Nobody shares a set, so nobody rolls against anyone.")
 
-	F.diffBtn = W.Button(p, "Normal", nil):Size(70, 22):Point("TOPLEFT", 270, -4)
-	F.diffBtn:OnClick(function() pickTakesOver(); d.hc = not d.hc; M.RefreshUI() end)
-	F.diffBtn:Tooltip("Normal / Heroic.\nStays on Normal for raids with no heroic mode.")
+	-- Normal | Heroic as a pair, the picked one lit. Hidden for a raid with no
+	-- heroic mode, rather than a grey "Normal" that cannot be changed.
+	F.diffBtn = menu(W.Button(p, "Normal", nil):Size(70, MENU_H))
+	F.diffBtn:OnClick(function() pickTakesOver(); d.hc = false; M.RefreshUI() end)
+	F.diffHC = menu(W.Button(p, "Heroic", nil):Size(70, MENU_H))
+	F.diffHC:OnClick(function() pickTakesOver(); d.hc = true; M.RefreshUI() end)
 
-	-- "min gs" is ~38px at font 12, so the box has to start past 350+38 or the
-	-- label runs into it.
-	F.gsLabel = label(p, "min gs", 352, -9)
-	F.gsBox = W.EditBox(p):Size(56, 22):Point("TOPLEFT", 398, -4)
+	-- The label is anchored to the box, so the two always line up.
+	F.gsBox = W.EditBox(p):Size(60, MENU_H)
+	F.gsLabel = W.Text(p, "min gs", "body", "dim")
+	F.gsLabel:SetPoint("RIGHT", F.gsBox, "LEFT", -6, 0)
 	F.gsBox.edit:SetScript("OnTextChanged", function(s) d.gs = s:GetText() or ""; M.RefreshPreview() end)
 
 	-- No free-text box here: extra words go straight into the line at the bottom,
 	-- which is editable.
 
-	-- Read everyone's actual spec instead of guessing from class. Without this the
-	-- board files every paladin the same way and the leader sorts 25 people by hand,
-	-- remembering who heals. Explicit button, not automatic: inspecting the whole
-	-- raid is a burst of server traffic and should happen when asked for.
-	F.scanBtn = W.Button(p, "Read specs", nil):Size(96, 22):Point("TOPLEFT", 470, -4)
-	-- A player the scan missed is read later, when they come into range; repaint
-	-- the board then so their row moves to the right column on its own.
-	if Okanvil.Inspect then
-		Okanvil.Inspect.onWatchRead = function() M.RefreshUI() end
-	end
-	F.scanBtn:OnClick(function()
-		local I = Okanvil.Inspect
-		if not (I and I.ScanGroup) then
-			Okanvil:Print("|cffff5555Inspect module not loaded.|r")
-			return
-		end
-		if I.IsScanning and I.IsScanning() then
-			Okanvil:Print("Already scanning...")
-			return
-		end
-		I.onProgress = function(done, total)
-			if F and F.scanBtn and F.scanBtn.text then
-				F.scanBtn.text:SetText(done .. "/" .. total)
-			end
-		end
-		-- force = true. Pressing a button called "Read specs" means read them NOW:
-		-- the cached answer is days fresh by IsFresh's reckoning, but someone who
-		-- respecced and regeared five minutes ago is exactly who you are pressing it
-		-- for -- and it kept showing their old spec and old gearscore.
-		local ok, total = I.ScanGroup(true, function(done)
-			I.onProgress = nil
-			if F and F.scanBtn and F.scanBtn.text then F.scanBtn.text:SetText("Read specs") end
-			Okanvil:Print("Specs read for " .. tostring(done) .. " player(s).")
-			M.RefreshUI()
-		end)
-		if not ok then
-			Okanvil:Print("|cffff5555Could not start the scan.|r")
-		elseif total == 0 then
-			-- With force on, an empty queue means there was nobody to read -- not
-			-- that they were all cached.
-			Okanvil:Print("Nobody in range to inspect.")
-		end
-	end)
-	F.scanBtn:Tooltip("Inspect the group and read each player's real spec,\n"
-		.. "then sort the board by it -- healers to Healer, tanks to Tank.\n\n"
-		.. "Only works on people in range (~28 yards). Anyone out of range\n"
-		.. "is read by itself when they come close, for the next 10 minutes.")
+	-- No "Read specs" button: specs are read by themselves. When spamming starts
+	-- and as each player joins, anyone without a fresh spec is put on the inspect
+	-- watch (PuG-Whispers.lua), which reads them one at a time as they come in range.
 end
 -- ------------------------------------------------------------
 -- The board: Unassigned + one column per role.
@@ -660,8 +632,9 @@ local function buildBottom(p)
 		M.RefreshUI()
 	end)
 	F.preview:SetPoint("TOPLEFT", 6, -6)
-	F.preview:SetPoint("RIGHT", p, "RIGHT", -180, 0)
-	F.preview:SetHeight(40)
+	F.preview:SetPoint("RIGHT", p, "RIGHT", -148, 0)
+	F.preview:SetHeight(44)
+	F.preview:SetTextSize(14)      -- the line you are about to send: easy to read
 
 	-- Losing focus is what saves an edit (see the handler above), so a send the user
 	-- clicks releases the box first.
@@ -671,16 +644,19 @@ local function buildBottom(p)
 		end
 	end
 
-	F.autoTag = W.Text(p, "", "label", "dim")
-	F.autoTag:SetPoint("TOPLEFT", 8, -50)
 
-	F.sendBtn = W.Button(p, "Send once", "primary"):Size(82, 22)
-	F.sendBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -92, -6)
+	F.sendBtn = menu(W.Button(p, "Send once", "primary"):Size(102, 28))
+	F.sendBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -40, -6)
 	F.sendBtn:OnClick(function() M.SendNow() end)
 	F.sendBtn:Tooltip("Post the line once, right now, in General and Global.\nSTART spamming (top right) repeats it: General, then Global 30s later, each every 45s.")
 
-	F.resetBtn = W.Button(p, "Rebuild", nil):Size(82, 22)
+	-- Rebuild: a square button with a circular arrow, beside Send once. Used now
+	-- and then, so it gets an icon rather than a second full-width button.
+	F.resetBtn = W.Button(p, "", nil):Size(30, 28)
 	F.resetBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -6, -6)
+	local rIcon = F.resetBtn:CreateTexture(nil, "OVERLAY")
+	rIcon:SetSize(20, 20); rIcon:SetPoint("CENTER")
+	rIcon:SetTexture("Interface\\AddOns\\Okanvil\\Media\\icon-refresh")   -- our own gold arrow
 	F.resetBtn:OnClick(function()
 		local d = db()
 		-- Release the box FIRST. With the cursor still in it the refresh below
@@ -693,10 +669,10 @@ local function buildBottom(p)
 		d.custom = ""
 		M.RefreshUI()
 	end)
-	F.resetBtn:Tooltip("Throw away your hand-edits and rebuild the line\nfrom the raid, roles and reserves you picked.\nThis does NOT send anything.")
+	F.resetBtn:Tooltip("Rebuild\nThrow away your hand-edits and rebuild the line\nfrom the raid, roles and reserves you picked.\nThis does NOT send anything.")
 
 	F.charCount = W.Text(p, "", "label", "dim")
-	F.charCount:SetPoint("TOPRIGHT", p, "TOPRIGHT", -8, -34)
+	F.charCount:SetPoint("TOPRIGHT", p, "TOPRIGHT", -8, -38)
 end
 
 -- ------------------------------------------------------------
@@ -708,23 +684,21 @@ local function buildReserveStrip(p)
 	local d = db()
 	F.resBtns = {}
 
-	local lbl = W.Text(p, "|cff8a8d93Reserve|r", "label", "dim")
+	local lbl = W.Text(p, "|cff8a8d93Reserve|r", "body", "dim")
 	lbl:SetPoint("LEFT", 6, 0)
 
 	-- Width per label, not one fixed size: "Fragments" needs ~72px while "Key"
 	-- needs 46, and a single width either clipped the long ones or wasted the row.
 	-- The chips start after the MEASURED label: Text size grows it past any fixed x.
-	local x = math.max(56, 6 + math.ceil(lbl:GetStringWidth() or 0) + 10)
+	local x0 = math.max(56, 6 + math.ceil(lbl:GetStringWidth() or 0) + 10)
 	for _, c in ipairs(M.ReserveCats) do
-		local b = W.Button(p, c.label, nil):Size(46, 20)
-		b:SetPoint("LEFT", x, 0)
+		local b = menu(W.Button(p, c.label, nil):Size(46, 24))
 		-- MEASURE the rendered label instead of guessing from the character count:
 		-- the font is proportional, so "Fragments" and "Shards" are nowhere near
-		-- len*N apart. Advance x by the width we actually set, or a wide button is
-		-- overlapped by the next one.
+		-- len*N apart. F.layoutRes advances by the width we actually set, or a wide
+		-- button is overlapped by the next one.
 		local tw = (b.text and b.text:GetStringWidth()) or 0
-		local bw = math.max(46, tw + 16)
-		b:SetWidth(bw)
+		b:SetWidth(math.max(46, tw + 16))
 		b:OnClick(function()
 			pickTakesOver()
 			d.reserve[c.key] = (not d.reserve[c.key]) or nil
@@ -737,11 +711,15 @@ local function buildReserveStrip(p)
 			b:Tooltip(c.label .. "\nSpelled out -- this one has no conventional letter.")
 		end
 		F.resBtns[c.key] = b
-		x = x + bw + 4
 	end
 
-	F.resNoneBtn = W.Button(p, "no res", nil):Size(56, 20)
-	F.resNoneBtn:SetPoint("LEFT", x + 6, 0)
+	-- The rest of the categories, the HR/GBid word and specific items live in
+	-- the "more" window; this strip only carries what is in use.
+	F.resMoreBtn = menu(W.Button(p, "+ more", nil):Size(66, 24))
+	F.resMoreBtn:OnClick(function() M.OpenReserves() end)
+	F.resMoreBtn:Tooltip("Other loot to reserve, and specific items.")
+
+	F.resNoneBtn = menu(W.Button(p, "no res", nil):Size(66, 24))
 	F.resNoneBtn:OnClick(function()
 		pickTakesOver()
 		d.reserveNone = not d.reserveNone
@@ -759,8 +737,7 @@ local function buildReserveStrip(p)
 	-- HR or GBid: the word the reserved ITEMS go out under. Two different
 	-- promises -- HR keeps the drop, GBid puts it to a gold bid among the raid --
 	-- so the leader picks which one the spam claims.
-	F.resTagBtn = W.Button(p, "HR", nil):Size(52, 20)
-	F.resTagBtn:SetPoint("LEFT", x + 68, 0)
+	F.resTagBtn = menu(W.Button(p, "HR", nil):Size(56, 24))
 	F.resTagBtn:OnClick(function()
 		d.reserveTag = (d.reserveTag == "gbid") and "hr" or "gbid"
 		M.RefreshUI()
@@ -769,10 +746,36 @@ local function buildReserveStrip(p)
 		.. "|cffe0b860HR|r -- the leader keeps the drop.\n"
 		.. "|cffe0b860GBid|r -- it goes to a gold bid among the raid.")
 
-	-- how many specific items are hard-reserved (they are set in the Reserves tab)
+	-- how many specific items are hard-reserved (they are set in the "more" window)
 	F.resItemTag = W.Text(p, "", "label", "dim")
-	F.resItemTag:SetPoint("LEFT", x + 126, 0)
+
+	-- Lay the strip out left to right: the three everyday categories always, any
+	-- other one only while it is on, then "+ more", "no res", the HR/GBid word
+	-- (only with reserved items) and the item count.
+	local COMMON = { boe = true, orb = true, pattern = true }
+	function F.layoutRes()
+		local d2 = db()
+		local x = x0
+		for _, c in ipairs(M.ReserveCats) do
+			local b = F.resBtns[c.key]
+			b:ClearAllPoints()
+			if COMMON[c.key] or d2.reserve[c.key] then
+				b:SetPoint("LEFT", x, 0); b:Show()
+				x = x + b:GetWidth() + 4
+			else
+				b:Hide()
+			end
+		end
+		F.resMoreBtn:ClearAllPoints(); F.resMoreBtn:SetPoint("LEFT", x + 2, 0)
+		x = x + 2 + F.resMoreBtn:GetWidth() + 10
+		F.resNoneBtn:ClearAllPoints(); F.resNoneBtn:SetPoint("LEFT", x, 0)
+		x = x + F.resNoneBtn:GetWidth() + 6
+		F.resTagBtn:ClearAllPoints(); F.resTagBtn:SetPoint("LEFT", x, 0)
+		if F.resTagBtn:IsShown() then x = x + F.resTagBtn:GetWidth() + 6 end
+		F.resItemTag:ClearAllPoints(); F.resItemTag:SetPoint("LEFT", x, 0)
+	end
 end
+
 -- ------------------------------------------------------------
 -- Loot tab: what the raid reserves
 -- ------------------------------------------------------------
@@ -1145,17 +1148,17 @@ function M.RefreshPreview()
 		F.preview:SetText(msg)
 		F.previewShown = msg
 	end
-	if d.useCustom and d.custom ~= "" then
-		F.autoTag:SetText("|cffe0b860Your text|r |cff8a8d93-- kept as you wrote it; the \"need ...\" counts still update. Rebuild to go back to auto.|r")
-	else
-		F.autoTag:SetText("|cff8a8d93Built from your picks -- updates as people join.|r")
-	end
+	-- Hand-edited text: the rebuild button lights up gold and the count says so,
+	-- instead of a whole line of explanation under the box.
+	local edited = d.useCustom and d.custom ~= ""
+	if F.resetBtn then F.resetBtn:SetKind(edited and "primary" or nil) end
 	-- 255 is the chat hard limit; show it before the server truncates.
 	local n = #msg
+	local tag = edited and "|cffe0b860edited|r  " or ""
 	if n > 255 then
-		F.charCount:SetText("|cffff5555" .. n .. "/255|r")
+		F.charCount:SetText(tag .. "|cffff5555" .. n .. "/255|r")
 	else
-		F.charCount:SetText("|cff8a8d93" .. n .. "/255|r")
+		F.charCount:SetText(tag .. "|cff8a8d93" .. n .. "/255|r")
 	end
 end
 
@@ -1176,18 +1179,26 @@ function M.RefreshUI()
 			if voa then F.size18:Show() else F.size18:Hide() end
 			F.size18:SetKind(d.classRun and "primary" or nil)
 		end
-		-- the controls after the size buttons slide right by the 18 button's
-		-- width only while it is there, so no other raid shows a gap
-		local dx = voa and 36 or 0
-		if F.diffBtn then F.diffBtn:ClearAllPoints(); F.diffBtn:SetPoint("TOPLEFT", 270 + dx, -4) end
-		if F.gsLabel then F.gsLabel:ClearAllPoints(); F.gsLabel:SetPoint("TOPLEFT", 352 + dx, -9) end
-		if F.gsBox then F.gsBox:ClearAllPoints(); F.gsBox:SetPoint("TOPLEFT", 398 + dx, -4) end
-		if F.scanBtn then F.scanBtn:ClearAllPoints(); F.scanBtn:SetPoint("TOPLEFT", 470 + dx, -4) end
-	end
-	if F.diffBtn then
+		-- Lay the strip out left to right in groups: sizes (18 only in VoA), then
+		-- difficulty (only where there is a heroic), then the gearscore. Nothing
+		-- leaves a gap when it is hidden.
 		local canHC = info and info.hc
-		F.diffBtn.text:SetText((canHC and d.hc) and "Heroic" or "Normal")
-		F.diffBtn:SetKind((canHC and d.hc) and "primary" or nil)
+		local x = 4 + 220 + 12
+		for _, b in ipairs({ F.size10, F.size25, voa and F.size18 or nil }) do
+			b:ClearAllPoints(); b:SetPoint("TOPLEFT", x, -5); x = x + 44 + 2
+		end
+		x = x + 10
+		if canHC then
+			F.diffBtn:ClearAllPoints(); F.diffBtn:SetPoint("TOPLEFT", x, -5); F.diffBtn:Show()
+			F.diffHC:ClearAllPoints(); F.diffHC:SetPoint("TOPLEFT", x + 72, -5); F.diffHC:Show()
+			F.diffBtn:SetKind((not d.hc) and "primary" or nil)
+			F.diffHC:SetKind(d.hc and "primary" or nil)
+			x = x + 72 + 70 + 12
+		else
+			F.diffBtn:Hide(); F.diffHC:Hide()
+		end
+		local lw = math.ceil(F.gsLabel:GetStringWidth() or 38)
+		F.gsBox:ClearAllPoints(); F.gsBox:SetPoint("TOPLEFT", x + lw + 6, -5)
 	end
 	if F.gsBox and not F.gsBox.edit:HasFocus() then F.gsBox.edit:SetText(d.gs or "") end
 
@@ -1396,6 +1407,9 @@ function M.RefreshUI()
 	if F.resBtns then
 		for key, b in pairs(F.resBtns) do b:SetKind(d.reserve[key] and "primary" or nil) end
 	end
+	if F.moreResBtns then
+		for key, b in pairs(F.moreResBtns) do b:SetKind(d.reserve[key] and "primary" or nil) end
+	end
 	if F.resNoneBtn then F.resNoneBtn:SetKind(d.reserveNone and "primary" or nil) end
 	if F.resItemTag then
 		local n = #(d.reserveItems or {})
@@ -1413,7 +1427,8 @@ function M.RefreshUI()
 			end
 		end
 	end
-	-- (the reserved list is the RIGHT column of the Reserves tab now;
+	if F.layoutRes then F.layoutRes() end
+	-- (the reserved list is the RIGHT column of the "more" window;
 	--  M.RefreshLootList below paints both columns)
 	if F.classRunTag then
 		if d.classRun then
@@ -1446,13 +1461,49 @@ function M.RefreshUI()
 	if F.dash then F.dash:Refresh() end
 end
 
+-- The "more" window: every reserve category, and the item browser that was the
+-- Reserves tab. Built once on first open; opened from "+ more" on the strip.
+function M.OpenReserves()
+	if F.moreWin then
+		if F.moreWin:IsShown() then F.moreWin:Hide() else F.moreWin:Show() end
+		return
+	end
+	local w = Okanvil:Popup("Reserves")
+	w:SetSize(600, 470)
+	F.moreWin = w
+	local d = db()
+
+	local cats = W.Frame(w, "bare")
+	cats:SetPoint("TOPLEFT", 10, -34); cats:SetPoint("TOPRIGHT", -10, -34); cats:SetHeight(22)
+	F.moreResBtns = {}
+	local x = 0
+	for _, c in ipairs(M.ReserveCats) do
+		local b = W.Button(cats, c.label, nil):Size(46, 20)
+		local bw = math.max(46, ((b.text and b.text:GetStringWidth()) or 0) + 16)
+		b:SetWidth(bw); b:SetPoint("LEFT", x, 0)
+		b:OnClick(function()
+			pickTakesOver()
+			d.reserve[c.key] = (not d.reserve[c.key]) or nil
+			if d.reserve[c.key] then d.reserveNone = false end
+			M.RefreshUI()
+		end)
+		F.moreResBtns[c.key] = b
+		x = x + bw + 4
+	end
+
+	local body = W.Frame(w, "bare")
+	body:SetPoint("TOPLEFT", 6, -62); body:SetPoint("BOTTOMRIGHT", -6, 6)
+	buildLoot(body)
+	M.RefreshUI()
+end
+
 -- ------------------------------------------------------------
--- Whispers panel (the drawer on the right): everyone who whispered while the
+-- Whispers panel (its own window docked to the right): everyone who whispered while the
 -- line was running, and whether they were invited, joined or turned it down.
 -- ------------------------------------------------------------
 local WHISPER_W = 250
-local WROW_H = 36
-local WROW_OPEN_H = 56
+local WROW_H = 42
+local WROW_OPEN_H = 62
 
 local STATUS_LOOK = {
 	new      = { "new",      "|cffe0b860" },
@@ -1493,30 +1544,30 @@ local function whisperRow(pool, i, parent)
 	do local b = C.border; rule:SetVertexColor(b[1], b[2], b[3], 1) end
 	rule:SetPoint("BOTTOMLEFT", 0, 0); rule:SetPoint("BOTTOMRIGHT", 0, 0)
 
-	row.x = W.Button(row, "x", nil):Size(18, 18)
+	row.x = W.Button(row, "x", nil):Size(22, 22)
 	row.x:SetPoint("TOPRIGHT", -2, -4)
 	row.x:Tooltip("Remove from the list.\nThey come back if they whisper again.")
-	row.w = W.Button(row, "/w", nil):Size(26, 18)
+	row.w = W.Button(row, "/w", nil):Size(30, 22)
 	row.w:SetPoint("RIGHT", row.x, "LEFT", -3, 0)
 	row.w:Tooltip("Whisper them.")
-	row.inv = W.Button(row, "Inv", "primary"):Size(30, 18)
+	row.inv = W.Button(row, "Inv", "primary"):Size(38, 22)
 	row.inv:SetPoint("RIGHT", row.w, "LEFT", -3, 0)
 
-	row.top = W.Text(row, "", "label")
+	row.top = W.Text(row, "", "body")
 	row.top:SetPoint("TOPLEFT", 6, -5)
 	row.top:SetPoint("RIGHT", row.inv, "LEFT", -4, 0)
 	row.top:SetJustifyH("LEFT")
 	if row.top.SetWordWrap then row.top:SetWordWrap(false) end
 
-	row.sub = W.Text(row, "", "note", "dim")
-	row.sub:SetPoint("TOPLEFT", 6, -20)
+	row.sub = W.Text(row, "", "label", "dim")
+	row.sub:SetPoint("TOPLEFT", 6, -23)
 	row.sub:SetPoint("RIGHT", -4, 0)
 	row.sub:SetJustifyH("LEFT")
 	if row.sub.SetWordWrap then row.sub:SetWordWrap(false) end
 
 	-- What they wrote, shown when the row is opened.
-	row.said = W.Text(row, "", "note")
-	row.said:SetPoint("TOPLEFT", 6, -35)
+	row.said = W.Text(row, "", "label")
+	row.said:SetPoint("TOPLEFT", 6, -40)
 	row.said:SetPoint("RIGHT", -4, 0)
 	row.said:SetJustifyH("LEFT")
 	if row.said.SetWordWrap then row.said:SetWordWrap(false) end
@@ -1581,7 +1632,7 @@ function M.RefreshWhispers()
 	if empty then F.wEmptyIcon:Show() else F.wEmptyIcon:Hide() end
 	if counts.all == 0 then
 		F.wEmpty:SetText(empty and "No whispers yet" or "")
-		F.wEmptyHint:SetText(empty and "Start spamming and everyone who\nasks to join shows up here." or "")
+		F.wEmptyHint:SetText(empty and "Post your LFM line and everyone who\nasks to join shows up here." or "")
 	else
 		F.wEmpty:SetText(empty and "Nobody here" or "")
 		F.wEmptyHint:SetText(empty and "Try another filter." or "")
@@ -1595,24 +1646,24 @@ local function buildWhispers(p)
 	-- Header in the page style: icon, gold title, one grey line, a hairline.
 	local head = W.Frame(p, "bare")
 	head:SetPoint("TOPLEFT", 0, 0); head:SetPoint("TOPRIGHT", 0, 0)
-	head:SetHeight(40)
-	W.Hairline(head, "BOTTOM", 2)
+	head:SetHeight(50)
+	W.Hairline(head, "BOTTOM", 0)
 	local icon = head:CreateTexture(nil, "OVERLAY")
-	icon:SetSize(24, 24); icon:SetPoint("LEFT", 4, 0)
+	icon:SetSize(28, 28); icon:SetPoint("LEFT", 0, 2)
 	icon:SetTexture("Interface\\Icons\\INV_Letter_15"); icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 	local title = W.Text(head, "Whispers", "title", "accent")
-	title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 8, 1)
+	title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, 1)
 	local sub = W.Text(head, "Who asked to join", "note", "dim")
 	sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -2)
-	F.wCount = W.Text(head, "", "title", "dim")
-	F.wCount:SetPoint("RIGHT", -6, 0)
+	F.wCount = W.Text(head, "", "title", "accent")
+	F.wCount:SetPoint("RIGHT", -2, 2)
 
 	-- Filters: one segmented row across the full width.
 	F.wFilterBtns = {}
 	local seg = (WHISPER_W - 3 * 3) / #WHISPER_FILTERS
 	for i, f in ipairs(WHISPER_FILTERS) do
-		local b = W.Button(p, f.label, nil):Size(seg, 20)
-		b:SetPoint("TOPLEFT", (i - 1) * (seg + 3), -48)
+		local b = menu(W.Button(p, f.label, nil):Size(seg, 24))
+		b:SetPoint("TOPLEFT", (i - 1) * (seg + 3), -60)
 		b:OnClick(function() F.wFilter = f.key; M.RefreshWhispers() end)
 		F.wFilterBtns[f.key] = b
 	end
@@ -1620,10 +1671,10 @@ local function buildWhispers(p)
 	-- Footer: Clear on the left, the bulk invite on the right.
 	local foot = W.Frame(p, "bare")
 	foot:SetPoint("BOTTOMLEFT", 0, 0); foot:SetPoint("BOTTOMRIGHT", 0, 0)
-	foot:SetHeight(30)
-	W.Hairline(foot, "TOP", 2)
+	foot:SetHeight(34)
+	W.Hairline(foot, "TOP", 0)
 
-	local invAll = W.Button(foot, "Invite needed", "primary"):Size(110, 22)
+	local invAll = menu(W.Button(foot, "Invite needed", "primary"):Size(120, MENU_H))
 	invAll:SetPoint("RIGHT", 0, -2)
 	invAll:OnClick(function()
 		local n = M.InviteNeeded()
@@ -1633,13 +1684,15 @@ local function buildWhispers(p)
 	end)
 	invAll:Tooltip("Invite every new whisperer whose role you still need,\noldest whisper first. Invites already out count.\nPeople whose spec was not read are left to you.")
 
-	local clear = W.Button(foot, "Clear", nil):Size(60, 22)
+	local clear = menu(W.Button(foot, "Clear", nil):Size(64, MENU_H))
 	clear:SetPoint("LEFT", 0, -2)
 	clear:OnClick(function() F.wOpen = nil; M.ClearWhispers() end)
 	clear:Tooltip("Empty the list.\nAnyone who whispers again comes back.")
 
-	local card, child, relayout = makeList(p, 0, WHISPER_W, -76, 34)
+	local card, child, relayout = makeList(p, 0, WHISPER_W, -88, 42)
 	F.wChild, F.wRelayout = child, relayout
+	-- A light wash, not a slab: the forge art should read through the list.
+	do local d = C.panelD; card:SetBackdropColor(d[1], d[2], d[3], 0.35) end
 
 	-- Empty state, centred in the list.
 	F.wEmptyIcon = card:CreateTexture(nil, "ARTWORK")
@@ -1673,15 +1726,13 @@ function M.BuildUI(parent)
 
 	local dash = W.Dashboard(parent, {
 		title = "PuG",
-		subtitle = "Build a raid and spam the LFM line",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.pug) or "Interface\\Icons\\Ability_Warrior_RallyingCry",
 		drawerWidth = 0,          -- one full-width page; the board needs the room
 		footerHeight = 0,
 		-- the Whispers panel is its own window docked to Okanvil's right edge
 		onSecondary = function() M.ToggleWhispers() end,
-		secondaryText = function() return db().whispersHidden and "Show whispers" or "Hide whispers" end,
-		secondaryWidth = 110,
-		landingLabel = "Raid",
+		secondaryText = function() return "Whispers" end,
+		secondaryWidth = 90,
 		primaryText = function() return M.IsActive() and "STOP spamming" or "START spamming" end,
 		primaryKind = function() return M.IsActive() and "primary" or "secondary" end,
 		onPrimary = function() M.Toggle(); M.RefreshUI() end,
@@ -1689,28 +1740,29 @@ function M.BuildUI(parent)
 			if M.IsActive() then return "|cff7cfc8aSpamming ON|r" end
 			return "|cffff5555Spamming OFF|r"
 		end,
-		tabs = {
-			-- fill = take the VIEW's height. The two lists scroll internally and are
-			-- anchored to the page's bottom, so they grow with it -- a fixed 420
-			-- left a third of the window empty under a list you had to scroll.
-			{ key = "loot",     label = "Reserves", height = 420, fill = true,
-			  build = function(p) buildLoot(p) end },
-			-- No "More" tab. It had grown to eight stacked sections -- channels,
-			-- auto-reply, raid groups, spec picks, class run, presets -- none of
-			-- which you touch while forming a raid.
-		},
+		-- No tabs: the Reserves tab is the "+ more" window on the reserve strip.
 	})
 	F.dash = dash
+	-- the header's two buttons, in the page's control size
+	if dash.cta then menu(dash.cta):SetSize(160, 28) end
+	if dash.cta2 then menu(dash.cta2):SetSize(104, 28) end
+
+	-- A player read by the inspect watch repaints the board, so their row moves
+	-- to the right column on its own.
+	if Okanvil.Inspect then
+		Okanvil.Inspect.onWatchRead = function() M.RefreshUI() end
+	end
 
 	-- The Whispers window. Parented to the PuG page so it shows and hides with
 	-- it (and with Okanvil), but anchored outside the main window's right edge,
 	-- so the board keeps its full width.
 	local side = CreateFrame("Frame", nil, parent)
 	Okanvil:Skin(side)
-	side:SetWidth(WHISPER_W + 12)
+	W.ForgeArt(side, 0.22)      -- the same smith-at-the-anvil art as the main window
+	side:SetWidth(WHISPER_W + 24)
 	side:EnableMouse(true)
 	local inner = W.Frame(side, "bare")
-	inner:SetPoint("TOPLEFT", 6, -6); inner:SetPoint("BOTTOMRIGHT", -6, 6)
+	inner:SetPoint("TOPLEFT", 12, -12); inner:SetPoint("BOTTOMRIGHT", -12, 10)
 	F.wSide = side
 
 	-- Dock on the right; flip to the left when the window sits against the
@@ -1751,7 +1803,7 @@ function M.BuildUI(parent)
 	-- the rat where it belongs -- behind the page, visible only in empty space.
 	local top = W.Frame(main, "well")
 	top:SetPoint("TOPLEFT", 0, 0); top:SetPoint("TOPRIGHT", 0, 0)
-	top:SetHeight(32)
+	top:SetHeight(36)
 	buildTopStrip(top)
 
 	-- No needs strip. Each column header carries its own count, target and
@@ -1767,13 +1819,13 @@ function M.BuildUI(parent)
 	local resStrip = W.Frame(main, "well")
 	resStrip:SetPoint("BOTTOMLEFT", 0, 0)
 	resStrip:SetPoint("BOTTOMRIGHT", 0, 0)
-	resStrip:SetHeight(26)
+	resStrip:SetHeight(30)
 	buildReserveStrip(resStrip)
 
 	local bottom = W.Frame(main, "well")
 	bottom:SetPoint("BOTTOMLEFT", resStrip, "TOPLEFT", 0, 3)
 	bottom:SetPoint("BOTTOMRIGHT", resStrip, "TOPRIGHT", 0, 3)
-	bottom:SetHeight(74)
+	bottom:SetHeight(56)
 	buildBottom(bottom)
 
 	-- the board takes every pixel between the top strip and the message
