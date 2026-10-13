@@ -39,16 +39,28 @@ end
 -- GameTooltip's own wrap cuts a long line off with "..." after a few rows, so
 -- callers that need the whole text add these lines one by one, unwrapped.
 -- A single word longer than `width` gets a line to itself, uncut.
+-- A chat link ("|c..|H..|h[The Light of Dawn]|h|r") is one unbreakable word:
+-- split across lines its escape codes break and the name shows half-coloured
+-- or not at all. Width counts visible characters, not the hidden codes.
+local function visibleLen(s)
+	return #(s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h", ""):gsub("|h", ""))
+end
+
 function U.wrapLines(text, width)
-	local lines, cur = {}, ""
-	for word in tostring(text or ""):gmatch("%S+") do
+	text = tostring(text or "")
+	-- protect spaces inside links so the word split below keeps each link whole
+	text = text:gsub("|H.-|h.-|h", function(link) return (link:gsub(" ", "\1")) end)
+	local lines, cur, curLen = {}, "", 0
+	for word in text:gmatch("%S+") do
+		word = word:gsub("\1", " ")
+		local len = visibleLen(word)
 		if cur == "" then
-			cur = word
-		elseif #cur + 1 + #word <= width then
-			cur = cur .. " " .. word
+			cur, curLen = word, len
+		elseif curLen + 1 + len <= width then
+			cur, curLen = cur .. " " .. word, curLen + 1 + len
 		else
 			lines[#lines + 1] = cur
-			cur = word
+			cur, curLen = word, len
 		end
 	end
 	if cur ~= "" then lines[#lines + 1] = cur end
