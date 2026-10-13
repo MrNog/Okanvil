@@ -321,7 +321,7 @@ function W.Button(parent, text, kind)
 	-- fixed: Settings > Text size must not grow a label past its button
 	t._okFixed = true
 	-- Tabs read one size up: they name the page you are on, not an action.
-	if kind == "tab" or kind == "tabOn" then t._okSize = 13 end
+	if kind == "tab" or kind == "tabOn" then t._okSize = 14 end
 	t:SetFont(Okanvil:Font(), t._okSize)
 	t:SetPoint("CENTER")
 	b.text = t
@@ -1004,7 +1004,7 @@ function W.Dashboard(parent, cfg)
 	local toolbar = W.Frame(parent, "bare")
 	toolbar:SetPoint("TOPLEFT", header, "BOTTOMLEFT", PAD, -4)
 	toolbar:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", -PAD, -4)
-	toolbar:SetHeight(26)
+	toolbar:SetHeight(28)
 	D.toolbar = toolbar
 
 	-- ---- content region (main + drawer), below toolbar, above footer ----
@@ -1179,7 +1179,7 @@ function W.Dashboard(parent, cfg)
 	local function addTabBtn(key, label, onClick)
 		local b = W.Button(toolbar, label, "tab")
 		local tw = (b.text and b.text:GetStringWidth() or 60) + 22
-		b:SetSize(math.max(64, tw), 24); b._key = key
+		b:SetSize(math.max(64, tw), 26); b._key = key
 		if prev then b:SetPoint("LEFT", prev, "RIGHT", 10, 0)
 		else b:SetPoint("LEFT", 0, 0) end
 		b:SetScript("OnClick", onClick)

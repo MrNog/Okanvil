@@ -848,50 +848,7 @@ local LOOT_TEXT_X = 5 + LOOT_ICON + 8
 
 -- One scrolling list: returns the scroll child to draw rows into, plus a
 -- relayout() to call once the content height is known.
-local function makeList(parent, x, w, top, bottom)
-	local card = W.Frame(parent, "soft")
-	card:SetPoint("TOPLEFT", x, top)
-	card:SetWidth(w)
-	card:SetPoint("BOTTOM", parent, "BOTTOM", 0, bottom)
-
-	local sf = CreateFrame("ScrollFrame", nil, card)
-	sf:SetPoint("TOPLEFT", 4, -4); sf:SetPoint("BOTTOMRIGHT", -10, 4)
-	local child = CreateFrame("Frame", nil, sf)
-	child:SetSize(10, 1); sf:SetScrollChild(child)
-
-	-- 3.3.5a hides rows scrolled out of view but still hit-tests them, so a row
-	-- scrolled off the top sits invisibly over the search box and takes its
-	-- clicks. Only rows whose middle is inside the viewport keep the mouse.
-	local function syncMouse()
-		local top, bottom = sf:GetTop(), sf:GetBottom()
-		if not (top and bottom) then return end
-		for _, row in ipairs({ child:GetChildren() }) do
-			local rt, rb = row:GetTop(), row:GetBottom()
-			local mid = rt and rb and (rt + rb) / 2
-			row:EnableMouse(mid ~= nil and mid <= top and mid >= bottom)
-		end
-	end
-
-	local sb = CreateFrame("Slider", nil, card)
-	sb:SetPoint("TOPRIGHT", -3, -4); sb:SetPoint("BOTTOMRIGHT", -3, 4); sb:SetWidth(4)
-	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1)
-	local th = sb:CreateTexture(nil, "OVERLAY"); th:SetTexture(FLAT); th:SetSize(4, 30)
-	do local a = C.accent; th:SetVertexColor(a[1], a[2], a[3], 1) end
-	sb:SetThumbTexture(th)
-	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v); syncMouse() end)
-	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, dz) sb:SetValue(sb:GetValue() - dz * 30) end)
-	sf:SetScript("OnSizeChanged", function() child:SetWidth(sf:GetWidth()) end)
-
-	local function relayout(h)
-		child:SetWidth(sf:GetWidth() or w)
-		child:SetHeight(math.max(1, h or 1))
-		local maxs = math.max(0, (h or 1) - sf:GetHeight())
-		sb:SetMinMaxValues(0, maxs); sb:SetShown(maxs > 4)
-		syncMouse()
-	end
-	return card, child, relayout, sf
-end
+local makeList = W.ScrollList
 
 -- A pooled row. `side` decides which way the arrow points.
 local function lootRow(pool, i, parent, side)
@@ -1498,223 +1455,58 @@ function M.OpenReserves()
 end
 
 -- ------------------------------------------------------------
--- Whispers panel (its own window docked to the right): everyone who whispered while the
--- line was running, and whether they were invited, joined or turned it down.
+-- Whispers panel (W.WhispersPanel, docked to the right): everyone who whispered while
+-- the line was running, and whether they were invited, joined or turned it down.
 -- ------------------------------------------------------------
-local WHISPER_W = 250
-local WROW_H = 42
-local WROW_OPEN_H = 62
-
-local STATUS_LOOK = {
-	new      = { "new",      "|cffe0b860" },
-	invited  = { "invited",  "|cff4a90d9" },
-	joined   = { "joined",   "|cff7cfc8a" },
-	declined = { "declined", "|cffe05555" },
-	busy     = { "in group", "|cffe05555" },
-	offline  = { "offline",  "|cffe05555" },
+local WHISPERS = {
+	title = "Whispers",
+	subtitle = "Who asked to join",
+	status = {
+		new      = { "new",      "|cffe0b860" },
+		invited  = { "invited",  "|cff4a90d9" },
+		joined   = { "joined",   "|cff7cfc8a" },
+		declined = { "declined", "|cffe05555" },
+		busy     = { "in group", "|cffe05555" },
+		offline  = { "offline",  "|cffe05555" },
+	},
+	-- "Out" gathers the three ways an invite can fail.
+	filters = {
+		{ key = "all",     label = "All" },
+		{ key = "new",     label = "New",     match = { new = true } },
+		{ key = "invited", label = "Invited", match = { invited = true } },
+		{ key = "out",     label = "Out",     match = { declined = true, busy = true, offline = true } },
+	},
+	emptyHint = "Post your LFM line and everyone who\nasks to join shows up here.",
+	items = function()
+		local out = {}
+		for _, a in ipairs(M.Whispers()) do
+			local sub = M.SubLabel(a.name)
+			out[#out + 1] = { name = a.name, class = a.class, status = a.status, t = a.t,
+				sub = sub ~= "" and sub or "|cff6f7176spec not read|r",
+				said = "|cffff80ff" .. (a.said or "") .. "|r",
+				-- a "declined" can be asked again
+				canInvite = a.status ~= "invited" and a.status ~= "joined" }
+		end
+		return out
+	end,
+	onInvite = function(name) M.InviteApplicant(name) end,
+	onDismiss = function(name) M.DismissApplicant(name) end,
+	onClear = function() M.ClearWhispers() end,
+	bulk = {
+		label = "Invite needed",
+		tip = "Invite every new whisperer whose role you still need,\noldest whisper first. Invites already out count.\nPeople whose spec was not read are left to you.",
+		onClick = function()
+			if M.InviteNeeded() == 0 then
+				DEFAULT_CHAT_FRAME:AddMessage("|cffF1C40F[PuG]|r Nobody new fits a role you still need.")
+			end
+		end,
+	},
+	hidden = function() return db().whispersHidden end,
+	setHidden = function(v) db().whispersHidden = v end,
 }
-
--- The filter buttons. "out" gathers the three ways an invite can fail.
-local WHISPER_FILTERS = {
-	{ key = "all",     label = "All" },
-	{ key = "new",     label = "New" },
-	{ key = "invited", label = "Invited" },
-	{ key = "out",     label = "Out" },
-}
-local OUT = { declined = true, busy = true, offline = true }
-
-local function ago(t)
-	local s = math.max(0, time() - (t or time()))
-	if s < 60 then return s .. "s" end
-	if s < 3600 then return math.floor(s / 60) .. "m" end
-	return math.floor(s / 3600) .. "h"
-end
-
-local function whisperRow(pool, i, parent)
-	local row = pool[i]
-	if row then return row end
-
-	row = CreateFrame("Button", nil, parent)
-	row:SetHeight(WROW_H)
-	local hl = row:CreateTexture(nil, "BACKGROUND")
-	hl:SetAllPoints(); hl:SetTexture(FLAT); hl:SetVertexColor(1, 1, 1, 0)
-	row.hl = hl
-	local rule = row:CreateTexture(nil, "BORDER")
-	rule:SetTexture(FLAT); rule:SetHeight(1)
-	do local b = C.border; rule:SetVertexColor(b[1], b[2], b[3], 1) end
-	rule:SetPoint("BOTTOMLEFT", 0, 0); rule:SetPoint("BOTTOMRIGHT", 0, 0)
-
-	row.x = W.Button(row, "x", nil):Size(22, 22)
-	row.x:SetPoint("TOPRIGHT", -2, -4)
-	row.x:Tooltip("Remove from the list.\nThey come back if they whisper again.")
-	row.w = W.Button(row, "/w", nil):Size(30, 22)
-	row.w:SetPoint("RIGHT", row.x, "LEFT", -3, 0)
-	row.w:Tooltip("Whisper them.")
-	row.inv = W.Button(row, "Inv", "primary"):Size(38, 22)
-	row.inv:SetPoint("RIGHT", row.w, "LEFT", -3, 0)
-
-	row.top = W.Text(row, "", "body")
-	row.top:SetPoint("TOPLEFT", 6, -5)
-	row.top:SetPoint("RIGHT", row.inv, "LEFT", -4, 0)
-	row.top:SetJustifyH("LEFT")
-	if row.top.SetWordWrap then row.top:SetWordWrap(false) end
-
-	row.sub = W.Text(row, "", "label", "dim")
-	row.sub:SetPoint("TOPLEFT", 6, -23)
-	row.sub:SetPoint("RIGHT", -4, 0)
-	row.sub:SetJustifyH("LEFT")
-	if row.sub.SetWordWrap then row.sub:SetWordWrap(false) end
-
-	-- What they wrote, shown when the row is opened.
-	row.said = W.Text(row, "", "label")
-	row.said:SetPoint("TOPLEFT", 6, -40)
-	row.said:SetPoint("RIGHT", -4, 0)
-	row.said:SetJustifyH("LEFT")
-	if row.said.SetWordWrap then row.said:SetWordWrap(false) end
-
-	row:SetScript("OnEnter", function(s) s.hl:SetVertexColor(1, 1, 1, 0.05) end)
-	row:SetScript("OnLeave", function(s) s.hl:SetVertexColor(1, 1, 1, s._open and 0.03 or 0) end)
-	row:SetScript("OnClick", function(s)
-		F.wOpen = (F.wOpen ~= s._name) and s._name or nil
-		M.RefreshWhispers()
-	end)
-	row.inv:OnClick(function() M.InviteApplicant(row._name) end)
-	row.w:OnClick(function() if row._name then ChatFrame_SendTell(row._name) end end)
-	row.x:OnClick(function() M.DismissApplicant(row._name) end)
-
-	pool[i] = row
-	return row
-end
 
 function M.RefreshWhispers()
-	if not (F and F.wChild) then return end
-	local counts = M.WhisperCounts()
-	F.wCount:SetText(counts.all > 0 and tostring(counts.all) or "")
-
-	for _, f in ipairs(WHISPER_FILTERS) do
-		local b = F.wFilterBtns[f.key]
-		local n = f.key == "out" and ((counts.declined or 0) + (counts.busy or 0) + (counts.offline or 0))
-			or counts[f.key] or 0
-		b.text:SetText(f.key == "all" and f.label or (n > 0 and (f.label .. " " .. n) or f.label))
-		b:SetKind(F.wFilter == f.key and "primary" or nil)
-	end
-
-	local list = {}
-	for _, a in ipairs(M.Whispers()) do
-		local keep = F.wFilter == "all" or a.status == F.wFilter or (F.wFilter == "out" and OUT[a.status])
-		if keep then list[#list + 1] = a end
-	end
-
-	local y = 0
-	for i, a in ipairs(list) do
-		local row = whisperRow(F.wRows, i, F.wChild)
-		local open = F.wOpen == a.name
-		row._name, row._open = a.name, open
-		row:ClearAllPoints()
-		row:SetPoint("TOPLEFT", 0, -y); row:SetPoint("TOPRIGHT", 0, -y)
-		row:SetHeight(open and WROW_OPEN_H or WROW_H)
-		row.hl:SetVertexColor(1, 1, 1, open and 0.03 or 0)
-
-		local look = STATUS_LOOK[a.status] or STATUS_LOOK.new
-		row.top:SetText(class_color(a.class) .. a.name .. "|r  " .. look[2] .. look[1] .. "|r  |cff6f7176" .. ago(a.t) .. "|r")
-		local sub = M.SubLabel(a.name)
-		row.sub:SetText(sub ~= "" and sub or "|cff6f7176spec not read|r")
-		row.said:SetText(open and ("|cffff80ff" .. (a.said or "") .. "|r") or "")
-
-		-- Inv on anyone not invited or in the group: a "declined" can be asked again.
-		if a.status == "invited" or a.status == "joined" then row.inv:Hide() else row.inv:Show() end
-		row:Show()
-		y = y + (open and WROW_OPEN_H or WROW_H)
-	end
-	for i = #list + 1, #F.wRows do F.wRows[i]:Hide() end
-
-	local empty = #list == 0
-	if empty then F.wEmptyIcon:Show() else F.wEmptyIcon:Hide() end
-	if counts.all == 0 then
-		F.wEmpty:SetText(empty and "No whispers yet" or "")
-		F.wEmptyHint:SetText(empty and "Post your LFM line and everyone who\nasks to join shows up here." or "")
-	else
-		F.wEmpty:SetText(empty and "Nobody here" or "")
-		F.wEmptyHint:SetText(empty and "Try another filter." or "")
-	end
-	F.wRelayout(y)
-end
-
-local function buildWhispers(p)
-	F.wFilter, F.wRows = "all", {}
-
-	-- Header in the page style: icon, gold title, one grey line, a hairline.
-	local head = W.Frame(p, "bare")
-	head:SetPoint("TOPLEFT", 0, 0); head:SetPoint("TOPRIGHT", 0, 0)
-	head:SetHeight(50)
-	W.Hairline(head, "BOTTOM", 0)
-	local icon = head:CreateTexture(nil, "OVERLAY")
-	icon:SetSize(28, 28); icon:SetPoint("LEFT", 0, 2)
-	icon:SetTexture("Interface\\Icons\\INV_Letter_15"); icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local title = W.Text(head, "Whispers", "title", "accent")
-	title:SetPoint("TOPLEFT", icon, "TOPRIGHT", 10, 1)
-	local sub = W.Text(head, "Who asked to join", "note", "dim")
-	sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -2)
-	F.wCount = W.Text(head, "", "title", "accent")
-	F.wCount:SetPoint("RIGHT", -2, 2)
-
-	-- Filters: one segmented row across the full width.
-	F.wFilterBtns = {}
-	local seg = (WHISPER_W - 3 * 3) / #WHISPER_FILTERS
-	for i, f in ipairs(WHISPER_FILTERS) do
-		local b = menu(W.Button(p, f.label, nil):Size(seg, 24))
-		b:SetPoint("TOPLEFT", (i - 1) * (seg + 3), -60)
-		b:OnClick(function() F.wFilter = f.key; M.RefreshWhispers() end)
-		F.wFilterBtns[f.key] = b
-	end
-
-	-- Footer: Clear on the left, the bulk invite on the right.
-	local foot = W.Frame(p, "bare")
-	foot:SetPoint("BOTTOMLEFT", 0, 0); foot:SetPoint("BOTTOMRIGHT", 0, 0)
-	foot:SetHeight(34)
-	W.Hairline(foot, "TOP", 0)
-
-	local invAll = menu(W.Button(foot, "Invite needed", "primary"):Size(120, MENU_H))
-	invAll:SetPoint("RIGHT", 0, -2)
-	invAll:OnClick(function()
-		local n = M.InviteNeeded()
-		if n == 0 then
-			DEFAULT_CHAT_FRAME:AddMessage("|cffF1C40F[PuG]|r Nobody new fits a role you still need.")
-		end
-	end)
-	invAll:Tooltip("Invite every new whisperer whose role you still need,\noldest whisper first. Invites already out count.\nPeople whose spec was not read are left to you.")
-
-	local clear = menu(W.Button(foot, "Clear", nil):Size(64, MENU_H))
-	clear:SetPoint("LEFT", 0, -2)
-	clear:OnClick(function() F.wOpen = nil; M.ClearWhispers() end)
-	clear:Tooltip("Empty the list.\nAnyone who whispers again comes back.")
-
-	local card, child, relayout = makeList(p, 0, WHISPER_W, -88, 42)
-	F.wChild, F.wRelayout = child, relayout
-	-- A light wash, not a slab: the forge art should read through the list.
-	do local d = C.panelD; card:SetBackdropColor(d[1], d[2], d[3], 0.35) end
-
-	-- Empty state, centred in the list.
-	F.wEmptyIcon = card:CreateTexture(nil, "ARTWORK")
-	F.wEmptyIcon:SetSize(36, 36); F.wEmptyIcon:SetPoint("CENTER", 0, 30)
-	F.wEmptyIcon:SetTexture("Interface\\Icons\\INV_Letter_15"); F.wEmptyIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	F.wEmptyIcon:SetDesaturated(true); F.wEmptyIcon:SetAlpha(0.35)
-	F.wEmpty = W.Text(card, "", "label", "dim")
-	F.wEmpty:SetPoint("TOP", F.wEmptyIcon, "BOTTOM", 0, -10)
-	F.wEmptyHint = W.Text(card, "", "note", "dim")
-	F.wEmptyHint:SetPoint("TOP", F.wEmpty, "BOTTOM", 0, -4)
-	F.wEmptyHint:SetJustifyH("CENTER")
-
-	-- Keep the "12s ago" honest while the panel is open.
-	local tick = 0
-	p:SetScript("OnUpdate", function(_, e)
-		tick = tick + e
-		if tick < 5 then return end
-		tick = 0
-		M.RefreshWhispers()
-	end)
-	p:SetScript("OnShow", function() M.RefreshWhispers() end)
-	M.RefreshWhispers()
+	if F and F.whispers then F.whispers:Refresh() end
 end
 
 -- ------------------------------------------------------------
@@ -1754,43 +1546,11 @@ function M.BuildUI(parent)
 	end
 
 	-- The Whispers window. Parented to the PuG page so it shows and hides with
-	-- it (and with Okanvil), but anchored outside the main window's right edge,
-	-- so the board keeps its full width.
-	local side = CreateFrame("Frame", nil, parent)
-	Okanvil:Skin(side)
-	W.ForgeArt(side, 0.22)      -- the same smith-at-the-anvil art as the main window
-	side:SetWidth(WHISPER_W + 24)
-	side:EnableMouse(true)
-	local inner = W.Frame(side, "bare")
-	inner:SetPoint("TOPLEFT", 12, -12); inner:SetPoint("BOTTOMRIGHT", -12, 10)
-	F.wSide = side
-
-	-- Dock on the right; flip to the left when the window sits against the
-	-- screen's right edge and the panel would hang off it.
-	local function dock()
-		local win = Okanvil.win
-		if not win then return end
-		side:ClearAllPoints()
-		local right = (win:GetRight() or 0) * win:GetEffectiveScale()
-		local room = UIParent:GetRight() * UIParent:GetEffectiveScale() - right
-		if room >= side:GetWidth() * win:GetEffectiveScale() then
-			side:SetPoint("TOPLEFT", win, "TOPRIGHT", 2, 0)
-			side:SetPoint("BOTTOMLEFT", win, "BOTTOMRIGHT", 2, 0)
-		else
-			side:SetPoint("TOPRIGHT", win, "TOPLEFT", -2, 0)
-			side:SetPoint("BOTTOMRIGHT", win, "BOTTOMLEFT", -2, 0)
-		end
-	end
-	side:SetScript("OnShow", dock)
-	dock()
-
-	buildWhispers(inner)
-	if db().whispersHidden then side:Hide() end
-
+	-- it (and with Okanvil), docked outside the main window so the board keeps
+	-- its full width.
+	F.whispers = W.WhispersPanel(parent, WHISPERS)
 	function M.ToggleWhispers()
-		local d = db()
-		d.whispersHidden = not d.whispersHidden
-		if d.whispersHidden then side:Hide() else side:Show() end
+		F.whispers:Toggle()
 		dash:Refresh()
 	end
 

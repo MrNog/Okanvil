@@ -435,28 +435,63 @@ end
 -- Mains: the guild roster with alts folded away (rank index 4, "alt" in the rank
 -- name, or a "<Main> alt" note -- the same rule the site uses). Level 80 only.
 -- ------------------------------------------------------------
+-- The roster read does not always hold the offline members (the game can hand back
+-- only who is online), so every main seen is kept on disk and the page lists them
+-- all. A main not seen in the roster for MAINS_KEEP is taken as gone from the guild.
+local MAINS_KEEP = 28 * 86400
+
+-- Store every main in the roster as it stands now (the caller decides whether the
+-- offline members are in it).
+local function rememberRoster(total)
+	local a = A.DB()
+	a.mains = a.mains or {}
+	local cache, now = a.mains, time()
+	for i = 1, total do
+		local name, rankName, rankIndex, level, _, _, _, _, _, _, classToken = GetGuildRosterInfo(i)
+		if name then
+			name = stripRealm(name)
+			local key = name:lower()
+			local alt = rankIndex == 4 or (rankName or ""):lower():find("alt", 1, true)
+				or Okanvil.U.mainOf(name)
+			if alt or (level or 0) < 80 then
+				cache[key] = nil
+			else
+				cache[key] = { name = name, rankIndex = rankIndex or 99, rankName = rankName or "",
+					class = classToken or "", seen = now }
+			end
+		end
+	end
+end
+
 function A.Mains()
 	local out = {}
 	if not (IsInGuild and IsInGuild()) then return out end
-	Okanvil:WithFullRoster(function(total)
-		for i = 1, total do
-			local name, rankName, rankIndex, level, _, _, _, _, _, _, classToken = GetGuildRosterInfo(i)
-			if name and (level or 0) >= 80 then
-				name = stripRealm(name)
-				local alt = rankIndex == 4 or (rankName or ""):lower():find("alt", 1, true)
-					or Okanvil.U.mainOf(name)
-				if not alt then
-					out[#out + 1] = { name = name, rankIndex = rankIndex or 99, rankName = rankName or "",
-						class = classToken or "" }
-				end
-			end
+	Okanvil:WithFullRoster(rememberRoster)
+	local cache, now = A.DB().mains, time()
+	for key, m in pairs(cache) do
+		if now - (m.seen or 0) > MAINS_KEEP then
+			cache[key] = nil
+		else
+			out[#out + 1] = { name = m.name, rankIndex = m.rankIndex, rankName = m.rankName, class = m.class }
 		end
-	end)
+	end
 	table.sort(out, function(a, b)
 		if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end
 		return a.name < b.name
 	end)
 	return out
+end
+
+-- Any roster update (the guild tab opened with offline shown, a login) adds to the
+-- list too, so the page knows the whole guild before an officer opens it.
+do
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("GUILD_ROSTER_UPDATE")
+	f:SetScript("OnEvent", function()
+		if not (IsInGuild and IsInGuild() and Okanvil.db) then return end
+		local ok, err = pcall(rememberRoster, (GetNumGuildMembers and GetNumGuildMembers()) or 0)
+		if not ok then Okanvil:Err("Attendance roster", err) end
+	end)
 end
 
 -- The main a raider counts for: their main when they are on an alt.
@@ -469,7 +504,9 @@ function A.Presence(run)
 	local seen = {}
 	for _, night in ipairs(run.nights or {}) do
 		local here = {}
-		for _, p in ipairs(night.players or {}) do here[mainKey(p.n)] = true end
+		for _, p in ipairs(night.players or {}) do
+			if (tonumber(p.g) or 0) < 6 then here[mainKey(p.n)] = true end   -- group 6+ = bench
+		end
 		for k in pairs(here) do seen[k] = (seen[k] or 0) + 1 end
 	end
 	return seen
@@ -620,6 +657,18 @@ function A.WeekView(week)
 		local R = { ref = ref, run = A.RunOfWeek(week, ref), present = {}, away = {} }
 		R.ours, R.source, R.setBy = A.OurId(week, ref)
 		if R.run then for k in pairs(A.Presence(R.run)) do R.present[k] = true end end
+		-- this client's own snapshots of our run: everyone in it came, with or without
+		-- Okanvil -- except the bench (group 6 and up)
+		for _, s in ipairs((Okanvil.db.guild and Okanvil.db.guild.snapshots) or {}) do
+			if s.t and weekOf(s.t) == week and refOf(s.zone, s.groupSize, s.difficulty) == ref
+				and isMainRun(s) and (not s.lockoutId or not R.ours or s.lockoutId == R.ours) then
+				v.known = true
+				for _, pl in ipairs(s.players or {}) do
+					local n = stripRealm(pl.name)
+					if n ~= "" and (tonumber(pl.group) or 0) < 6 then R.present[mainKey(n)] = true end
+				end
+			end
+		end
 		v.raids[i], byRef[ref] = R, R
 		if R.run or R.ours then v.known = true end
 	end
@@ -715,10 +764,10 @@ local function tagName(m) return rankTag(m) .. " " .. nameOf(m) end
 -- one Saved-Raids chip
 local function newChip(parent)
 	local c = CreateFrame("Frame", nil, parent)
-	c:SetSize(34, 20)
+	c:SetSize(40, 22)
 	c:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
 	c:SetBackdropColor(0, 0, 0, 0.25)
-	c.t = W.FixedText(c, "", "note")
+	c.t = W.FixedText(c, "", "label")
 	c.t:SetPoint("CENTER", 0, 0)
 	return c
 end
@@ -734,7 +783,7 @@ end
 -- A tab page: boxes, texts and row pools laid top-down. Everything is re-anchored
 -- on each refresh, so the pools only ever grow.
 local function newPage(page)
-	local P = { page = page, texts = {}, rows = {}, boxes = {}, heads = {}, tiles = {}, y = 0, w = 400, nRow = 0 }
+	local P = { page = page, texts = {}, rows = {}, boxes = {}, heads = {}, y = 0, w = 400, nRow = 0 }
 	local base = page:GetFrameLevel()
 
 	function P:Text(key, x, size, role)
@@ -791,36 +840,11 @@ local function newPage(page)
 		b:SetHeight(self.y - b.top + 4)
 		self.y = self.y + 18
 	end
-	-- the week tally: four framed numbers across the box
-	function P:Tally(items)
-		local n = #items
-		local gap = 8
-		local w = (self.w - 2 * PAD - (n - 1) * gap) / n
-		for i, it in ipairs(items) do
-			local t = self.tiles[i]
-			if not t then
-				t = CreateFrame("Frame", nil, page)
-				t:SetFrameLevel(base + 2)
-				t:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
-				t:SetBackdropColor(0, 0, 0, 0.2)
-				t:SetBackdropBorderColor(0.18, 0.17, 0.15, 1)
-				t.num = W.Text(t, "", "title"); t.num:SetPoint("LEFT", 10, 0)
-				t.lbl = W.Text(t, "", "note", "dim"); t.lbl:SetPoint("LEFT", t.num, "RIGHT", 8, -1)
-				self.tiles[i] = t
-			end
-			t:ClearAllPoints()
-			t:SetPoint("TOPLEFT", PAD + (i - 1) * (w + gap), -self.y)
-			t:SetSize(w, 30)
-			t.num:SetText(it[1]); t.lbl:SetText(it[2])
-			t:Show()
-		end
-		self.y = self.y + 40
-	end
 	function P:Row()
 		self.nRow = self.nRow + 1
 		local row = self.rows[self.nRow]
 		if not row then
-			row = W.Frame(page, "row"); row:SetHeight(26)
+			row = W.Frame(page, "row"); row:SetHeight(30)
 			row:SetFrameLevel(base + 2)
 			row.tag = W.Text(row, "", "note"); row.tag:SetPoint("LEFT", PAD, 0)
 			row.nm = W.Text(row, "", "label"); row.nm:SetPoint("LEFT", NAME_X, 0)
@@ -842,13 +866,13 @@ local function newPage(page)
 		for i, c in ipairs(row.cells) do
 			local x = CELL_X + (i - 1) * self.cellW
 			c.a:ClearAllPoints(); c.a:SetPoint("LEFT", x, 0)
-			c.b:ClearAllPoints(); c.b:SetPoint("LEFT", x + 38, 0)
-			c.dot:ClearAllPoints(); c.dot:SetPoint("LEFT", x + 14, 0)
+			c.b:ClearAllPoints(); c.b:SetPoint("LEFT", x + 44, 0)
+			c.dot:ClearAllPoints(); c.dot:SetPoint("LEFT", x + 16, 0)
 			c.a:Hide(); c.b:Hide(); c.dot:SetText("")
 		end
 		row.btn:Hide()
 		row:Show()
-		self.y = self.y + 27
+		self.y = self.y + 32
 		return row
 	end
 	-- column heads: one per week + the last column's label
@@ -874,8 +898,6 @@ local function newPage(page)
 		for _, r in ipairs(self.rows) do r:Hide() end
 		for _, b in pairs(self.boxes) do b:Hide() end
 		for _, t in pairs(self.texts) do t:Hide() end
-		for _, t in ipairs(self.tiles) do t:Hide() end
-		for _, set in pairs(self.sortBtns or {}) do for _, b in ipairs(set) do b:Hide() end end
 		for _, r in ipairs(self.ruleRows or {}) do r:Hide() end
 		if self.allRow then self.allRow:Hide() end
 		for _, h in pairs(self.heads) do
@@ -902,18 +924,9 @@ local function sortMains(list)
 	return list
 end
 
--- rows with a rank heading at each change of rank
--- flat = one list with no rank headings (sorted by something other than rank)
-local function rankedRows(P, key, mains, fill, flat)
-	local lastRank
-	local counts = {}
-	for _, m in ipairs(mains) do counts[m.rankIndex] = (counts[m.rankIndex] or 0) + 1 end
-	for i, m in ipairs(mains) do
-		if not flat and m.rankIndex ~= lastRank then
-			lastRank = m.rankIndex
-			P:Para(key .. "rk" .. i, rankHex(m.rankIndex) .. (m.rankName or "?"):upper() .. "|r  |cff5e6166"
-				.. counts[m.rankIndex] .. "|r", "note", nil, 4)
-		end
+-- one row per main: coloured [rank] tag, name, then the grid's own cells
+local function mainRows(P, mains, fill)
+	for _, m in ipairs(mains) do
 		local row = P:Row()
 		row.tag:SetText(rankTag(m))
 		row.nm:SetText(nameOf(m))
@@ -921,63 +934,16 @@ local function rankedRows(P, key, mains, fill, flat)
 	end
 end
 
--- The order of a grid: by rank (the default, with rank headings), by the grid's own
--- number -- most active first, so a busy Sewer Rat is not at the bottom of a long
--- list -- or by name. The pick is remembered per grid.
-local SORTS = {
-	main = { { "rank", "Rank" }, { "num", "Attendance" }, { "name", "Name" } },
-	ten  = { { "rank", "Rank" }, { "num", "Effort" },     { "name", "Name" } },
-}
-local function sortOf(key)
-	local s = A.DB().sort
-	return (s and s[key]) or "rank"
-end
-
--- The sort buttons, on their own line inside the box.
-local function sortBar(P, key)
-	P.sortBtns = P.sortBtns or {}
-	local set = P.sortBtns[key]
-	if not set then
-		set = {}
-		for i, o in ipairs(SORTS[key]) do
-			local b = W.Button(P.page, o[2], "tab"):Size(84, 20)
-			b:SetFrameLevel(P.page:GetFrameLevel() + 3)
-			b:SetScript("OnClick", function()
-				local a = A.DB()
-				a.sort = a.sort or {}
-				a.sort[key] = o[1]
-				if A.onChange then A.onChange() end
-			end)
-			set[i] = b
-		end
-		P.sortBtns[key] = set
-	end
-	local cur = sortOf(key)
-	local lbl = P:Text(key .. "sortL", PAD, "note", "dim")
-	lbl:SetText("Sort"); lbl:SetHeight(20)
-	for i, o in ipairs(SORTS[key]) do
-		local b = set[i]
-		b:ClearAllPoints(); b:SetPoint("TOPLEFT", PAD + 34 + (i - 1) * 90, -P.y)
-		if b.SetKind then b:SetKind(cur == o[1] and "tabOn" or "tab") end
-		b:Show()
-	end
-	P.y = P.y + 28
-end
-
--- Sort mains by the pick. num(m) is the grid's number (higher = more active); ties
--- fall back to rank, then name. Returns flat = true when rank headings do not apply.
-local function sortBy(key, list, num)
-	local how = sortOf(key)
-	if how == "rank" then return list, false end
+-- The order of a grid: by its own number, most active first (a busy Sewer Rat is not
+-- lost at the bottom of a long list); ties by rank, then name.
+local function sortBy(list, num)
 	table.sort(list, function(a, b)
-		if how == "num" then
-			local x, y = num(a), num(b)
-			if x ~= y then return x > y end
-			if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end
-		end
+		local x, y = num(a), num(b)
+		if x ~= y then return x > y end
+		if a.rankIndex ~= b.rankIndex then return a.rankIndex < b.rankIndex end
 		return a.name < b.name
 	end)
-	return list, true
+	return list
 end
 
 -- the first names in full, the rest as "+ N more"
@@ -1010,57 +976,14 @@ local function buildMainTab(P, width)
 	for i, w in ipairs(weeks) do views[i] = A.WeekView(w) end
 	local cur = views[1]
 	local mains = sortMains(A.Mains())
-	local known = cur.known
 	local multi = #cur.raids > 1
 
-	-- who is where this week
-	local nWith, away, nOpen, quiet = 0, {}, 0, {}
+	-- saved elsewhere this week
+	local away = {}
 	for _, m in ipairs(mains) do
 		local k = m.name:lower()
-		if cur.present[k] then nWith = nWith + 1
-		elseif cur.elsewhere[k] then away[#away + 1] = m
-		elseif known then nOpen = nOpen + 1; quiet[#quiet + 1] = m end
+		if not cur.present[k] and cur.elsewhere[k] then away[#away + 1] = m end
 	end
-
-	-- this lockout
-	local function idText(R)
-		return R.ours and ("ID " .. R.ours .. (R.setBy and ("  ·  set by " .. R.setBy) or "")) or "no ID yet"
-	end
-	local meta = multi and A.MustLabel() or (A.RefLabel(cur.raids[1].ref) .. "  ·  " .. idText(cur.raids[1]))
-	P:BoxStart("this", "THIS LOCKOUT  |cff8a8d93week of " .. weekLabel(cur.week) .. "|r", meta)
-	local lines, noId = {}, false
-	for _, R in ipairs(cur.raids) do
-		if multi then
-			lines[#lines + 1] = "|cffe0b860" .. A.RefLabel(R.ref) .. "|r   |cff8a8d93" .. idText(R) .. "|r"
-		end
-		if R.run then
-			for _, n in ipairs(R.run.nights) do
-				lines[#lines + 1] = "|cffdcddde" .. date("%a %d %b", n.t) .. "|r   |cff8a8d93" .. #n.players
-					.. " players  ·  recorded by " .. (n.recorder or "?") .. "  ·  "
-					.. (n.exportedAt and "exported" or "|cffe0b860not exported|r") .. "|r"
-			end
-		end
-		if not R.ours then
-			noId = true
-		elseif R.source ~= "run" then
-			lines[#lines + 1] = "|cff6f7176" .. (multi and (A.RefLabel(R.ref) .. ": ") or "") .. "our ID comes from the "
-				.. (R.source == "officer" and "officer's own lockout." or "raiders' letters (3+ agree).") .. "|r"
-		end
-	end
-	if noId then
-		lines[#lines + 1] = "|cff8a8d93Our ID is known after the first kill, when an officer who raided with us presses "
-			.. "Our ID = mine, or once 3 raiders' letters agree.|r"
-	end
-	if #lines > 0 then P:Para("thisB", table.concat(lines, "\n"), "body", nil, 8) end
-	-- the open week can still fill up on night 2: "no word" only once it's over
-	local isOpen = true
-	P:Tally({
-		{ "|cffe0b860" .. nWith .. "|r", "with us" },
-		{ "|cffff6b6b" .. #away .. "|r", "saved elsewhere" },
-		{ "|cffe6b866" .. (isOpen and nOpen or 0) .. "|r", known and "open · can still come" or "open" },
-		{ "|cff5e6166" .. (known and 0 or #mains) .. "|r", known and "no word" or "no data yet" },
-	})
-	P:BoxEnd("this")
 
 	-- saved elsewhere, each with the officer's Clear
 	P:BoxStart("away", "|cffff6b6bSAVED ELSEWHERE|r", "bottom of loot prio unless an officer clears it")
@@ -1124,10 +1047,17 @@ local function buildMainTab(P, width)
 			end
 			return counted > 0 and math.floor(100 * came / counted + 0.5) or nil
 		end
-		sortBar(P, "main")
-		local list, flat = sortBy("main", mains, function(m) return pctOf(m) or -1 end)
+		-- anyone who raided a mandatory raid (with us or in another ID) in these weeks
+		-- goes above the social players with nothing, then by %
+		local function raided(m)
+			local k = m.name:lower()
+			for _, v in ipairs(views) do
+				if v.present[k] or v.elsewhere[k] then return true end
+			end
+		end
+		local list = sortBy(mains, function(m) return (raided(m) and 1000 or 0) + (pctOf(m) or -1) end)
 		P:Heads("gridH", labels, "with us")
-		rankedRows(P, "grid", list, function(row, m)
+		mainRows(P, list, function(row, m)
 			local k = m.name:lower()
 			for c, v in ipairs(views) do
 				local cell = row.cells[c]
@@ -1142,7 +1072,7 @@ local function buildMainTab(P, width)
 			local pct = pctOf(m)
 			row.last:SetText(not pct and "|cff5e6166--|r"
 				or ((pct >= 75 and "|cff7cfc8a" or pct >= 50 and "|cffe0b860" or "|cffff6b6b") .. pct .. "%|r"))
-		end, flat)
+		end)
 	end
 	P:BoxEnd("grid")
 	return P.y + 6
@@ -1184,11 +1114,10 @@ local function buildTenTab(P, width)
 	else
 		local labels = {}
 		for c, v in ipairs(views) do labels[c] = weekLabel(v.week) end
-		sortBar(P, "ten")
 		-- effort = weeks with an extra raid, then weeks with us
-		local list, flat = sortBy("ten", shown, function(m) return m._w10 * 10 + m._w25 end)
+		local list = sortBy(shown, function(m) return m._w10 * 10 + m._w25 end)
 		P:Heads("tenH", labels, "verdict")
-		rankedRows(P, "ten", list, function(row, m)
+		mainRows(P, list, function(row, m)
 			local k = m.name:lower()
 			for c, v in ipairs(views) do
 				local cell = row.cells[c]
@@ -1200,7 +1129,7 @@ local function buildTenTab(P, width)
 			end
 			row.last:SetText(m._w10 > 0 and "|cff7cfc8aeffort|r"
 				or m._w25 >= 2 and "|cffff6b6bours only|r" or "|cff8a8d93little data|r")
-		end, flat)
+		end)
 	end
 	P:BoxEnd("ten")
 

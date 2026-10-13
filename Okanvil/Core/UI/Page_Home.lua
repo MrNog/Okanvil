@@ -1325,20 +1325,59 @@ function Okanvil:BuildHome()
 	end)
 
 	-- live-update on roster changes (login/logoff), not just when the panel opens.
-	local ev = CreateFrame("Frame")
-	ev:RegisterEvent("GUILD_ROSTER_UPDATE")
-	ev:SetScript("OnEvent", function()
+	-- The server only sends the roster when asked, so a login is news only once
+	-- someone calls GuildRoster(): ask on the "has come online / gone offline" line,
+	-- and every ROSTER_POLL seconds while Home is open.
+	local function pattern(fmt)
+		if not fmt then return nil end
+		local p = fmt:gsub("[%(%)%.%+%-%*%?%[%]%^%$]", "%%%0")
+		return (p:gsub("%%s", ".+"):gsub("%%d", "%%d+"))
+	end
+	local ONLINE, OFFLINE = pattern(ERR_FRIEND_ONLINE_SS), pattern(ERR_FRIEND_OFFLINE_S)
+	local ROSTER_POLL = 20
+
+	local pending = false
+	local function refreshNow()
+		if not wrap:IsShown() then return end
 		-- Ignore roster events WE caused: WithFullRoster toggles Show-Offline, which
 		-- fires GUILD_ROSTER_UPDATE, which would call refreshGuild -> WithFullRoster
 		-- again -> a C stack overflow. rosterBusy stays set across that async event.
-		if Okanvil.rosterBusy then return end
-		if wrap:IsShown() then
-			-- Same ordering as OnShow: the card must be sized before the row list
-			-- measures it, or someone logging in while you watch re-renders the list
-			-- against a stale height.
-			p:SetHeight(math.max(wrap.scroll:GetHeight(), 1))
-			refreshGuild()
+		-- A real update landing in that window is not dropped: it runs once the
+		-- window closes.
+		if Okanvil.rosterBusy then
+			if not pending and Okanvil.Comms and Okanvil.Comms.After then
+				pending = true
+				Okanvil.Comms.After(0.5, function() pending = false; refreshNow() end)
+			end
+			return
 		end
+		-- Same ordering as OnShow: the card must be sized before the row list
+		-- measures it, or someone logging in while you watch re-renders the list
+		-- against a stale height.
+		p:SetHeight(math.max(wrap.scroll:GetHeight(), 1))
+		refreshGuild()
+	end
+
+	local ev = CreateFrame("Frame")
+	ev:RegisterEvent("GUILD_ROSTER_UPDATE")
+	ev:RegisterEvent("CHAT_MSG_SYSTEM")
+	ev:SetScript("OnEvent", function(_, event, msg)
+		if event == "CHAT_MSG_SYSTEM" then
+			if wrap:IsShown() and msg and GuildRoster
+				and ((ONLINE and msg:find(ONLINE)) or (OFFLINE and msg:find(OFFLINE))) then
+				GuildRoster()
+			end
+			return
+		end
+		refreshNow()
+	end)
+	local poll = 0
+	ev:SetScript("OnUpdate", function(_, e)
+		if not wrap:IsShown() then return end
+		poll = poll + e
+		if poll < ROSTER_POLL then return end
+		poll = 0
+		if GuildRoster then GuildRoster() end
 	end)
 
 	local onShow
