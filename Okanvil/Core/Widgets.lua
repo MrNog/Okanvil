@@ -320,6 +320,8 @@ function W.Button(parent, text, kind)
 	local t = W.Text(b, text, "body")
 	-- fixed: Settings > Text size must not grow a label past its button
 	t._okFixed = true
+	-- Tabs read one size up: they name the page you are on, not an action.
+	if kind == "tab" or kind == "tabOn" then t._okSize = 14 end
 	t:SetFont(Okanvil:Font(), t._okSize)
 	t:SetPoint("CENTER")
 	b.text = t
@@ -540,14 +542,21 @@ function W.EditBox(parent, onEnter)
 	-- the top-left -- where the cursor sits -- did nothing at all, and a short
 	-- value left most of the field dead. The frame behind it catches the click
 	-- and hands over focus, putting the cursor nearest to where you clicked.
+	-- 3.3.5a EditBoxes have no GetStringWidth, so the text is measured on a
+	-- hidden FontString set to the same font.
+	local measure = box:CreateFontString(nil, "OVERLAY")
+	measure:Hide()
 	box:EnableMouse(true)
 	box:SetScript("OnMouseDown", function(_, button)
 		if button ~= "LeftButton" then return end
 		e:SetFocus()
 		-- Clicking past the end of the text puts the cursor at the end, which is
 		-- what the empty space to the right of a value means.
+		local font, size, flags = e:GetFont()
+		if font then measure:SetFont(font, size, flags) end
+		measure:SetText(e:GetText() or "")
 		local x = GetCursorPosition() / (e:GetEffectiveScale() or 1)
-		if x > (e:GetLeft() or 0) + (e:GetStringWidth() or 0) then
+		if x > (e:GetLeft() or 0) + (measure:GetStringWidth() or 0) then
 			e:SetCursorPosition(e:GetText() and #e:GetText() or 0)
 		end
 	end)
@@ -995,7 +1004,7 @@ function W.Dashboard(parent, cfg)
 	local toolbar = W.Frame(parent, "bare")
 	toolbar:SetPoint("TOPLEFT", header, "BOTTOMLEFT", PAD, -4)
 	toolbar:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", -PAD, -4)
-	toolbar:SetHeight(22)
+	toolbar:SetHeight(28)
 	D.toolbar = toolbar
 
 	-- ---- content region (main + drawer), below toolbar, above footer ----
@@ -1170,7 +1179,7 @@ function W.Dashboard(parent, cfg)
 	local function addTabBtn(key, label, onClick)
 		local b = W.Button(toolbar, label, "tab")
 		local tw = (b.text and b.text:GetStringWidth() or 60) + 22
-		b:SetSize(math.max(60, tw), 20); b._key = key
+		b:SetSize(math.max(64, tw), 26); b._key = key
 		if prev then b:SetPoint("LEFT", prev, "RIGHT", 10, 0)
 		else b:SetPoint("LEFT", 0, 0) end
 		b:SetScript("OnClick", onClick)

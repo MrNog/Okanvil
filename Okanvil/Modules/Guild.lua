@@ -79,8 +79,9 @@ function G.ExportRoster(cb)
 		if cb then cb(json, count) end
 		return
 	end
-	-- turn on Show Offline + request a fresh roster from the server
-	if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
+	-- turn on Show Offline + request a fresh roster from the server; the player's
+	-- own setting comes back in finish()
+	Okanvil:ForceShowOffline()
 	if GuildRoster then GuildRoster() end
 
 	local After = Okanvil.Comms and Okanvil.Comms.After
@@ -98,6 +99,7 @@ function G.ExportRoster(cb)
 	end
 	local function finish(loaded)
 		local json, count = G.BuildRosterJSON()
+		Okanvil:RestoreShowOffline()
 		if not loaded then
 			Okanvil:Print("Roster export: the offline members never loaded, so only " .. count
 				.. " members are in it. /reload and export again.")
@@ -111,9 +113,8 @@ function G.ExportRoster(cb)
 			finish(ok)
 			return
 		end
-		-- the Home guild list restores "Show Offline" to off on every roster update,
-		-- which our own GuildRoster() request triggers: force it back on each tick
-		if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
+		-- ask again until the offline members arrive (the flag stays forced on
+		-- until finish(), however many quick roster walks run in between)
 		if GuildRoster then GuildRoster() end
 		After(0.25, poll)
 	end
@@ -222,18 +223,31 @@ local function snapshotRaid(trigger, bossName)
 	}
 end
 
--- persist a snapshot into the guild DB (keeps the newest 10; older ones are
--- pushed out -- officers export to the website before they go)
+-- persist a snapshot into the guild DB. The list is shared by every toon on the
+-- account, but the cap is PER TOON: each keeps its newest 10. One cap for the
+-- whole list let a few alt raids push a main's ICC out of it.
 local MAX_SNAPSHOTS = 10
 
--- Snapshots saved under an older, larger cap are trimmed once at login.
+-- Drop each toon's snapshots past its newest MAX_SNAPSHOTS. The list is newest
+-- first, so counting from the top keeps the right ones.
+local function trimSnapshots(list)
+	if not list then return end
+	local count = {}
+	local keep = {}
+	for _, snap in ipairs(list) do
+		local who = snap.char or ""
+		count[who] = (count[who] or 0) + 1
+		if count[who] <= MAX_SNAPSHOTS then keep[#keep + 1] = snap end
+	end
+	for i = #list, 1, -1 do list[i] = nil end
+	for i, snap in ipairs(keep) do list[i] = snap end
+end
+
 do
 	local f = CreateFrame("Frame")
 	f:RegisterEvent("PLAYER_LOGIN")
 	f:SetScript("OnEvent", function()
-		local list = Okanvil.db and Okanvil.db.guild and Okanvil.db.guild.snapshots
-		if not list then return end
-		while #list > MAX_SNAPSHOTS do table.remove(list) end
+		trimSnapshots(Okanvil.db and Okanvil.db.guild and Okanvil.db.guild.snapshots)
 	end)
 end
 function G.SaveSnapshot(trigger, bossName)
@@ -243,9 +257,7 @@ function G.SaveSnapshot(trigger, bossName)
 	db.guild = db.guild or {}
 	db.guild.snapshots = db.guild.snapshots or {}
 	table.insert(db.guild.snapshots, 1, snap)   -- newest first
-	while #db.guild.snapshots > MAX_SNAPSHOTS do
-		table.remove(db.guild.snapshots)
-	end
+	trimSnapshots(db.guild.snapshots)
 	if G.onSnapshot then G.onSnapshot() end       -- refresh the tab if open
 	local A = Okanvil.Attendance
 	if A and A.OnSnapshot then
@@ -320,9 +332,19 @@ end
 -- the newest snapshot of this instance that is still missing its id -- only one
 -- taken in the last 12 hours, so an old snapshot never picks up a new lockout.
 -- ------------------------------------------------------------
+-- This toon's snapshots, newest first. The list is shared by the account, but a
+-- toon's own raids are what its Snapshots tab shows, and lockouts are per toon.
+function G.MySnapshots()
+	local me = UnitName("player") or ""
+	local out = {}
+	for _, snap in ipairs((Okanvil.db and Okanvil.db.guild and Okanvil.db.guild.snapshots) or {}) do
+		if (snap.char or "") == me then out[#out + 1] = snap end
+	end
+	return out
+end
+
 function G.FillLockout()
-	local list = Okanvil.db and Okanvil.db.guild and Okanvil.db.guild.snapshots
-	local snap = list and list[1]
+	local snap = G.MySnapshots()[1]
 	if not snap or snap.lockoutId or (time() - (snap.t or 0)) > 12 * 3600 then return end
 	local id = myLockoutId(snap.zone, snap.difficulty)
 	if id then
@@ -341,8 +363,7 @@ do
 	f:RegisterEvent("PLAYER_REGEN_ENABLED")
 	f:RegisterEvent("UPDATE_INSTANCE_INFO")
 	f:SetScript("OnEvent", function(_, event)
-		local list = Okanvil.db and Okanvil.db.guild and Okanvil.db.guild.snapshots
-		local snap = list and list[1]
+		local snap = G.MySnapshots()[1]
 		if not snap or snap.lockoutId then return end
 		if event == "PLAYER_REGEN_ENABLED" then
 			local inInstance, itype = IsInInstance()

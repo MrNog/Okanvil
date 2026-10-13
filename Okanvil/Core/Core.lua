@@ -315,13 +315,10 @@ end
 -- stays on after we're done, which is why the guild tab was suddenly always showing
 -- offline members.
 --
--- 3.3.5a has no reliable getter for the flag, and inferring "did we turn it on?" from
--- the member count is unsound: forcing offline in does NOT change the count when the
--- whole guild is already online, so we could never tell we'd enabled it and would leak
--- it on. So we don't guess -- we ALWAYS restore the WoW default (offline hidden) after
--- walking. Cost: a user who manually ticked "Show Offline" gets it unticked after we
--- run. That is rare and far less bad than the addon silently forcing it on for everyone;
--- if it ever matters, add an explicit opt-out setting.
+-- So every caller brackets its read with ForceShowOffline / RestoreShowOffline, which
+-- read the player's own choice (GetGuildRosterShowOffline) before the first force and
+-- put exactly that back when the last caller is done. The calls nest: an export
+-- polling for seconds and a quick walk inside it restore only once, at the end.
 --
 --   Okanvil:WithFullRoster(function(total) ... GetGuildRosterInfo(i) ... end)
 --
@@ -333,6 +330,30 @@ end
 -- GUILD_ROSTER_UPDATE handler skips its refresh when it sees a roster event we caused
 -- ourselves. Reads only ever set the flag briefly, so a real login/logoff that lands
 -- outside our window still refreshes normally.
+local showOfflineHolds = 0      -- callers currently forcing "Show Offline" on
+local playerShowOffline         -- the player's own choice, read before the first force
+
+function Okanvil:ForceShowOffline()
+	if not SetGuildRosterShowOffline then return end
+	if showOfflineHolds == 0 then
+		playerShowOffline = GetGuildRosterShowOffline and GetGuildRosterShowOffline() and true or false
+	end
+	showOfflineHolds = showOfflineHolds + 1
+	SetGuildRosterShowOffline(true)
+end
+
+function Okanvil:RestoreShowOffline()
+	if not SetGuildRosterShowOffline or showOfflineHolds == 0 then return end
+	showOfflineHolds = showOfflineHolds - 1
+	if showOfflineHolds > 0 then return end
+	SetGuildRosterShowOffline(playerShowOffline and true or false)
+	-- Blizzard's checkbox only reads the flag when the guild tab opens; keep an open
+	-- one in step with what the list now shows.
+	if GuildFrameLFGButton and GuildFrameLFGButton.SetChecked then
+		GuildFrameLFGButton:SetChecked(playerShowOffline and true or false)
+	end
+end
+
 function Okanvil:WithFullRoster(fn)
 	if not (IsInGuild and IsInGuild()) then return end
 	if self.rosterBusy then
@@ -343,10 +364,10 @@ function Okanvil:WithFullRoster(fn)
 		return
 	end
 	self.rosterBusy = true
-	if SetGuildRosterShowOffline then SetGuildRosterShowOffline(true) end
+	self:ForceShowOffline()
 	local total = (GetNumGuildMembers and GetNumGuildMembers()) or 0
 	local ok, err = pcall(fn, total)
-	if SetGuildRosterShowOffline then SetGuildRosterShowOffline(false) end
+	self:RestoreShowOffline()
 	-- Keep the guard up briefly: GUILD_ROSTER_UPDATE from our two toggles arrives
 	-- AFTER we return here (it's async), so clearing rosterBusy now would let that
 	-- late event trigger a refresh -> another WithFullRoster -> the loop. Drop it a

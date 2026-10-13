@@ -13,6 +13,27 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
+-- 3.3.5a hides rows scrolled out of a ScrollFrame but still hit-tests them, so
+-- a guild row scrolled off the top sat invisibly over the Online / Snapshots /
+-- Saved raids tabs and took their clicks. Only rows whose middle is inside the
+-- viewport keep the mouse, and their buttons with them. A frame that never took
+-- the mouse is left alone.
+local function syncRowMouse(sf, child)
+	local top, bottom = sf:GetTop(), sf:GetBottom()
+	if not (top and bottom and child) then return end
+	local function set(f, inside)
+		if f._wantsMouse == nil then f._wantsMouse = f:IsMouseEnabled() and true or false end
+		if f._wantsMouse then f:EnableMouse(inside) end
+	end
+	for _, row in ipairs({ child:GetChildren() }) do
+		local rt, rb = row:GetTop(), row:GetBottom()
+		local mid = rt and rb and (rt + rb) / 2
+		local inside = mid ~= nil and mid <= top and mid >= bottom
+		set(row, inside)
+		for _, c in ipairs({ row:GetChildren() }) do set(c, inside) end
+	end
+end
+
 function Okanvil:BuildHome()
 	local wrap = newScrollPanel()
 	local p = wrap.child
@@ -203,7 +224,7 @@ function Okanvil:BuildHome()
 	local gth = gsb:CreateTexture(nil, "OVERLAY"); gth:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
 	gth:SetSize(6, 36); local ga = Okanvil.Colors.accent; gth:SetVertexColor(ga[1], ga[2], ga[3], 1)
 	gsb:SetThumbTexture(gth)
-	gsb:SetScript("OnValueChanged", function(_, v) gsf:SetVerticalScroll(v) end)
+	gsb:SetScript("OnValueChanged", function(_, v) gsf:SetVerticalScroll(v); syncRowMouse(gsf, gchild) end)
 	gsf:EnableMouseWheel(true)
 	gsf:SetScript("OnMouseWheel", function(_, d) gsb:SetValue(gsb:GetValue() - d * 24) end)
 	wrap.gsf, wrap.gchild, wrap.gsb, wrap.gRows = gsf, gchild, gsb, {}
@@ -229,7 +250,7 @@ function Okanvil:BuildHome()
 	sth:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
 	sth:SetSize(6, 36); sth:SetVertexColor(ga[1], ga[2], ga[3], 1)
 	ssb:SetThumbTexture(sth)
-	ssb:SetScript("OnValueChanged", function(_, v) ssf:SetVerticalScroll(v) end)
+	ssb:SetScript("OnValueChanged", function(_, v) ssf:SetVerticalScroll(v); syncRowMouse(ssf, schild) end)
 	ssf:EnableMouseWheel(true)
 	ssf:SetScript("OnMouseWheel", function(_, d) ssb:SetValue(ssb:GetValue() - d * 46) end)
 	scard:Hide()
@@ -361,12 +382,13 @@ function Okanvil:BuildHome()
 		local G = Okanvil.Guild
 		for _, r in ipairs(wrap.snapRows) do r:Hide() end
 		for _, c in ipairs(wrap.snapCards) do c:Hide() end
-		local snaps = (Okanvil.db.guild and Okanvil.db.guild.snapshots) or {}
+		-- only this toon's raids: each toon keeps its own newest 10
+		local snaps = (G and G.MySnapshots and G.MySnapshots()) or {}
 		schild:SetWidth(math.max(40, ssf:GetWidth()))
 		if #snaps == 0 or not G then
 			wrap.snapEmpty = wrap.snapEmpty or W.Text(schild, "", "body", "dim")
 			wrap.snapEmpty:ClearAllPoints(); wrap.snapEmpty:SetPoint("TOPLEFT", 4, -6)
-			wrap.snapEmpty:SetText(G and "|cff888888No snapshots yet. One is saved automatically at the first pull of a raid.|r"
+			wrap.snapEmpty:SetText(G and "|cff888888No snapshots on this toon yet. One is saved automatically at the first pull of a raid.|r"
 				or "|cff888888Guild module not loaded.|r")
 			wrap.snapEmpty:Show(); schild:SetHeight(40); ssb:SetShown(false); return
 		end
@@ -437,6 +459,7 @@ function Okanvil:BuildHome()
 		schild:SetHeight(math.max(1, y))
 		local maxs = math.max(0, y - ssf:GetHeight())
 		ssb:SetMinMaxValues(0, maxs); ssb:SetShown(maxs > 4)
+		syncRowMouse(ssf, schild)
 	end
 	wrap.rebuildSnaps = rebuildSnaps
 
@@ -448,6 +471,7 @@ function Okanvil:BuildHome()
 		local maxs = math.max(0, schild:GetHeight() - self:GetHeight())
 		ssb:SetMinMaxValues(0, maxs)
 		ssb:SetShown(maxs > 4)
+		syncRowMouse(ssf, schild)
 	end)
 
 	-- ---- Saved raids: every toon's lockouts, the minimap tooltip's grid at page size
@@ -509,7 +533,7 @@ function Okanvil:BuildHome()
 	local lth = lsb:CreateTexture(nil, "OVERLAY"); lth:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
 	lth:SetSize(4, 30); lth:SetVertexColor(ga[1], ga[2], ga[3], 1)
 	lsb:SetThumbTexture(lth)
-	lsb:SetScript("OnValueChanged", function(_, v) lsf:SetVerticalScroll(v) end)
+	lsb:SetScript("OnValueChanged", function(_, v) lsf:SetVerticalScroll(v); syncRowMouse(lsf, lchild) end)
 	lsf:EnableMouseWheel(true)
 	lsf:SetScript("OnMouseWheel", function(_, d) lsb:SetValue(lsb:GetValue() - d * SR_ROW_H) end)
 
@@ -685,6 +709,7 @@ function Okanvil:BuildHome()
 		lsb:SetMinMaxValues(0, maxs)
 		if maxs > 4 then lsb:Show() else lsb:Hide() end
 		if lsb:GetValue() > maxs then lsb:SetValue(maxs) end
+		syncRowMouse(lsf, lchild)
 	end
 	lcard:SetScript("OnSizeChanged", function(self) if self:IsShown() then rebuildSaved() end end)
 
@@ -1280,6 +1305,7 @@ function Okanvil:BuildHome()
 		wrap.gchild:SetHeight(h); wrap.gchild:SetWidth(wrap.gsf:GetWidth())
 		local maxs = math.max(0, h - wrap.gsf:GetHeight())
 		wrap.gsb:SetMinMaxValues(0, maxs); wrap.gsb:SetShown(maxs > 4)
+		syncRowMouse(wrap.gsf, wrap.gchild)
 		wrap.gempty:SetText(#onlineList == 0 and "|cff888888Nobody online.|r" or "")
 	end
 
@@ -1295,23 +1321,63 @@ function Okanvil:BuildHome()
 		local maxs = math.max(0, child:GetHeight() - self:GetHeight())
 		wrap.gsb:SetMinMaxValues(0, maxs)
 		wrap.gsb:SetShown(maxs > 4)
+		syncRowMouse(self, child)
 	end)
 
 	-- live-update on roster changes (login/logoff), not just when the panel opens.
-	local ev = CreateFrame("Frame")
-	ev:RegisterEvent("GUILD_ROSTER_UPDATE")
-	ev:SetScript("OnEvent", function()
+	-- The server only sends the roster when asked, so a login is news only once
+	-- someone calls GuildRoster(): ask on the "has come online / gone offline" line,
+	-- and every ROSTER_POLL seconds while Home is open.
+	local function pattern(fmt)
+		if not fmt then return nil end
+		local p = fmt:gsub("[%(%)%.%+%-%*%?%[%]%^%$]", "%%%0")
+		return (p:gsub("%%s", ".+"):gsub("%%d", "%%d+"))
+	end
+	local ONLINE, OFFLINE = pattern(ERR_FRIEND_ONLINE_SS), pattern(ERR_FRIEND_OFFLINE_S)
+	local ROSTER_POLL = 20
+
+	local pending = false
+	local function refreshNow()
+		if not wrap:IsShown() then return end
 		-- Ignore roster events WE caused: WithFullRoster toggles Show-Offline, which
 		-- fires GUILD_ROSTER_UPDATE, which would call refreshGuild -> WithFullRoster
 		-- again -> a C stack overflow. rosterBusy stays set across that async event.
-		if Okanvil.rosterBusy then return end
-		if wrap:IsShown() then
-			-- Same ordering as OnShow: the card must be sized before the row list
-			-- measures it, or someone logging in while you watch re-renders the list
-			-- against a stale height.
-			p:SetHeight(math.max(wrap.scroll:GetHeight(), 1))
-			refreshGuild()
+		-- A real update landing in that window is not dropped: it runs once the
+		-- window closes.
+		if Okanvil.rosterBusy then
+			if not pending and Okanvil.Comms and Okanvil.Comms.After then
+				pending = true
+				Okanvil.Comms.After(0.5, function() pending = false; refreshNow() end)
+			end
+			return
 		end
+		-- Same ordering as OnShow: the card must be sized before the row list
+		-- measures it, or someone logging in while you watch re-renders the list
+		-- against a stale height.
+		p:SetHeight(math.max(wrap.scroll:GetHeight(), 1))
+		refreshGuild()
+	end
+
+	local ev = CreateFrame("Frame")
+	ev:RegisterEvent("GUILD_ROSTER_UPDATE")
+	ev:RegisterEvent("CHAT_MSG_SYSTEM")
+	ev:SetScript("OnEvent", function(_, event, msg)
+		if event == "CHAT_MSG_SYSTEM" then
+			if wrap:IsShown() and msg and GuildRoster
+				and ((ONLINE and msg:find(ONLINE)) or (OFFLINE and msg:find(OFFLINE))) then
+				GuildRoster()
+			end
+			return
+		end
+		refreshNow()
+	end)
+	local poll = 0
+	ev:SetScript("OnUpdate", function(_, e)
+		if not wrap:IsShown() then return end
+		poll = poll + e
+		if poll < ROSTER_POLL then return end
+		poll = 0
+		if GuildRoster then GuildRoster() end
 	end)
 
 	local onShow
@@ -1336,12 +1402,9 @@ function Okanvil:BuildHome()
 		-- the rows ran off the bottom of the card with no scrollbar to reach them.
 		p:SetHeight(math.max(wrap.scroll:GetHeight(), 1))
 		refreshGuild()
-		-- Prime the FULL roster: GetGuildRosterInfo only returns offline members
-		-- once the client has fetched them, and an export taken before that is
-		-- only whoever was online -- the "238 left the guild" bug.
-		if IsInGuild and IsInGuild() and SetGuildRosterShowOffline then
-			SetGuildRosterShowOffline(true)
-		end
+		-- No "Show Offline" priming here: forcing it on and leaving it on flipped
+		-- the checkbox in Blizzard's own guild tab. The roster export fetches the
+		-- offline members itself (Guild.lua ExportRoster).
 		if wrap.rebuildSnaps and scard:IsShown() then wrap.rebuildSnaps() end
 		wrap.relayout()
 	end

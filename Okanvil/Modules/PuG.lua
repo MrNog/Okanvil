@@ -35,6 +35,9 @@ local defaults = {
 	-- Extra channel beyond the two built-in ones (name or number). "" = none.
 	customChannel = "",
 	toGuild = false,
+	-- Also /yell the line. Yell reaches only the zone you stand in (Dalaran), so
+	-- it adds to General and Global rather than replacing them.
+	toYell = false,
 	active = false,
 	autoReply = false,       -- whisper back automatically when someone applies
 	replyText = "",
@@ -195,6 +198,7 @@ local function applicant(name)
 	if a and a.t and time() - a.t > APPLICANT_TTL then return nil end
 	return a
 end
+M.Applicant = applicant
 
 -- What the INSPECTED spec says this player does. nil = we have not inspected them
 -- (or the answer is stale), so the caller falls through to its other guesses.
@@ -1112,9 +1116,15 @@ local function sendTo(name, msg)
 		SendChatMessage(msg, "GUILD")
 		return true
 	end
+	if name == "YELL" then
+		SendChatMessage(msg, "YELL")
+		return true
+	end
 	local id = resolveChannelId(name)
 	if id and id > 0 then
 		SendChatMessage(msg, "CHANNEL", nil, id)
+		-- remembered so the answers are still collected after a one-off Send once
+		db.lastPostAt = time()
 		return true
 	end
 	return false
@@ -1193,16 +1203,29 @@ local SPEC_WORDS = {
 local PURE_DPS = { MAGE = true, WARLOCK = true, HUNTER = true, ROGUE = true }
 
 -- "5.8k" / "5800" / "5,8k" -> 5800. Returns nil when the text has no gearscore.
+-- A number followed by one of these is a time, a raid size or a date, never a
+-- gearscore: "3min", "25m", "2 hours", "10 man", "9pm".
+local NOT_GS_UNIT = {
+	m = true, min = true, mins = true, minute = true, minutes = true,
+	s = true, sec = true, secs = true, h = true, hr = true, hrs = true,
+	hour = true, hours = true, man = true, men = true, ppl = true,
+	am = true, pm = true, st = true, nd = true, rd = true, th = true, x = true,
+}
+
 local function parseGS(msg)
-	local n, k = msg:match("(%d[%d%.,]*)%s*(k?)")
-	if not n then return nil end
-	n = n:gsub(",", ".")
-	local v = tonumber(n)
-	if not v then return nil end
-	if k == "k" or v < 100 then v = v * 1000 end
-	-- A raid size ("25") or a year is not a gearscore. WotLK GS tops out near 6.5k.
-	if v < 1000 or v > 9000 then return nil end
-	return math.floor(v)
+	for n, unit in msg:lower():gmatch("(%d[%d%.,]*)%s*(%a*)") do
+		n = n:gsub(",", ".")
+		local v = tonumber(n)
+		local k = unit:sub(1, 1) == "k"
+		-- A bare small whole number ("3", "inv in 5") says nothing about gear:
+		-- a gearscore is written "5.4", "5.4k", "5k" or "5400".
+		if v and not NOT_GS_UNIT[unit] and (k or v >= 100 or n:find("%.")) then
+			if k or v < 100 then v = v * 1000 end
+			-- A raid size ("25") or a year is not a gearscore. WotLK GS tops out near 6.5k.
+			if v >= 1000 and v <= 9000 then return math.floor(v) end
+		end
+	end
+	return nil
 end
 M.ParseGS = parseGS
 
@@ -1242,15 +1265,9 @@ local function classify(msg, class)
 end
 M.Classify = classify
 
--- No applicant list and no conversation log.
---
--- Whispers from people wanting in are read in the chat frame, where every other
--- whisper already is. The Messages window that used to hold them was a second
--- inbox for the same text: one more place to check, rather than one fewer.
---
--- `db.applicants` survives as a table because the spec parser still files what
--- it learns from a whisper there (see classify / GuessRole) -- that is a cache
--- of "this name said they were a Ret paladin", not a queue of people waiting.
+-- `db.applicants` holds one entry per whisperer: what their line said about
+-- them (see classify / GuessRole) and where their invite stands, which the
+-- Whispers panel lists (PuG-Whispers.lua).
 
 -- Role tints, the same four the board columns use, so a spec on a row and the
 -- column it belongs in are the same colour.
@@ -1331,8 +1348,7 @@ function M.SubLabel(name)
 	return table.concat(bits, "  ")
 end
 
--- Clear the spec cache. Not a list of people any more -- just what past
--- whispers said about each name -- but it is still worth being able to empty.
+-- Forget every whisperer: their specs and their place in the Whispers panel.
 function M.ClearApplicants()
 	db.applicants = {}
 end
@@ -1347,7 +1363,21 @@ local core = CreateFrame("Frame")
 -- for both; Global is offset half a cycle in Start() so the two never fire on
 -- the same tick (that is what gets a leader muted).
 local SPAM_CHANNELS = { "General", "Global" }
-local SPAM_EVERY = 60
+local SPAM_EVERY = 45
+
+-- Every place the line goes: { timer key, send target, seconds into the cycle }.
+-- General, Yell and Global sit 15s apart, so with all three on one line leaves
+-- every 15s and each channel repeats every 45s. Custom channel and guild fall in
+-- the gaps between them. The optional ones change while spamming.
+local function spamTargets()
+	local list = {}
+	list[#list + 1] = { "General", "General", 0 }
+	if db.toYell then list[#list + 1] = { "__yell", "YELL", 15 } end
+	list[#list + 1] = { "Global", "Global", 30 }
+	if db.customChannel ~= "" then list[#list + 1] = { "__custom", db.customChannel, 22 } end
+	if db.toGuild then list[#list + 1] = { "__guild", "GUILD", 37 } end
+	return list
+end
 
 core:SetScript("OnUpdate", function(self, e)
 	if not db or not db.active then return end
@@ -1362,22 +1392,30 @@ core:SetScript("OnUpdate", function(self, e)
 
 	-- Build the line only when a channel is due. Building it walks the raid
 	-- roster and makes a table per member, and doing that every frame for a post
-	-- once a minute was the cost -- in a raid it ran thousands of times a second.
+	-- every 45s was the cost -- in a raid it ran thousands of times a second.
 	-- Posting itself is never held back: a leader pugging one spot mid-raid
 	-- switched this on and it must keep going, trash pulls included.
 	local msg
-	local function post(key, target)
+	for _, t in ipairs(spamTargets()) do
+		local key = t[1]
 		chElapsed[key] = (chElapsed[key] or 0) + e
-		if chElapsed[key] < SPAM_EVERY then return end
-		chElapsed[key] = 0
-		if msg == nil then msg = outgoing() end
-		if msg ~= "" then sendTo(target, msg) end
+		if chElapsed[key] >= SPAM_EVERY then
+			chElapsed[key] = 0
+			if msg == nil then msg = outgoing() end
+			if msg ~= "" then sendTo(t[2], msg) end
+		end
 	end
-	for _, name in ipairs(SPAM_CHANNELS) do post(name, name) end
-	-- optional extras, set in the More tab
-	if db.customChannel ~= "" then post("__custom", db.customChannel) end
-	if db.toGuild then post("__guild", "GUILD") end
 end)
+
+-- Put each channel at its place in the cycle. General goes out on the next frame
+-- so START does something visible straight away; `wait` holds the whole schedule
+-- back that many seconds.
+local function staggerTargets(wait)
+	chElapsed = {}
+	for _, t in ipairs(spamTargets()) do
+		chElapsed[t[1]] = SPAM_EVERY - (wait or 0) - t[3]
+	end
+end
 
 function M.Start()
 	if not db then return end
@@ -1387,27 +1425,22 @@ function M.Start()
 		return
 	end
 	db.active = true
-	chElapsed = {}
+	staggerTargets()
 
-	-- Post ONCE right now. Waiting a full interval before the first line makes the
-	-- button look dead (60s of silence reads as "it did nothing"), and a leader who
-	-- just hit START wants the line out now.
-	local sent, missing = 0, {}
+	-- Nothing is sent here: the engine posts the first line on the next frame and
+	-- spaces the rest out. Only check which channels can be reached, so a missing
+	-- one is reported now rather than skipped in silence.
+	local reachable, missing = 0, {}
 	for _, name in ipairs(SPAM_CHANNELS) do
-		if sendTo(name, msg) then sent = sent + 1 else missing[#missing + 1] = name end
+		if resolveChannelId(name) then reachable = reachable + 1 else missing[#missing + 1] = name end
 	end
 	if db.customChannel ~= "" then
-		if sendTo(db.customChannel, msg) then sent = sent + 1 else missing[#missing + 1] = db.customChannel end
-	end
-	if db.toGuild then sendTo("GUILD", msg) end
-
-	-- then space the repeats out: General on the minute, Global half a cycle later
-	for i, name in ipairs(SPAM_CHANNELS) do
-		chElapsed[name] = -((i - 1) * (SPAM_EVERY / #SPAM_CHANNELS))
+		if resolveChannelId(db.customChannel) then reachable = reachable + 1 else missing[#missing + 1] = db.customChannel end
 	end
 
-	if sent > 0 then
-		Print("Advertising every " .. SPAM_EVERY .. "s: |cffffd200" .. msg .. "|r")
+	if reachable > 0 or db.toYell or db.toGuild then
+		Print("Advertising in " .. #spamTargets() .. " places, each every " .. SPAM_EVERY ..
+			"s, taking turns: |cffffd200" .. msg .. "|r")
 	end
 	-- A channel you have not joined cannot be posted to, and silently doing nothing
 	-- is the worst outcome -- say which one and how to fix it.
@@ -1444,6 +1477,7 @@ function M.SendNow()
 		if sendTo(db.customChannel, msg) then sent = sent + 1 else missing[#missing + 1] = db.customChannel end
 	end
 	if db.toGuild then sendTo("GUILD", msg) end
+	if db.toYell then sendTo("YELL", msg) end
 	if sent == 0 then
 		Print("|cffff5555Sent nowhere|r -- not in " .. table.concat(missing, " or ") ..
 			". |cff8a8d93Try /join " .. (missing[1] or "General") .. "|r")
@@ -1520,7 +1554,7 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		-- instant the UI comes back is one you never chose to send. Waiting the
 		-- whole cycle leaves time to notice and press Stop.
 		if db.active then
-			chElapsed = {}
+			staggerTargets(SPAM_EVERY)
 			Print(("|cffe0b860LFM is still running|r -- next line in %ds."):format(SPAM_EVERY))
 		end
 		return
@@ -1530,16 +1564,16 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		if not db then return end
 		-- module switched off in Modules = stay silent
 		if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
-		-- Only act while forming. Off-hours whispers are just chat.
-		if not db.active then return end
+		-- Only act while forming: spamming, or within 10 minutes of the last post
+		-- (a "Send once" gets answers too, and replies keep coming after STOP).
+		-- Off-hours whispers are just chat.
+		if not db.active and time() - (db.lastPostAt or 0) > 600 then return end
 
-		-- Whispers are no longer collected into an applicant list. They are read
-		-- in the chat frame like every other whisper -- a second inbox for the
-		-- same messages was one more place to look, not one fewer.
-		--
-		-- What IS still worth keeping is what the line tells us about the person:
-		-- "ret pala 5.4" names a spec and a gearscore, and when they accept the
-		-- invite the board can label their row before any inspect comes back.
+		-- A whisper that asks to join files its sender in the Whispers panel
+		-- (PuG-Whispers.lua), with what the line says about them: "ret pala 5.4"
+		-- names a spec and a gearscore, and when they accept the invite the board
+		-- can label their row before any inspect comes back. Other whispers --
+		-- a friend saying hi, an addon's auto-reply -- are left in chat.
 		local msg, sender = arg1, stripRealm(arg2)
 		if not sender then return end
 		do
@@ -1554,12 +1588,24 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 			-- session add up ("ret pala", then "5.4k").
 			local a = applicant(sender)
 			if a and class and a.class and class ~= a.class then a = nil end
+			local role, spec, gs = classify(msg, class or (a and a.class))
+			-- Already in the panel: every follow-up counts ("5.4k", "inv pls").
+			-- Otherwise only a line that reads like an application gets in.
+			local listed = a and a.status and not a.hidden
+			if not listed and not M.LooksLikeApplication(msg, spec, gs) then return end
 			a = a or { name = sender }
-			local role, spec, gs = classify(msg, class or a.class)
 			a.class = class or a.class
 			a.role, a.spec, a.gs = role or a.role, spec or a.spec, gs or a.gs
 			a.t = time()
+			a.said = msg
+			-- Someone who was turned away, or removed from the panel, and writes
+			-- again is asking again: back to "new". An invite still pending or a
+			-- player already in the raid keeps that status.
+			if not a.status or a.hidden or a.status == "declined" or a.status == "busy" then
+				a.status, a.hidden = "new", nil
+			end
 			db.applicants[sender] = a
+			if M.WhispersChanged then M.WhispersChanged() end
 		end
 
 		-- The auto-reply stays: answering "what gs?" twenty times a night is work

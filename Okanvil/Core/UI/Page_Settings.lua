@@ -574,6 +574,16 @@ function Okanvil:Settings_Invite(p)
 		local sortHint = W.Text(p, "25-man: melee and tanks to groups 1-2, ranged 3-4, healers 5. "
 			.. "Each person is placed once, when they join.", "note", "dim")
 		sortHint:SetPoint("TOPLEFT", X + 2, -232 + Y0); sortHint:SetWidth(600); sortHint:SetJustifyH("LEFT")
+
+		-- PuG spam: also /yell the line. Off by default.
+		local yellLbl = W.Text(p, "PUG SPAM", "note", "dim"); yellLbl:SetPoint("TOPLEFT", X, -266 + Y0)
+		local yellChk = W.Check(p, "Also /yell the LFM line",
+			function() return P.DB().toYell and true or false end,
+			function(v) P.DB().toYell = v and true or false end)
+		yellChk:SetPoint("TOPLEFT", X, -286 + Y0)
+		local yellHint = W.Text(p, "Yell reaches only the zone you stand in. It goes out 15s after General, "
+			.. "then every 45s.", "note", "dim")
+		yellHint:SetPoint("TOPLEFT", X + 2, -312 + Y0); yellHint:SetWidth(600); yellHint:SetJustifyH("LEFT")
 	end
 
 	-- The login toast and its switch are gone: it double-counted one person into
