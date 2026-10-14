@@ -29,7 +29,7 @@ local W = Okanvil.W
 local C = Okanvil.Colors
 
 local FLAT = "Interface\\ChatFrame\\ChatFrameBackground"
-local PANEL_W = 250
+local PANEL_W = 320
 local ROW_H = 42
 local CTRL_FONT, CTRL_H = 13, 26
 
