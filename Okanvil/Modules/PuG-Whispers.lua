@@ -350,6 +350,14 @@ local function auditOf(name)
 	return info and info.audit, info
 end
 
+-- An item level in the colour of the gear it means: green, blue, epic, ICC-heroic orange.
+local function ilvlColour(ilvl)
+	if ilvl >= 264 then return "|cffff8000" end
+	if ilvl >= 245 then return "|cffa335ee" end
+	if ilvl >= 226 then return "|cff0070dd" end
+	return "|cff1eff00"
+end
+
 -- "5.6k" from a gearscore, "i251" from an item level, nil from nothing.
 local function gearShort(info)
 	if info and info.gs and info.gs >= 1000 then return ("%.1fk"):format(info.gs / 1000) end
@@ -382,7 +390,7 @@ local function progressChips(info)
 	local read = info and info.ach
 	local out, n = {}, 0
 	for _, c in ipairs(list) do
-		local label = short .. " " .. c.label
+		local label = c.label
 		if not read then
 			out[#out + 1] = { label .. " ?", "off" }
 		elseif read[c.id] then
@@ -394,7 +402,7 @@ local function progressChips(info)
 	end
 	-- the row's dot: all earned green, some yellow, none red, unread grey
 	local tone = not read and "off" or (n == #list and "ok") or (n > 0 and "warn") or "bad"
-	return out, not read, tone
+	return out, not read, tone, short
 end
 
 local function canKick()
@@ -413,8 +421,8 @@ function M.AuditDetail(name)
 
 	if info then
 		local stat = {}
-		if info.gs then stat[#stat + 1] = DIM .. "GS|r " .. TEXT .. info.gs .. "|r" end
-		if info.ilvl then stat[#stat + 1] = DIM .. "ilvl|r " .. TEXT .. info.ilvl .. "|r" end
+		if info.gs then stat[#stat + 1] = DIM .. "GS|r " .. (M.GSColor and M.GSColor(info.gs) or TEXT) .. info.gs .. "|r" end
+		if info.ilvl then stat[#stat + 1] = DIM .. "ilvl|r " .. ilvlColour(info.ilvl) .. info.ilvl .. "|r" end
 		stat[#stat + 1] = DIM .. "PvP|r " .. ((info.pvp or 0) > 0 and "|cffd94d52" or TEXT) .. (info.pvp or 0) .. "|r"
 		d.stat = table.concat(stat, "    ")
 	end
@@ -439,8 +447,8 @@ function M.AuditDetail(name)
 		if audit.partial then notes[#notes + 1] = "Some items were not cached; reopen later." end
 	end
 
-	local chips, unread, tone = progressChips(info)
-	d.chips, d.chipsLabel, d.chipsTone = chips, "Achiev", tone
+	local chips, unread, tone, short = progressChips(info)
+	d.chips, d.chipsLabel, d.chipsTone = chips, short, tone
 	if chips and unread then notes[#notes + 1] = "Achievements read when they come near." end
 	if a.auditOk then notes[#notes + 1] = "Marked OK." end
 	d.note = table.concat(notes, "\n")

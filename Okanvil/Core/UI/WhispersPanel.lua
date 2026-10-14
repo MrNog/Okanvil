@@ -135,7 +135,7 @@ end
 
 -- One opened row's audit block, laid out from y = -h down. Returns the new h.
 local function layoutDetail(row, d, h, width)
-	row.stat = row.stat or W.Text(row, "", "label")
+	row.stat = row.stat or W.Text(row, "", "body")
 	row.dots, row.clab, row.cval = row.dots or {}, row.clab or {}, row.cval or {}
 	row.chips = row.chips or {}
 	row.note = row.note or W.Text(row, "", "label", "dim")
@@ -193,7 +193,7 @@ local function layoutDetail(row, d, h, width)
 		local b = row.chips[i]
 		if not b then b = newBox(row); row.chips[i] = b end
 		b.text:SetText(c[1]); paintBox(b, c[2])
-		local w = math.floor((b.text:GetStringWidth() or 30) + 14)
+		local w = math.floor((b.text:GetStringWidth() or 30) + 12)
 		if x > x0 and x + w > width - 6 then x = x0; h = h + 24 end
 		b:SetSize(w, 20)
 		b:ClearAllPoints(); b:SetPoint("TOPLEFT", x, -h); b:Show()
