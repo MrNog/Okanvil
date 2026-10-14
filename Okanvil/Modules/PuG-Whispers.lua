@@ -323,7 +323,7 @@ end)
 -- on that inspect. The panel shows a badge per joined row and, opened, what is
 -- missing plus Mark OK / Whisper / Kick. Nothing is sent or done unless clicked.
 -- ------------------------------------------------------------
-local RED, YELLOW, GREEN, DIM, GOLD = "|cffd94d52", "|cfff0c040", "|cff7cfc8a", "|cff8a8d93", "|cffffd200"
+local DIM, TEXT, RARE = "|cff8a8d93", "|cffdcddde", "|cff0070dd"
 local KICK_CONFIRM = 4
 
 -- The row state for a joined player: their applicant entry, or the members entry
@@ -340,32 +340,41 @@ local function auditOf(name)
 	return info and info.audit, info
 end
 
+-- "5.6k" from a gearscore, "i251" from an item level, nil from nothing.
+local function gearShort(info)
+	if info and info.gs and info.gs >= 1000 then return ("%.1fk"):format(info.gs / 1000) end
+	if info and info.ilvl then return "i" .. info.ilvl end
+	return nil
+end
+
+-- { text, tone } for the boxed badge: gearscore plus the issue count.
 function M.AuditBadge(name)
 	local a = joinedState(name)
 	if not a then return nil end
-	if a.auditOk then return GREEN .. "OK|r" end
-	local audit = auditOf(name)
-	if not audit then return DIM .. "...|r" end
+	local audit, info = auditOf(name)
+	local gs = gearShort(info)
+	local function with(mark) return (gs and (gs .. " ") or "") .. mark end
+	if a.auditOk then return { text = with("OK"), tone = "ok" } end
+	if not audit then return { text = gs or "...", tone = "off" } end
 	local hard, soft = Okanvil.Audit.Counts(audit)
-	if hard > 0 then return RED .. "x" .. hard .. "|r" end
-	if soft > 0 then return YELLOW .. "!" .. soft .. "|r" end
-	return GREEN .. "OK|r"
+	if hard > 0 then return { text = with("x" .. hard), tone = "bad" } end
+	if soft > 0 then return { text = with("!" .. soft), tone = "warn" } end
+	return { text = with("OK"), tone = "ok" }
 end
 
-local function progressLine(info)
+-- The raid's achievement chips: earned in gold, missing dim.
+local function progressChips(info)
 	local raid = M.db and M.db.raid
-	local chips = Okanvil.Audit.RaidChips(raid)
-	if #chips == 0 then return nil end
+	local list = Okanvil.Audit.RaidChips(raid)
+	if #list == 0 then return nil end
 	local short = raid
 	for _, r in ipairs(OkanvilRaids or {}) do if r.key == raid then short = r.short end end
-	if not (info and info.ach) then
-		return DIM .. short .. "|r  " .. DIM .. "reads when near|r"
+	local out = {}
+	for _, c in ipairs(list) do
+		local got = info and info.ach and info.ach[c.id]
+		out[#out + 1] = { short .. " " .. c.label .. (got and " +" or ""), got and "gold" or "off" }
 	end
-	local bits = {}
-	for _, c in ipairs(chips) do
-		bits[#bits + 1] = (info.ach[c.id] and GOLD or "|cff5a5c60") .. c.label .. "|r"
-	end
-	return DIM .. short .. "|r  " .. table.concat(bits, "   ")
+	return out, not (info and info.ach)
 end
 
 local function canKick()
@@ -379,48 +388,53 @@ function M.AuditDetail(name)
 	local a = joinedState(name)
 	if not a then return nil end
 	local audit, info = auditOf(name)
-	local lines = {}
+	local d = { checks = {} }
+	local notes = {}
+
+	if info then
+		local stat = {}
+		if info.gs then stat[#stat + 1] = DIM .. "GS|r " .. TEXT .. info.gs .. "|r" end
+		if info.ilvl then stat[#stat + 1] = DIM .. "ilvl|r " .. TEXT .. info.ilvl .. "|r" end
+		stat[#stat + 1] = DIM .. "PvP|r " .. ((info.pvp or 0) > 0 and "|cffd94d52" or TEXT) .. (info.pvp or 0) .. "|r"
+		d.stat = table.concat(stat, "    ")
+	end
 
 	if not audit then
-		lines[#lines + 1] = DIM .. "Gear not read yet -- reads when they come near.|r"
+		notes[#notes + 1] = "Gear not read yet -- reads when they come near."
 	else
-		local hard = Okanvil.Audit.Counts(audit)
-		local stat = {}
-		if info.ilvl then stat[#stat + 1] = DIM .. "ilvl|r " .. info.ilvl end
-		if (info.pvp or 0) > 0 then stat[#stat + 1] = DIM .. "PvP|r " .. RED .. info.pvp .. "|r" end
-		if #stat > 0 then lines[#lines + 1] = table.concat(stat, "   ") end
-
 		local ne = audit.noEnchant or {}
-		lines[#lines + 1] = (#ne > 0 and RED or GREEN) .. "Enchants|r  "
-			.. (#ne > 0 and (table.concat(ne, ", ") .. " missing") or "all done")
+		d.checks[#d.checks + 1] = { #ne > 0 and "bad" or "ok", "Enchants",
+			#ne > 0 and (table.concat(ne, ", ") .. " missing") or "All done" }
 
 		local g = {}
 		if (audit.empty or 0) > 0 then g[#g + 1] = audit.empty .. " empty (" .. table.concat(audit.emptySlots, ", ") .. ")" end
-		if audit.noBuckle then g[#g + 1] = "no buckle" end
-		if (audit.lowGems or 0) > 0 then g[#g + 1] = audit.lowGems .. " rare on raid gear" end
-		local gc = ((audit.empty or 0) > 0 or audit.noBuckle) and RED or ((audit.lowGems or 0) > 0 and YELLOW or GREEN)
-		lines[#lines + 1] = gc .. "Gems|r  " .. (#g > 0 and table.concat(g, ", ") or "all filled, epic")
+		if (audit.lowGems or 0) > 0 then g[#g + 1] = audit.lowGems .. " " .. RARE .. "rare|r gems" end
+		if audit.noBuckle then g[#g + 1] = "Belt no buckle" end
+		local gt = ((audit.empty or 0) > 0 or audit.noBuckle) and "bad" or ((audit.lowGems or 0) > 0 and "warn" or "ok")
+		d.checks[#d.checks + 1] = { gt, "Gems", #g > 0 and table.concat(g, " - ") or "All filled, epic" }
 
 		if audit.meta ~= nil then
-			lines[#lines + 1] = (audit.meta and GREEN or RED) .. "Meta|r  " .. (audit.meta and "active" or "not active")
+			d.checks[#d.checks + 1] = { audit.meta and "ok" or "bad", "Meta", audit.meta and "Active" or "Not active" }
 		end
-		if audit.partial then lines[#lines + 1] = DIM .. "Some items were not cached; reopen later.|r" end
-		if hard == 0 and a.auditOk then lines[#lines + 1] = DIM .. "Marked OK.|r" end
+		if audit.partial then notes[#notes + 1] = "Some items were not cached; reopen later." end
 	end
 
-	local prog = progressLine(info)
-	if prog then lines[#lines + 1] = prog end
+	local chips, unread = progressChips(info)
+	d.chips = chips
+	if chips and unread then notes[#notes + 1] = "Achievements read when they come near." end
+	if a.auditOk then notes[#notes + 1] = "Marked OK." end
+	d.note = table.concat(notes, "\n")
 
 	local msg = audit and Okanvil.Audit.WhisperText(audit)
-	if msg then lines[#lines + 1] = "|cffff80ff" .. msg .. "|r" end
+	if msg then d.preview = "|cffff80ff[W] To " .. name .. ": " .. msg .. "|r" end
 
 	local actions = {}
-	actions[#actions + 1] = { label = a.auditOk and "Unmark" or "Mark OK", width = 62,
+	actions[#actions + 1] = { label = a.auditOk and "Unmark" or "Mark OK", width = 70,
 		tip = "Mark them as fine (green badge), whatever the audit says.",
 		onClick = function() a.auditOk = not a.auditOk or nil; changed() end }
 	if msg then
-		actions[#actions + 1] = { label = a.auditSent and "Again" or "Whisper", kind = "primary", width = 64,
-			tip = "Whisper them the pink line above.",
+		actions[#actions + 1] = { label = a.auditSent and "Whisper again" or "Whisper audit", kind = "primary", width = 100,
+			tip = "Whisper them the pink message above.",
 			onClick = function()
 				SendChatMessage(msg, "WHISPER", nil, name)
 				a.auditSent = true
@@ -442,5 +456,6 @@ function M.AuditDetail(name)
 				changed()
 			end }
 	end
-	return { text = table.concat(lines, "\n"), actions = actions }
+	d.actions = actions
+	return d
 end

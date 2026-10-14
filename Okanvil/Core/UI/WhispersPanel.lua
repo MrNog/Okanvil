@@ -13,9 +13,12 @@
 --   title, subtitle, icon
 --   items()          -> { { name, class, status, t, sub, said, canInvite,
 --                          badge, detail }, ... }
---     badge  = short coloured text next to the name (optional)
---     detail = { text = "...", actions = { { label, kind, width, tip, onClick }, ... } }
---              shown under what they said when the row is opened (optional)
+--     badge  = { text, tone } boxed next to the buttons (optional)
+--     detail = shown under what they said when the row is opened (optional):
+--              { stat = "...", checks = { { tone, label, value }, ... },
+--                chips = { { text, tone }, ... }, note = "...", preview = "...",
+--                actions = { { label, kind, width, tip, onClick }, ... } }
+--     tone   = "ok" | "warn" | "bad" | "gold" | "off"
 --   status          = { [status] = { label, colour }, ... }
 --   filters         = { { key, label, match = { [status] = true } | nil }, ... }
 --   onInvite(name), onDismiss(name), onOpen(name) (optional), onClear()
@@ -102,6 +105,116 @@ function W.ScrollList(parent, x, w, top, bottom)
 end
 
 -- ------------------------------------------------------------
+-- Boxes: the badge, the achievement chips and the whisper preview share one look
+-- -- a dark fill with a 1px edge in the tone's colour.
+-- ------------------------------------------------------------
+local TONES = {
+	ok   = { text = { 0.486, 0.988, 0.541 }, edge = { 0.18, 0.35, 0.20 } },
+	warn = { text = { 0.94, 0.75, 0.25 },    edge = { 0.35, 0.29, 0.11 } },
+	bad  = { text = { 0.85, 0.30, 0.32 },    edge = { 0.35, 0.14, 0.15 } },
+	gold = { text = { 1.0, 0.82, 0.0 },      edge = { 0.32, 0.25, 0.11 } },
+	off  = { text = { 0.541, 0.553, 0.576 }, edge = { 0.184, 0.192, 0.216 } },
+}
+
+local function newBox(parent)
+	local f = CreateFrame("Frame", nil, parent)
+	f:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1,
+		insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+	f.text = W.Text(f, "", "label")
+	f.text:SetPoint("CENTER")
+	return f
+end
+
+local function paintBox(f, tone, keepTextColour)
+	local t = TONES[tone or "off"] or TONES.off
+	local d = C.panelD
+	f:SetBackdropColor(d[1], d[2], d[3], 0.9)
+	f:SetBackdropBorderColor(t.edge[1], t.edge[2], t.edge[3], 1)
+	if not keepTextColour then f.text:SetTextColor(t.text[1], t.text[2], t.text[3]) end
+end
+
+-- One opened row's audit block, laid out from y = -h down. Returns the new h.
+local function layoutDetail(row, d, h, width)
+	row.stat = row.stat or W.Text(row, "", "label")
+	row.dots, row.clab, row.cval = row.dots or {}, row.clab or {}, row.cval or {}
+	row.chips = row.chips or {}
+	row.note = row.note or W.Text(row, "", "label", "dim")
+	row.prev = row.prev or newBox(row)
+
+	if d and d.stat then
+		row.stat:ClearAllPoints(); row.stat:SetPoint("TOPLEFT", 8, -h)
+		row.stat:SetText(d.stat); row.stat:Show()
+		h = h + (row.stat:GetStringHeight() or 12) + 8
+	else
+		row.stat:Hide()
+	end
+
+	local checks = d and d.checks or {}
+	for i, c in ipairs(checks) do
+		local dot, lab, val = row.dots[i], row.clab[i], row.cval[i]
+		if not dot then
+			dot = row:CreateTexture(nil, "ARTWORK"); dot:SetTexture(FLAT); dot:SetSize(7, 7)
+			lab = W.Text(row, "", "label", "dim"); lab:SetJustifyH("LEFT")
+			val = W.Text(row, "", "label"); val:SetJustifyH("LEFT")
+			row.dots[i], row.clab[i], row.cval[i] = dot, lab, val
+		end
+		local t = (TONES[c[1]] or TONES.off).text
+		dot:SetVertexColor(t[1], t[2], t[3], 1)
+		dot:ClearAllPoints(); dot:SetPoint("TOPLEFT", 10, -(h + 4))
+		lab:ClearAllPoints(); lab:SetPoint("TOPLEFT", 24, -h); lab:SetText(c[2])
+		val:ClearAllPoints(); val:SetPoint("TOPLEFT", 96, -h); val:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+		val:SetText(c[3])
+		dot:Show(); lab:Show(); val:Show()
+		h = h + math.max(14, val:GetStringHeight() or 14) + 5
+	end
+	for i = #checks + 1, #row.dots do row.dots[i]:Hide(); row.clab[i]:Hide(); row.cval[i]:Hide() end
+	if #checks > 0 then h = h + 3 end
+
+	local chips = d and d.chips or {}
+	local x = 8
+	for i, c in ipairs(chips) do
+		local b = row.chips[i]
+		if not b then b = newBox(row); row.chips[i] = b end
+		b.text:SetText(c[1]); paintBox(b, c[2])
+		local w = math.floor((b.text:GetStringWidth() or 30) + 14)
+		if x > 8 and x + w > width - 6 then x = 8; h = h + 24 end
+		b:SetSize(w, 20)
+		b:ClearAllPoints(); b:SetPoint("TOPLEFT", x, -h); b:Show()
+		x = x + w + 4
+	end
+	for i = #chips + 1, #row.chips do row.chips[i]:Hide() end
+	if #chips > 0 then h = h + 26 end
+
+	if d and d.note and d.note ~= "" then
+		row.note:ClearAllPoints()
+		row.note:SetPoint("TOPLEFT", 8, -h); row.note:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+		row.note:SetJustifyH("LEFT")
+		row.note:SetText(d.note); row.note:Show()
+		h = h + (row.note:GetStringHeight() or 12) + 8
+	else
+		row.note:Hide()
+	end
+
+	if d and d.preview and d.preview ~= "" then
+		local pv = row.prev
+		paintBox(pv, "off", true)
+		pv.text:ClearAllPoints()
+		pv.text:SetPoint("TOPLEFT", 8, -6); pv.text:SetPoint("TOPRIGHT", -8, -6)
+		pv.text:SetJustifyH("LEFT"); pv.text:SetJustifyV("TOP")
+		pv.text:SetWidth(width - 30)
+		pv.text:SetText(d.preview)
+		local ph = (pv.text:GetStringHeight() or 12) + 12
+		pv:ClearAllPoints()
+		pv:SetPoint("TOPLEFT", 6, -h); pv:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+		pv:SetHeight(ph); pv:Show()
+		h = h + ph + 8
+	else
+		row.prev:Hide()
+	end
+	return h
+end
+
+-- ------------------------------------------------------------
 -- The panel
 -- ------------------------------------------------------------
 function W.WhispersPanel(parent, cfg)
@@ -130,8 +243,8 @@ function W.WhispersPanel(parent, cfg)
 		row.inv:SetPoint("RIGHT", row.w, "LEFT", -3, 0)
 		if cfg.inviteTip then row.inv:Tooltip(cfg.inviteTip) end
 
-		row.badge = W.Text(row, "", "label")
-		row.badge:SetJustifyH("RIGHT")
+		row.badge = newBox(row)
+		row.badge:SetHeight(22)
 
 		row.top = W.Text(row, "", "body")
 		row.top:SetPoint("TOPLEFT", 6, -5)
@@ -152,9 +265,6 @@ function W.WhispersPanel(parent, cfg)
 		row.said:SetJustifyH("LEFT")
 		row.said:SetJustifyV("TOP")
 
-		row.detail = W.Text(row, "", "label")
-		row.detail:SetJustifyH("LEFT")
-		row.detail:SetJustifyV("TOP")
 		row.acts = {}
 
 		row:SetScript("OnEnter", function(s) s.hl:SetVertexColor(1, 1, 1, 0.05) end)
@@ -212,8 +322,18 @@ function W.WhispersPanel(parent, cfg)
 			row.sub:SetText(it.sub or "")
 			if it.canInvite then row.inv:Show() else row.inv:Hide() end
 			row.badge:ClearAllPoints()
-			row.badge:SetPoint("TOPRIGHT", it.canInvite and row.inv or row.w, "TOPLEFT", -4, -5)
-			row.badge:SetText(it.badge or "")
+			row.badge:SetPoint("TOPRIGHT", it.canInvite and row.inv or row.w, "TOPLEFT", -4, 0)
+			local bd = it.badge
+			if bd then
+				row.badge.text:SetText(bd.text or "")
+				paintBox(row.badge, bd.tone)
+				row.badge:SetWidth(math.max(56, math.floor((row.badge.text:GetStringWidth() or 0) + 16)))
+				row.badge:Show()
+				row.top:SetPoint("RIGHT", row.badge, "LEFT", -4, 0)
+			else
+				row.badge:Hide()
+				row.top:SetPoint("RIGHT", it.canInvite and row.inv or row.w, "LEFT", -4, 0)
+			end
 			local h = ROW_H
 			if open then
 				row.said:SetText(it.said or "")
@@ -222,17 +342,8 @@ function W.WhispersPanel(parent, cfg)
 			else
 				row.said:SetText(""); row.said:Hide()
 			end
-			local d = open and it.detail
-			if d and d.text and d.text ~= "" then
-				row.detail:ClearAllPoints()
-				row.detail:SetPoint("TOPLEFT", 6, -h)
-				row.detail:SetPoint("TOPRIGHT", -4, -h)
-				row.detail:SetText(d.text)
-				row.detail:Show()
-				h = h + (row.detail:GetStringHeight() or 0) + 8
-			else
-				row.detail:SetText(""); row.detail:Hide()
-			end
+			local d = open and it.detail or nil
+			h = layoutDetail(row, d, h, (self.child:GetWidth() or 0) > 50 and self.child:GetWidth() or PANEL_W)
 			local acts = d and d.actions or {}
 			local right = -4
 			for ai = #acts, 1, -1 do
