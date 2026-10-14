@@ -1496,6 +1496,13 @@ local WHISPERS = {
 				badge = M.AuditBadge and M.AuditBadge(a.name),
 				detail = M.AuditDetail and M.AuditDetail(a.name) }
 		end
+		for _, p in ipairs(M.GroupMembers and M.GroupMembers() or {}) do
+			local sub = M.SubLabel(p.name)
+			out[#out + 1] = { name = p.name, class = p.class, status = "joined", t = p.t,
+				sub = sub ~= "" and sub or "|cff6f7176spec not read|r",
+				said = "|cff6f7176In the group, did not whisper.|r",
+				badge = M.AuditBadge(p.name), detail = M.AuditDetail(p.name) }
+		end
 		return out
 	end,
 	onInvite = function(name) M.InviteApplicant(name) end,

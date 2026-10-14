@@ -98,9 +98,29 @@ function M.InviteApplicant(name)
 	setStatus(name, "invited")
 end
 
+-- Group members who never whispered: they get a Joined row too, so the gear
+-- audit covers the whole group. [name] = { t, hidden, auditOk, kickAsk }
+local members = {}
+
+function M.GroupMembers()
+	local out = {}
+	local me = UnitName("player")
+	for _, p in ipairs(M.RosterList and M.RosterList() or {}) do
+		local a = p.name and M.Applicant(p.name)
+		if p.name and p.name ~= me and not (a and a.status == "joined") then
+			local m = members[p.name] or { t = time() }
+			members[p.name] = m
+			if not m.hidden then out[#out + 1] = { name = p.name, class = p.class, t = m.t } end
+		end
+	end
+	return out
+end
+
 function M.DismissApplicant(name)
 	local a = M.Applicant(name)
-	if a then a.hidden = true; changed() end
+	if a then a.hidden = true end
+	if members[name] then members[name].hidden = true end
+	changed()
 end
 
 function M.ClearWhispers()
@@ -108,6 +128,7 @@ function M.ClearWhispers()
 		local a = M.Applicant(name)
 		if a then a.hidden = true end
 	end
+	for _, m in pairs(members) do m.hidden = true end
 	changed()
 end
 
@@ -277,7 +298,7 @@ ev:SetScript("OnEvent", function(_, event, msg)
 		local inGroup = (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0
 		if wasInGroup and not inGroup then
 			M.ClearWhispers()
-			settled, watched = nil, {}
+			settled, watched, members = nil, {}, {}
 		end
 		wasInGroup = inGroup
 		syncRoster()
@@ -305,6 +326,14 @@ end)
 local RED, YELLOW, GREEN, DIM, GOLD = "|cffd94d52", "|cfff0c040", "|cff7cfc8a", "|cff8a8d93", "|cffffd200"
 local KICK_CONFIRM = 4
 
+-- The row state for a joined player: their applicant entry, or the members entry
+-- for someone who joined without whispering.
+local function joinedState(name)
+	local a = M.Applicant(name)
+	if a and a.status == "joined" then return a end
+	return members[name]
+end
+
 local function auditOf(name)
 	local I = Okanvil.Inspect
 	local info = I and I.Info and I.Info(name)
@@ -312,8 +341,8 @@ local function auditOf(name)
 end
 
 function M.AuditBadge(name)
-	local a = M.Applicant(name)
-	if not (a and a.status == "joined") then return nil end
+	local a = joinedState(name)
+	if not a then return nil end
 	if a.auditOk then return GREEN .. "OK|r" end
 	local audit = auditOf(name)
 	if not audit then return DIM .. "...|r" end
@@ -347,8 +376,8 @@ local function canKick()
 end
 
 function M.AuditDetail(name)
-	local a = M.Applicant(name)
-	if not (a and a.status == "joined") then return nil end
+	local a = joinedState(name)
+	if not a then return nil end
 	local audit, info = auditOf(name)
 	local lines = {}
 
