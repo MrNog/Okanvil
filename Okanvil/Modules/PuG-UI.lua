@@ -1469,19 +1469,26 @@ local WHISPERS = {
 		busy     = { "in group", "|cffe05555" },
 		offline  = { "offline",  "|cffe05555" },
 	},
-	-- "Out" gathers the three ways an invite can fail.
+	-- New also holds the failed invites (declined, in a group, offline): each
+	-- can be asked again, and its status says why it failed.
 	filters = {
-		{ key = "all",     label = "All" },
-		{ key = "new",     label = "New",     match = { new = true } },
+		{ key = "new",     label = "New",     match = { new = true, declined = true, busy = true, offline = true } },
 		{ key = "invited", label = "Invited", match = { invited = true } },
-		{ key = "out",     label = "Out",     match = { declined = true, busy = true, offline = true } },
+		{ key = "joined",  label = "Joined",  match = { joined = true } },
 	},
 	emptyHint = "Post your LFM line and everyone who\nasks to join shows up here.",
 	items = function()
 		local out = {}
 		for _, a in ipairs(M.Whispers()) do
 			local sub = M.SubLabel(a.name)
-			out[#out + 1] = { name = a.name, class = a.class, status = a.status, t = a.t,
+			-- a whisper carries no class: once they joined or were inspected, we know it
+			local class = a.class
+			if not class then
+				local I = Okanvil.Inspect
+				local _, c = I and I.Get and I.Get(a.name)
+				class = c or select(2, UnitClass(a.name))
+			end
+			out[#out + 1] = { name = a.name, class = class, status = a.status, t = a.t,
 				sub = sub ~= "" and sub or "|cff6f7176spec not read|r",
 				said = "|cffff80ff" .. (a.said or "") .. "|r",
 				-- a "declined" can be asked again

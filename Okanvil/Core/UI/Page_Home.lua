@@ -288,13 +288,24 @@ function Okanvil:BuildHome()
 		r.spec = W.Text(r, "", "note", "dim")
 		r.spec:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", 8, 0)
 		r.spec:SetJustifyH("LEFT")
+		-- One line each: with only a width set, a long "Protection  offline"
+		-- wrapped and its first line climbed over the name. A fixed height makes
+		-- the text cut with "..." instead.
+		for _, fs in ipairs({ r.name, r.spec }) do
+			local _, size = fs:GetFont()
+			fs:SetHeight(math.ceil((size or 12) + 2))
+		end
+		-- online right now: green, offline grey, hollow while the /who queue gets to them
+		r.dot = r:CreateTexture(nil, "ARTWORK")
+		r.dot:SetTexture("Interface\\Buttons\\WHITE8x8")
+		r.dot:SetSize(8, 8); r.dot:SetPoint("RIGHT", -10, 0)
 		r.badge = W.Text(r, "", "note", "accent")
-		r.badge:SetPoint("RIGHT", -8, 0)
+		r.badge:SetPoint("RIGHT", r.dot, "LEFT", -8, 0)
 		card.tiles[i] = r
 		return r
 	end
 
-	local function fillTile(r, p, width)
+	local function fillTile(r, p, width, snap)
 		-- The spec saved with the snapshot is what they played that night. The
 		-- live inspect cache only stands in for a snapshot saved without one, and
 		-- only when it is recent -- an old reading is shown as unknown rather than
@@ -317,14 +328,26 @@ function Okanvil:BuildHome()
 		r.name:SetText(p.name or "?")
 		r.name:SetWidth(width - 84)
 
+		-- status as of now (checked when the snapshot opened), not as of that night
+		local G = Okanvil.Guild
+		local on, zone, checking
+		if G and G.LiveOf then on, zone, checking = G.LiveOf(p.name, snap) end
+
 		local sub = spec or "spec unknown"
 		if (p.level or 0) > 0 and p.level < 80 then sub = sub .. "  |cff5e6166lvl " .. p.level .. "|r" end
-		if p.online == false then sub = sub .. "  |cff5e6166offline|r" end
+		if checking then sub = sub .. "  |cff5e6166checking...|r"
+		elseif on and zone and zone ~= "" then sub = sub .. "  |cff5e6166" .. zone .. "|r"
+		elseif on == false then sub = sub .. "  |cff5e6166offline|r" end
 		r.spec:SetText(sub)
-		r.spec:SetWidth(width - 84)
+		r.spec:SetWidth(width - 96)
+
+		if on then r.dot:SetVertexColor(0.31, 0.82, 0.42, 1); r.dot:Show()
+		elseif on == false then r.dot:SetVertexColor(0.37, 0.38, 0.40, 1); r.dot:Show()
+		elseif checking then r.dot:SetVertexColor(0.37, 0.38, 0.40, 0.35); r.dot:Show()
+		else r.dot:Hide() end
 
 		r.badge:SetText(ROLE_BADGE[p.role or ""] or "")
-		r:SetAlpha(p.online == false and 0.5 or 1)
+		r:SetAlpha(on == false and 0.5 or 1)
 	end
 
 	-- Lays the cards out under the snapshot row at offset y; returns the y below them.
@@ -369,7 +392,7 @@ function Okanvil:BuildHome()
 				r:ClearAllPoints()
 				r:SetPoint("TOPLEFT", 0, -(CARD_HEAD_H + (i - 1) * PROW_H))
 				r:SetSize(cardW, PROW_H)
-				fillTile(r, p, cardW)
+				fillTile(r, p, cardW, snap)
 				r:Show()
 			end
 			card:Show()
@@ -378,6 +401,7 @@ function Okanvil:BuildHome()
 		return top + lineH + 12
 	end
 
+	local checkOnline   -- set below; the row click needs it before it exists
 	local function rebuildSnaps()
 		local G = Okanvil.Guild
 		for _, r in ipairs(wrap.snapRows) do r:Hide() end
@@ -388,7 +412,7 @@ function Okanvil:BuildHome()
 		if #snaps == 0 or not G then
 			wrap.snapEmpty = wrap.snapEmpty or W.Text(schild, "", "body", "dim")
 			wrap.snapEmpty:ClearAllPoints(); wrap.snapEmpty:SetPoint("TOPLEFT", 4, -6)
-			wrap.snapEmpty:SetText(G and "|cff888888No snapshots on this toon yet. One is saved automatically at the first pull of a raid.|r"
+			wrap.snapEmpty:SetText(G and "|cff888888No snapshots on this toon yet. One is saved automatically at the first boss kill of a raid.|r"
 				or "|cff888888Guild module not loaded.|r")
 			wrap.snapEmpty:Show(); schild:SetHeight(40); ssb:SetShown(false); return
 		end
@@ -403,12 +427,15 @@ function Okanvil:BuildHome()
 					if not sn then return end
 					if wrap.snapOpen == sn then wrap.snapOpen = nil else wrap.snapOpen = sn end
 					rebuildSnaps()
+					checkOnline(wrap.snapOpen)
 				end)
 				r.del = W.Button(r, "X", "danger"); r.del:SetSize(24, 22); r.del:SetPoint("RIGHT", -8, 0)
+				r.chk = W.Button(r, "Recheck"); r.chk:SetSize(72, 22)
+				r.chk:Tooltip("Check again who from this raid is online now.")
 				r.export = W.Button(r, "Export"); r.export:SetSize(72, 22); r.export:SetPoint("RIGHT", r.del, "LEFT", -6, 0)
 				r.inv = W.Button(r, "Invite", "primary"); r.inv:SetSize(60, 22)
 				r.inv:SetPoint("RIGHT", r.export, "LEFT", -6, 0)
-				Okanvil.UI.HoverReveal(r, { r.inv, r.export, r.del })
+				Okanvil.UI.HoverReveal(r, { r.chk, r.inv, r.export, r.del })
 				wrap.snapRows[i] = r
 			end
 			r._snap = snap
@@ -419,6 +446,7 @@ function Okanvil:BuildHome()
 			local where = (snap.zone ~= "" and snap.zone) or "Unknown"
 			local isOpen = (wrap.snapOpen == snap)
 			local size, heroic = Okanvil.UI.RaidDifficulty(snap.difficulty)
+			local cDone, cTotal = G.OnlineCheckProgress and G.OnlineCheckProgress(snap)
 			Okanvil.UI.PaintRecordRow(r, {
 				size = size or ((snap.groupSize or 0) > 0 and snap.groupSize or nil),
 				heroic = heroic,
@@ -426,7 +454,8 @@ function Okanvil:BuildHome()
 				sub = Okanvil.UI.NightStamp(snap.t) .. "   |cff5e6166·|r   " .. (snap.count or 0)
 					.. " players   |cff5e6166·|r   "
 					.. (snap.lockoutId and ("ID " .. snap.lockoutId .. "   |cff5e6166·|r   ") or "")
-					.. (snap.trigger or ""),
+					.. (snap.trigger or "")
+					.. (cTotal and ("   |cff5e6166·|r   |cffe0b860checking " .. cDone .. "/" .. cTotal .. "|r") or ""),
 				open = isOpen,
 			})
 
@@ -436,9 +465,13 @@ function Okanvil:BuildHome()
 			-- Exports feed the website, which is officer work: no button for anyone else.
 			local canExport = Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()
 			r.export._allowed = canExport and true or false
+			r.chk._allowed = isOpen
+			r.chk:SetScript("OnClick", function() checkOnline(snap) end)
 			r._revealUpdate()
 			r.inv:ClearAllPoints()
 			r.inv:SetPoint("RIGHT", canExport and r.export or r.del, "LEFT", -6, 0)
+			r.chk:ClearAllPoints()
+			r.chk:SetPoint("RIGHT", r.inv, "LEFT", -6, 0)
 			r.inv:Tooltip("Invite everyone from this snapshot (" .. (snap.count or 0) .. " players).\nAlready in the group, or offline, are skipped.")
 			r.inv:SetScript("OnClick", function()
 				local sent, total = G.InviteSnapshot(snap)
@@ -448,7 +481,7 @@ function Okanvil:BuildHome()
 				end
 			end)
 			r.del:SetScript("OnClick", function()
-				if wrap.snapOpen == snap then wrap.snapOpen = nil end
+				if wrap.snapOpen == snap then wrap.snapOpen = nil; checkOnline(nil) end
 				G.DeleteSnapshot(snap)
 				rebuildSnaps()
 			end)
@@ -462,6 +495,17 @@ function Okanvil:BuildHome()
 		syncRowMouse(ssf, schild)
 	end
 	wrap.rebuildSnaps = rebuildSnaps
+
+	-- Who from the open snapshot is online now. Collapsing it (snap = nil) stops
+	-- the /who queue; each answer repaints while that snapshot is still open.
+	checkOnline = function(snap)
+		local G = Okanvil.Guild
+		if not (G and G.CheckSnapshotOnline) then return end
+		if not snap then G.StopOnlineCheck(); return end
+		G.CheckSnapshotOnline(snap, function()
+			if wrap.snapOpen == snap then rebuildSnaps() end
+		end)
+	end
 
 	-- Re-measure only, like the online card: rebuildSnaps() re-renders every row
 	-- and rebuilds the body text of any expanded one, which is far too much to run

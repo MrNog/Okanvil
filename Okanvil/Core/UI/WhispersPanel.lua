@@ -193,7 +193,9 @@ function W.WhispersPanel(parent, cfg)
 			local open = self.open == it.name
 			row._name, row._open = it.name, open
 			local look = cfg.status[it.status] or { it.status or "", "|cff8a8d93" }
-			row.top:SetText(classHex(it.class) .. it.name .. "|r  " .. look[2] .. look[1] .. "|r  |cff6f7176"
+			-- the tab already says it ("joined" under Joined): leave the room to the name
+			local word = (it.status == cur.key) and "" or (look[2] .. look[1] .. "|r  ")
+			row.top:SetText(classHex(it.class) .. it.name .. "|r  " .. word .. "|cff6f7176"
 				.. ago(it.t) .. "|r")
 			row.sub:SetText(it.sub or "")
 			if it.canInvite then row.inv:Show() else row.inv:Hide() end

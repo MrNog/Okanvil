@@ -1340,12 +1340,22 @@ end
 -- everyone sees the items TO ROLL before they are handed out. (Comms.Send
 -- escolhe RAID/PARTY sozinho e no-op se estivermos solo.)
 -- ------------------------------------------------------------
--- Corpses we've already scanned this login, by loot-source GUID. Without this, each
--- slot is added as its own line (allowDup below), so RE-opening the same corpse would
--- duplicate every item. Keyed by the target/loot GUID so a second LOOT_OPENED on the
--- same body is a no-op, while a different corpse dropping the same item still counts.
+-- Each slot is added as its own line (allowDup below), so RE-opening the same corpse
+-- would duplicate every item: a corpse is scanned once per run (scannedOnRun, by its
+-- GUID), while a different corpse dropping the same item still counts. Containers
+-- have no GUID and are tracked here instead, once per run key.
 local scannedCorpses = {}
 local function captureCorpse()
+	-- A creature's GUID is only unique inside ONE instance: Toravon has the same GUID
+	-- in every VoA. So the scanned corpses live on the run's SESSION -- one per raid
+	-- lockout (ICC 10 and 25 the same day, ToC four times a week: each its own), and
+	-- saved with it, so a /reload mid-raid does not scan a body twice either.
+	local function scannedOnRun()
+		local s = currentSession(false)
+		if not s then return nil end
+		s.scanned = s.scanned or {}
+		return s.scanned
+	end
 	if not shouldRecordHere() then return end
 	-- AUTHORITY BY LOOT METHOD: under need/greed / group / freeforall the client fires
 	-- START_LOOT_ROLL once per item on every player -- that is the single source of truth
@@ -1365,7 +1375,8 @@ local function captureCorpse()
 	if not deadNPC("target") and deadNPC("mouseover") then lootUnit = "mouseover" end
 	-- one scan per physical corpse
 	local lootGuid = UnitGUID and UnitGUID(lootUnit)
-	if lootGuid and scannedCorpses[lootGuid] then return end
+	local seen = lootGuid and scannedOnRun()
+	if seen and seen[lootGuid] then return end
 	-- CONTAINER GUARD: opening a bag from your own inventory (Sack of Frosty Treasures
 	-- and friends) fires the same LOOT_OPENED as a corpse, but there is no corpse behind
 	-- it -- the target is whatever happened to be selected, or nothing. Without this the
@@ -1553,7 +1564,10 @@ local function captureCorpse()
 			end
 		end
 	end
-	if lootGuid and added > 0 then scannedCorpses[lootGuid] = true end
+	if lootGuid and added > 0 then
+		local done = scannedOnRun()
+		if done then done[lootGuid] = true end
+	end
 	Okanvil:Trace("LOOT", ("opened %s as %s: %d item(s), %d new, %s"):format(
 		tostring(srcKey), tostring(boss), n, added,
 		(owner and owner ~= me) and ("sent by " .. owner .. " already")

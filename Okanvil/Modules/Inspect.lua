@@ -188,12 +188,16 @@ local function isPvPItem(link)
 	local ok = pcall(gearTip.SetHyperlink, gearTip, link)
 	if not ok then return false end
 	local pat = resilienceMatcher()
+	local found = false
 	for i = 2, 20 do
 		local fs = _G["OkanvilInspectGearTipTextLeft" .. i]
 		local t = fs and fs:GetText()
-		if t and t:find(pat) then return true end
+		if t and t:find(pat) then found = true; break end
 	end
-	return false
+	-- SetHyperlink shows the tooltip; a tooltip addon that anchors every tooltip
+	-- would otherwise draw it on screen for a frame, once per item scanned
+	gearTip:Hide()
+	return found
 end
 
 -- gs, avgIlvl, pvpCount, pvpSlots  (pvpSlots = { "Hands", "Legs" })

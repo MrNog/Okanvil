@@ -71,7 +71,11 @@ function M.Whispers(filter)
 	table.sort(out, function(x, y)
 		local ox, oy = STATUS_ORDER[x.status] or 9, STATUS_ORDER[y.status] or 9
 		if ox ~= oy then return ox < oy end
-		return (x.t or 0) > (y.t or 0)            -- newest whisper first
+		-- oldest first, by their FIRST whisper: a newcomer joins the bottom and a
+		-- follow-up ("5.4k") does not move a row, so the Inv under the cursor stays put
+		local fx, fy = x.first or x.t or 0, y.first or y.t or 0
+		if fx ~= fy then return fx < fy end
+		return x.name < y.name
 	end)
 	return out
 end
@@ -218,8 +222,15 @@ local function readSpec(name)
 end
 
 function M.CheckJoinersFillAsks()
-	if not (M.db and M.db.active) then settled, watched = nil, {}; return end
+	if not M.db then return end
 	local list = M.RosterList()
+	if not M.db.active then
+		-- not hosting: still read each group member once, as they come in range,
+		-- so the board shows spec and gear for a group someone else is leading
+		settled = nil
+		for _, p in ipairs(list) do readSpec(p.name) end
+		return
+	end
 	if not settled then
 		-- spamming just started: whoever is already here asked for nothing, but
 		-- their specs are worth reading for the board
@@ -240,6 +251,7 @@ function M.CheckJoinersFillAsks()
 	if changed and M.RefreshUI then M.RefreshUI() end
 end
 
+local wasInGroup          -- nil until the first roster event: a login solo is not a leave
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("CHAT_MSG_SYSTEM")
 ev:RegisterEvent("RAID_ROSTER_UPDATE")
@@ -258,6 +270,14 @@ ev:SetScript("OnEvent", function(_, event, msg)
 			end
 		end
 	else
+		-- leaving the group ends that pug: its whispers go, and the next group
+		-- gets its specs read afresh
+		local inGroup = (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0
+		if wasInGroup and not inGroup then
+			M.ClearWhispers()
+			settled, watched = nil, {}
+		end
+		wasInGroup = inGroup
 		syncRoster()
 		M.CheckJoinersFillAsks()
 	end

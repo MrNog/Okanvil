@@ -693,6 +693,26 @@ local VOA_SLOTS = {
 }
 M.VoASlots = VOA_SLOTS
 
+-- The spec a whisper named ("resto sham", "boomkin"), in the Inspect module's
+-- spec names. It places a hybrid who joined out of inspect range; an inspect,
+-- once it lands, wins. Single-set classes need no entry.
+local WHISPER_SPEC = {
+	["Resto Sham"] = "Restoration", ["Resto Dru"] = "Restoration", ["Resto"] = "Restoration",
+	["Holy Pala"] = "Holy", ["Holy Pri"] = "Holy", ["Holy"] = "Holy", ["Disc"] = "Discipline",
+	["Ret"] = "Retribution", ["Shadow"] = "Shadow", ["Boomkin"] = "Balance",
+	["Enh"] = "Enhancement", ["Ele"] = "Elemental", ["Cat"] = "Feral (Cat)",
+}
+
+-- An "Ask for" spec chip -> the VoA places it fills. A plain class chip fills
+-- any place of that class and needs no entry.
+local VOA_PICK_KEYS = {
+	DEATHKNIGHT_TANK = { "TANK1", "TANK2" }, WARRIOR_PROT = { "TANK1", "TANK2" },
+	PALADIN_PROT = { "TANK1", "TANK2" },     DRUID_BEAR = { "TANK1", "TANK2" },
+	PALADIN_HOLY = { "HPALA" }, PRIEST_DISC = { "HPRIEST" }, PRIEST_HOLY = { "HPRIEST" },
+	SHAMAN_RESTO = { "RSHAM" }, DRUID_RESTO = { "RDRUID" }, SHAMAN_ENH = { "ENH" },
+	SHAMAN_ELE = { "ELE" },     DRUID_BALANCE = { "BOOMKIN" },
+}
+
 -- Who holds each place. Returns the places in board order, each
 -- { def = slot, who = player or nil, dupes = { players on the same set } }, and
 -- the raiders it could not place: hybrids whose spec has not been read yet (a
@@ -711,6 +731,13 @@ function M.VoABoard()
 		if I and I.Get then
 			local s, _, r = I.Get(pl.name)
 			spec, role = s, r
+		end
+		if not spec then
+			local a = M.Applicant and M.Applicant(pl.name)
+			if a and (not a.class or a.class == cls) then
+				spec = WHISPER_SPEC[a.spec or ""]
+				if a.role == "tank" then role = "tank" end
+			end
 		end
 		-- a hand placement in the Tank column is the leader's call and wins
 		local hand = M.AssignedRole and M.AssignedRole(pl.name)
@@ -737,6 +764,24 @@ function M.VoABoard()
 	return places, unplaced
 end
 
+-- "1 Tank (no Pala)": the tank classes already placed are not asked for again,
+-- so a second prot paladin does not whisper for the open tank place.
+local function tankAsk(places, n)
+	local seen, no = {}, {}
+	for _, p in ipairs(places) do
+		local cls = p.def.tank and p.who and p.who.class and p.who.class:upper()
+		if cls and not seen[cls] then
+			seen[cls] = true
+			for _, c in ipairs(OkanvilClasses or {}) do
+				if c.token == cls then no[#no + 1] = c.short end
+			end
+		end
+	end
+	local s = n .. " Tank"
+	if #no > 0 then s = s .. " (no " .. table.concat(no, "/") .. ")" end
+	return s
+end
+
 -- The empty places, as the LFM line names them: "Ret, Boomkin, 2 Tank", and how
 -- many places that is (the two tanks count as two).
 function M.VoAMissing()
@@ -748,7 +793,7 @@ function M.VoAMissing()
 			if p.def.tank then tanks = tanks + 1 else out[#out + 1] = p.def.short end
 		end
 	end
-	if tanks > 0 then out[#out + 1] = tanks .. " Tank" end
+	if tanks > 0 then out[#out + 1] = tankAsk(places, tanks) end
 	return out, n
 end
 
@@ -762,12 +807,15 @@ local VOA_NAME_AT = 6
 function M.VoAAsked()
 	local ask = db.voaAsk or {}
 	local out, tanks = {}, 0
-	for _, p in ipairs(M.VoABoard()) do
-		if not p.who and ask[p.def.key] then
-			if p.def.tank then tanks = tanks + 1 else out[#out + 1] = p.def.short end
+	local places = M.VoABoard()
+	for _, p in ipairs(places) do
+		if ask[p.def.key] then
+			-- filled: the ask is answered, so it goes (it does not come back if they leave)
+			if p.who then ask[p.def.key] = nil
+			elseif p.def.tank then tanks = tanks + 1 else out[#out + 1] = p.def.short end
 		end
 	end
-	if tanks > 0 then out[#out + 1] = tanks .. " Tank" end
+	if tanks > 0 then out[#out + 1] = tankAsk(places, tanks) end
 	return out
 end
 
@@ -1040,12 +1088,31 @@ local function buildMessage()
 
 	-- A class run asks by class, not by role, so its picks go at the end rather
 	-- than beside a role count that does not apply.
+	-- A pick whose places are all taken is dropped from the line.
 	if db.classRun then
+		local open = {}
+		for _, p in ipairs(M.VoABoard()) do if not p.who then open[p.def.key] = true end end
+		local function stillOpen(tok)
+			local keys = VOA_PICK_KEYS[tok]
+			if keys then
+				for _, k in ipairs(keys) do if open[k] then return true end end
+				return false
+			end
+			for _, s in ipairs(VOA_SLOTS) do
+				if s.class == tok and open[s.key] then return true end
+			end
+			return false
+		end
 		local seen, all = {}, {}
 		for _, r in ipairs(ROLES) do
-			local w = wantText(r)
-			for bit in w:gmatch("[^/]+") do
-				if not seen[bit] then seen[bit] = true; all[#all + 1] = bit end
+			local picks = rolePicks(r)
+			for _, tok in ipairs(M.ASKS[r] or {}) do
+				if picks[tok] and stillOpen(tok) then
+					local short
+					for _, s in ipairs(OkanvilClassSpecs or {}) do if s.token == tok then short = s.short end end
+					for _, c in ipairs(OkanvilClasses or {}) do if c.token == tok then short = c.short end end
+					if short and not seen[short] then seen[short] = true; all[#all + 1] = short end
+				end
 			end
 		end
 		if #all > 0 then parts[#parts + 1] = "(" .. table.concat(all, "/") .. ")" end
@@ -1419,6 +1486,14 @@ end
 
 function M.Start()
 	if not db then return end
+	-- A class run with nothing picked asks for every empty place; each one leaves
+	-- the line as somebody fills it (VoAAsked). Picks the leader made are kept.
+	if db.classRun and not next(db.voaAsk or {}) then
+		db.voaAsk = {}
+		for _, p in ipairs(M.VoABoard()) do
+			if not p.who then db.voaAsk[p.def.key] = true end
+		end
+	end
 	local msg = clickedOutgoing()
 	if msg == "" then
 		Print("|cffff5555Nothing to advertise|r -- the message is empty.")
@@ -1578,7 +1653,8 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 		if not sender then return end
 		do
 			local class
-			local guid = select(9, ...)
+			-- `...` starts at arg3, so the sender's GUID (arg12) is its 10th value
+			local guid = select(10, ...)
 			if guid and GetPlayerInfoByGUID then
 				class = select(2, GetPlayerInfoByGUID(guid))
 			end
@@ -1603,7 +1679,9 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2, ...)
 			-- player already in the raid keeps that status.
 			if not a.status or a.hidden or a.status == "declined" or a.status == "busy" then
 				a.status, a.hidden = "new", nil
+				a.first = time()   -- asking again: joins the bottom of the list
 			end
+			a.first = a.first or a.t
 			db.applicants[sender] = a
 			if M.WhispersChanged then M.WhispersChanged() end
 		end

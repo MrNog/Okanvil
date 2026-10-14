@@ -975,6 +975,16 @@ local COL_DIFF = 640     -- the ilvl gap
 local COL_VOTE = 700     -- council votes: count, two names, the Vote button
 local BOARD_W  = 980
 
+-- Sets "<colour><text>|r", cutting the text with "..." until it fits maxW pixels.
+local function fitText(fs, hex, text, maxW)
+	fs:SetText(hex .. text .. "|r")
+	if fs:GetStringWidth() <= maxW then return end
+	for n = #text - 1, 1, -1 do
+		fs:SetText(hex .. text:sub(1, n):gsub("[%s,]+$", "") .. "...|r")
+		if fs:GetStringWidth() <= maxW then return end
+	end
+end
+
 -- "<idx>=<response>/<equippedID>/<diff>", with the two gear fields optional so an
 -- older client (or one that could not read its own slot) still parses. An
 -- "E=<skill>" part is the raider's Enchanting skill, kept as out.ench.
@@ -2341,23 +2351,22 @@ function C_.RepaintBoard(open)
 				local hex = (eqQ and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[eqQ])
 					and ("|c" .. ITEM_QUALITY_COLORS[eqQ].hex:gsub("^|c", "")) or "|cffffffff"
 				-- Two items (rings, trinkets) share the column, so each gets half.
-				local maxLen = d.eq2 and 14 or 32
-				local short = eqName or "?"
-				if #short > maxLen then short = short:sub(1, maxLen - 1) .. "..." end
-				r.spec:SetText(hex .. short .. "|r")
+				-- Trimmed by drawn width, not characters: the font size varies with
+				-- the UI scale, so a character count still ran into the next item.
+				local colW = COL_DIFF - 8 - COL_GEAR
+				local nameW = (d.eq2 and math.floor(colW / 2) or colW) - (COL_SPEC - COL_GEAR) - 6
+				fitText(r.spec, hex, eqName or "?", nameW)
 				if d.eq2 then
 					local n2, l2, q2, _, _, _, _, _, _, tex2 = GetItemInfo(d.eq2)
 					r._eqLink2 = l2
 					tex2 = tex2 or (GetItemIcon and GetItemIcon(d.eq2))
 					r.eqIcon2:ClearAllPoints()
-					r.eqIcon2:SetPoint("LEFT", r.spec, "RIGHT", 8, 0)
+					r.eqIcon2:SetPoint("LEFT", r, "LEFT", COL_GEAR + math.floor(colW / 2), 0)
 					if tex2 then r.eqIcon2:SetTexture(tex2) else r.eqIcon2:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark") end
 					r.eqIcon2:Show()
 					local hex2 = (q2 and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q2])
 						and ("|c" .. ITEM_QUALITY_COLORS[q2].hex:gsub("^|c", "")) or "|cffffffff"
-					local s2 = n2 or "?"
-					if #s2 > maxLen then s2 = s2:sub(1, maxLen - 1) .. "..." end
-					r.spec2:SetText(hex2 .. s2 .. "|r")
+					fitText(r.spec2, hex2, n2 or "?", nameW)
 				end
 			else
 				r.eqIcon:Hide()

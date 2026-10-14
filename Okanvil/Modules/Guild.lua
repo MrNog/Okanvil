@@ -2,7 +2,7 @@
 -- Okanvil -- Guild (native core module, not a plugin).
 -- Two exports for the RATS web hub:
 --   * Roster export   -- the full guild roster as JSON (comp/guild importer).
---   * Attendance      -- a snapshot of the raid group at the first pull of the
+--   * Attendance      -- a snapshot of the raid group at the first boss kill of the
 --                        night (auto, MRT-style) or on demand, as JSON.
 -- Attendance capture runs ALWAYS (core), so a raid is recorded even if you
 -- never open the window.
@@ -217,8 +217,8 @@ local function snapshotRaid(trigger, bossName)
 		boss = bossName or "", trigger = trigger,
 		char = UnitName("player") or "",   -- which toon took it: lockout IDs are per character
 		count = #players, players = players,
-		-- nil at the first pull of a fresh lockout: nobody is saved until the first
-		-- boss dies. G.FillLockout adds it as soon as the game reports it.
+		-- set: the snapshot waits until we are saved. Snapshots from older versions were
+		-- taken at the first pull, before the lockout existed; G.FillLockout fills those.
 		lockoutId = myLockoutId(zone, difficultyID),
 	}
 end
@@ -277,7 +277,7 @@ end
 -- again and overwrites the snapshot's spec with whatever it just read; anyone
 -- it could not reach (offline, out of range) keeps the recent guess or none.
 --
--- In combat it waits: the automatic snapshot is taken at the first pull, and an
+-- In combat it waits: a snapshot can be taken mid-fight, and an
 -- inspect round in the middle of a boss both misses whoever is out of range and
 -- is the last thing anyone wants running then. Busy (another module is already
 -- scanning) it tries again a few times.
@@ -326,7 +326,7 @@ end
 -- ------------------------------------------------------------
 -- The LOCKOUT ID of a snapshot taken before anyone was saved.
 --
--- The auto snapshot fires at the first pull; the lockout only exists once the
+-- Snapshots from older versions were taken at the first pull; the lockout only exists once the
 -- first boss is dead. So after each fight in a raid we ask the server for our
 -- lockouts (RequestRaidInfo is async: the answer is UPDATE_INSTANCE_INFO) and fill
 -- the newest snapshot of this instance that is still missing its id -- only one
@@ -415,6 +415,164 @@ function G.InviteSnapshot(snap)
 		return 0, #names
 	end
 	return I.InviteNames(names), #names
+end
+
+-- ------------------------------------------------------------
+-- Who from a snapshot is online RIGHT NOW (checked when the snapshot is opened).
+--
+-- Guild members and the current group are answered at once from the roster.
+-- Everyone else (pugs) goes through /who, one name at a time. Servers differ in
+-- how soon they answer the next /who: the queue starts fast and, each time an
+-- answer never comes, doubles the wait and asks that name once more. The query runs silently -- results go to the event, not the Who
+-- window or chat -- and steps aside whenever the player runs a /who themselves.
+-- ------------------------------------------------------------
+local WHO_GAP_MIN, WHO_GAP_MAX, WHO_TIMEOUT = 1, 6, 4
+local whoGap = WHO_GAP_MIN   -- learned for the session
+local whoRetried = {}
+
+G.live = G.live or {}     -- [name] = { on = bool, zone = string|nil, at = time() }
+local whoQ, whoName, whoSentAt, whoSnap, whoDone, whoTotal, whoCb = {}, nil, 0, nil, 0, 0, nil
+local whoOurs = false     -- the SendWho in flight is ours
+local whoNextAt = 0
+
+local function setLive(name, on, zone)
+	G.live[name] = { on = on, zone = zone, at = time() }
+end
+
+-- [name] = { online, zone } for every guild member, offline ones included.
+local function guildRoster()
+	local out = {}
+	if not IsInGuild() then return out end
+	for i = 1, (GetNumGuildMembers(true) or 0) do
+		local n, _, _, _, _, zone, _, _, online = GetGuildRosterInfo(i)
+		if n then out[n:gsub("%-.*$", "")] = { online and true or false, zone } end
+	end
+	return out
+end
+
+-- Guild and group answers, no server round trip. Returns true when answered.
+local function liveFromRoster(name, roster)
+	if UnitInRaid(name) or UnitInParty(name) or UnitName("player") == name then
+		setLive(name, UnitIsConnected(name) and true or false, nil)
+		return true
+	end
+	local g = roster[name]
+	if g then
+		setLive(name, g[1], g[1] and g[2] or nil)
+		return true
+	end
+	return false
+end
+
+local function whoFinish()
+	whoName, whoOurs = nil, false
+	if FriendsFrame and not FriendsFrame:IsEventRegistered("WHO_LIST_UPDATE") then
+		FriendsFrame:RegisterEvent("WHO_LIST_UPDATE")
+	end
+	if SetWhoToUI then SetWhoToUI(0) end
+end
+
+local function whoProgress()
+	if whoCb then pcall(whoCb, whoDone, whoTotal) end
+end
+
+local function whoSend()
+	local name = table.remove(whoQ, 1)
+	if not name then whoFinish(); whoSnap = nil; whoProgress(); return end
+	whoName, whoSentAt, whoOurs = name, GetTime(), true
+	if SetWhoToUI then SetWhoToUI(1) end
+	-- the Friends frame would draw our result in the Who tab
+	if FriendsFrame then FriendsFrame:UnregisterEvent("WHO_LIST_UPDATE") end
+	SendWho('n-"' .. name .. '"')
+end
+
+-- A /who the player typed: hand the server back to them, ask ours again later.
+hooksecurefunc("SendWho", function()
+	if whoOurs then whoOurs = false; return end
+	if whoName then
+		table.insert(whoQ, 1, whoName)
+		whoFinish()
+	end
+	whoNextAt = GetTime() + WHO_GAP_MAX
+end)
+
+local whoEv = CreateFrame("Frame")
+whoEv:RegisterEvent("WHO_LIST_UPDATE")
+whoEv:SetScript("OnEvent", function()
+	if not whoName then return end
+	local name, found, zone = whoName, false, nil
+	for i = 1, (GetNumWhoResults() or 0) do
+		local n, _, _, _, _, z = GetWhoInfo(i)
+		if n and n:gsub("%-.*$", "") == name then found, zone = true, z; break end
+	end
+	setLive(name, found, zone)
+	whoFinish()
+	whoDone = whoDone + 1
+	whoNextAt = GetTime() + whoGap
+	whoProgress()
+end)
+
+whoEv:SetScript("OnUpdate", function()
+	if not whoSnap then return end
+	local now = GetTime()
+	if whoName then
+		-- no answer: leave them unknown rather than call them offline
+		if now - whoSentAt > WHO_TIMEOUT then
+			local name = whoName
+			whoFinish()
+			whoGap = math.min(whoGap * 2, WHO_GAP_MAX)
+			if not whoRetried[name] then
+				whoRetried[name] = true
+				table.insert(whoQ, 1, name)
+			else
+				whoDone = whoDone + 1
+				whoProgress()
+			end
+			whoNextAt = now + whoGap
+		end
+		return
+	end
+	if now < whoNextAt then return end
+	if InCombatLockdown() then return end
+	if WhoFrame and WhoFrame:IsVisible() then return end
+	whoSend()
+end)
+
+-- Live status for one player: on (bool), zone, checking (still queued).
+function G.LiveOf(name, snap)
+	local l = G.live[name]
+	if whoSnap and whoSnap == snap then
+		if whoName == name then return nil, nil, true end
+		for _, n in ipairs(whoQ) do if n == name then return nil, nil, true end end
+	end
+	if l then return l.on, l.zone, false end
+	return nil, nil, false
+end
+
+-- done, total while a check runs for this snapshot; nil otherwise.
+function G.OnlineCheckProgress(snap)
+	if whoSnap and whoSnap == snap then return whoDone, whoTotal end
+end
+
+-- Start a check of every player in `snap`. `cb(done, total)` repaints the page.
+function G.CheckSnapshotOnline(snap, cb)
+	if not (snap and snap.players) then return end
+	G.StopOnlineCheck()
+	whoQ, whoDone, whoCb, whoRetried = {}, 0, cb, {}
+	local roster = guildRoster()
+	for _, p in ipairs(snap.players) do
+		if p.name and p.name ~= "" and not liveFromRoster(p.name, roster) then
+			whoQ[#whoQ + 1] = p.name
+		end
+	end
+	whoTotal = #whoQ
+	if whoTotal > 0 then whoSnap = snap end
+	whoProgress()
+end
+
+function G.StopOnlineCheck()
+	whoQ, whoSnap, whoCb = {}, nil, nil
+	if whoName then whoFinish() end
 end
 
 -- JSON for one snapshot (fed to the hub attendance importer)
@@ -564,9 +722,12 @@ function G.ShowSnapshot(snap)
 end
 
 -- ------------------------------------------------------------
--- Auto-capture at the first pull of the raid (MRT-style).
--- Prefer ENCOUNTER_START (some 3.3.5a private servers backport it);
--- fall back to entering combat (PLAYER_REGEN_DISABLED) inside a raid instance.
+-- Auto-capture when this toon becomes saved to the raid, i.e. at the first boss
+-- kill. The first pull was too early: it is usually trash, while the raid is
+-- still filling (18 of 25 captured). 3.3.5a has no kill event, so after each
+-- fight in a raid we ask for our lockouts, and the answer that shows us saved to
+-- this instance takes the snapshot. On a raid continued from an earlier night we
+-- are already saved, so it is taken after the first fight instead.
 -- One auto-snapshot per raid lockout session (reset when the raid empties).
 --
 -- "Already taken" lives in the SavedVariables, not a local: a local resets on
@@ -597,52 +758,97 @@ local function setAutoSnap(taken)
 	db.guild = db.guild or {}
 	db.guild.autoSnap = taken and { key = instanceKey(), t = time() } or nil
 end
--- Set only when an ENCOUNTER_START actually ARRIVES, never by registering for it.
--- Stock 3.3.5a accepts the registration and then never fires the event, so trusting
--- the register meant the combat fallback was disabled by a trigger that never came --
--- and no snapshot was ever taken.
-local haveEncounterEvent = false
-
 local function inGroup()
 	local raidN = (GetNumRaidMembers and GetNumRaidMembers()) or 0
 	local partyN = (GetNumPartyMembers and GetNumPartyMembers()) or 0
 	return raidN > 0 or partyN > 0
 end
 
-local function tryFirstPull(bossName, trigger)
+local function trySavedSnapshot()
 	if autoSnapTaken() then return end
 	if not inGroup() then return end
 	if not Okanvil:ShouldRecord() then return end   -- dungeon/raid toggle
-	local snap = G.SaveSnapshot(trigger, bossName)
+	local zone, _, diff = GetInstanceInfo()
+	if not myLockoutId(zone, diff) then return end  -- no boss down yet
+	local snap = G.SaveSnapshot("saved")
 	if snap then
 		setAutoSnap(true)
 		Okanvil:Print("Attendance snapshot saved (" .. (snap.count or 0) .. " players).")
 	end
 end
 
+-- The snapshot is the roster at the first kill, so whoever joins after it would
+-- be missing. After each later fight, add the latecomers to
+-- this raid's snapshot, keeping the raid group they are in now. Attendance then
+-- gets them too: its night merges in names it does not have yet.
+local topUpQueued = false
+local function topUpSnapshot()
+	topUpQueued = false
+	local snap = G.MySnapshots()[1]
+	if not snap or time() - (snap.t or 0) > AUTO_SNAP_STALE then return end
+	local now = snapshotRaid("topup")
+	if not now or now.zone ~= snap.zone or now.difficulty ~= snap.difficulty
+		or now.groupSize ~= snap.groupSize then return end
+	local have = {}
+	for _, p in ipairs(snap.players or {}) do have[p.name] = true end
+	local added = 0
+	snap.players = snap.players or {}
+	for _, p in ipairs(now.players) do
+		if not have[p.name] then
+			snap.players[#snap.players + 1] = p
+			added = added + 1
+		end
+	end
+	if added == 0 then return end
+	table.sort(snap.players, function(a, b)
+		if a.group ~= b.group then return a.group < b.group end
+		return a.name < b.name
+	end)
+	snap.count = #snap.players
+	Okanvil:Trace("GUILD", ("snapshot top-up: +%d (%d)"):format(added, snap.count))
+	local A = Okanvil.Attendance
+	if A and A.OnSnapshot then
+		local ok, e = pcall(A.OnSnapshot, snap)
+		if not ok and Okanvil.Err then Okanvil:Err("Attendance.OnSnapshot", e) end
+	end
+	G.ScanSnapshotSpecs(snap)
+	if G.onSnapshot then G.onSnapshot() end
+end
+
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("PLAYER_REGEN_DISABLED")   -- entered combat
+ev:RegisterEvent("UPDATE_INSTANCE_INFO")    -- the lockout list asked for after a fight
 ev:RegisterEvent("RAID_ROSTER_UPDATE")
 ev:RegisterEvent("PARTY_MEMBERS_CHANGED")
--- ENCOUNTER_START exists only on servers that backported it. Registering is safe
--- either way, but says nothing about whether it will ever fire.
-pcall(function() ev:RegisterEvent("ENCOUNTER_START") end)
 
-ev:SetScript("OnEvent", function(_, event, a1, a2)
-	-- Modulo Guild DESLIGADO = nao faz first-pull announce nem reage a grupo.
+-- Set when a fight ends in a raid and we asked for the lockouts, so only that
+-- answer can take the snapshot -- not the one the zone-in asks for.
+local savedCheck = false
+
+local function afterRaidFight()
+	local inInstance, itype = IsInInstance()
+	if not (inInstance and itype == "raid" and RequestRaidInfo) then return end
+	savedCheck = true
+	RequestRaidInfo()
+end
+
+ev:SetScript("OnEvent", function(_, event)
+	-- Modulo Guild DESLIGADO = nao faz snapshot nem reage a grupo.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive("__guild") then return end
-	if event == "ENCOUNTER_START" then
-		-- a1 = encounterID, a2 = encounterName. Arriving at all proves this server
-		-- backported the event, which is what retires the combat fallback.
-		haveEncounterEvent = true
-		tryFirstPull(a2, "encounter-start")
-	elseif event == "PLAYER_REGEN_DISABLED" then
-		-- The real trigger on stock 3.3.5a. No boss name: at the instant combat
-		-- starts the Loot scanner has usually not vetted the target yet, so naming
-		-- it here would guess. The snapshot's zone + time place the pull.
-		if not haveEncounterEvent then tryFirstPull(nil, "combat") end
+	if event == "PLAYER_REGEN_DISABLED" then
+		-- passive work: wait for the fight to end
+		if not autoSnapTaken() then
+			afterCombat[#afterCombat + 1] = afterRaidFight
+		elseif not topUpQueued then
+			topUpQueued = true
+			afterCombat[#afterCombat + 1] = topUpSnapshot
+		end
+	elseif event == "UPDATE_INSTANCE_INFO" then
+		if not savedCheck then return end
+		savedCheck = false
+		trySavedSnapshot()
 	else
-		-- group emptied -> arm the next session's first-pull capture again.
+		-- group emptied -> arm the next session's capture again.
 		-- Not watched on PLAYER_ENTERING_WORLD: at login the roster can read empty
 		-- for a moment, and that would re-arm the capture on every login.
 		if not inGroup() then setAutoSnap(false) end
