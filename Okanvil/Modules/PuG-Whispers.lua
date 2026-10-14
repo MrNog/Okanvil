@@ -379,12 +379,22 @@ local function progressChips(info)
 	if #list == 0 then return nil end
 	local short = raid
 	for _, r in ipairs(OkanvilRaids or {}) do if r.key == raid then short = r.short end end
-	local out = {}
+	local read = info and info.ach
+	local out, n = {}, 0
 	for _, c in ipairs(list) do
-		local got = info and info.ach and info.ach[c.id]
-		out[#out + 1] = { short .. " " .. c.label .. (got and " +" or ""), got and "gold" or "off" }
+		local label = short .. " " .. c.label
+		if not read then
+			out[#out + 1] = { label .. " ?", "off" }
+		elseif read[c.id] then
+			n = n + 1
+			out[#out + 1] = { label, "ok" }
+		else
+			out[#out + 1] = { label, "bad" }
+		end
 	end
-	return out, not (info and info.ach)
+	-- the row's dot: all earned green, some yellow, none red, unread grey
+	local tone = not read and "off" or (n == #list and "ok") or (n > 0 and "warn") or "bad"
+	return out, not read, tone
 end
 
 local function canKick()
@@ -429,8 +439,8 @@ function M.AuditDetail(name)
 		if audit.partial then notes[#notes + 1] = "Some items were not cached; reopen later." end
 	end
 
-	local chips, unread = progressChips(info)
-	d.chips = chips
+	local chips, unread, tone = progressChips(info)
+	d.chips, d.chipsLabel, d.chipsTone = chips, "Achiev", tone
 	if chips and unread then notes[#notes + 1] = "Achievements read when they come near." end
 	if a.auditOk then notes[#notes + 1] = "Marked OK." end
 	d.note = table.concat(notes, "\n")

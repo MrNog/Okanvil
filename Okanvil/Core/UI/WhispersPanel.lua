@@ -170,14 +170,31 @@ local function layoutDetail(row, d, h, width)
 	for i = #checks + 1, #row.dots do row.dots[i]:Hide(); row.clab[i]:Hide(); row.cval[i]:Hide() end
 	if #checks > 0 then h = h + 3 end
 
+	-- The chips sit on a checklist row of their own: dot + label, boxes in the
+	-- value column, wrapping back to that column.
 	local chips = d and d.chips or {}
-	local x = 8
+	local x0 = 8
+	if #chips > 0 and d.chipsLabel then
+		row.achDot = row.achDot or row:CreateTexture(nil, "ARTWORK")
+		row.achLab = row.achLab or W.Text(row, "", "label", "dim")
+		local t = (TONES[d.chipsTone or "off"] or TONES.off).text
+		row.achDot:SetTexture(FLAT); row.achDot:SetSize(7, 7)
+		row.achDot:SetVertexColor(t[1], t[2], t[3], 1)
+		row.achDot:ClearAllPoints(); row.achDot:SetPoint("TOPLEFT", 10, -(h + 7))
+		row.achLab:ClearAllPoints(); row.achLab:SetPoint("TOPLEFT", 24, -(h + 3))
+		row.achLab:SetText(d.chipsLabel)
+		row.achDot:Show(); row.achLab:Show()
+		x0 = 96
+	elseif row.achDot then
+		row.achDot:Hide(); row.achLab:Hide()
+	end
+	local x = x0
 	for i, c in ipairs(chips) do
 		local b = row.chips[i]
 		if not b then b = newBox(row); row.chips[i] = b end
 		b.text:SetText(c[1]); paintBox(b, c[2])
 		local w = math.floor((b.text:GetStringWidth() or 30) + 14)
-		if x > 8 and x + w > width - 6 then x = 8; h = h + 24 end
+		if x > x0 and x + w > width - 6 then x = x0; h = h + 24 end
 		b:SetSize(w, 20)
 		b:ClearAllPoints(); b:SetPoint("TOPLEFT", x, -h); b:Show()
 		x = x + w + 4
