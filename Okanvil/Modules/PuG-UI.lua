@@ -1469,12 +1469,10 @@ local WHISPERS = {
 		busy     = { "in group", "|cffe05555" },
 		offline  = { "offline",  "|cffe05555" },
 	},
-	-- New also holds the failed invites (declined, in a group, offline): each
-	-- can be asked again, and its status says why it failed.
+	-- One list, no tabs: it is sorted new -> invited -> joined and every row
+	-- says its own status.
 	filters = {
-		{ key = "new",     label = "New",     match = { new = true, declined = true, busy = true, offline = true } },
-		{ key = "invited", label = "Invited", match = { invited = true } },
-		{ key = "joined",  label = "Joined",  match = { joined = true } },
+		{ key = "all", label = "All" },
 	},
 	emptyHint = "Post your LFM line and everyone who\nasks to join shows up here.",
 	items = function()

@@ -317,8 +317,10 @@ function W.WhispersPanel(parent, cfg)
 			local n = 0
 			for _, it in ipairs(items) do if matches(f, it) then n = n + 1 end end
 			local b = self.filterBtns[f.key]
-			b.text:SetText((f.match and n > 0) and (f.label .. " " .. n) or f.label)
-			b:SetKind(self.filter == f.key and "primary" or nil)
+			if b then
+				b.text:SetText((f.match and n > 0) and (f.label .. " " .. n) or f.label)
+				b:SetKind(self.filter == f.key and "primary" or nil)
+			end
 			if self.filter == f.key then cur = f end
 		end
 		cur = cur or cfg.filters[1]
@@ -406,7 +408,13 @@ function W.WhispersPanel(parent, cfg)
 	-- the window, docked outside the main one so the page keeps its full width
 	local side = CreateFrame("Frame", nil, parent)
 	Okanvil:Skin(side)
-	W.ForgeArt(side, 0.22)
+	-- same strength as the main window's wallpaper (Settings), and a lighter
+	-- fade: the panel is narrow, so the default one left almost nothing showing
+	local _, fade = W.ForgeArt(side, (Okanvil.db and Okanvil.db.ratAlpha) or 0.45)
+	if fade then
+		local d = C.panelD
+		fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.80, d[1], d[2], d[3], 0.30)
+	end
 	side:SetWidth(PANEL_W + 24)
 	side:EnableMouse(true)
 	local p = W.Frame(side, "bare")
@@ -447,11 +455,12 @@ function W.WhispersPanel(parent, cfg)
 	P.count = W.Text(head, "", "title", "accent")
 	P.count:SetPoint("RIGHT", -2, 2)
 
-	-- filters: one segmented row across the full width
+	-- filters: one segmented row across the full width. A single filter needs no
+	-- buttons: the list starts right under the header instead.
 	P.filterBtns = {}
 	local n = #cfg.filters
 	local seg = (PANEL_W - (n - 1) * 3) / n
-	for i, f in ipairs(cfg.filters) do
+	for i, f in ipairs(n > 1 and cfg.filters or {}) do
 		local b = big(W.Button(p, f.label, nil):Size(seg, 24))
 		b:SetPoint("TOPLEFT", (i - 1) * (seg + 3), -60)
 		b:OnClick(function() P.filter = f.key; P:Refresh() end)
@@ -474,10 +483,10 @@ function W.WhispersPanel(parent, cfg)
 	clear:OnClick(function() P.open = nil; cfg.onClear() end)
 	clear:Tooltip("Empty the list.\nAnyone who whispers again comes back.")
 
-	local card, child, relayout = W.ScrollList(p, 0, PANEL_W, -88, 42)
+	local card, child, relayout = W.ScrollList(p, 0, PANEL_W, n > 1 and -88 or -60, 42)
 	P.child, P.relayout = child, relayout
 	-- a light wash, not a slab: the forge art should read through the list
-	do local d = C.panelD; card:SetBackdropColor(d[1], d[2], d[3], 0.35) end
+	do local d = C.panelD; card:SetBackdropColor(d[1], d[2], d[3], 0.20) end
 
 	-- empty state, centred in the list
 	P.emptyIcon = card:CreateTexture(nil, "ARTWORK")
