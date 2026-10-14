@@ -1925,6 +1925,10 @@ SlashCmdList["OKPUG"] = function(arg)
 	elseif arg == "stop" then M.Stop()
 	elseif arg == "send" then M.SendNow()
 	elseif arg == "msg" then Print(outgoing())
+	elseif arg == "mock" then
+		if not (Okanvil.win and Okanvil.win:IsShown()) then Okanvil:Toggle() end
+		if Okanvil.ShowPanel then Okanvil:ShowPanel(ADDON) end
+		M.ToggleMock()
 	else
 		-- open the window on our own page (the plugin name IS the panel key)
 		if not (Okanvil.win and Okanvil.win:IsShown()) then Okanvil:Toggle() end

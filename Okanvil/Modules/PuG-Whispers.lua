@@ -101,6 +101,7 @@ end
 -- Group members who never whispered: they get a Joined row too, so the gear
 -- audit covers the whole group. [name] = { t, hidden, auditOk, kickAsk }
 local members = {}
+local mock               -- /pug mock: [name] = fake player, nil when off
 
 function M.GroupMembers()
 	local out = {}
@@ -113,6 +114,11 @@ function M.GroupMembers()
 			if not m.hidden then out[#out + 1] = { name = p.name, class = p.class, t = m.t } end
 		end
 	end
+	for n, p in pairs(mock or {}) do
+		local m = members[n]
+		if m and not m.hidden then out[#out + 1] = { name = n, class = p.class, t = m.t, sub = p.sub } end
+	end
+	table.sort(out, function(x, y) return (x.t or 0) < (y.t or 0) end)
 	return out
 end
 
@@ -335,6 +341,10 @@ local function joinedState(name)
 end
 
 local function auditOf(name)
+	if mock and mock[name] then
+		local info = mock[name].info
+		return info and info.audit, info
+	end
 	local I = Okanvil.Inspect
 	local info = I and I.Info and I.Info(name)
 	return info and info.audit, info
@@ -436,19 +446,21 @@ function M.AuditDetail(name)
 		actions[#actions + 1] = { label = a.auditSent and "Whisper again" or "Whisper audit", kind = "primary", width = 100,
 			tip = "Whisper them the pink message above.",
 			onClick = function()
-				SendChatMessage(msg, "WHISPER", nil, name)
+				if mock and mock[name] then Okanvil:Print("(mock) would whisper " .. name .. ": " .. msg)
+				else SendChatMessage(msg, "WHISPER", nil, name) end
 				a.auditSent = true
 				changed()
 			end }
 	end
-	if canKick() then
+	if canKick() or (mock and mock[name]) then
 		local asking = a.kickAsk and (GetTime() - a.kickAsk) < KICK_CONFIRM
 		actions[#actions + 1] = { label = asking and "Sure?" or "Kick", kind = "danger", width = 52,
 			tip = "Remove them from the group. Click twice.",
 			onClick = function()
 				if a.kickAsk and (GetTime() - a.kickAsk) < KICK_CONFIRM then
 					a.kickAsk = nil
-					UninviteUnit(name)
+					if mock and mock[name] then mock[name] = nil; members[name] = nil
+					else UninviteUnit(name) end
 					Okanvil:Trace("AUDIT", "kicked " .. name)
 				else
 					a.kickAsk = GetTime()
@@ -458,4 +470,46 @@ function M.AuditDetail(name)
 	end
 	d.actions = actions
 	return d
+end
+
+-- ------------------------------------------------------------
+-- /pug mock: four made-up joined players, one per badge state, so the audit
+-- rows can be checked solo. They live only in memory, never touch the inspect
+-- cache, and Whisper / Kick on them print instead of acting.
+-- ------------------------------------------------------------
+local function mockPlayers()
+	local ach = {}
+	for i, c in ipairs(Okanvil.Audit.RaidChips(M.db and M.db.raid)) do ach[c.id] = i <= 2 end
+	local all = {}
+	for _, c in ipairs(Okanvil.Audit.RaidChips(M.db and M.db.raid)) do all[c.id] = true end
+	return {
+		{ name = "Lightwardh", class = "PALADIN", sub = "|cff7cfc8aholy|r",
+			info = { gs = 5912, ilvl = 258, pvp = 0, ach = all,
+				audit = { noEnchant = {}, empty = 0, emptySlots = {}, lowGems = 0, meta = true } } },
+		{ name = "Frostgrip", class = "DEATHKNIGHT", sub = "|cffd94d52frost|r",
+			info = { gs = 5612, ilvl = 251, pvp = 2, ach = ach,
+				audit = { noEnchant = { "Cloak", "Boots" }, empty = 0, emptySlots = {}, noBuckle = true,
+					lowGems = 2, meta = true } } },
+		{ name = "Totemtoe", class = "SHAMAN", sub = "|cff7cfc8arestoration|r",
+			info = { gs = 5203, ilvl = 245, pvp = 0,
+				audit = { noEnchant = {}, empty = 0, emptySlots = {}, lowGems = 1, meta = false, partial = true } } },
+		{ name = "Blinkzor", class = "MAGE", sub = "|cff6f7176spec not read|r", info = nil },
+	}
+end
+
+function M.ToggleMock()
+	if mock then
+		for n in pairs(mock) do members[n] = nil end
+		mock = nil
+		Okanvil:Print("PuG mock off.")
+	else
+		mock = {}
+		for i, p in ipairs(mockPlayers()) do
+			mock[p.name] = p
+			members[p.name] = { t = time() - (4 - i) * 120 }
+		end
+		Okanvil:Print("PuG mock on: 4 fake joined players in Whispers > Joined. /pug mock again to remove.")
+		if M.ShowWhispers then M.ShowWhispers() end
+	end
+	changed()
 end
