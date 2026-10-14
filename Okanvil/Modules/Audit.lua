@@ -239,7 +239,7 @@ function M.WhisperText(a)
 	if a.noBuckle then bits[#bits + 1] = "belt missing buckle" end
 	if a.meta == false then bits[#bits + 1] = "meta gem not active" end
 	if #bits == 0 then return nil end
-	local msg = "Hi! Quick gear check: " .. table.concat(bits, ", ") .. ". Can you fix before pull? :)"
+	local msg = "Hi! Gear check: " .. table.concat(bits, ", ") .. "."
 	if #msg > 250 then msg = msg:sub(1, 247) .. "..." end
 	return msg
 end
