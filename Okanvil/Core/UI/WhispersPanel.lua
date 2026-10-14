@@ -11,7 +11,11 @@
 --
 -- cfg:
 --   title, subtitle, icon
---   items()          -> { { name, class, status, t, sub, said, canInvite }, ... }
+--   items()          -> { { name, class, status, t, sub, said, canInvite,
+--                          badge, detail }, ... }
+--     badge  = short coloured text next to the name (optional)
+--     detail = { text = "...", actions = { { label, kind, width, tip, onClick }, ... } }
+--              shown under what they said when the row is opened (optional)
 --   status          = { [status] = { label, colour }, ... }
 --   filters         = { { key, label, match = { [status] = true } | nil }, ... }
 --   onInvite(name), onDismiss(name), onOpen(name) (optional), onClear()
@@ -126,9 +130,12 @@ function W.WhispersPanel(parent, cfg)
 		row.inv:SetPoint("RIGHT", row.w, "LEFT", -3, 0)
 		if cfg.inviteTip then row.inv:Tooltip(cfg.inviteTip) end
 
+		row.badge = W.Text(row, "", "label")
+		row.badge:SetJustifyH("RIGHT")
+
 		row.top = W.Text(row, "", "body")
 		row.top:SetPoint("TOPLEFT", 6, -5)
-		row.top:SetPoint("RIGHT", row.inv, "LEFT", -4, 0)
+		row.top:SetPoint("RIGHT", row.badge, "LEFT", -4, 0)
 		row.top:SetJustifyH("LEFT")
 		if row.top.SetWordWrap then row.top:SetWordWrap(false) end
 
@@ -144,6 +151,11 @@ function W.WhispersPanel(parent, cfg)
 		row.said:SetPoint("RIGHT", -4, 0)
 		row.said:SetJustifyH("LEFT")
 		row.said:SetJustifyV("TOP")
+
+		row.detail = W.Text(row, "", "label")
+		row.detail:SetJustifyH("LEFT")
+		row.detail:SetJustifyV("TOP")
+		row.acts = {}
 
 		row:SetScript("OnEnter", function(s) s.hl:SetVertexColor(1, 1, 1, 0.05) end)
 		row:SetScript("OnLeave", function(s) s.hl:SetVertexColor(1, 1, 1, s._open and 0.03 or 0) end)
@@ -199,6 +211,9 @@ function W.WhispersPanel(parent, cfg)
 				.. ago(it.t) .. "|r")
 			row.sub:SetText(it.sub or "")
 			if it.canInvite then row.inv:Show() else row.inv:Hide() end
+			row.badge:ClearAllPoints()
+			row.badge:SetPoint("TOPRIGHT", it.canInvite and row.inv or row.w, "TOPLEFT", -4, -5)
+			row.badge:SetText(it.badge or "")
 			local h = ROW_H
 			if open then
 				row.said:SetText(it.said or "")
@@ -207,6 +222,38 @@ function W.WhispersPanel(parent, cfg)
 			else
 				row.said:SetText(""); row.said:Hide()
 			end
+			local d = open and it.detail
+			if d and d.text and d.text ~= "" then
+				row.detail:ClearAllPoints()
+				row.detail:SetPoint("TOPLEFT", 6, -h)
+				row.detail:SetPoint("TOPRIGHT", -4, -h)
+				row.detail:SetText(d.text)
+				row.detail:Show()
+				h = h + (row.detail:GetStringHeight() or 0) + 8
+			else
+				row.detail:SetText(""); row.detail:Hide()
+			end
+			local acts = d and d.actions or {}
+			local right = -4
+			for ai = #acts, 1, -1 do
+				local a = acts[ai]
+				local b = row.acts[ai]
+				if not b then
+					b = W.Button(row, "", a.kind)
+					row.acts[ai] = b
+				end
+				if b.SetKind then b:SetKind(a.kind) end
+				b.text:SetText(a.label)
+				b:Size(a.width or 70, 22)
+				b:Tooltip(a.tip)
+				b:OnClick(a.onClick)
+				b:ClearAllPoints()
+				b:SetPoint("TOPRIGHT", row, "TOPRIGHT", right, -h)
+				b:Show()
+				right = right - (a.width or 70) - 3
+			end
+			for ai = #acts + 1, #row.acts do row.acts[ai]:Hide() end
+			if #acts > 0 then h = h + 22 + 8 end
 			row:ClearAllPoints()
 			row:SetPoint("TOPLEFT", 0, -y); row:SetPoint("TOPRIGHT", 0, -y)
 			row:SetHeight(h)

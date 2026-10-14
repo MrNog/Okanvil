@@ -1492,7 +1492,9 @@ local WHISPERS = {
 				sub = sub ~= "" and sub or "|cff6f7176spec not read|r",
 				said = "|cffff80ff" .. (a.said or "") .. "|r",
 				-- a "declined" can be asked again
-				canInvite = a.status ~= "invited" and a.status ~= "joined" }
+				canInvite = a.status ~= "invited" and a.status ~= "joined",
+				badge = M.AuditBadge and M.AuditBadge(a.name),
+				detail = M.AuditDetail and M.AuditDetail(a.name) }
 		end
 		return out
 	end,
@@ -1549,7 +1551,10 @@ function M.BuildUI(parent)
 	-- A player read by the inspect watch repaints the board, so their row moves
 	-- to the right column on its own.
 	if Okanvil.Inspect then
-		Okanvil.Inspect.onWatchRead = function() M.RefreshUI() end
+		Okanvil.Inspect.onWatchRead = function() M.RefreshUI(); M.RefreshWhispers() end
+	end
+	if Okanvil.Audit then
+		Okanvil.Audit.onRead = function() M.RefreshWhispers() end
 	end
 
 	-- The Whispers window. Parented to the PuG page so it shows and hides with

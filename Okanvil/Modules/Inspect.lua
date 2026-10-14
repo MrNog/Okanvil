@@ -200,7 +200,8 @@ local function isPvPItem(link)
 	return found
 end
 
--- gs, avgIlvl, pvpCount, pvpSlots  (pvpSlots = { "Hands", "Legs" })
+-- gs, avgIlvl, pvpCount, pvpSlots, audit  (pvpSlots = { "Hands", "Legs" };
+-- audit = enchants/gems/meta from Okanvil.Audit, nil if that module failed)
 local function readGear(unit)
 	local gs, avg
 
@@ -234,7 +235,13 @@ local function readGear(unit)
 	-- NOT a gearscore and must not be shown as one, so it is returned separately.
 	if not avg and ilvlCount > 0 then avg = math.floor(ilvlSum / ilvlCount) end
 
-	return gs, avg, pvpCount, pvpSlots
+	local audit
+	if ilvlCount > 0 and Okanvil.Audit then
+		local ok, res = pcall(Okanvil.Audit.Gear, unit)
+		if ok then audit = res elseif Okanvil.Err then Okanvil:Err("Audit.Gear", res) end
+	end
+
+	return gs, avg, pvpCount, pvpSlots, audit
 end
 
 -- ------------------------------------------------------------
@@ -323,9 +330,9 @@ function fireNext()
 					if spec == "Feral (Bear)" then role = "tank"
 					elseif spec == "Feral (Cat)" then role = "dps"
 					else role = (ROLES[class] and ROLES[class][spec]) or "dps" end
-					local gs, avg, pvp, pvpSlots = readGear("player")
+					local gs, avg, pvp, pvpSlots, audit = readGear("player")
 					store(name, { spec = spec, class = class, role = role, icon = bestIcon,
-						gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots })
+						gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
 				end
 				done = done + 1
 				progress()
@@ -389,10 +396,10 @@ ev:SetScript("OnEvent", function()
 		-- Gear is read even when the talents came back empty: the two are cached
 		-- separately by the client, and a player with no spec still has a gearscore
 		-- worth knowing.
-		local gs, avg, pvp, pvpSlots = readGear(curUnit)
+		local gs, avg, pvp, pvpSlots, audit = readGear(curUnit)
 		if (spec and class) or gs or avg then
 			store(curName, { spec = spec, class = class, role = role, icon = icon,
-				gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots })
+				gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
 		end
 	end
 
@@ -448,9 +455,29 @@ function M.Info(name)
 		gs    = e.gs,    ilvl  = e.ilvl,
 		pvp   = e.pvp or 0,
 		pvpSlots = e.pvpSlots,
+		audit = e.audit,
+		ach   = e.ach,   achAt = e.achAt,
 		at    = e.at,
 		age   = time() - (e.at or 0),
 	}
+end
+
+-- Add fields to a player's entry without a new inspect (the Audit module's
+-- achievement read). Leaves `at` alone: that stamps the inspect, and these fields
+-- carry their own time.
+function M.Put(name, fields)
+	name = stripRealm(name)
+	if not name or name == "" then return end
+	local d = db().specs
+	local e = d[name] or { at = 0 }
+	for k, v in pairs(fields) do e[k] = v end
+	d[name] = e
+end
+
+-- Has this player's gear been audited recently enough to trust tonight?
+function M.HasAudit(name, maxAge)
+	local e = name and db().specs[stripRealm(name)]
+	return e ~= nil and e.audit ~= nil and (time() - (e.at or 0)) <= (maxAge or 3 * 3600)
 end
 
 -- gs, avgIlvl, pvpCount. `gs` is nil when no GearScore addon is installed -- then

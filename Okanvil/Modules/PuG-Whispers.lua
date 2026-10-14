@@ -217,7 +217,9 @@ local function readSpec(name)
 	local I = Okanvil.Inspect
 	if not (name and I and I.Watch) or watched[name] then return end
 	watched[name] = true
-	if I.IsFresh and I.IsFresh(name) then return end
+	if Okanvil.Audit then Okanvil.Audit.WantAchievements(name) end
+	-- a spec read before the audit existed has no gear check: read it again
+	if I.IsFresh and I.IsFresh(name) and (not I.HasAudit or I.HasAudit(name)) then return end
 	I.Watch({ name })
 end
 
@@ -292,3 +294,124 @@ ev:SetScript("OnUpdate", function(_, e)
 	tick = 0
 	if M.db then M.CheckJoinersFillAsks() end
 end)
+
+-- ------------------------------------------------------------
+-- Gear audit
+--
+-- Joined players are inspected as they come near (see readSpec); the audit rides
+-- on that inspect. The panel shows a badge per joined row and, opened, what is
+-- missing plus Mark OK / Whisper / Kick. Nothing is sent or done unless clicked.
+-- ------------------------------------------------------------
+local RED, YELLOW, GREEN, DIM, GOLD = "|cffd94d52", "|cfff0c040", "|cff7cfc8a", "|cff8a8d93", "|cffffd200"
+local KICK_CONFIRM = 4
+
+local function auditOf(name)
+	local I = Okanvil.Inspect
+	local info = I and I.Info and I.Info(name)
+	return info and info.audit, info
+end
+
+function M.AuditBadge(name)
+	local a = M.Applicant(name)
+	if not (a and a.status == "joined") then return nil end
+	if a.auditOk then return GREEN .. "OK|r" end
+	local audit = auditOf(name)
+	if not audit then return DIM .. "...|r" end
+	local hard, soft = Okanvil.Audit.Counts(audit)
+	if hard > 0 then return RED .. "x" .. hard .. "|r" end
+	if soft > 0 then return YELLOW .. "!" .. soft .. "|r" end
+	return GREEN .. "OK|r"
+end
+
+local function progressLine(info)
+	local raid = M.db and M.db.raid
+	local chips = Okanvil.Audit.RaidChips(raid)
+	if #chips == 0 then return nil end
+	local short = raid
+	for _, r in ipairs(OkanvilRaids or {}) do if r.key == raid then short = r.short end end
+	if not (info and info.ach) then
+		return DIM .. short .. "|r  " .. DIM .. "reads when near|r"
+	end
+	local bits = {}
+	for _, c in ipairs(chips) do
+		bits[#bits + 1] = (info.ach[c.id] and GOLD or "|cff5a5c60") .. c.label .. "|r"
+	end
+	return DIM .. short .. "|r  " .. table.concat(bits, "   ")
+end
+
+local function canKick()
+	if (GetNumRaidMembers() or 0) > 0 then
+		return (IsRaidLeader and IsRaidLeader()) or (IsRaidOfficer and IsRaidOfficer())
+	end
+	return IsPartyLeader and IsPartyLeader()
+end
+
+function M.AuditDetail(name)
+	local a = M.Applicant(name)
+	if not (a and a.status == "joined") then return nil end
+	local audit, info = auditOf(name)
+	local lines = {}
+
+	if not audit then
+		lines[#lines + 1] = DIM .. "Gear not read yet -- reads when they come near.|r"
+	else
+		local hard = Okanvil.Audit.Counts(audit)
+		local stat = {}
+		if info.ilvl then stat[#stat + 1] = DIM .. "ilvl|r " .. info.ilvl end
+		if (info.pvp or 0) > 0 then stat[#stat + 1] = DIM .. "PvP|r " .. RED .. info.pvp .. "|r" end
+		if #stat > 0 then lines[#lines + 1] = table.concat(stat, "   ") end
+
+		local ne = audit.noEnchant or {}
+		lines[#lines + 1] = (#ne > 0 and RED or GREEN) .. "Enchants|r  "
+			.. (#ne > 0 and (table.concat(ne, ", ") .. " missing") or "all done")
+
+		local g = {}
+		if (audit.empty or 0) > 0 then g[#g + 1] = audit.empty .. " empty (" .. table.concat(audit.emptySlots, ", ") .. ")" end
+		if audit.noBuckle then g[#g + 1] = "no buckle" end
+		if (audit.lowGems or 0) > 0 then g[#g + 1] = audit.lowGems .. " rare on raid gear" end
+		local gc = ((audit.empty or 0) > 0 or audit.noBuckle) and RED or ((audit.lowGems or 0) > 0 and YELLOW or GREEN)
+		lines[#lines + 1] = gc .. "Gems|r  " .. (#g > 0 and table.concat(g, ", ") or "all filled, epic")
+
+		if audit.meta ~= nil then
+			lines[#lines + 1] = (audit.meta and GREEN or RED) .. "Meta|r  " .. (audit.meta and "active" or "not active")
+		end
+		if audit.partial then lines[#lines + 1] = DIM .. "Some items were not cached; reopen later.|r" end
+		if hard == 0 and a.auditOk then lines[#lines + 1] = DIM .. "Marked OK.|r" end
+	end
+
+	local prog = progressLine(info)
+	if prog then lines[#lines + 1] = prog end
+
+	local msg = audit and Okanvil.Audit.WhisperText(audit)
+	if msg then lines[#lines + 1] = "|cffff80ff" .. msg .. "|r" end
+
+	local actions = {}
+	actions[#actions + 1] = { label = a.auditOk and "Unmark" or "Mark OK", width = 62,
+		tip = "Mark them as fine (green badge), whatever the audit says.",
+		onClick = function() a.auditOk = not a.auditOk or nil; changed() end }
+	if msg then
+		actions[#actions + 1] = { label = a.auditSent and "Again" or "Whisper", kind = "primary", width = 64,
+			tip = "Whisper them the pink line above.",
+			onClick = function()
+				SendChatMessage(msg, "WHISPER", nil, name)
+				a.auditSent = true
+				changed()
+			end }
+	end
+	if canKick() then
+		local asking = a.kickAsk and (GetTime() - a.kickAsk) < KICK_CONFIRM
+		actions[#actions + 1] = { label = asking and "Sure?" or "Kick", kind = "danger", width = 52,
+			tip = "Remove them from the group. Click twice.",
+			onClick = function()
+				if a.kickAsk and (GetTime() - a.kickAsk) < KICK_CONFIRM then
+					a.kickAsk = nil
+					UninviteUnit(name)
+					Okanvil:Trace("AUDIT", "kicked " .. name)
+				else
+					a.kickAsk = GetTime()
+				end
+				changed()
+			end }
+	end
+	return { text = table.concat(lines, "\n"), actions = actions }
+end
