@@ -410,8 +410,12 @@ function W.WhispersPanel(parent, cfg)
 	Okanvil:Skin(side)
 	-- same strength as the main window's wallpaper (Settings), and a lighter
 	-- fade: the panel is narrow, so the default one left almost nothing showing
-	local _, fade = W.ForgeArt(side, (Okanvil.db and Okanvil.db.ratAlpha) or 0.45)
+	local art, fade = W.ForgeArt(side, (Okanvil.db and Okanvil.db.ratAlpha) or 0.45)
+	-- One layer up, like the main window's wallpaper: on BACKGROUND it shares the
+	-- layer with the window's own near-opaque backdrop, which then hid it.
+	if art then art:SetDrawLayer("BORDER") end
 	if fade then
+		fade:SetDrawLayer("ARTWORK")
 		local d = C.panelD
 		fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.80, d[1], d[2], d[3], 0.30)
 	end
