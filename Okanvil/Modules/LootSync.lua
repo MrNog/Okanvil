@@ -39,6 +39,7 @@ local ZONE_DELAY  = 15          -- after zoning in: let the lockout answer arriv
 local WEEK_SLACK  = 2 * 86400   -- two clients may place the week boundary a little apart
 
 local lastOfferAt = -OFFER_GAP
+local offeredRuns = {}          -- zone|difficulty|week -> true once offered this session
 local queued = {}               -- sends held back while in combat: fn()
 
 local function trace(line)
@@ -214,6 +215,12 @@ function S.Offer(why)
 	if not (IsInInstance and select(2, IsInInstance()) == "raid") then return end
 	local now = (GetTime and GetTime()) or 0
 	if now - lastOfferAt < OFFER_GAP then return end
+	-- Once per run per session. Every ICC teleporter is a loading screen, and each
+	-- one re-ran the whole exchange between every officer in the raid.
+	local zone, _, diff = GetInstanceInfo()
+	local run = tostring(zone) .. "|" .. tostring(diff) .. "|" .. tostring(L.WeekStart())
+	if offeredRuns[run] then return end
+	offeredRuns[run] = true
 	lastOfferAt = now
 	trace("offer (" .. tostring(why) .. ")")
 	whenCalm(function() send("O") end)
