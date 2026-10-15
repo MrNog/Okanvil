@@ -354,8 +354,8 @@ function W.WhispersPanel(parent, cfg)
 				row.top:SetPoint("RIGHT", it.canInvite and row.inv or row.w, "LEFT", -4, 0)
 			end
 			local h = ROW_H
-			if open then
-				row.said:SetText(it.said or "")
+			if open and it.said and it.said ~= "" then
+				row.said:SetText(it.said)
 				row.said:Show()
 				h = ROW_H + (row.said:GetStringHeight() or 0) + 6
 			else

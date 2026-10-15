@@ -1498,7 +1498,6 @@ local WHISPERS = {
 			local sub = p.sub or M.SubLabel(p.name)
 			out[#out + 1] = { name = p.name, class = p.class, status = "joined", t = p.t,
 				sub = sub ~= "" and sub or "|cff6f7176spec not read|r",
-				said = "|cff6f7176In the group, did not whisper.|r",
 				badge = M.AuditBadge(p.name), detail = M.AuditDetail(p.name) }
 		end
 		return out
