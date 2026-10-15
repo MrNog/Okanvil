@@ -635,9 +635,33 @@ local function fixYouWinners()
 	youFixed = true
 	local you = YOU or "You"
 	for _, sess in ipairs(sessions() or {}) do
-		for _, d in ipairs(sess.drops or {}) do
-			if d.receivedBy == you or d.receivedBy == "You" then d.receivedBy = me end
+		-- A synced row's "You" is the officer who sent it, not us. While either side
+		-- still said "You", the sync merge could not match the copy already on the
+		-- list under the real name and added the item a second time.
+		local drops = sess.drops or {}
+		local wasYou = {}
+		for _, d in ipairs(drops) do
+			if d.receivedBy == you or d.receivedBy == "You" then
+				d.receivedBy = d.syncFrom or me
+				wasYou[d] = true
+			end
 			if d.heldBy == you or d.heldBy == "You" then d.heldBy = me end
+		end
+		-- Earlier logins already turned those synced "You" rows into our own name,
+		-- so they read as us winning every item somebody else won. Our own client
+		-- records what we win, so a synced row naming us for a drop we saw
+		-- ourselves is one of those, whoever we saw it go to.
+		for i = #drops, 1, -1 do
+			local d = drops[i]
+			if d.syncFrom then
+				for _, o in ipairs(drops) do
+					if o ~= d and not o.syncFrom and o.id == d.id and o.boss == d.boss
+						and (d.receivedBy == me
+							or ((wasYou[d] or wasYou[o]) and o.receivedBy == d.receivedBy)) then
+						table.remove(drops, i); break
+					end
+				end
+			end
 		end
 		fixDropBosses(sess)
 	end
@@ -2107,8 +2131,10 @@ local function buildWinPatterns()
 		WIN_PATTERNS[#WIN_PATTERNS + 1] = { p, kind, extract }
 	end
 	-- won: "%s won: %s" (name, item) or just item (You won). resolve by link.
-	add(LOOT_ROLL_WON,      "won", function(a, b) return a, b end)
+	-- YOU_WON goes first: the generic "%s won: %s" also matches "You won: [item]"
+	-- and hands back the word "You" as the winner.
 	add(LOOT_ROLL_YOU_WON,  "won", function(a) return me(), a end)
+	add(LOOT_ROLL_WON,      "won", function(a, b) return a, b end)
 	add(LOOT_ROLL_ALL_PASSED, "passed", function(a) return nil, a end)
 	return WIN_PATTERNS
 end
@@ -2134,7 +2160,9 @@ local function onChatLoot(msg)
 				if link then recordAllPassed(link); return end
 			elseif w[2] == "won" then
 				-- "You won": only the link exists (who = me). else who is the other group.
-				if not who or who:find("item:") then who = UnitName("player") end
+				if not who or who:find("item:") or who == (YOU or "You") or who == "You" then
+					who = UnitName("player")
+				end
 				if link then recordRollWon(who, link); return end
 			end
 		end

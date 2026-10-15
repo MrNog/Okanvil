@@ -48,6 +48,14 @@ end
 local function me() return (UnitName and UnitName("player")) or "" end
 local function short(n) return n and (n:gsub("%-.*$", "")) or n end
 
+-- A winner saved as the word "You" means whoever recorded it. Matching rows by
+-- winner name, an unresolved "You" on either side never matched the real name
+-- and the merge added the same item a second time.
+local function resolveYou(n, owner)
+	if n == "You" or n == (YOU or "You") then return owner end
+	return n
+end
+
 local function isOfficer(name)
 	local U = Okanvil.U
 	return U and name and (U.isOfficer(name) or U.isOfficerAlt(name)) or false
@@ -86,7 +94,7 @@ local function encode(mode, s)
 	for _, d in ipairs(s.drops or {}) do
 		if d.receivedBy and d.receivedBy ~= "" and d.id then
 			out[#out + 1] = table.concat({
-				d.id, d.boss or "", d.receivedBy, d.de and "1" or "0",
+				d.id, d.boss or "", resolveYou(d.receivedBy, me()), d.de and "1" or "0",
 				d.corpse or "", d.slot or 0, d.t or 0, d.item or "",
 			}, "\t")
 			rows = rows + 1
@@ -127,6 +135,11 @@ end
 -- ------------------------------------------------------------
 local function merge(s, r, used, sender)
 	local drops = s.drops
+	r.who = resolveYou(r.who, sender)
+	local mine = me()
+	for _, d in ipairs(drops) do
+		d.receivedBy = resolveYou(d.receivedBy, mine)
+	end
 	local function claim(d)
 		used[d] = true
 		if d.receivedBy and d.receivedBy ~= "" then return false end
