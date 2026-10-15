@@ -855,6 +855,8 @@ local function onAsked(sender, payload)
 			link = full or link
 			local can = true
 			if P and P.CanIUse then can = P.CanIUse(link) end
+			-- lighter armour, only when it suits your spec and beats what you wear
+			if not can and P and P.LighterWorthAsking and P.LighterWorthAsking(link) then can = true end
 			if can then
 				local equip = select(9, GetItemInfo(link))
 				items[#items + 1] = {
@@ -2003,8 +2005,7 @@ function C_.RepaintBoard(open)
 	-- The full ladder under the item name: the PRIO column gives each candidate's
 	-- position, but the ladder shows the SHAPE of the decision -- who is level with
 	-- whom (>) and where it steps down (>>). A number alone does not say that.
-	f.prio:SetText((prioLine and not db().hidePrio)
-		and ("|cff8a8d93prio|r  " .. prioLine) or "")
+	f.prio:SetText(prioLine and ("|cff8a8d93prio|r  " .. prioLine) or "")
 
 	local isMark = MARK_FROM[Okanvil.U.itemIDFromLink(link)] ~= nil
 	for i = 1, math.max(#vis, #f.rows) do
@@ -2214,8 +2215,12 @@ function C_.RepaintBoard(open)
 			-- token the loot history uses.
 			local L = Okanvil.Loot
 			r._who = d.name        -- for the inspect/whisper click
-			r.who:SetText(L and L.ClassColorName and L.ClassColorName(d.name) or d.name)
 			local tok = L and L.ClassOf and L.ClassOf(d.name)
+			-- an answer on lighter armour than they wear is an exception: say so
+			local P = Okanvil.Prof
+			local lighter = tok and P and P.LighterArmor and P.LighterArmor(link, tok)
+			r.who:SetText((L and L.ClassColorName and L.ClassColorName(d.name) or d.name)
+				.. (lighter and ("  |cff8a8d93" .. lighter .. "|r") or ""))
 			local tc = tok and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[tok]
 			if tc then
 				r.cls:SetTexCoord(tc[1], tc[2], tc[3], tc[4])
@@ -2727,7 +2732,8 @@ C_._repaintHeader = function()
 	if fill and fill.dash and fill.dash.Refresh then fill.dash:Refresh() end
 end
 
--- The "Round" tab: how a round is started, and the settings that shape it.
+-- The council's panel under the Guild run tile on the Loot page: the night's
+-- state, the solo test, and the one option. body.needH is the height it uses.
 function C_.BuildRunTab(body)
 	-- Two columns: what the council IS doing on the left, the buttons that act on
 	-- it pinned right. Centred controls in a wide page leave the eye hunting;
@@ -2762,8 +2768,7 @@ function C_.BuildRunTab(body)
 			hint:SetText("Open the mini roll and press |cffe0b860Ask this one|r on an item.")
 		else
 			state:SetText("|cff8a8d93Council night is off|r")
-			hint:SetText("Turn it on above, or say yes when you are asked at the "
-				.. "start of a raid.")
+			hint:SetText("Only the master looter turns it on: pick Guild run.")
 		end
 	end
 	paintState()
@@ -2812,35 +2817,13 @@ function C_.BuildRunTab(body)
 		return c
 	end
 
-	opt("Ask when I become master looter",
-		"Offers council night at the start of a raid",
-		"When the master looter becomes you. Asks once per raid ID; a reload keeps "
-			.. "your answer. Say no and rolls carry on as they are.",
-		function() return db().askOnML == true end,
-		function(v) db().askOnML = v end)
-
 	opt("Ask automatically when a corpse opens",
 		"On a council night, every epic goes to the raid as one question",
 		"Only on a council night, and only for epics.",
 		function() return db().autoAsk end,
 		function(v) db().autoAsk = v end)
 
-	-- Only an officer ever sees the ladder, so only an officer is offered a switch
-	-- for it.
-	if Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() then
-		opt("Hide the priority ladder on the board",
-			"For a council that decides without the website's order",
-			"The ladder is only ever shown to officers.",
-			function() return db().hidePrio end,
-			function(v) db().hidePrio = v; C_.RepaintBoard() end)
-	end
-
-	opt("Whisper the winner when it cannot be given",
-		"Auto loot or item already in bags: they trade you",
-		"Under auto loot the item is in your bags -- the winner is told to trade you.",
-		function() return db().whisperWinner == true end,
-		function(v) db().whisperWinner = v end)
-
+	body.needH = -y + 8
 	body.refresh = paintState
 	C_._paintState = paintState
 	return body
@@ -3368,13 +3351,16 @@ do
 		-- rows with no name or icon.
 		-- Every automatic council option is opt-in. They used to default ON, so
 		-- installs that already saved them are switched off once; anyone who
-		-- wants one turns it back on in the Council tab of the Loot page.
+		-- wants one turns it back on under the Guild run tile of the Loot page.
 		do
 			local d = db()
 			if not d._autoOffV1 then
 				d.askOnML, d.autoAsk, d.whisperWinner = false, false, false
 				d._autoOffV1 = true
 			end
+			-- "Ask when I become master looter" is gone: the Guild run tile is the
+			-- choice now, so a switch saved on before must not keep asking.
+			d.askOnML = nil
 		end
 
 		-- COUNCIL NIGHT survives a reload, for NIGHT_TTL, so it covers a raid night and
@@ -3384,7 +3370,10 @@ do
 		do
 			local d = db()
 			local at = tonumber(d.activeAt or 0) or 0
-			if at > 0 and (time() - at) < NIGHT_TTL then
+			-- the loot mode decides: council night only comes back with Council picked
+			local SRM = Okanvil.SoftRes
+			local councilMode = not (SRM and SRM.Mode) or SRM.Mode() == "council"
+			if at > 0 and (time() - at) < NIGHT_TTL and councilMode then
 				C_.active = true
 				Okanvil:Print("|cffe0b860Loot council:|r council night restored.")
 			else
@@ -3526,7 +3515,9 @@ function C_.HasOpenRound()
 end
 
 -- The board on request (mini roll's Council button, /okcouncil board).
+-- The mini roll's Council button: opens the board, or closes it when it is open.
 function C_.OpenBoard()
+	if board and board:IsShown() then board:Hide(); return end
 	if C_.current then C_.RepaintBoard(true) end
 end
 

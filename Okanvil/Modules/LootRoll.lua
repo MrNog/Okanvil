@@ -266,6 +266,19 @@ local pendingItemScroll   -- scroll offset that puts the selected item on screen
 -- roll names an exact page and always outranks "go to the newest boss".
 local pendingJumpNewest = false
 local function isML() return amML() end
+
+-- The one raider who soft-reserved this drop, when exactly one did: the item is
+-- theirs without a roll. Not offered when that raider is no longer in the group.
+local function soleReserver(d)
+	local SRM = Okanvil.SoftRes
+	if not (SRM and d and d.id) then return nil end
+	local list = SRM.For(d.id)
+	if #list ~= 1 then return nil end
+	local name = list[1].name
+	local inGroup = (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0
+	if inGroup and not (UnitInRaid(name) or UnitInParty(name)) then return nil end
+	return name
+end
 RM.IsML = isML
 
 local function buildWindow()
@@ -372,7 +385,7 @@ local function buildWindow()
 	-- Back to the council board of the open round, for an officer who closed it.
 	-- Only while a round is open (RM.SyncCouncilButton).
 	local cnB = W.Button(hdr, "Council"); cnB:SetSize(58, 20)
-	cnB:Tooltip("Open the council board of the round in progress.")
+	cnB:Tooltip("Open or close the council board of the round in progress.")
 	cnB:SetScript("OnClick", function()
 		local CC = Okanvil.Council
 		if CC and CC.OpenBoard then CC.OpenBoard() end
@@ -762,7 +775,9 @@ function RM.Rebuild()
 		local bh = 22
 		local gap, bw = 6, (INNER - 6) / 2
 		local CC = Okanvil.Council
+		local SRM = Okanvil.SoftRes
 		local council = CC and CC.active and CC.Enabled and CC.Enabled()
+			and not (SRM and SRM.CouncilAllowed and not SRM.CouncilAllowed())
 
 		local rollB = keep(W.Button(body, "Roll", (not council) and "primary" or nil))
 		if council then
@@ -806,7 +821,13 @@ function RM.Rebuild()
 				local ar = L.ActiveRoll()
 				if ar and ar.best and ((not ar.id) or (not selected.id) or ar.id == selected.id) then top = ar.best end
 			end
-			if not top then Okanvil:Print("|cffff5555No rolls on this item yet.|r"); return end
+			if not top then
+				-- reserved by one raider only: theirs, no roll needed
+				local sole = soleReserver(selected)
+				if sole then L.AwardWinner(selected.id, sole, nil, nil); return end
+				Okanvil:Print("|cffff5555No rolls on this item yet.|r")
+				return
+			end
 			L.AwardWinner(selected.id, top.player, top.roll, top.spec or ((top.kind == "os") and "off" or nil))
 		end)
 		-- Says which give this will be before it is clicked: GiveMasterLoot only
@@ -900,6 +921,13 @@ function RM.SyncCouncilButton()
 		or (win.srBtn:IsShown() and win.srBtn) or win.closeBtn
 	win.cnBtn:ClearAllPoints()
 	win.cnBtn:SetPoint("RIGHT", left, "LEFT", -4, 0)
+	-- The title ends where the buttons begin, cut short rather than under them.
+	if win.title then
+		local first = win.cnBtn:IsShown() and win.cnBtn or left
+		win.title:SetPoint("RIGHT", first, "LEFT", -6, 0)
+		win.title:SetJustifyH("LEFT")
+		if win.title.SetWordWrap then win.title:SetWordWrap(false) end
+	end
 end
 
 -- Shrink the list (and the window) to what is actually in it. The list is laid out
@@ -1352,16 +1380,28 @@ function RM.Refresh()
 			and selected.receivedBy ~= mlName
 		local top = selected and L.RollWinner and L.RollWinner(selected)
 		if not top and selected and ar and ar.best and ((not ar.id) or ar.id == selected.id) then top = ar.best end
+		local sole = selected and not top and not owned and soleReserver(selected)
 		if selected and top and not owned then
 			local tag = (top.kind == "os" or top.spec == "off") and " OS" or ""
 			f.giveB.text:SetText("Give to " .. top.player .. " (" .. (top.roll or 0) .. tag .. ")")
 			f.giveB:Show()
 			if f.askB then f.askB:Hide() end
 			if f.rollB then f.rollB:Hide() end
+		elseif sole then
+			f.giveB.text:SetText("Give to " .. sole .. " (SR)")
+			f.giveB:Show()
+			if f.askB then f.askB:Hide() end
+			if f.rollB then f.rollB:Hide() end
 		else
 			f.giveB:Hide()
 			if f.askB then f.askB:Show() end
-			if f.rollB then f.rollB:Show() end
+			if f.rollB then
+				-- a contested reserve: Main spec rolls among the reservers only
+				local SRM = Okanvil.SoftRes
+				local n = (selected and SRM and #SRM.For(selected.id)) or 0
+				f.rollB.text:SetText(n >= 2 and ("Roll SR (" .. n .. ")") or "Roll")
+				f.rollB:Show()
+			end
 		end
 	end
 

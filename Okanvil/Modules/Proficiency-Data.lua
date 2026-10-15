@@ -282,6 +282,112 @@ function P.CanUse(link, class)
 	return true
 end
 
+-- Looser than CanUse, for what a raider may soft-reserve: any armour
+-- the class can put on, lighter types included (a Holy Paladin's BiS can be
+-- cloth). Returns ok, and the armour type when it is lighter than the class's
+-- own ("Cloth"), so the picker can say so. Heavier armour and weapons the class
+-- cannot hold are still refused.
+function P.CanEquip(link, class)
+	class = class or (select(2, UnitClass("player")))
+	if not link or not class then return true end
+	local _, _, _, _, _, itemType, itemSub, _, equipSlot = GetItemInfo(link)
+	if not itemType or equipSlot == "INVTYPE_CLOAK" then return P.CanUse(link, class) end
+	local eng = P.Subtype(itemSub)
+	local rank = eng and ARMOR_RANK[eng]
+	if rank then
+		local maxRank = ARMOR_MAX[class]
+		if not maxRank or rank == maxRank then return true end
+		if rank < maxRank then return true, eng end
+		return false, "armor"
+	end
+	return P.CanUse(link, class)
+end
+
+-- The armour type of this item when it is lighter than what the class wears
+-- ("Cloth"), else nil. The council board uses it to label such an answer.
+function P.LighterArmor(link, class)
+	if not (link and class) then return nil end
+	local _, _, _, _, _, itemType, itemSub, _, equipSlot = GetItemInfo(link)
+	if not itemType or equipSlot == "INVTYPE_CLOAK" then return nil end
+	local eng = P.Subtype(itemSub)
+	local rank, maxRank = eng and ARMOR_RANK[eng], ARMOR_MAX[class]
+	if rank and maxRank and rank < maxRank then return eng end
+	return nil
+end
+
+-- What each spec looks for on gear: `want` lists the stats that make an item
+-- theirs (any one is enough), `never` the stats that make it someone else's.
+-- Keyed by class, then talent tree (1-3). Physical specs take any physical
+-- stat -- a Retribution alt can be agility mail, hunter mail always carries
+-- Intellect -- and only refuse Spirit and spell power. Enhancement also takes
+-- Intellect (spellhancement). Only classes that can wear lighter armour need
+-- a row.
+local STAT = {
+	INT = "ITEM_MOD_INTELLECT_SHORT", SPI = "ITEM_MOD_SPIRIT_SHORT",
+	STR = "ITEM_MOD_STRENGTH_SHORT", AGI = "ITEM_MOD_AGILITY_SHORT",
+	AP = "ITEM_MOD_ATTACK_POWER_SHORT", SP = "ITEM_MOD_SPELL_POWER_SHORT",
+}
+local PHYSICAL = { want = { "STR", "AGI", "AP" }, never = { "SPI", "SP" } }
+local HEALER_NO_SPIRIT = { want = { "INT" }, never = { "SPI" } }
+local CASTER = { want = { "INT" } }
+local SPEC_STATS = {
+	PALADIN     = { HEALER_NO_SPIRIT, PHYSICAL, PHYSICAL },                -- Holy, Prot, Ret
+	SHAMAN      = { CASTER,                                                -- Elemental
+	                { want = { "STR", "AGI", "AP", "INT" }, never = { "SPI" } }, -- Enhancement
+	                CASTER },                                              -- Restoration
+	HUNTER      = { PHYSICAL, PHYSICAL, PHYSICAL },
+	DRUID       = { CASTER, PHYSICAL, CASTER },                            -- Balance, Feral, Resto
+	WARRIOR     = { PHYSICAL, PHYSICAL, PHYSICAL },
+	DEATHKNIGHT = { PHYSICAL, PHYSICAL, PHYSICAL },
+	ROGUE       = { PHYSICAL, PHYSICAL, PHYSICAL },
+}
+
+-- The talent tree with the most points, in the active spec.
+local function myTree()
+	local group = GetActiveTalentGroup and GetActiveTalentGroup(false) or 1
+	local best, bestPts = nil, -1
+	for i = 1, (GetNumTalentTabs and GetNumTalentTabs() or 3) do
+		local _, _, pts = GetTalentTabInfo(i, false, false, group)
+		if (pts or 0) > bestPts then best, bestPts = i, pts or 0 end
+	end
+	return best
+end
+
+-- equip slot -> inventory slots it goes in
+local INV_SLOTS = {
+	INVTYPE_HEAD = { 1 }, INVTYPE_SHOULDER = { 3 }, INVTYPE_CHEST = { 5 }, INVTYPE_ROBE = { 5 },
+	INVTYPE_WAIST = { 6 }, INVTYPE_LEGS = { 7 }, INVTYPE_FEET = { 8 }, INVTYPE_WRIST = { 9 },
+	INVTYPE_HAND = { 10 },
+}
+
+-- A lighter-armour item is still worth asking this raider about when it
+-- carries their spec's stat, none of the stats their spec never uses, and is
+-- a higher item level than what they wear in that slot. A Holy Paladin is
+-- asked about cloth Intellect boots that beat their own; never about Spirit
+-- gear, and a Retribution Paladin never about caster cloth.
+function P.LighterWorthAsking(link)
+	local _, class = UnitClass("player")
+	if not P.LighterArmor(link, class) then return false end
+	local spec = SPEC_STATS[class] and SPEC_STATS[class][myTree() or 0]
+	if not (spec and GetItemStats) then return false end
+	local stats = GetItemStats(link) or {}
+	local wanted = false
+	for _, st in ipairs(spec.want) do if stats[STAT[st]] then wanted = true end end
+	if not wanted then return false end
+	for _, s in ipairs(spec.never or {}) do
+		if stats[STAT[s]] then return false end
+	end
+	local ilvl = select(4, GetItemInfo(link)) or 0
+	local slots = INV_SLOTS[select(9, GetItemInfo(link)) or ""]
+	if not slots then return false end
+	for _, slot in ipairs(slots) do
+		local worn = GetInventoryItemLink("player", slot)
+		local wornLvl = worn and select(4, GetItemInfo(worn)) or 0
+		if ilvl > wornLvl then return true end
+	end
+	return false
+end
+
 -- Convenience for the raider's own client, which is where the filter runs.
 function P.CanIUse(link)
 	return P.CanUse(link, (select(2, UnitClass("player"))))

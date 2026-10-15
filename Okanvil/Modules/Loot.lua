@@ -3442,8 +3442,7 @@ local function commitAward(id, winner, de)
 		-- trade. A line in the raid feed is an announcement; a whisper is a task.
 		-- Skipped when the winner is us (the client refuses a self-whisper and the
 		-- server answers with a visible "Player not found.").
-		local cdb = Okanvil.db and Okanvil.db.council
-		if winner ~= meName and cdb and cdb.whisperWinner == true then
+		if winner ~= meName then
 			SendChatMessage((de and "You get %s to disenchant -- trade %s for it."
 				or "You won %s -- trade %s for it."):format(link or nm, meName),
 				"WHISPER", nil, winner)

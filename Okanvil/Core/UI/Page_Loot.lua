@@ -15,8 +15,8 @@ local newScrollPanel = Okanvil.UI.newScrollPanel
 
 -- ONE page for loot. It used to be two -- Loot and Loot Council -- with names
 -- close enough that the master looter could not tell which to open. Now:
---   Loot      what dropped and who got it, with the speed-run fields and the
---             soft reserves on top (everyone; the page's only view for raiders)
+--   Loot      tonight's setup: speed-run fields, loot mode, soft reserves
+--   History   what dropped and who got it
 --   Council   the loot council's settings (officers)
 --   Priority  the ladder pasted from the site (officers)
 -- Neither page is used DURING the raid: that is the mini roll, which the header
@@ -33,9 +33,8 @@ function Okanvil:BuildLoot()
 	Okanvil._lootFill = fill   -- set BEFORE the tab builders run (they read it)
 	local officer = Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() and true or false
 
-	-- The loot view: collectors on top, then the history list filling what is
-	-- left. The collectors block is a fixed height, so the history can anchor to
-	-- its bottom and still track the window.
+	-- Tonight's setup: the speed-run block (officers / ML), the loot mode tiles,
+	-- and what the picked mode needs below them.
 	local function buildBody(main)
 		local top = W.Frame(main, "page")
 		top:SetPoint("TOPLEFT", 0, 0)
@@ -57,30 +56,38 @@ function Okanvil:BuildLoot()
 		fill.applyTop = applyTop
 		top.onToggle = applyTop
 
-		-- Soft reserves: one line when closed, the paste box when open. Shown to
-		-- everyone -- in a pug the master looter is whoever the leader picked.
+		-- Shown to everyone: in a pug the master looter is whoever the leader picked.
+		-- Tonight's loot mode: four big tiles, one lit.
+		local modes = CreateFrame("Frame", nil, main)
+		modes:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
+		modes:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -4)
+		Okanvil:Loot_BuildModes(modes)
+
 		local srp = W.Frame(main, "page")
-		srp:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
-		srp:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -4)
+		srp:SetPoint("TOPLEFT", modes, "BOTTOMLEFT", 0, -6)
+		srp:SetPoint("TOPRIGHT", modes, "BOTTOMRIGHT", 0, -6)
 		Okanvil:Loot_BuildSoftRes(srp)
 
+	end
+
+	-- What dropped and who got it, on its own tab.
+	local function buildHistory(main)
 		local hist = W.Frame(main, "page")
-		hist:SetPoint("TOPLEFT", srp, "BOTTOMLEFT", 0, -14)
+		hist:SetPoint("TOPLEFT", 0, 0)
 		hist:SetPoint("BOTTOMRIGHT", main, "BOTTOMRIGHT", 0, 0)
 		Okanvil:Loot_BuildHistory(hist)
 	end
 
-	local tabs
+	-- Loot (tonight's setup) and History for everyone; Priority for officers.
+	local tabs = {
+		{ key = "loot", label = "Loot", height = 400, fill = true, build = buildBody },
+		{ key = "history", label = "History", height = 400, fill = true, build = buildHistory },
+	}
 	if officer then
-		tabs = {
-			{ key = "loot", label = "Loot", height = 400, fill = true, build = buildBody },
-			{ key = "council", label = "Council", height = 400, fill = true,
-			  build = function(pg)
-				if CC and CC.BuildRunTab then CC.BuildRunTab(pg) end
-			  end },
+		for _, t in ipairs({
 			{ key = "prio", label = "Priority", height = 400, fill = true,
 			  build = function(pg) Okanvil:Loot_BuildPrio(pg) end },
-		}
+		}) do tabs[#tabs + 1] = t end
 	end
 
 	local function takeML()
@@ -122,13 +129,6 @@ function Okanvil:BuildLoot()
 			if Okanvil.RollMgr and Okanvil.RollMgr.Toggle then Okanvil.RollMgr.Toggle()
 			else Okanvil:Print("Roll manager not loaded.") end
 		end,
-		-- Council night: officers, with the council module on.
-		secondaryText = function() return (CC and CC.NightText and CC.NightText()) or "" end,
-		secondaryWidth = 170,
-		secondaryShown = function()
-			return officer and CC and CC.Enabled and CC.Enabled() and true or false
-		end,
-		onSecondary = function() if CC and CC.NightClick then CC.NightClick() end end,
 		-- "Set me as ML" -- only shown when you're the leader and NOT already ML.
 		tertiaryText = function() return "Set me as ML" end,
 		tertiaryWidth = 110,
@@ -153,15 +153,13 @@ function Okanvil:BuildLoot()
 				or (GetNumPartyMembers and GetNumPartyMembers() > 0)
 			return grouped and "|cff8a8d93not master loot|r" or ""
 		end,
-		-- Officers get the three tabs as pills over one body; everyone else gets
-		-- the loot view alone, with no tab row.
-		pills = officer or nil,
+		-- the tabs are pills over one body
+		pills = true,
 		tabs = tabs,
 		-- The Council tab repaints the header while it is being built.
 		onReady = function(d) fill.dash = d end,
 	})
 	fill.dash = dash
-	if not officer then buildBody(dash.main) end
 
 	-- refresh when loot changes / the page shows / loot method changes
 	local function refreshAll()
@@ -303,112 +301,339 @@ function Okanvil:Loot_BuildCollectors(p)
 	-- other. Both are in Settings > Loot now, as one control.
 end
 
--- ---- Soft reserves: the softres.it CSV, pasted in ----
+-- ---- Loot mode: four big tiles ----
 --
--- Closed, the strip is one line saying what is loaded. Open, it is the paste
--- box and the wording of the roll call for a reserved item. The list itself is
--- read by the roll manager (who reserved what, whose rolls count).
--- The closed strip is laid out like the speed-run row above it: title, status
--- line under it, buttons on the right edge, a hairline below.
-local SR_CLOSED_H, SR_OPEN_H = 44, 208
-function Okanvil:Loot_BuildSoftRes(p)
+-- One click picks how tonight's loot is shared out (SoftRes.lua, SR.Mode).
+-- The lit tile is the mode; nothing lit means none picked yet, which behaves
+-- the way loot did before modes.
+local MODE_TILES = {
+	{ mode = "council", title = "Council", sub = "Officers decide" },
+	{ mode = "sr",      title = "SR",      sub = "Soft reserves" },
+	{ mode = "roll",    title = "Roll",    sub = "MS / OS" },
+}
+local MODE_TILE_H, MODE_TILE_GAP = 46, 6
+
+function Okanvil:Loot_BuildModes(p)
 	local SR = Okanvil.SoftRes
-	p:SetHeight(SR_CLOSED_H)
-	if not SR then return end
-	local X = 8
-
-	local hd = W.Text(p, "Soft reserves", "body")
-	hd:SetPoint("TOPLEFT", X, -6)
-	local status = W.Text(p, "", "note")
-	status:SetPoint("TOPLEFT", hd, "BOTTOMLEFT", 0, -3)
-
-	-- Paste SR owns the right edge; Clear sits to its left and only exists
-	-- while a list is loaded, so the edge never moves.
-	local tog = W.Button(p, "Paste SR"); tog:SetSize(80, 22); tog:SetPoint("TOPRIGHT", -X, -11)
-	local clr = W.Button(p, "Clear"); clr:SetSize(60, 22); clr:SetPoint("RIGHT", tog, "LEFT", -6, 0)
-	-- Send to raid: master looter / raid leader only. The import already sends
-	-- the list once; this is for whoever joins the raid after it.
-	local snd = W.Button(p, "Send to raid"); snd:SetSize(96, 22); snd:SetPoint("RIGHT", clr, "LEFT", -6, 0)
-	snd:Tooltip("Send this list to everyone in the raid who has Okanvil,\n"
-		.. "so their Mini Roll shows the [SR] tags too.")
-	status:SetJustifyH("LEFT")
-
-	local rule = p:CreateTexture(nil, "BORDER")
-	rule:SetTexture(FLAT); rule:SetVertexColor(1, 1, 1, 0.06)
-	rule:SetHeight(1)
-	rule:SetPoint("TOPLEFT", X, -SR_CLOSED_H + 1); rule:SetPoint("TOPRIGHT", -X, -SR_CLOSED_H + 1)
-
-	local body = CreateFrame("Frame", nil, p)
-	body:SetPoint("TOPLEFT", 0, -SR_CLOSED_H)
-	body:SetPoint("BOTTOMRIGHT", 0, 0)
-	body:Hide()
-
-	local hint = W.Text(body, "softres.it > Export > CSV > Copy to Clipboard, then paste here (Ctrl+V).", "note", "dim")
-	hint:SetPoint("TOPLEFT", X, -2)
-	local box = W.MultiEdit(body)
-	box:SetPoint("TOPLEFT", X, -18)
-	box:SetPoint("TOPRIGHT", -8, -18)
-	box:SetHeight(92)
-
-	local imp = W.Button(body, "Import", "primary"); imp:SetSize(80, 22)
-	imp:SetPoint("TOPRIGHT", box, "BOTTOMRIGHT", 0, -6)
-
-	local ml = W.Text(body, "MS call", "label"); ml:SetPoint("TOPLEFT", X, -148)
-	local msg = W.EditBox(body, function(t) SR.SetMsg(t) end)
-	msg:SetHeight(24)
-	msg:SetPoint("LEFT", ml, "RIGHT", 8, 0)
-	msg:SetPoint("RIGHT", body, "RIGHT", -8, 0)
-	msg.edit:SetText(SR.Msg())
-	local mh = W.Text(body, "|cffffd200[item]|r = the item, |cffffd200[names]|r = who reserved it. Only their rolls count.", "note", "dim")
-	mh:SetPoint("TOPLEFT", X + 66, -174)
+	p:SetHeight(MODE_TILE_H)
+	if not (SR and SR.SetMode) then p:SetHeight(1); return end
+	local C = Okanvil.Colors
+	local tiles = {}
 
 	local function paint()
-		local ni, np, at, from = SR.Summary()
-		if ni then
-			local src = from and ("received from |cffffd200" .. from .. "|r|cff8a8d93") or "imported"
-			status:SetText(("|cff7cfc8aLoaded|r |cff8a8d93--|r |cffffd200%d|r |cff8a8d93items,|r |cffffd200%d|r |cff8a8d93raiders, %s %s. MS rolls count only the reservers.|r")
-				:format(ni, np, src, date("%d/%m %H:%M", at)))
-			clr:Show()
-		else
-			status:SetText("|cff8a8d93None loaded -- MS rolls are open to everyone. Paste the softres.it CSV to load a list.|r")
-			clr:Hide()
+		local cur = SR.Mode()
+		for _, t in ipairs(tiles) do
+			local on = t._mode == cur
+			if on then
+				t.bg:SetVertexColor(C.accentD[1], C.accentD[2], C.accentD[3], 0.55)
+				t.edge:Show()
+				t.title:SetTextColor(C.accentText[1], C.accentText[2], C.accentText[3])
+				t.sub:SetTextColor(C.text[1], C.text[2], C.text[3])
+			else
+				t.bg:SetVertexColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.85)
+				t.edge:Hide()
+				t.title:SetTextColor(C.text[1], C.text[2], C.text[3])
+				t.sub:SetTextColor(C.textDim[1], C.textDim[2], C.textDim[3])
+			end
 		end
-		if SR.CanShare() then snd:Show() else snd:Hide() end
-		status:SetPoint("RIGHT", snd:IsShown() and snd or clr, "LEFT", -12, 0)
 	end
 
-	local function setOpen(open)
-		p._open = open
-		if open then body:Show(); p:SetHeight(SR_OPEN_H); tog.text:SetText("Close")
-		else body:Hide(); p:SetHeight(SR_CLOSED_H); tog.text:SetText("Paste SR"); box.edit:ClearFocus() end
+	for i, def in ipairs(MODE_TILES) do
+		local t = CreateFrame("Button", nil, p)
+		t._mode = def.mode
+		t:SetHeight(MODE_TILE_H)
+		Okanvil:Skin(t, "dark")
+		t.bg = t:CreateTexture(nil, "BACKGROUND", nil, 1)
+		t.bg:SetTexture(FLAT); t.bg:SetPoint("TOPLEFT", 1, -1); t.bg:SetPoint("BOTTOMRIGHT", -1, 1)
+		t.edge = t:CreateTexture(nil, "ARTWORK")
+		t.edge:SetTexture(FLAT); t.edge:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 1)
+		t.edge:SetHeight(2); t.edge:SetPoint("TOPLEFT", 1, -1); t.edge:SetPoint("TOPRIGHT", -1, -1)
+		t.hover = t:CreateTexture(nil, "HIGHLIGHT")
+		t.hover:SetTexture(FLAT); t.hover:SetVertexColor(1, 1, 1, 0.04); t.hover:SetAllPoints()
+		t.title = W.Text(t, def.title, "head")
+		t.title:SetPoint("TOPLEFT", 10, -9)
+		t.sub = W.Text(t, def.sub, "note")
+		t.sub:SetPoint("TOPLEFT", t.title, "BOTTOMLEFT", 0, -4)
+		t:SetScript("OnClick", function(s) SR.SetMode(s._mode) end)
+		tiles[i] = t
 	end
 
-	tog:SetScript("OnClick", function() setOpen(not p._open) end)
-	imp:SetScript("OnClick", function()
+	-- Four equal columns; re-laid out whenever the page width changes.
+	local function layout()
+		local w = p:GetWidth() or 0
+		if w <= 0 then return end
+		local tw = (w - MODE_TILE_GAP * (#tiles - 1)) / #tiles
+		for i, t in ipairs(tiles) do
+			t:ClearAllPoints()
+			t:SetPoint("TOPLEFT", p, "TOPLEFT", (i - 1) * (tw + MODE_TILE_GAP), 0)
+			t:SetWidth(tw)
+		end
+	end
+	p:SetScript("OnSizeChanged", layout)
+	p:SetScript("OnShow", function() layout(); paint() end)
+	layout()
+	paint()
+
+	Okanvil._paintModes = paint
+end
+
+-- ---- Soft reserves: what the picked mode needs, nothing else ----
+--
+-- SR: the counts and whether whispers are taken, then
+-- reserves per player and the actions, then what has been reserved. Import CSV
+-- swaps the list for the paste box until the import is done.
+-- Council: the council's own panel. Roll: one quiet line -- nothing to set.
+-- The roll call's wording lives in Settings > Loot with the other templates.
+local SR_LINE1_H, SR_LINE2_H, SR_ROW_H, SR_MAX_ROWS, SR_PASTE_H = 42, 40, 22, 8, 118
+function Okanvil:Loot_BuildSoftRes(p)
+	local SR = Okanvil.SoftRes
+	p:SetHeight(40)
+	if not SR then return end
+	local C = Okanvil.Colors
+	local X = 12
+
+	local quiet = W.Text(p, "", "body", "dim")
+	quiet:SetPoint("TOPLEFT", X, -13)
+
+	-- Council: the council's own panel, built the first time it is needed.
+	local cn = CreateFrame("Frame", nil, p)
+	cn:SetPoint("TOPLEFT"); cn:SetPoint("TOPRIGHT")
+	cn:Hide()
+
+	-- Which raid the window shows raiders: the one you are in, or picked here.
+	local function raidButton(parent)
+		local b = W.Button(parent, "ICC 25"); b:SetSize(96, 22)
+		b.listFn = function()
+			local out = {}
+			for _, r in ipairs(OkanvilRaids or {}) do
+				for _, size in ipairs(r.sizes or { 10, 25 }) do
+					out[#out + 1] = { text = SR.RaidLabel({ key = r.key, size = size }), value = r.key .. ":" .. size .. ":0" }
+				end
+			end
+			return out
+		end
+		b.setFn = function(v)
+			local key, size, hc = v:match("^(%w+):(%d+):(%d)$")
+			if not key then return end
+			size, hc = tonumber(size), hc == "1"
+			local cur = SR.Raid()
+			if cur.key == key and cur.size == size and (cur.hc and true or false) == hc then return end
+			-- a reserve list belongs to one raid: another raid starts from nothing
+			if SR.Summary() then
+				Okanvil:Confirm("Change to " .. SR.RaidLabel({ key = key, size = size, hc = hc })
+					.. "?\n|cff8a8d93The current soft-reserve list is cleared.|r", "Change raid",
+					function() SR.Clear(); SR.SetRaid(key, size, hc) end)
+			else
+				SR.SetRaid(key, size, hc)
+			end
+		end
+		b:SetScript("OnClick", function(s)
+			if SR.RaidHere and SR.RaidHere() then return end   -- inside, it is the raid you are in
+			if W.OpenMenu then W.OpenMenu(s) end
+		end)
+		b:Tooltip("The raid whose loot raiders pick from.\nInside a raid it is always that raid.")
+		b.Sync = function() if SR.RaidLabel then b.text:SetText(SR.RaidLabel()) end end
+		return b
+	end
+
+
+	local sr = CreateFrame("Frame", nil, p)
+	sr:SetPoint("TOPLEFT"); sr:SetPoint("BOTTOMRIGHT")
+
+	local function hair(y)
+		local t = sr:CreateTexture(nil, "BORDER")
+		t:SetTexture(FLAT); t:SetVertexColor(1, 1, 1, 0.06); t:SetHeight(1)
+		t:SetPoint("TOPLEFT", 1, y); t:SetPoint("TOPRIGHT", -1, y)
+		return t
+	end
+
+	-- line 1: counts, whisper state
+	local nItems = W.Text(sr, "0", 20); nItems:SetPoint("TOPLEFT", X, -10)
+	nItems:SetTextColor(C.accentText[1], C.accentText[2], C.accentText[3])
+	local lItems = W.Text(sr, "items", "label", "dim"); lItems:SetPoint("BOTTOMLEFT", nItems, "BOTTOMRIGHT", 5, 2)
+	local nRaid = W.Text(sr, "0", 20); nRaid:SetPoint("BOTTOMLEFT", lItems, "BOTTOMRIGHT", 16, -2)
+	nRaid:SetTextColor(C.accentText[1], C.accentText[2], C.accentText[3])
+	local lRaid = W.Text(sr, "raiders", "label", "dim"); lRaid:SetPoint("BOTTOMLEFT", nRaid, "BOTTOMRIGHT", 5, 2)
+	local lockB = W.Button(sr, "Lock"); lockB:SetSize(70, 22); lockB:SetPoint("TOPRIGHT", -X, -10)
+	lockB:SetScript("OnClick", function() SR.SetIntake(not SR.IntakeOpen()) end)
+	lockB:Tooltip("Open: \"sr [item]\" whispers are saved and answered.\nLocks by itself at the first pull in a raid.")
+	local wState = W.Text(sr, "", "label"); wState:SetPoint("RIGHT", lockB, "LEFT", -10, 0)
+	hair(-SR_LINE1_H)
+
+	-- line 2: per player, actions
+	local y2 = -SR_LINE1_H - 9
+	local pp = W.Text(sr, "Per player", "label", "dim"); pp:SetPoint("TOPLEFT", X, y2 - 4)
+	local seg = {}
+	for n = 1, 3 do
+		local b = W.Button(sr, tostring(n)); b:SetSize(26, 22)
+		b:SetPoint("LEFT", n == 1 and pp or seg[n - 1], "RIGHT", n == 1 and 10 or 2, 0)
+		b:SetScript("OnClick", function() SR.SetLimit(n) end)
+		seg[n] = b
+	end
+	local srRaidB = raidButton(sr); srRaidB:SetPoint("LEFT", seg[3], "RIGHT", 14, 0)
+	local listB = W.Button(sr, "Post list", "primary"); listB:SetSize(80, 22); listB:SetPoint("TOPRIGHT", -X, y2)
+	listB:SetScript("OnClick", function() SR.PostList() end)
+	listB:Tooltip("Posts every reserved item and who reserved it in raid chat.")
+	local postB = W.Button(sr, "Post rules"); postB:SetSize(84, 22); postB:SetPoint("RIGHT", listB, "LEFT", -6, 0)
+	postB:SetScript("OnClick", function()
+		-- the rules go to raid chat for everyone; raiders with Okanvil also get
+		-- the pick window, so they do not have to whisper
+		if SR.PostPick then SR.PostPick() end
+		SR.PostOpen()
+	end)
+	postB:Tooltip("Tells the raid how to reserve (\"whisper me sr [item]\")\nand opens the pick window for raiders with Okanvil.")
+	local impB = W.Button(sr, "Import CSV"); impB:SetSize(84, 22); impB:SetPoint("RIGHT", postB, "LEFT", -6, 0)
+	impB:Tooltip("Load the list from softres.it:\nExport > CSV > Copy to Clipboard, then paste.")
+	local clrB = W.Button(sr, "Clear"); clrB:SetSize(56, 22); clrB:SetPoint("RIGHT", impB, "LEFT", -6, 0)
+	clrB:SetScript("OnClick", function()
+		Okanvil:Confirm("Clear the soft reserves?", "Clear", function() SR.Clear() end)
+	end)
+	hair(-SR_LINE1_H - SR_LINE2_H)
+
+	-- the reserved items, or the paste box in their place
+	local top = -SR_LINE1_H - SR_LINE2_H
+	local rows = {}
+	local function row(i)
+		if rows[i] then return rows[i] end
+		local r = CreateFrame("Button", nil, sr)
+		r:SetHeight(SR_ROW_H)
+		r:SetPoint("TOPLEFT", 1, top - (i - 1) * SR_ROW_H)
+		r:SetPoint("TOPRIGHT", -1, top - (i - 1) * SR_ROW_H)
+		r.hl = r:CreateTexture(nil, "HIGHLIGHT"); r.hl:SetTexture(FLAT); r.hl:SetVertexColor(1, 1, 1, 0.04); r.hl:SetAllPoints()
+		r.who = W.Text(r, "", "label"); r.who:SetPoint("RIGHT", -X + 1, 0); r.who:SetJustifyH("RIGHT")
+		r.item = W.Text(r, "", "body"); r.item:SetPoint("LEFT", X - 1, 0); r.item:SetPoint("RIGHT", r.who, "LEFT", -12, 0)
+		r.item:SetJustifyH("LEFT")
+		if r.item.SetWordWrap then r.item:SetWordWrap(false) end
+		r:SetScript("OnEnter", function(s)
+			if not s._id then return end
+			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+			GameTooltip:SetHyperlink("item:" .. s._id)
+			SR.AddTooltip(GameTooltip, s._id)
+			GameTooltip:Show()
+		end)
+		r:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		rows[i] = r
+		return r
+	end
+	local more = W.Text(sr, "", "note", "dim")
+
+	local paste = CreateFrame("Frame", nil, sr)
+	paste:SetPoint("TOPLEFT", 0, top); paste:SetPoint("TOPRIGHT", 0, top); paste:SetHeight(SR_PASTE_H)
+	local box = W.MultiEdit(paste)
+	box:SetPoint("TOPLEFT", X, -8); box:SetPoint("TOPRIGHT", -X, -8); box:SetHeight(76)
+	local doImp = W.Button(paste, "Import", "primary"); doImp:SetSize(80, 22)
+	doImp:SetPoint("TOPRIGHT", box, "BOTTOMRIGHT", 0, -6)
+	local cancel = W.Button(paste, "Cancel"); cancel:SetSize(70, 22); cancel:SetPoint("RIGHT", doImp, "LEFT", -6, 0)
+	paste:Hide()
+
+	local pasting = false
+	local paint
+	impB:SetScript("OnClick", function() pasting = not pasting; paint() end)
+	cancel:SetScript("OnClick", function() pasting = false; box:SetText(""); box.edit:ClearFocus(); paint() end)
+	doImp:SetScript("OnClick", function()
 		local ni, np = SR.Import(box:GetText())
 		if not ni then Okanvil:Print("|cffff5555" .. tostring(np) .. "|r"); return end
 		Okanvil:Print(("Soft reserves loaded: %d items, %d raiders."):format(ni, np)
 			.. (SR.CanShare() and " Sent to the raid." or ""))
-		box:SetText("")
-		setOpen(false)
+		box:SetText(""); box.edit:ClearFocus()
+		pasting = false
+		paint()
 	end)
-	clr:SetScript("OnClick", function()
-		Okanvil:Confirm("Clear the soft reserves?\n|cff8a8d93MS rolls go back to being open to everyone.|r",
-			"Clear", function() SR.Clear(); Okanvil:Print("Soft reserves cleared.") end)
-	end)
-	clr:Tooltip("Remove the loaded list, e.g. before the next raid.\nImporting a new list also replaces it.")
-	snd:SetScript("OnClick", function()
-		if SR.Share() then Okanvil:Print("Soft reserves sent to the raid.")
-		else Okanvil:Print("|cffff5555Could not send -- are you in a group?|r") end
-	end)
+
+	local function itemText(id, fallback)
+		local name, _, q = GetItemInfo(id)
+		name = name or fallback or ("item " .. id)
+		-- not `local r, g, b = f and f()`: `and` keeps only the first return
+		local r, g, b
+		if GetItemQualityColor then r, g, b = GetItemQualityColor(q or 4) end
+		if not (r and g and b) then r, g, b = 0.64, 0.21, 0.93 end
+		return ("|cff%02x%02x%02x%s|r"):format(r * 255, g * 255, b * 255, name)
+	end
+
+	paint = function()
+		local mode = SR.Mode()
+		local srMode = SR.WhisperMode and SR.WhisperMode()
+		local CC = Okanvil.Council
+		if mode == "council" and CC and CC.BuildRunTab and CC.Enabled and CC.Enabled() then
+			sr:Hide(); quiet:Hide()
+			if not cn.built then CC.BuildRunTab(cn); cn.built = true end
+			if cn.refresh then cn.refresh() end
+			cn:SetHeight(cn.needH or 140)
+			cn:Show()
+			p:SetHeight(cn.needH or 140)
+			return
+		end
+		cn:Hide()
+		if not srMode then
+			sr:Hide(); quiet:Show()
+			quiet:SetText(mode == "council" and "Loot council is off for this character (Modules)."
+				or "MS / OS for everything. Nothing to set here.")
+			p:SetHeight(40)
+			return
+		end
+		quiet:Hide(); sr:Show()
+
+		local ni, np = SR.Summary()
+		nItems:SetText(tostring(ni or 0)); nRaid:SetText(tostring(np or 0))
+		local open = SR.IntakeOpen()
+		wState:SetText(open and "|cff7cfc8aWhispers open|r" or "|cff8a8d93Whispers locked|r")
+		lockB.text:SetText(open and "|cffff5555Lock|r" or "Open")
+		for n, b in ipairs(seg) do b:SetKind(n == SR.Limit() and "primary" or nil) end
+		srRaidB.Sync()
+		if ni then clrB:Show() else clrB:Hide() end
+
+		local h = SR_LINE1_H + SR_LINE2_H
+		if pasting then
+			for _, r in ipairs(rows) do r:Hide() end
+			more:Hide()
+			paste:Show()
+			impB.text:SetText("Close")
+			h = h + SR_PASTE_H
+		else
+			paste:Hide()
+			impB.text:SetText("Import CSV")
+			local items = SR.All()
+			local n = math.min(#items, SR_MAX_ROWS)
+			for i = 1, math.max(n, #rows) do
+				local it = items[i]
+				if i <= n and it then
+					local r = row(i)
+					r._id = it.id
+					r.item:SetText(itemText(it.id, it.name))
+					r.who:SetText(SR.Names(it.id, false))
+					r:Show()
+				elseif rows[i] then
+					rows[i]:Hide()
+				end
+			end
+			h = h + n * SR_ROW_H
+			if #items > SR_MAX_ROWS then
+				more:ClearAllPoints()
+				more:SetPoint("TOPLEFT", X, -h - 4)
+				more:SetText("+" .. (#items - SR_MAX_ROWS) .. " more  |cff6f7176(Post list shows all)|r")
+				more:Show()
+				h = h + 20
+			else
+				more:Hide()
+			end
+			if #items == 0 then
+				more:ClearAllPoints()
+				more:SetPoint("TOPLEFT", X, -h - 6)
+				more:SetText("Nothing reserved yet. Raiders whisper you:  sr [item]")
+				more:Show()
+				h = h + 24
+			end
+		end
+		p:SetHeight(h + 4)
+	end
 
 	SR.onChange = function()
 		paint()
+		if Okanvil._paintModes then Okanvil._paintModes() end
 		if Okanvil.RollMgr and Okanvil.RollMgr.Refresh then Okanvil.RollMgr.Refresh() end
 	end
-	p:SetScript("OnShow", paint)
+	p:SetScript("OnShow", function() paint() end)
 	paint()
-	setOpen(false)
 end
 
 -- ---- Announce templates: MS/OS/Free/Whisper ([item] placeholder) ----
@@ -436,6 +661,13 @@ local function buildMessages(p, y0)
 	-- as StartRoll's fallback, and its default wording with it.
 	row("MS",      y0 - 40, function() return L.RollMsg("ms") end,   function(t) L.SetRollMsg("ms", t) end)
 	local osBox = row("OS", y0 - 70, function() return L.RollMsg("os") end, function(t) L.SetRollMsg("os", t) end)
+	-- the MS call for a soft-reserved item; [names] = who reserved it
+	local SRM = Okanvil.SoftRes
+	if SRM and SRM.Msg then
+		local srBox = row("SR", y0 - 100, function() return SRM.Msg() end, function(t) SRM.SetMsg(t) end)
+		local srh = W.Text(p, "|cffffd200[names]|r = who reserved it", "note", "dim")
+		srh:SetPoint("LEFT", srBox, "RIGHT", 14, 0)
+	end
 	-- ROLL TIMER: seconds before an MS/OS roll ends itself. Beside the templates
 	-- it applies to; the loot council has no clock and is not affected.
 	if L.RollTimer then
@@ -457,7 +689,7 @@ local function buildMessages(p, y0)
 	-- switch on and nothing to explain why nothing was sent.
 	-- 30px higher than it used to be: the Free template above is gone, and the
 	-- gap it left read as a missing control.
-	local wy = y0 - 118
+	local wy = y0 - 148
 	local wh = W.Text(p, "ON AWARD", "note", "dim"); wh:SetPoint("TOPLEFT", X, wy)
 	wy = wy - 24
 

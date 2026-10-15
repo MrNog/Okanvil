@@ -392,7 +392,9 @@ do
 end
 
 SLASH_OKRES1 = "/okres"
-SlashCmdList["OKRES"] = function()
+SlashCmdList["OKRES"] = function(msg)
+	-- /okres mode|open|lock|post|list|test -- see SoftRes-Live.lua
+	if SR.Slash and SR.Slash(msg) then return end
 	if not isML() then Okanvil:Print("Soft reserves: only the master looter has this list."); return end
 	if not (SR.Summary() or Okanvil.LITE) then Okanvil:Print("Soft reserves: none loaded -- paste the CSV on the Loot page."); return end
 	local rm = rollWin()
