@@ -408,17 +408,32 @@ function W.WhispersPanel(parent, cfg)
 	-- the window, docked outside the main one so the page keeps its full width
 	local side = CreateFrame("Frame", nil, parent)
 	Okanvil:Skin(side)
-	-- same strength as the main window's wallpaper (Settings), and a lighter
-	-- fade: the panel is narrow, so the default one left almost nothing showing
-	local art, fade = W.ForgeArt(side, (Okanvil.db and Okanvil.db.ratAlpha) or 0.45)
-	-- One layer up, like the main window's wallpaper: on BACKGROUND it shares the
-	-- layer with the window's own near-opaque backdrop, which then hid it.
-	if art then art:SetDrawLayer("BORDER") end
-	if fade then
-		fade:SetDrawLayer("ARTWORK")
+	-- The main window's wallpaper, drawn the same way: BORDER layer (above the
+	-- backdrop), its strength from Settings, a dark fade that eases off to the
+	-- right. The panel is tall and narrow, so it shows the right-hand slice of
+	-- the 2:1 picture, where the smith stands.
+	local art = side:CreateTexture(nil, "BORDER")
+	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
+	art:SetTexture("Interface\\AddOns\\Okanvil\\Media\\window-bg")
+	local fade = side:CreateTexture(nil, "ARTWORK")
+	fade:SetPoint("TOPLEFT", 1, -1); fade:SetPoint("BOTTOMRIGHT", -1, 1)
+	fade:SetTexture(FLAT)
+	do
 		local d = C.panelD
 		fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.80, d[1], d[2], d[3], 0.30)
 	end
+	local function paintArt()
+		local db = Okanvil.db or {}
+		if (db.ratArt or "on") == "off" then art:Hide(); fade:Hide(); return end
+		local w, h = side:GetWidth() or 0, side:GetHeight() or 0
+		if w > 0 and h > 0 then
+			local span = math.min(1, (w / h) / 2)
+			art:SetTexCoord(1 - span, 1, 0, 1)
+		end
+		art:SetAlpha(db.ratAlpha or 0.45); art:Show(); fade:Show()
+	end
+	side:HookScript("OnSizeChanged", paintArt)
+	side:HookScript("OnShow", paintArt)
 	side:SetWidth(PANEL_W + 24)
 	side:EnableMouse(true)
 	local p = W.Frame(side, "bare")
