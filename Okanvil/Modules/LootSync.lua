@@ -137,6 +137,10 @@ end
 local function merge(s, r, used, sender)
 	local drops = s.drops
 	r.who = resolveYou(r.who, sender)
+	-- Same boss correction as a local capture: a sender on an older boss table
+	-- (Rowan's Rifle under Marrowgar) would otherwise never match our Trash row.
+	local real = OkanvilItemBoss and OkanvilItemBoss[r.id]
+	if real then r.boss = real end
 	local mine = me()
 	for _, d in ipairs(drops) do
 		d.receivedBy = resolveYou(d.receivedBy, mine)
@@ -164,6 +168,12 @@ local function merge(s, r, used, sender)
 			and (not d.receivedBy or d.receivedBy == "") then
 			return claim(d)
 		end
+	end
+	-- We saw this item drop ourselves and every copy already has its winner, so a
+	-- different winner from the sender is their mistake, not a copy we missed.
+	-- (Officers on an older build still send rows their login fix gave the wrong name.)
+	for _, d in ipairs(drops) do
+		if d.id == r.id and d.boss == r.boss and not d.syncFrom then return false end
 	end
 	local name, _, rarity = GetItemInfo(r.link ~= "" and r.link or r.id)
 	local icon = (GetItemIcon and GetItemIcon(r.id)) or nil
