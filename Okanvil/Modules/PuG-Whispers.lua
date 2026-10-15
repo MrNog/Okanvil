@@ -430,9 +430,12 @@ function M.AuditDetail(name)
 	if not audit then
 		notes[#notes + 1] = "Gear not read yet -- reads when they come near."
 	else
-		local ne = audit.noEnchant or {}
-		d.checks[#d.checks + 1] = { #ne > 0 and "bad" or "ok", "Enchants",
-			#ne > 0 and (table.concat(ne, ", ") .. " missing") or "All done" }
+		local ne, cheap = audit.noEnchant or {}, audit.budget or {}
+		local e = {}
+		if #ne > 0 then e[#e + 1] = table.concat(ne, ", ") .. " missing" end
+		if #cheap > 0 then e[#e + 1] = table.concat(cheap, ", ") .. " budget" end
+		d.checks[#d.checks + 1] = { #ne > 0 and "bad" or (#cheap > 0 and "warn" or "ok"), "Enchants",
+			#e > 0 and table.concat(e, " - ") or "All done" }
 
 		local g = {}
 		if (audit.empty or 0) > 0 then g[#g + 1] = audit.empty .. " empty (" .. table.concat(audit.emptySlots, ", ") .. ")" end
@@ -510,7 +513,8 @@ local function mockPlayers()
 					lowGems = 2, meta = true } } },
 		{ name = "Totemtoe", class = "SHAMAN", sub = "|cff7cfc8arestoration|r",
 			info = { gs = 5203, ilvl = 245, pvp = 0,
-				audit = { noEnchant = {}, empty = 0, emptySlots = {}, lowGems = 1, meta = false, partial = true } } },
+				audit = { noEnchant = {}, budget = { "Chest", "Gloves" }, empty = 0, emptySlots = {}, lowGems = 1,
+					meta = false, partial = true } } },
 		{ name = "Blinkzor", class = "MAGE", sub = "|cff6f7176spec not read|r", info = nil },
 	}
 end

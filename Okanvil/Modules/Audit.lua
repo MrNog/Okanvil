@@ -32,6 +32,32 @@ local ENCHANT_SLOTS = {
 	{ 16, "Weapon"    }, { 17, "Off hand"  }, { 18, "Ranged" },
 }
 
+-- Enchant ids (the number after the item id in a link) that count as a proper
+-- enchant; anything else on the slot is a budget one. The top-end WotLK enchants
+-- per slot, profession-only ones (embroideries, fur linings, tinkers, master
+-- inscriptions) and runeforges. An id with the same stats as one here counts too
+-- (3719/3872 are both Brilliant Spellthread). Ids and texts come from an
+-- in-game scan of the client (/pug enchscan).
+local function set(t) local s = {} for _, v in ipairs(t) do s[v] = true end return s end
+local WEAPON_ENCHANTS = {
+	3789, 3790, 3788, 3834, 3827, 3854, 3870, 3869, 2673, 3225, 3731,   -- Berserking, Black Magic, Accuracy, Mighty Spellpower, Massacre, Greater Spellpower, Blood Draining, Blade Ward, Mongoose, Executioner, Titanium Chain
+	3365, 3366, 3367, 3368, 3369, 3370, 3594, 3595, 3847, 3883,         -- runeforges
+}
+local GOOD_ENCHANTS = {
+	[1]  = set{ 3817, 3818, 3819, 3820 },                               -- arcanums: Torment, Stalwart Protector, Blissful Mending, Burning Mysteries
+	[3]  = set{ 3808, 3809, 3810, 3811, 3852, 3835, 3836, 3837, 3838 }, -- greater inscriptions + Inscription's own
+	[15] = set{ 3831, 1099, 3294, 3722, 3728, 3730, 3605, 3859 },       -- haste, agility, armor, embroideries, parachutes
+	[5]  = set{ 3832, 3879, 3297, 2381, 1144 },                         -- all stats, health, mana regen, spirit
+	[9]  = set{ 2332, 3845, 3850, 1147, 3756, 3757, 3758 },             -- spell power, attack power, stamina, spirit, fur linings
+	[10] = set{ 3246, 1603, 3222, 3234, 3260, 3253, 3231, 684, 3604, 3603, 3860 }, -- + engineering tinkers
+	[7]  = set{ 3823, 3328, 3822, 3327, 3719, 3872, 3721, 3873 },       -- Icescale, Frosthide, spellthreads
+	[8]  = set{ 3232, 1597, 1601, 3449, 983, 3447, 1075, 3259, 3826, 3244, 3606 }, -- Tuskarr, assault, agility, fortitude, Icewalker, vitality, Nitro
+	[16] = set(WEAPON_ENCHANTS),
+	[17] = set(WEAPON_ENCHANTS),
+	[18] = set{ 3608, 3607, 3843 },                                     -- Heartseeker, Sun, Diamond-cut
+}
+for _, id in ipairs({ 3849, 1128, 1952 }) do GOOD_ENCHANTS[17][id] = true end -- shields: Titanium Plating, intellect, defense
+
 -- Every slot that can hold a gem.
 local GEM_SLOTS = {
 	{  1, "Head"     }, {  2, "Neck"     }, {  3, "Shoulders" }, { 15, "Cloak"   },
@@ -104,6 +130,54 @@ local function tipLines(link)
 	return out
 end
 
+-- Every enchant id the client knows, with its tooltip text, for building the
+-- budget-enchant table from real data. An enchant only shows on an item, so each
+-- id is put on one of the player's own (cached) items and the lines the bare item
+-- does not have are the enchant. Saved to OkanvilPuGDB.enchScan.
+local SCAN_MAX, SCAN_PER_FRAME = 4500, 100
+function M.ScanEnchants()
+	local base
+	for _, slot in ipairs({ 5, 7, 1, 3, 10, 8, 16 }) do
+		local link = GetInventoryItemLink("player", slot)
+		base = link and link:match("item:(%d+)")
+		if base then break end
+	end
+	if not base then
+		Okanvil:Print("Enchant scan: equip any armour or weapon first.")
+		return
+	end
+	local function lines(ench)
+		local set = {}
+		for _, t in ipairs(tipLines(("item:%s:%d:0:0:0:0:0:0:80"):format(base, ench))) do set[t] = true end
+		return set
+	end
+	local bare = lines(0)
+	local out, n, id = {}, 0, 0
+	local f = CreateFrame("Frame")
+	f:SetScript("OnUpdate", function(self)
+		for _ = 1, SCAN_PER_FRAME do
+			id = id + 1
+			if id > SCAN_MAX then
+				self:SetScript("OnUpdate", nil)
+				OkanvilPuGDB = OkanvilPuGDB or {}
+				OkanvilPuGDB.enchScan = out
+				Okanvil:Print(("Enchant scan done: %d enchants saved. /reload to write them to disk."):format(n))
+				return
+			end
+			local extra = {}
+			for t in pairs(lines(id)) do
+				if not bare[t] then extra[#extra + 1] = t end
+			end
+			if #extra > 0 then
+				table.sort(extra)
+				out[id] = table.concat(extra, " / ")
+				n = n + 1
+			end
+		end
+	end)
+	Okanvil:Print("Enchant scan started (a few seconds)...")
+end
+
 -- The meta gem's own condition, as written on its tooltip:
 --   "Requires at least 1 Red Gem, at least 1 Yellow Gem, and at least 1 Blue Gem."
 --   "Requires more Blue gems than Red gems."
@@ -146,7 +220,7 @@ end
 --   partial     = some item was not in the client's cache, so a check was skipped
 function M.Gear(unit)
 	local _, class = UnitClass(unit)
-	local a = { noEnchant = {}, empty = 0, emptySlots = {}, noBuckle = false,
+	local a = { noEnchant = {}, budget = {}, empty = 0, emptySlots = {}, noBuckle = false,
 		lowGems = 0, partial = false }
 	local colours = { r = 0, y = 0, b = 0 }
 	local coloursKnown = true
@@ -161,6 +235,8 @@ function M.Gear(unit)
 				a.partial = true
 			elseif ench == "0" and enchantable(e[1], equipLoc, class) then
 				a.noEnchant[#a.noEnchant + 1] = e[2]
+			elseif ench and ench ~= "0" and GOOD_ENCHANTS[e[1]] and not GOOD_ENCHANTS[e[1]][tonumber(ench)] then
+				a.budget[#a.budget + 1] = e[2]
 			end
 		end
 	end
@@ -223,7 +299,7 @@ end
 function M.Counts(a)
 	if not a then return nil end
 	local hard = #(a.noEnchant or {}) + (a.empty or 0) + (a.noBuckle and 1 or 0) + (a.meta == false and 1 or 0)
-	return hard, (a.lowGems or 0)
+	return hard, (a.lowGems or 0) + #(a.budget or {})
 end
 
 -- One friendly whisper listing what to fix, or nil when there is nothing.

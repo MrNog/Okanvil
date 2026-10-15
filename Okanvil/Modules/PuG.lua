@@ -1929,6 +1929,8 @@ SlashCmdList["OKPUG"] = function(arg)
 		if not (Okanvil.win and Okanvil.win:IsShown()) then Okanvil:Toggle() end
 		if Okanvil.ShowPanel then Okanvil:ShowPanel(ADDON) end
 		M.ToggleMock()
+	elseif arg == "enchscan" then
+		if Okanvil.Audit and Okanvil.Audit.ScanEnchants then Okanvil.Audit.ScanEnchants() end
 	else
 		-- open the window on our own page (the plugin name IS the panel key)
 		if not (Okanvil.win and Okanvil.win:IsShown()) then Okanvil:Toggle() end

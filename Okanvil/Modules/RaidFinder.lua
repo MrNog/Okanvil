@@ -632,6 +632,10 @@ Okanvil.RaidFinder_Achievements = {
 	{ raid = "icc25nm",  name = "Fall of the Lich King (25)",     id = 4608 },
 	{ raid = "icc10hc",  name = "Bane of the Fallen King (10 HC)",id = 4583 },
 	{ raid = "icc25hc",  name = "The Light of Dawn (25 HC)",      id = 4584 },
+	{ raid = "rs10nm",   name = "The Twilight Destroyer (10)",    id = 4817 },
+	{ raid = "rs25nm",   name = "The Twilight Destroyer (25)",    id = 4815 },
+	{ raid = "rs10hc",   name = "Heroic: The Twilight Destroyer (10 HC)", id = 4818 },
+	{ raid = "rs25hc",   name = "Heroic: The Twilight Destroyer (25 HC)", id = 4816 },
 }
 local ach_by_raid = {}
 for _, a in ipairs(Okanvil.RaidFinder_Achievements) do ach_by_raid[a.raid] = a.id end
