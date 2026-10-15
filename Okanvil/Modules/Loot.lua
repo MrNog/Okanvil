@@ -769,21 +769,32 @@ end
 local WEEK = 7 * 86400
 local RESET_WD = 3   -- Wednesday ("%w": Sunday = 0). Only used when nothing above is known.
 
+-- Old raids farmed for mounts reset every 3 days, not on the weekly reset. Learning
+-- the week from one of them put the week start up to 3 days off, and the loot sync
+-- then turned away that officer's rows as "not this run".
 -- Remember the NEXT weekly reset (a timestamp) for this realm, account-wide.
-local function learnWeeklyReset(secondsLeft)
-	if not (secondsLeft and secondsLeft > 0 and secondsLeft <= WEEK + 3600) then return end
-	local db = Okanvil.db
-	if not db then return end
-	db.weeklyReset = db.weeklyReset or {}
-	db.weeklyReset[GetRealmName() or "?"] = time() + secondsLeft
+local learnWeeklyReset
+do
+	local THREE_DAY_RAIDS = {
+		["Zul'Gurub"] = true, ["Ruins of Ahn'Qiraj"] = true, ["Zul'Aman"] = true,
+	}
+	function learnWeeklyReset(secondsLeft, raidName)
+		if raidName and THREE_DAY_RAIDS[raidName] then return end
+		if not (secondsLeft and secondsLeft > 0 and secondsLeft <= WEEK + 3600) then return end
+		local db = Okanvil.db
+		if not db then return end
+		db.weeklyReset = db.weeklyReset or {}
+		db.weeklyReset[GetRealmName() or "?"] = time() + secondsLeft
+		return true
+	end
 end
 
 local function scanWeeklyReset()
 	if not (GetNumSavedInstances and GetSavedInstanceInfo) then return end
 	for i = 1, GetNumSavedInstances() do
-		local _, _, reset, _, locked, _, _, isRaid = GetSavedInstanceInfo(i)
-		if isRaid and locked and reset and reset > 0 then
-			learnWeeklyReset(reset)
+		local name, _, reset, _, locked, _, _, isRaid = GetSavedInstanceInfo(i)
+		-- learnWeeklyReset refuses a 3-day raid, so keep looking past one.
+		if isRaid and locked and reset and reset > 0 and learnWeeklyReset(reset, name) then
 			return
 		end
 	end
@@ -832,7 +843,7 @@ function runKey()
 			for i = 1, GetNumSavedInstances() do
 				local sname, _, reset, sdiff = GetSavedInstanceInfo(i)
 				if sname == name and (not sdiff or sdiff == diff) and reset and reset > 0 then
-					learnWeeklyReset(reset)
+					learnWeeklyReset(reset, name)
 					return "lock|" .. name .. "|" .. (diff or 0) .. "|" .. date("%Y-%m-%d", time() + reset), name, diff, mapID
 				end
 			end
@@ -4401,7 +4412,7 @@ ev:SetScript("OnEvent", function(_, event, ...)
 		-- Heroic dungeons send this too, with their DAILY reset, so raids only.
 		local _, itype = IsInInstance()
 		local _, secondsLeft = ...
-		if itype == "raid" then learnWeeklyReset(tonumber(secondsLeft)) end
+		if itype == "raid" then learnWeeklyReset(tonumber(secondsLeft), (GetInstanceInfo())) end
 	elseif event == "UPDATE_INSTANCE_INFO" then
 		-- lockout info landed: open/rejoin the real session and flush buffered drops.
 		resolveSession()
