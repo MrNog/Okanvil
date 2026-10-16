@@ -329,6 +329,12 @@ local function buildWindow()
 	local srB = W.Button(hdr, "SR"); srB:SetSize(30, 20); srB:SetPoint("RIGHT", close, "LEFT", -4, 0)
 	srB:Tooltip("Soft reserves: every reserved item, who reserved it,\nand what happened to it tonight.")
 	srB:SetScript("OnClick", function()
+		-- on a council night with the wishlist on, this is WH: the wish list
+		local SRM = Okanvil.SoftRes
+		if SRM and SRM.Mode() == "council" and Okanvil.Wish then
+			Okanvil.Wish.Panel.Toggle()
+			return
+		end
 		local P = Okanvil.SoftResPanel
 		if P then P.Toggle() end
 	end)
@@ -902,7 +908,20 @@ function RM.SyncSRButton()
 	local SRM = Okanvil.SoftRes
 	-- Lite has no Loot page to paste the CSV on, so the ML gets SR (and its Load
 	-- CSV) before any list is loaded.
-	if isML() and SRM and (SRM.Summary() or Okanvil.LITE) then win.srBtn:Show() else win.srBtn:Hide() end
+	-- SR in SR mode; WH (the wishes) on a council night with the wishlist on
+	local WP = Okanvil.Wish and Okanvil.Wish.Panel
+	if isML() and SRM and SRM.WhisperMode() and (SRM.Summary() or Okanvil.LITE) then
+		win.srBtn.text:SetText("SR")
+		win.srBtn:Tooltip("Soft reserves: every reserved item, who reserved it,\nand what happened to it tonight.")
+		win.srBtn:Show()
+	elseif WP and SRM and SRM.Mode() == "council" and Okanvil.Wish.IsOn() and Okanvil.Wish.CanTrigger() then
+		win.srBtn.text:SetText("WH")
+		win.srBtn:Tooltip("Wishes: what each raider is after this raid ID.")
+		win.srBtn:Show()
+	else
+		win.srBtn:Hide()
+	end
+	if WP then WP.Sync() end
 	-- Clear sits next to SR when SR is there, else straight next to X: anchored to
 	-- a hidden SR it kept SR's empty slot as a gap.
 	if win.clrBtn then

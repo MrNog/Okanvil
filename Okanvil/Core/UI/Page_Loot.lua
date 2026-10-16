@@ -63,9 +63,47 @@ function Okanvil:BuildLoot()
 		modes:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -4)
 		Okanvil:Loot_BuildModes(modes)
 
+		-- Your own picks, for everyone: the soft reserve and the wish this
+		-- character sent. Collapses to nothing when there is neither.
+		local mine = CreateFrame("Frame", nil, main)
+		mine:SetPoint("TOPLEFT", modes, "BOTTOMLEFT", 0, -6)
+		mine:SetPoint("TOPRIGHT", modes, "BOTTOMRIGHT", 0, -6)
+		mine.text = W.Text(mine, "", "body")
+		mine.text:SetPoint("LEFT", 12, 0); mine.text:SetPoint("RIGHT", -12, 0)
+		mine.text:SetJustifyH("LEFT")
+		local function paintMine()
+			local SR = Okanvil.SoftRes
+			local function names(ids)
+				local out = {}
+				for _, id in ipairs(ids or {}) do
+					local n, _, q = GetItemInfo(id)
+					local r, g, b = 0.64, 0.21, 0.93
+					if q and GetItemQualityColor then r, g, b = GetItemQualityColor(q) end
+					out[#out + 1] = ("|cff%02x%02x%02x%s|r"):format(r * 255, g * 255, b * 255, n or ("item " .. id))
+				end
+				return #out > 0 and table.concat(out, ", ") or nil
+			end
+			local sr = SR and SR.MyPicks and names(SR.MyPicks("sr"))
+			-- a wish only means something while the Wishlist is on
+			local Wi = Okanvil.Wish
+			local wish = Wi and Wi.IsOn() and SR and SR.MyPicks and names(SR.MyPicks("wish"))
+			local bits = {}
+			if sr then bits[#bits + 1] = "|cff8a8d93Your SR:|r " .. sr end
+			if wish then bits[#bits + 1] = "|cff8a8d93Your wish:|r " .. wish end
+			if #bits > 0 then
+				mine.text:SetText(table.concat(bits, "     "))
+				mine:SetHeight(24); mine:Show()
+			else
+				mine.text:SetText(""); mine:SetHeight(1)
+			end
+		end
+		mine:SetScript("OnShow", paintMine)
+		paintMine()
+		Okanvil.Loot_PaintMine = paintMine
+
 		local srp = W.Frame(main, "page")
-		srp:SetPoint("TOPLEFT", modes, "BOTTOMLEFT", 0, -6)
-		srp:SetPoint("TOPRIGHT", modes, "BOTTOMRIGHT", 0, -6)
+		srp:SetPoint("TOPLEFT", mine, "BOTTOMLEFT", 0, -6)
+		srp:SetPoint("TOPRIGHT", mine, "BOTTOMRIGHT", 0, -6)
 		Okanvil:Loot_BuildSoftRes(srp)
 
 	end
@@ -631,6 +669,9 @@ function Okanvil:Loot_BuildSoftRes(p)
 		paint()
 		if Okanvil._paintModes then Okanvil._paintModes() end
 		if Okanvil.RollMgr and Okanvil.RollMgr.Refresh then Okanvil.RollMgr.Refresh() end
+		-- the mini roll's SR button and panel follow the mode
+		if Okanvil.RollMgr and Okanvil.RollMgr.SyncSRButton then Okanvil.RollMgr.SyncSRButton() end
+		if Okanvil.SoftResPanel and Okanvil.SoftResPanel.Sync then Okanvil.SoftResPanel.Sync() end
 	end
 	p:SetScript("OnShow", function() paint() end)
 	paint()

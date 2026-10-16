@@ -225,6 +225,7 @@ local function savePicks(sentGen)
 	d.myPicks = d.myPicks or {}
 	local old = d.myPicks[picksKey()]
 	d.myPicks[picksKey()] = { at = time(), list = picks, sentGen = sentGen or (old and old.sentGen) }
+	if sentGen and Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end   -- "Your SR / wish" line
 end
 
 local function loadPicks()
@@ -242,7 +243,10 @@ local function entries()
 		local items = {}
 		for _, it in ipairs(b.items or {}) do
 			-- one row per item: its normal and heroic copies are the same reserve
-			if SR.InRun(it.m, run) and not seen[it.name or it.id] and not SR.IsMaterial(it.id, it.name)
+			-- epics only: white quest items (Crystalline Essence) are not loot to pick
+			local _, _, q, _, _, itype = GetItemInfo(it.id)
+			local plain = (q and q < 4) or itype == "Quest"
+			if SR.InRun(it.m, run) and not seen[it.name or it.id] and not SR.IsMaterial(it.id, it.name) and not plain
 				and (want == "" or (it.name or ""):lower():find(want, 1, true)) then
 				seen[it.name or it.id] = true
 				items[#items + 1] = it
@@ -263,6 +267,8 @@ local function canUse(id)
 	local Pf = Okanvil.Prof
 	local _, link = GetItemInfo(id)
 	if not (Pf and Pf.CanIUse and link) then return true end
+	-- the right armour or weapon, but stats for another spec (spell power on a DK)
+	if Pf.StatsFitMe and not Pf.StatsFitMe(link) then return false end
 	if Pf.CanIUse(link) then return true end
 	if Pf.LighterWorthAsking and Pf.LighterWorthAsking(link) then
 		return true, Pf.LighterArmor(link, (select(2, UnitClass("player"))))
@@ -521,6 +527,22 @@ function P.DoSend()
 	end
 	-- done: the window gets out of the way; the answer arrives in chat
 	win:Hide()
+end
+
+-- What this character sent, newest first: the items of its latest soft reserve
+-- (kind "sr") or wish (kind "wish") from the last week, or nil. The Loot page
+-- shows it, so a raider sees their own pick without the window.
+function SR.MyPicks(kind)
+	local mine, best = ":" .. (me() or ""), nil
+	local cutoff = time() - KEEP_DAYS * 86400
+	for k, p in pairs(db().myPicks or {}) do
+		local isWish = k:find("^wish:") ~= nil
+		if isWish == (kind == "wish") and k:sub(-#mine) == mine and p.sentGen ~= nil
+			and (p.at or 0) >= cutoff and (not best or (p.at or 0) > (best.at or 0)) then
+			best = p
+		end
+	end
+	return best and best.list or nil
 end
 
 -- ---- Wire handlers -----------------------------------------------------------

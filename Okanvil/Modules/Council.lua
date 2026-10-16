@@ -2846,12 +2846,21 @@ function C_.BuildRunTab(body)
 	-- Any officer can switch it, not only the master looter (Wishlist.lua).
 	local Wi = Okanvil.Wish
 	if Wi and Wi.CanTrigger() then
-		opt("Wishlist",
+		local wrow = opt("Wishlist",
 			"Raiders pick one item per raid ID; the board marks it WISH",
 			"Off by default. Turning it on opens the wish window for raiders with Okanvil.\n"
 				.. "Only tells the council what a raider is after -- it is not a reserve.",
 			function() return Wi.IsOn() end,
 			function(v) Wi.SetOn(v) end)
+		-- Clear beside the switch, the same as the WH panel's
+		local clr = W.Button(wrow, "Clear"); clr:SetSize(52, 22)
+		clr:SetPoint("RIGHT", wrow.btn, "LEFT", -6, 0)
+		clr:Tooltip("Clear every wish on this raid ID.\nEveryone gets the window again.")
+		clr:SetScript("OnClick", function()
+			Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Everyone picks again.|r", "Clear", Wi.Clear)
+		end)
+		if wrow.desc then wrow.desc:SetPoint("RIGHT", clr, "LEFT", -12, 0) end
+		wrow.text:SetPoint("RIGHT", clr, "LEFT", -12, 0)
 	end
 
 	body.needH = -y + 8

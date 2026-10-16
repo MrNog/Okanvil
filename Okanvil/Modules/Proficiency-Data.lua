@@ -328,18 +328,23 @@ local STAT = {
 	AP = "ITEM_MOD_ATTACK_POWER_SHORT", SP = "ITEM_MOD_SPELL_POWER_SHORT",
 }
 local PHYSICAL = { want = { "STR", "AGI", "AP" }, never = { "SPI", "SP" } }
-local HEALER_NO_SPIRIT = { want = { "INT" }, never = { "SPI" } }
-local CASTER = { want = { "INT" } }
+-- melee without a use for Intellect: Intellect plate is a holy paladin's
+local MELEE = { want = { "STR", "AGI", "AP" }, never = { "SPI", "SP", "INT" } }
+local HEALER_NO_SPIRIT = { want = { "INT" }, never = { "SPI", "STR", "AGI" } }
+local CASTER = { want = { "INT", "SP" }, never = { "STR", "AGI", "AP" } }
 local SPEC_STATS = {
-	PALADIN     = { HEALER_NO_SPIRIT, PHYSICAL, PHYSICAL },                -- Holy, Prot, Ret
+	PALADIN     = { HEALER_NO_SPIRIT, MELEE, MELEE },                      -- Holy, Prot, Ret
 	SHAMAN      = { CASTER,                                                -- Elemental
 	                { want = { "STR", "AGI", "AP", "INT" }, never = { "SPI" } }, -- Enhancement
 	                CASTER },                                              -- Restoration
 	HUNTER      = { PHYSICAL, PHYSICAL, PHYSICAL },
-	DRUID       = { CASTER, PHYSICAL, CASTER },                            -- Balance, Feral, Resto
-	WARRIOR     = { PHYSICAL, PHYSICAL, PHYSICAL },
-	DEATHKNIGHT = { PHYSICAL, PHYSICAL, PHYSICAL },
-	ROGUE       = { PHYSICAL, PHYSICAL, PHYSICAL },
+	DRUID       = { CASTER, MELEE, CASTER },                               -- Balance, Feral, Resto
+	WARRIOR     = { MELEE, MELEE, MELEE },
+	DEATHKNIGHT = { MELEE, MELEE, MELEE },
+	ROGUE       = { MELEE, MELEE, MELEE },
+	PRIEST      = { CASTER, CASTER, CASTER },
+	MAGE        = { CASTER, CASTER, CASTER },
+	WARLOCK     = { CASTER, CASTER, CASTER },
 }
 
 -- The talent tree with the most points, in the active spec.
@@ -385,6 +390,26 @@ function P.LighterWorthAsking(link)
 		local wornLvl = worn and select(4, GetItemInfo(worn)) or 0
 		if ilvl > wornLvl then return true end
 	end
+	return false
+end
+
+-- Do this item's stats suit the spec you are in? A death knight is not asked
+-- about a spell-power neck or Intellect plate. An item with no main stat at all
+-- (a crit trinket, a tier token) passes, and so does one the client has not
+-- cached yet -- that is decided once it is.
+function P.StatsFitMe(link)
+	local _, class = UnitClass("player")
+	local spec = SPEC_STATS[class] and SPEC_STATS[class][myTree() or 0]
+	if not (spec and GetItemStats and link) then return true end
+	local stats = GetItemStats(link)
+	if not stats then return true end
+	for _, s in ipairs(spec.never or {}) do
+		if stats[STAT[s]] then return false end
+	end
+	local anyMain = false
+	for _, s in pairs(STAT) do if stats[s] then anyMain = true end end
+	if not anyMain then return true end
+	for _, st in ipairs(spec.want) do if stats[STAT[st]] then return true end end
 	return false
 end
 

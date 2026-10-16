@@ -341,7 +341,8 @@ end
 -- mini roll on screen to sit beside.
 local function allowed()
 	local rm = rollWin()
-	return isML() and (SR.Summary() ~= nil or Okanvil.LITE) and rm and rm:IsShown()
+	-- only in SR mode: a list left over from another night does not belong on a council or roll night
+	return isML() and SR.WhisperMode() and (SR.Summary() ~= nil or Okanvil.LITE) and rm and rm:IsShown()
 end
 
 function P.Show()
