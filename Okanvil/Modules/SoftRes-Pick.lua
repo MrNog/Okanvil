@@ -209,13 +209,14 @@ end
 local P = {}
 SR.PickWindow = P
 local win
-local state = { raid = "icc", size = 25, hc = false, limit = 1, lockKey = "", from = nil, gen = 0 }
+local state = { raid = "icc", size = 25, hc = false, limit = 1, lockKey = "", from = nil, gen = 0, kind = "sr" }
 local picks = {}      -- item ids
 local filter = ""
 local scroll = 0
 local ROWS, ROW_H, WIN_W, SLOT_H = 12, 22, 380, 28
 
-local function picksKey() return state.lockKey .. ":" .. (me() or "") end
+-- a wish is kept apart from a soft reserve on the same lockout
+local function picksKey() return (state.kind == "wish" and "wish:" or "") .. state.lockKey .. ":" .. (me() or "") end
 
 -- `sentGen` is the round these picks were sent in: once sent, the window is
 -- read-only until the master looter clears the list.
@@ -402,7 +403,9 @@ end
 paint = function()
 	if not (win and win:IsShown()) then return end
 	local C = Okanvil.Colors
-	win.sub:SetText(SR.RaidLabel({ key = state.raid, size = state.size, hc = state.hc }) .. "  ·  " .. state.limit)
+	win.title:SetText(state.kind == "wish" and "Wishlist" or "Soft reserve")
+	win.sub:SetText(SR.RaidLabel({ key = state.raid, size = state.size, hc = state.hc })
+		.. (state.kind == "wish" and "  ·  1 per raid ID, for the council" or ("  ·  " .. state.limit)))
 
 	-- the picks, stacked; everything below moves down to fit them
 	local y = -36
@@ -471,7 +474,8 @@ paint = function()
 	end
 end
 
-function P.Open(raid, size, hc, limit, lockKey, from, g)
+function P.Open(raid, size, hc, limit, lockKey, from, g, kind)
+	state.kind = kind == "wish" and "wish" or "sr"
 	state.raid, state.size, state.hc = raid, tonumber(size) or 25, hc and true or false
 	state.limit = math.max(1, math.min(3, tonumber(limit) or 1))
 	state.lockKey, state.from, state.gen = lockKey, from, tonumber(g) or 0
@@ -489,6 +493,11 @@ end
 function P.Send()
 	if state.locked then return end
 	if #picks == 0 then Okanvil:Print("Pick an item first."); return end
+	if state.kind == "wish" then
+		Okanvil:Confirm("Send your wish? The council sees it when the item drops.\n"
+			.. "|cff8a8d93It is not a reserve. You cannot change it after.|r", "Send", P.DoSend)
+		return
+	end
 	Okanvil:Confirm("Send your soft reserve? You cannot change it after.", "Send", P.DoSend)
 end
 
@@ -496,6 +505,11 @@ function P.DoSend()
 	local payload = table.concat(picks, ";")
 	savePicks(state.gen)
 	state.locked = true
+	if state.kind == "wish" then
+		if Okanvil.Wish then Okanvil.Wish.SendPick(state.lockKey, picks[1]) end
+		win:Hide()
+		return
+	end
 	local from = state.from
 	if not from or from == me() then
 		-- solo test, or you are the master looter yourself

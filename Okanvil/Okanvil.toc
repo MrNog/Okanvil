@@ -44,6 +44,7 @@ Modules\LootRoll.lua
 Modules\SoftRes-UI.lua
 Modules\SoftRes-Live.lua
 Modules\SoftRes-Pick.lua
+Modules\Wishlist.lua
 Modules\LootTrade.lua
 Modules\Invite.lua
 Modules\RecruitLogic.lua

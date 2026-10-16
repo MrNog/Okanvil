@@ -2229,16 +2229,36 @@ function C_.RepaintBoard(open)
 				r.cls:Hide()
 			end
 
+			-- WISH: this is the item they said they are after this raid ID. A gold
+			-- frame round the row and a pill after the name; it informs, it does
+			-- not decide.
+			local wished = Okanvil.Wish and Okanvil.Wish.Wants(d.name, link)
+			if not r.wishEdge then
+				r.wishEdge = CreateFrame("Frame", nil, r)
+				r.wishEdge:SetPoint("TOPLEFT", 1, 1); r.wishEdge:SetPoint("BOTTOMRIGHT", -1, 0)
+				r.wishEdge:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+				r.wishEdge:SetBackdropBorderColor(0.88, 0.72, 0.38, 1)
+				r.wishPill = CreateFrame("Frame", nil, r)
+				r.wishPill:SetSize(34, 15)
+				r.wishPill:SetPoint("LEFT", r.who, "RIGHT", 6, 0)
+				local pbg = r.wishPill:CreateTexture(nil, "ARTWORK")
+				pbg:SetAllPoints(); pbg:SetTexture("Interface\\Buttons\\WHITE8x8")
+				pbg:SetVertexColor(0.88, 0.72, 0.38, 1)
+				local pt = W.Text(r.wishPill, "WISH", "note")
+				pt:SetPoint("CENTER", 0, 0); pt:SetTextColor(0.08, 0.08, 0.09)
+			end
+			if wished then r.wishEdge:Show(); r.wishPill:Show() else r.wishEdge:Hide(); r.wishPill:Hide() end
+
 			-- ALREADY WON TONIGHT: a count (gold for one, red for two or more) and
 			-- the items themselves after the name, so the council can spread the
 			-- loot instead of stacking it on one raider. Hover an icon for the item.
 			do
 				local won = (L and L.WonTonight and L.WonTonight(d.name)) or {}
 				r.wonIcons = r.wonIcons or {}
-				if not r.wonN then
-					r.wonN = W.Text(r, "", "body")
-					r.wonN:SetPoint("LEFT", r.who, "RIGHT", 6, 0)
-				end
+				if not r.wonN then r.wonN = W.Text(r, "", "body") end
+				-- after the WISH pill when there is one
+				r.wonN:ClearAllPoints()
+				r.wonN:SetPoint("LEFT", wished and r.wishPill or r.who, "RIGHT", 6, 0)
 				local nShow = math.min(3, #won)
 				if #won > 0 then
 					r.wonN:SetText(#won)
@@ -2823,6 +2843,17 @@ function C_.BuildRunTab(body)
 		function() return db().autoAsk end,
 		function(v) db().autoAsk = v end)
 
+	-- Any officer can switch it, not only the master looter (Wishlist.lua).
+	local Wi = Okanvil.Wish
+	if Wi and Wi.CanTrigger() then
+		opt("Wishlist",
+			"Raiders pick one item per raid ID; the board marks it WISH",
+			"Off by default. Turning it on opens the wish window for raiders with Okanvil.\n"
+				.. "Only tells the council what a raider is after -- it is not a reserve.",
+			function() return Wi.IsOn() end,
+			function(v) Wi.SetOn(v) end)
+	end
+
 	body.needH = -y + 8
 	body.refresh = paintState
 	C_._paintState = paintState
@@ -2898,6 +2929,9 @@ function C_.Test(num)
 		end
 	end
 	if #pool == 0 then pool = TEST_FALLBACK end
+	-- your own wish first, so the WISH row shows in the test (/okwish test)
+	local myWish = Okanvil.Wish and Okanvil.Wish.Of(UnitName("player"))
+	if myWish and not GetItemInfo(myWish) then myWish = nil end
 
 	-- One piece of gear from the BAGS as well, first in the list. Equipped items
 	-- are not in the bags, so awarding one could never show the "owed by trade"
@@ -2920,6 +2954,7 @@ function C_.Test(num)
 	-- nothing the first one did not.
 	local picked, seen = {}, {}
 	if bagItem then picked[1] = bagItem; seen[bagItem] = true end
+	if myWish and not seen[myWish] then picked[#picked + 1] = myWish; seen[myWish] = true end
 	local guard = 0
 	while #picked < num and guard < 200 do
 		guard = guard + 1
