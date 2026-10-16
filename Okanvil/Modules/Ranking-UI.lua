@@ -311,7 +311,11 @@ function Okanvil:BuildRanking(host)
 	local yIcon = you:CreateTexture(nil, "ARTWORK"); yIcon:SetSize(18, 18)
 	yIcon:SetPoint("BOTTOMLEFT", yRank, "TOPLEFT", 0, 6)
 	local yName = W.Text(you, "", "head"); yName:SetPoint("LEFT", yIcon, "RIGHT", 6, 0)
-	local yMove = W.Text(you, "", "label"); yMove:SetPoint("LEFT", yName, "RIGHT", 16, 0)
+	-- pinned to the card's right edge: a font swap can leave yName measuring
+	-- narrower than it draws, and an arrow chained to its end lands on the name
+	local yMove = W.Text(you, "", "label"); yMove:SetPoint("RIGHT", you, "RIGHT", -12, 0)
+	yMove:SetPoint("TOP", yName, "TOP", 0, 0); yMove:SetPoint("BOTTOM", yName, "BOTTOM", 0, 0)
+	yMove:SetJustifyH("RIGHT")
 	local yNone = W.Text(you, "", "label", "dim")
 	yNone:SetPoint("BOTTOMLEFT", yBase, "BOTTOMLEFT", 12, 10)
 	yNone:SetPoint("RIGHT", you, "RIGHT", -12, 0)

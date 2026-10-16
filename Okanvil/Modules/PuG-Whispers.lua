@@ -189,6 +189,9 @@ local function syncRoster()
 		local a = M.Applicant(name)
 		if a and a.status and a.status ~= "joined" and inGroup[name] then
 			a.status, a.st = "joined", time()
+		elseif a and a.status == "joined" and not inGroup[name] and next(inGroup) then
+			-- left (or was kicked): off the list; a new whisper brings them back
+			a.hidden = true
 		end
 	end
 	changed()
@@ -305,6 +308,7 @@ ev:SetScript("OnEvent", function(_, event, msg)
 		if wasInGroup and not inGroup then
 			M.ClearWhispers()
 			settled, watched, members = nil, {}, {}
+			M.db.voaHand = {}
 		end
 		wasInGroup = inGroup
 		syncRoster()
@@ -374,6 +378,7 @@ function M.AuditBadge(name)
 	local function with(mark) return (gs and (gs .. " ") or "") .. mark end
 	if a.auditOk then return { text = with("OK"), tone = "ok" } end
 	if not audit then return { text = gs or "...", tone = "off" } end
+	if audit.gemsUnread then return { text = with("..."), tone = "off" } end
 	local hard, soft = Okanvil.Audit.Counts(audit)
 	if hard > 0 then return { text = with("x" .. hard), tone = "bad" } end
 	if soft > 0 then return { text = with("!" .. soft), tone = "warn" } end
@@ -441,13 +446,17 @@ function M.AuditDetail(name)
 		if (audit.empty or 0) > 0 then g[#g + 1] = audit.empty .. " empty (" .. table.concat(audit.emptySlots, ", ") .. ")" end
 		if (audit.lowGems or 0) > 0 then g[#g + 1] = audit.lowGems .. " " .. RARE .. "rare|r gems" end
 		if audit.noBuckle then g[#g + 1] = "Belt no buckle" end
-		local gt = ((audit.empty or 0) > 0 or audit.noBuckle) and "bad" or ((audit.lowGems or 0) > 0 and "warn" or "ok")
-		d.checks[#d.checks + 1] = { gt, "Gems", #g > 0 and table.concat(g, " - ") or "All filled, epic" }
+		if audit.gemsUnread then
+			d.checks[#d.checks + 1] = { "off", "Gems", "Not sent yet -- read again shortly" }
+		else
+			local gt = ((audit.empty or 0) > 0 or audit.noBuckle) and "bad" or ((audit.lowGems or 0) > 0 and "warn" or "ok")
+			d.checks[#d.checks + 1] = { gt, "Gems", #g > 0 and table.concat(g, " - ") or "All filled, epic" }
+		end
 
 		if audit.meta ~= nil then
 			d.checks[#d.checks + 1] = { audit.meta and "ok" or "bad", "Meta", audit.meta and "Active" or "Not active" }
 		end
-		if audit.partial then notes[#notes + 1] = "Some items were not cached; reopen later." end
+		if audit.partial and not audit.gemsUnread then notes[#notes + 1] = "Some items were not cached; reopen later." end
 	end
 
 	local chips, unread, tone, short = progressChips(info)
@@ -516,7 +525,17 @@ local function mockPlayers()
 				audit = { noEnchant = {}, budget = { "Chest", "Gloves" }, empty = 0, emptySlots = {}, lowGems = 1,
 					meta = false, partial = true } } },
 		{ name = "Blinkzor", class = "MAGE", sub = "|cff6f7176spec not read|r", info = nil },
+		{ name = "Barkleaf", class = "DRUID", sub = "|cff6f7176spec not read|r", info = nil },
 	}
+end
+
+-- The mock players as roster rows, so the board (and the VoA places) can be
+-- tried solo too. Empty when the mock is off.
+function M.MockRoster()
+	local out = {}
+	for n, p in pairs(mock or {}) do out[#out + 1] = { name = n, class = p.class, online = true } end
+	table.sort(out, function(x, y) return x.name < y.name end)
+	return out
 end
 
 function M.ToggleMock()
@@ -530,8 +549,9 @@ function M.ToggleMock()
 			mock[p.name] = p
 			members[p.name] = { t = time() - (4 - i) * 120 }
 		end
-		Okanvil:Print("PuG mock on: 4 fake joined players in Whispers > Joined. /pug mock again to remove.")
+		Okanvil:Print("PuG mock on: 5 fake joined players in Whispers > Group. /pug mock again to remove.")
 		if M.ShowWhispers then M.ShowWhispers() end
 	end
 	changed()
+	if M.RefreshUI then M.RefreshUI() end   -- the board shows the mock players too
 end

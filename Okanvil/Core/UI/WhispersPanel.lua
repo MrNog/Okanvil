@@ -162,7 +162,9 @@ local function layoutDetail(row, d, h, width)
 		dot:SetVertexColor(t[1], t[2], t[3], 1)
 		dot:ClearAllPoints(); dot:SetPoint("TOPLEFT", 10, -(h + 4))
 		lab:ClearAllPoints(); lab:SetPoint("TOPLEFT", 24, -h); lab:SetText(c[2])
-		val:ClearAllPoints(); val:SetPoint("TOPLEFT", 96, -h); val:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+		-- a set width, not a RIGHT anchor: the row is not laid out yet when this
+		-- runs, so the string measured one line and the rest was cut to "..."
+		val:ClearAllPoints(); val:SetPoint("TOPLEFT", 96, -h); val:SetWidth(width - 96 - 6)
 		val:SetText(c[3])
 		dot:Show(); lab:Show(); val:Show()
 		h = h + math.max(14, val:GetStringHeight() or 14) + 5
@@ -204,7 +206,7 @@ local function layoutDetail(row, d, h, width)
 
 	if d and d.note and d.note ~= "" then
 		row.note:ClearAllPoints()
-		row.note:SetPoint("TOPLEFT", 8, -h); row.note:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+		row.note:SetPoint("TOPLEFT", 8, -h); row.note:SetWidth(width - 8 - 6)
 		row.note:SetJustifyH("LEFT")
 		row.note:SetText(d.note); row.note:Show()
 		h = h + (row.note:GetStringHeight() or 12) + 8
@@ -220,7 +222,7 @@ local function layoutDetail(row, d, h, width)
 		pv.text:SetJustifyH("LEFT"); pv.text:SetJustifyV("TOP")
 		pv.text:SetWidth(width - 30)
 		pv.text:SetText(d.preview)
-		local ph = (pv.text:GetStringHeight() or 12) + 12
+		local ph = (pv.text:GetStringHeight() or 12) + 16
 		pv:ClearAllPoints()
 		pv:SetPoint("TOPLEFT", 6, -h); pv:SetPoint("RIGHT", row, "RIGHT", -6, 0)
 		pv:SetHeight(ph); pv:Show()

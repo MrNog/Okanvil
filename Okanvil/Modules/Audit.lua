@@ -241,6 +241,7 @@ function M.Gear(unit)
 		end
 	end
 
+	local socketsSeen, gemsSeen = 0, 0
 	for _, e in ipairs(GEM_SLOTS) do
 		local slot, slotName = e[1], e[2]
 		local link = GetInventoryItemLink(unit, slot)
@@ -250,11 +251,19 @@ function M.Gear(unit)
 			if not sockets then
 				a.partial = true
 			else
+				-- The gem ids sit in the link itself (item:id:ench:g1:g2:g3:g4). GetItemGem
+				-- returns nil for a gem this client has not cached yet, so a raider with
+				-- every socket filled read as all-empty; the ids are counted instead.
+				local gemIds = { link:match("item:%-?%d+:%-?%d+:(%-?%d+):(%-?%d+):(%-?%d+):(%-?%d+)") }
 				local filled = 0
 				for i = 1, 4 do
 					local gemName, gemLink = nil, nil
 					if GetItemGem then gemName, gemLink = GetItemGem(link, i) end
-					if gemLink then
+					if not gemLink and (tonumber(gemIds[i]) or 0) > 0 then
+						filled = filled + 1
+						a.partial = true
+						coloursKnown = false
+					elseif gemLink then
 						filled = filled + 1
 						local _, _, q, _, _, _, subType = GetItemInfo(gemLink)
 						if subType == META_SUBTYPE then
@@ -274,6 +283,7 @@ function M.Gear(unit)
 						end
 					end
 				end
+				socketsSeen, gemsSeen = socketsSeen + sockets, gemsSeen + filled
 				-- A belt buckle adds one socket that the bare item does not have.
 				local want = (slot == 6) and sockets + 1 or sockets
 				if filled < want then
@@ -286,6 +296,16 @@ function M.Gear(unit)
 				end
 			end
 		end
+	end
+
+	-- Not one gem in any socket: the server sent the items before their gems (the
+	-- Inspect window shows grey sockets then too). That is "not read", not "empty".
+	if gemsSeen == 0 and socketsSeen >= 3 then
+		a.gemsUnread, a.partial = true, true
+		local head = GetInventoryItemLink(unit, 1)
+		Okanvil:Trace("AUDIT", "no gems for " .. (UnitName(unit) or "?") .. " head "
+			.. tostring(head and head:gsub("|", "!")) .. " gem1 " .. tostring(GetItemGem and GetItemGem(head or "", 1)))
+		a.empty, a.emptySlots, a.noBuckle = 0, {}, false
 	end
 
 	if metaLink then
@@ -335,7 +355,8 @@ function M.RaidChips(raidKey)
 	for _, e in ipairs(Okanvil.RaidFinder_Achievements or {}) do
 		local size = raidKey and e.raid:match("^" .. raidKey .. "(%d+)")
 		if size and GetAchievementInfo(e.id) then
-			out[#out + 1] = { id = e.id, label = size .. (e.raid:find("hc$") and " HC" or "") }
+			local suffix = e.tag and (" " .. e.tag) or (e.raid:find("hc$") and " HC" or "")
+			out[#out + 1] = { id = e.id, label = size .. suffix }
 		end
 	end
 	return out
@@ -404,7 +425,11 @@ runner:SetScript("OnEvent", function(_, _, guid)
 		local got = {}
 		for _, e in ipairs(Okanvil.RaidFinder_Achievements or {}) do
 			if GetAchievementInfo(e.id) then
-				got[e.id] = GetAchievementComparisonInfo(e.id) and true or false
+				local has = GetAchievementComparisonInfo(e.id) and true or false
+				for _, alt in ipairs(e.alt or {}) do
+					if not has and GetAchievementInfo(alt) and GetAchievementComparisonInfo(alt) then has = true end
+				end
+				got[e.id] = has
 			end
 		end
 		local I = Okanvil.Inspect

@@ -620,6 +620,11 @@ end
 -- real names). A bad/missing id => no link, never an error.
 -- ------------------------------------------------------------
 Okanvil.RaidFinder_Achievements = {
+	{ raid = "os10",     name = "Besting the Black Dragonflight (10)", id = 1876 },
+	{ raid = "os25",     name = "Besting the Black Dragonflight (25)", id = 625 },
+	-- Sartharion with all three drakes up, the OS achievement pugs ask for
+	{ raid = "os10d3",   name = "The Twilight Zone (10)",         id = 2051, tag = "3D" },
+	{ raid = "os25d3",   name = "The Twilight Zone (25)",         id = 2054, tag = "3D" },
 	{ raid = "naxx10",   name = "The Fall of Naxxramas (10)",     id = 576 },
 	{ raid = "naxx25",   name = "The Fall of Naxxramas (25)",     id = 577 },
 	{ raid = "ulduar10", name = "The Siege of Ulduar (10)",       id = 2886 },
@@ -628,8 +633,9 @@ Okanvil.RaidFinder_Achievements = {
 	{ raid = "toc25nm",  name = "Call of the Crusade (25)",       id = 3916 },
 	{ raid = "toc10hc",  name = "Call of the Grand Crusade (10)", id = 3918 },
 	{ raid = "toc25hc",  name = "Call of the Grand Crusade (25)", id = 3812 },
-	{ raid = "icc10nm",  name = "Fall of the Lich King (10)",     id = 4532 },
-	{ raid = "icc25nm",  name = "Fall of the Lich King (25)",     id = 4608 },
+	-- alt: the Lich King kill alone ("The Frozen Throne") counts for the audit chip
+	{ raid = "icc10nm",  name = "Fall of the Lich King (10)",     id = 4532, alt = { 4530 } },
+	{ raid = "icc25nm",  name = "Fall of the Lich King (25)",     id = 4608, alt = { 4597 } },
 	{ raid = "icc10hc",  name = "Bane of the Fallen King (10 HC)",id = 4583 },
 	{ raid = "icc25hc",  name = "The Light of Dawn (25 HC)",      id = 4584 },
 	{ raid = "rs10nm",   name = "The Twilight Destroyer (10)",    id = 4817 },
@@ -894,7 +900,7 @@ local function make_row(parent)
 		s._hl:SetVertexColor(1, 1, 1, 0.06)
 		if s._info and s._info.message then
 			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-			for _, line in ipairs(Okanvil.U.wrapLines(s._info.message, 60)) do GameTooltip:AddLine(line, 1, 1, 1) end
+			for _, line in ipairs(Okanvil.U.wrapLines(Okanvil.U.paintClasses(s._info.message), 60)) do GameTooltip:AddLine(line, 0.75, 0.75, 0.75) end
 			GameTooltip:AddLine("Last spam: " .. (time() - s._info.lastSeen) .. "s ago", 0.6, 0.6, 0.6)
 			if s._info.locked then
 				GameTooltip:AddLine("|cffff5555You are saved to this raid|r")

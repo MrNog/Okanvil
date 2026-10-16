@@ -546,23 +546,41 @@ local function buildBoard(p)
 			if self._empty then
 				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 				GameTooltip:AddLine(self._tipTitle or "", 1, 0.82, 0)
-				GameTooltip:AddLine("Click to name this place in the line.", 0.6, 0.6, 0.6)
+				local cand = self._key and M.VoACandidates(self._key) or {}
+				if #cand > 0 then
+					GameTooltip:AddLine("Click: put " .. cand[1].name .. " here", 0.5, 0.9, 0.5)
+					GameTooltip:AddLine("(spec not read yet)", 0.6, 0.6, 0.6)
+				else
+					GameTooltip:AddLine("Click to name this place in the line.", 0.6, 0.6, 0.6)
+				end
 				GameTooltip:Show()
 				return
 			end
-			if not self._tip then return end
 			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 			GameTooltip:AddLine(self._tipTitle or "", 1, 0.82, 0)
-			for _, line in ipairs(self._tip) do GameTooltip:AddLine(line, 1, 1, 1) end
+			for _, line in ipairs(self._tip or {}) do GameTooltip:AddLine(line, 1, 1, 1) end
+			if self._hand then GameTooltip:AddLine("Right-click: take " .. self._hand .. " off this place", 0.9, 0.5, 0.5) end
 			GameTooltip:Show()
 		end)
 		card:SetScript("OnLeave", function() GameTooltip:Hide() end)
-		-- an empty place toggles whether the line asks for it, like the role
-		-- columns' Ask for chips
+		-- An empty place takes the first raider of its class the board could not
+		-- place (spec not read); with nobody to place, it toggles whether the line
+		-- asks for it, like the role columns' Ask for chips. Right-click undoes a
+		-- hand placement.
 		card:SetScript("OnMouseUp", function(self, button)
-			if button ~= "LeftButton" or not self._empty or not self._key then return end
-			pickTakesOver()   -- a class run's own text has no need clause to update
-			M.ToggleVoAAsk(self._key)
+			if not self._key then return end
+			if button == "RightButton" then
+				if self._hand then M.VoAPlace(self._hand, nil); M.RefreshUI() end
+				return
+			end
+			if button ~= "LeftButton" or not self._empty then return end
+			local cand = M.VoACandidates(self._key)
+			if #cand > 0 then
+				M.VoAPlace(cand[1].name, self._key)
+			else
+				pickTakesOver()   -- a class run's own text has no need clause to update
+				M.ToggleVoAAsk(self._key)
+			end
 			M.RefreshUI()
 		end)
 		F.voaCards[i] = card
@@ -1303,6 +1321,7 @@ function M.RefreshUI()
 					card._tip = nil
 					card._key = def.key
 					card._empty = not who
+					card._hand = who and M.VoAHandPlaced(who.name) == def.key and who.name or nil
 					if who then
 						card.name:SetText(class_color(who.class) .. who.name .. "|r")
 						card.sub:SetText(M.SubLabel and M.SubLabel(who.name) or "")
@@ -1349,7 +1368,7 @@ function M.RefreshUI()
 			if #unplaced > 0 then
 				local names = {}
 				for _, pl in ipairs(unplaced) do names[#names + 1] = class_color(pl.class) .. pl.name .. "|r" end
-				F.voaUnplaced:SetText("|cffe0b860Spec not read|r |cff8a8d93(Read specs, or reads when near):|r "
+				F.voaUnplaced:SetText("|cffe0b860Spec not read|r |cff8a8d93(reads when near, or click an empty place):|r "
 					.. table.concat(names, "|cff6f7176, |r"))
 			else
 				F.voaUnplaced:SetText("")
@@ -1469,10 +1488,12 @@ local WHISPERS = {
 		busy     = { "in group", "|cffe05555" },
 		offline  = { "offline",  "|cffe05555" },
 	},
-	-- One list, no tabs: it is sorted new -> invited -> joined and every row
-	-- says its own status.
+	-- Two tabs: who is still asking to join, and who is already in the group
+	-- (with the gear audit). Mixed in one list they got lost under the spam.
 	filters = {
-		{ key = "all", label = "All" },
+		{ key = "asking", label = "Whispers",
+			match = { new = true, invited = true, declined = true, busy = true, offline = true } },
+		{ key = "joined", label = "Group", match = { joined = true } },
 	},
 	emptyHint = "Post your LFM line and everyone who\nasks to join shows up here.",
 	items = function()

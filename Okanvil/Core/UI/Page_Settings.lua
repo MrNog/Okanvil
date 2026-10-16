@@ -257,8 +257,8 @@ function Okanvil:Settings_RaidTools(p)
 		chk("Close once everyone is ready",
 			function() return rcdb().closeWhenClear ~= false end,
 			function(v) rcdb().closeWhenClear = v and true or false end,
-			"Everyone answered READY and nobody is missing a flask or food -> the "
-			.. "popup has nothing left to show, so it closes itself.\n\n"
+			"Everyone answered READY -> the popup closes itself, even if someone "
+			.. "is still missing a flask or food.\n\n"
 			.. "Someone answering NOT ready keeps it open -- that is the case you "
 			.. "want to be looking at.")
 		chk("Minutes left on each icon",
