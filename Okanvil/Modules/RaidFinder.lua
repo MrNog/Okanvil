@@ -890,7 +890,7 @@ local function make_row(parent)
 		s._hl:SetVertexColor(1, 1, 1, 0.06)
 		if s._info and s._info.message then
 			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-			for _, line in ipairs(Okanvil.U.wrapLines(s._info.message, 60)) do GameTooltip:AddLine(line, 1, 1, 1) end
+			for _, line in ipairs(Okanvil.U.wrapLines(Okanvil.U.paintClasses(s._info.message), 60)) do GameTooltip:AddLine(line, 0.75, 0.75, 0.75) end
 			GameTooltip:AddLine("Last spam: " .. (time() - s._info.lastSeen) .. "s ago", 0.6, 0.6, 0.6)
 			if s._info.locked then
 				GameTooltip:AddLine("|cffff5555You are saved to this raid|r")
