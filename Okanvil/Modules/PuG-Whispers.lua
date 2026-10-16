@@ -432,6 +432,13 @@ function M.AuditDetail(name)
 		d.stat = table.concat(stat, "    ")
 	end
 
+	-- The spec's last talent sits at 51 points: under that, it is missing.
+	if info and info.pts and info.spec then
+		local full = info.pts >= 51
+		d.checks[#d.checks + 1] = { full and "ok" or "warn", "Talents",
+			info.pts .. " " .. info.spec .. (full and "" or " -- last talent missing") }
+	end
+
 	if not audit then
 		notes[#notes + 1] = "Gear not read yet -- reads when they come near."
 	else

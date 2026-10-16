@@ -209,6 +209,20 @@ local function specRole(name, class)
 	local spec, cls, role = I.Get(name)
 	if not (spec and role) then return nil end
 
+	-- A Blood DK tanks or dps's on the same talents; the presence tells them
+	-- apart (Frost = tank). Unreadable (out of range): what they whispered, else
+	-- tank as before.
+	if spec == "Blood" and (cls == "DEATHKNIGHT" or class == "DEATHKNIGHT") then
+		local frost, blood, unholy = GetSpellInfo(48263), GetSpellInfo(48266), GetSpellInfo(48265)
+		if UnitExists(name) then
+			if frost and UnitBuff(name, frost) then return "tank" end
+			if (blood and UnitBuff(name, blood)) or (unholy and UnitBuff(name, unholy)) then return "melee" end
+		end
+		local a = applicant(name)
+		if a and a.role then return a.role end
+		return "tank"
+	end
+
 	if role == "tank" or role == "healer" then return role end
 
 	-- role == "dps": which half of the board?
@@ -1248,6 +1262,9 @@ local SPEC_WORDS = {
 	-- happened to contain those letters, and an abbreviation that short turns up
 	-- in names and in the middle of sentences.
 	{ "blood%s*dk",   "tank",   "Blood DK"  }, { "%f[%w]bdk%f[%W]", "tank", "Blood DK" },
+	-- a Blood DK on its dps spec: longer than "bdk"/"blood dk", so it wins
+	{ "blood%s*dps",  "melee",  "Blood DPS" }, { "bdk%s*dps",  "melee",  "Blood DPS" },
+	{ "blood%s*dk%s*dps", "melee", "Blood DPS" }, { "dps%s*blood", "melee", "Blood DPS" },
 	{ "prot%s*pal",   "tank",   "Prot Pala" }, { "ppal",       "tank",   "Prot Pala" },
 	{ "prot%s*warr",  "tank",   "Prot Warr" }, { "pwar",       "tank",   "Prot Warr" },
 	{ "prot",         "tank",   "Prot"      }, { "bear",       "tank",   "Bear"      },
