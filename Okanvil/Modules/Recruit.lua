@@ -1454,6 +1454,7 @@ end
 -- ------------------------------------------------------------
 -- invite outcome (db.session[name].state) -> the panel's status
 local STATE_STATUS = { joined = "joined", sent = "invited", declined = "declined", offline = "offline" }
+local STATUS_ORDER = { new = 1, invited = 2, joined = 3, declined = 4, offline = 5, blocked = 6 }
 
 local function statusOf(name)
 	local s = db.session and db.session[name]
@@ -1501,11 +1502,10 @@ function Rec_WhispersConfig()
 			offline  = { "offline",  "|cffe05555" },
 			blocked  = { "blocked",  "|cffe05555" },
 		},
+		-- One list, no tabs: it is sorted new -> invited -> joined -> out and every
+		-- row says its own status.
 		filters = {
-			{ key = "all",     label = "All" },
-			{ key = "new",     label = "New",     match = { new = true } },
-			{ key = "invited", label = "Invited", match = { invited = true } },
-			{ key = "out",     label = "Out",     match = { declined = true, offline = true, blocked = true } },
+			{ key = "all", label = "All" },
 		},
 		emptyHint = "Start advertising: everyone who\nanswers shows up here.",
 		inviteTip = "Send a guild invite.",
@@ -1522,6 +1522,12 @@ function Rec_WhispersConfig()
 					canInvite = canInvite and status ~= "joined" and status ~= "invited"
 						and not isInMyGuild(c.name) }
 			end
+			-- who still needs an answer first; newest first within each status
+			table.sort(out, function(x, y)
+				local ox, oy = STATUS_ORDER[x.status] or 9, STATUS_ORDER[y.status] or 9
+				if ox ~= oy then return ox < oy end
+				return (x.t or 0) > (y.t or 0)
+			end)
 			return out
 		end,
 		onOpen = function(name)

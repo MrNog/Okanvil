@@ -27,6 +27,7 @@ Core\UI\Page_Modules.lua
 Core\UI\Setup.lua
 
 Modules\Inspect.lua
+Modules\Audit.lua
 Modules\Guild.lua
 Modules\Ranking.lua
 Modules\Ranking-UI.lua

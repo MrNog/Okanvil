@@ -98,9 +98,35 @@ function M.InviteApplicant(name)
 	setStatus(name, "invited")
 end
 
+-- Group members who never whispered: they get a Joined row too, so the gear
+-- audit covers the whole group. [name] = { t, hidden, auditOk, kickAsk }
+local members = {}
+local mock               -- /pug mock: [name] = fake player, nil when off
+
+function M.GroupMembers()
+	local out = {}
+	local me = UnitName("player")
+	for _, p in ipairs(M.RosterList and M.RosterList() or {}) do
+		local a = p.name and M.Applicant(p.name)
+		if p.name and p.name ~= me and not (a and a.status == "joined") then
+			local m = members[p.name] or { t = time() }
+			members[p.name] = m
+			if not m.hidden then out[#out + 1] = { name = p.name, class = p.class, t = m.t } end
+		end
+	end
+	for n, p in pairs(mock or {}) do
+		local m = members[n]
+		if m and not m.hidden then out[#out + 1] = { name = n, class = p.class, t = m.t, sub = p.sub } end
+	end
+	table.sort(out, function(x, y) return (x.t or 0) < (y.t or 0) end)
+	return out
+end
+
 function M.DismissApplicant(name)
 	local a = M.Applicant(name)
-	if a then a.hidden = true; changed() end
+	if a then a.hidden = true end
+	if members[name] then members[name].hidden = true end
+	changed()
 end
 
 function M.ClearWhispers()
@@ -108,6 +134,7 @@ function M.ClearWhispers()
 		local a = M.Applicant(name)
 		if a then a.hidden = true end
 	end
+	for _, m in pairs(members) do m.hidden = true end
 	changed()
 end
 
@@ -162,6 +189,9 @@ local function syncRoster()
 		local a = M.Applicant(name)
 		if a and a.status and a.status ~= "joined" and inGroup[name] then
 			a.status, a.st = "joined", time()
+		elseif a and a.status == "joined" and not inGroup[name] and next(inGroup) then
+			-- left (or was kicked): off the list; a new whisper brings them back
+			a.hidden = true
 		end
 	end
 	changed()
@@ -217,7 +247,9 @@ local function readSpec(name)
 	local I = Okanvil.Inspect
 	if not (name and I and I.Watch) or watched[name] then return end
 	watched[name] = true
-	if I.IsFresh and I.IsFresh(name) then return end
+	if Okanvil.Audit then Okanvil.Audit.WantAchievements(name) end
+	-- a spec read before the audit existed has no gear check: read it again
+	if I.IsFresh and I.IsFresh(name) and (not I.HasAudit or I.HasAudit(name)) then return end
 	I.Watch({ name })
 end
 
@@ -275,7 +307,8 @@ ev:SetScript("OnEvent", function(_, event, msg)
 		local inGroup = (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0
 		if wasInGroup and not inGroup then
 			M.ClearWhispers()
-			settled, watched = nil, {}
+			settled, watched, members = nil, {}, {}
+			M.db.voaHand = {}
 		end
 		wasInGroup = inGroup
 		syncRoster()
@@ -292,3 +325,233 @@ ev:SetScript("OnUpdate", function(_, e)
 	tick = 0
 	if M.db then M.CheckJoinersFillAsks() end
 end)
+
+-- ------------------------------------------------------------
+-- Gear audit
+--
+-- Joined players are inspected as they come near (see readSpec); the audit rides
+-- on that inspect. The panel shows a badge per joined row and, opened, what is
+-- missing plus Mark OK / Whisper / Kick. Nothing is sent or done unless clicked.
+-- ------------------------------------------------------------
+local DIM, TEXT, RARE = "|cff8a8d93", "|cffdcddde", "|cff0070dd"
+local KICK_CONFIRM = 4
+
+-- The row state for a joined player: their applicant entry, or the members entry
+-- for someone who joined without whispering.
+local function joinedState(name)
+	local a = M.Applicant(name)
+	if a and a.status == "joined" then return a end
+	return members[name]
+end
+
+local function auditOf(name)
+	if mock and mock[name] then
+		local info = mock[name].info
+		return info and info.audit, info
+	end
+	local I = Okanvil.Inspect
+	local info = I and I.Info and I.Info(name)
+	return info and info.audit, info
+end
+
+-- An item level in the colour of the gear it means: green, blue, epic, ICC-heroic orange.
+local function ilvlColour(ilvl)
+	if ilvl >= 264 then return "|cffff8000" end
+	if ilvl >= 245 then return "|cffa335ee" end
+	if ilvl >= 226 then return "|cff0070dd" end
+	return "|cff1eff00"
+end
+
+-- "5.6k" from a gearscore, "i251" from an item level, nil from nothing.
+local function gearShort(info)
+	if info and info.gs and info.gs >= 1000 then return ("%.1fk"):format(info.gs / 1000) end
+	if info and info.ilvl then return "i" .. info.ilvl end
+	return nil
+end
+
+-- { text, tone } for the boxed badge: gearscore plus the issue count.
+function M.AuditBadge(name)
+	local a = joinedState(name)
+	if not a then return nil end
+	local audit, info = auditOf(name)
+	local gs = gearShort(info)
+	local function with(mark) return (gs and (gs .. " ") or "") .. mark end
+	if a.auditOk then return { text = with("OK"), tone = "ok" } end
+	if not audit then return { text = gs or "...", tone = "off" } end
+	if audit.gemsUnread then return { text = with("..."), tone = "off" } end
+	local hard, soft = Okanvil.Audit.Counts(audit)
+	if hard > 0 then return { text = with("x" .. hard), tone = "bad" } end
+	if soft > 0 then return { text = with("!" .. soft), tone = "warn" } end
+	return { text = with("OK"), tone = "ok" }
+end
+
+-- The raid's achievement chips: earned in gold, missing dim.
+local function progressChips(info)
+	local raid = M.db and M.db.raid
+	local list = Okanvil.Audit.RaidChips(raid)
+	if #list == 0 then return nil end
+	local short = raid
+	for _, r in ipairs(OkanvilRaids or {}) do if r.key == raid then short = r.short end end
+	local read = info and info.ach
+	local out, n = {}, 0
+	for _, c in ipairs(list) do
+		local label = c.label
+		if not read then
+			out[#out + 1] = { label .. " ?", "off" }
+		elseif read[c.id] then
+			n = n + 1
+			out[#out + 1] = { label, "ok" }
+		else
+			out[#out + 1] = { label, "bad" }
+		end
+	end
+	-- the row's dot: all earned green, some yellow, none red, unread grey
+	local tone = not read and "off" or (n == #list and "ok") or (n > 0 and "warn") or "bad"
+	return out, not read, tone, short
+end
+
+local function canKick()
+	if (GetNumRaidMembers() or 0) > 0 then
+		return (IsRaidLeader and IsRaidLeader()) or (IsRaidOfficer and IsRaidOfficer())
+	end
+	return IsPartyLeader and IsPartyLeader()
+end
+
+function M.AuditDetail(name)
+	local a = joinedState(name)
+	if not a then return nil end
+	local audit, info = auditOf(name)
+	local d = { checks = {} }
+	local notes = {}
+
+	if info then
+		local stat = {}
+		if info.gs then stat[#stat + 1] = DIM .. "GS|r " .. (M.GSColor and M.GSColor(info.gs) or TEXT) .. info.gs .. "|r" end
+		if info.ilvl then stat[#stat + 1] = DIM .. "ilvl|r " .. ilvlColour(info.ilvl) .. info.ilvl .. "|r" end
+		stat[#stat + 1] = DIM .. "PvP|r " .. ((info.pvp or 0) > 0 and "|cffd94d52" or TEXT) .. (info.pvp or 0) .. "|r"
+		d.stat = table.concat(stat, "    ")
+	end
+
+	if not audit then
+		notes[#notes + 1] = "Gear not read yet -- reads when they come near."
+	else
+		local ne, cheap = audit.noEnchant or {}, audit.budget or {}
+		local e = {}
+		if #ne > 0 then e[#e + 1] = table.concat(ne, ", ") .. " missing" end
+		if #cheap > 0 then e[#e + 1] = table.concat(cheap, ", ") .. " budget" end
+		d.checks[#d.checks + 1] = { #ne > 0 and "bad" or (#cheap > 0 and "warn" or "ok"), "Enchants",
+			#e > 0 and table.concat(e, " - ") or "All done" }
+
+		local g = {}
+		if (audit.empty or 0) > 0 then g[#g + 1] = audit.empty .. " empty (" .. table.concat(audit.emptySlots, ", ") .. ")" end
+		if (audit.lowGems or 0) > 0 then g[#g + 1] = audit.lowGems .. " " .. RARE .. "rare|r gems" end
+		if audit.noBuckle then g[#g + 1] = "Belt no buckle" end
+		if audit.gemsUnread then
+			d.checks[#d.checks + 1] = { "off", "Gems", "Not sent yet -- read again shortly" }
+		else
+			local gt = ((audit.empty or 0) > 0 or audit.noBuckle) and "bad" or ((audit.lowGems or 0) > 0 and "warn" or "ok")
+			d.checks[#d.checks + 1] = { gt, "Gems", #g > 0 and table.concat(g, " - ") or "All filled, epic" }
+		end
+
+		if audit.meta ~= nil then
+			d.checks[#d.checks + 1] = { audit.meta and "ok" or "bad", "Meta", audit.meta and "Active" or "Not active" }
+		end
+		if audit.partial and not audit.gemsUnread then notes[#notes + 1] = "Some items were not cached; reopen later." end
+	end
+
+	local chips, unread, tone, short = progressChips(info)
+	d.chips, d.chipsLabel, d.chipsTone = chips, short, tone
+	if chips and unread then notes[#notes + 1] = "Achievements read when they come near." end
+	if a.auditOk then notes[#notes + 1] = "Marked OK." end
+	d.note = table.concat(notes, "\n")
+
+	local msg = audit and Okanvil.Audit.WhisperText(audit)
+	if msg then d.preview = "|cffff80ff[W] To " .. name .. ": " .. msg .. "|r" end
+
+	local actions = {}
+	actions[#actions + 1] = { label = a.auditOk and "Unmark" or "Mark OK", width = 70,
+		tip = "Mark them as fine (green badge), whatever the audit says.",
+		onClick = function() a.auditOk = not a.auditOk or nil; changed() end }
+	if msg then
+		actions[#actions + 1] = { label = a.auditSent and "Whisper again" or "Whisper audit", kind = "primary", width = 100,
+			tip = "Whisper them the pink message above.",
+			onClick = function()
+				if mock and mock[name] then Okanvil:Print("(mock) would whisper " .. name .. ": " .. msg)
+				else SendChatMessage(msg, "WHISPER", nil, name) end
+				a.auditSent = true
+				changed()
+			end }
+	end
+	if canKick() or (mock and mock[name]) then
+		local asking = a.kickAsk and (GetTime() - a.kickAsk) < KICK_CONFIRM
+		actions[#actions + 1] = { label = asking and "Sure?" or "Kick", kind = "danger", width = 52,
+			tip = "Remove them from the group. Click twice.",
+			onClick = function()
+				if a.kickAsk and (GetTime() - a.kickAsk) < KICK_CONFIRM then
+					a.kickAsk = nil
+					if mock and mock[name] then mock[name] = nil; members[name] = nil
+					else UninviteUnit(name) end
+					Okanvil:Trace("AUDIT", "kicked " .. name)
+				else
+					a.kickAsk = GetTime()
+				end
+				changed()
+			end }
+	end
+	d.actions = actions
+	return d
+end
+
+-- ------------------------------------------------------------
+-- /pug mock: four made-up joined players, one per badge state, so the audit
+-- rows can be checked solo. They live only in memory, never touch the inspect
+-- cache, and Whisper / Kick on them print instead of acting.
+-- ------------------------------------------------------------
+local function mockPlayers()
+	local ach = {}
+	for i, c in ipairs(Okanvil.Audit.RaidChips(M.db and M.db.raid)) do ach[c.id] = i <= 2 end
+	local all = {}
+	for _, c in ipairs(Okanvil.Audit.RaidChips(M.db and M.db.raid)) do all[c.id] = true end
+	return {
+		{ name = "Lightwardh", class = "PALADIN", sub = "|cff7cfc8aholy|r",
+			info = { gs = 5912, ilvl = 258, pvp = 0, ach = all,
+				audit = { noEnchant = {}, empty = 0, emptySlots = {}, lowGems = 0, meta = true } } },
+		{ name = "Frostgrip", class = "DEATHKNIGHT", sub = "|cffd94d52frost|r",
+			info = { gs = 5612, ilvl = 251, pvp = 2, ach = ach,
+				audit = { noEnchant = { "Cloak", "Boots" }, empty = 0, emptySlots = {}, noBuckle = true,
+					lowGems = 2, meta = true } } },
+		{ name = "Totemtoe", class = "SHAMAN", sub = "|cff7cfc8arestoration|r",
+			info = { gs = 5203, ilvl = 245, pvp = 0,
+				audit = { noEnchant = {}, budget = { "Chest", "Gloves" }, empty = 0, emptySlots = {}, lowGems = 1,
+					meta = false, partial = true } } },
+		{ name = "Blinkzor", class = "MAGE", sub = "|cff6f7176spec not read|r", info = nil },
+		{ name = "Barkleaf", class = "DRUID", sub = "|cff6f7176spec not read|r", info = nil },
+	}
+end
+
+-- The mock players as roster rows, so the board (and the VoA places) can be
+-- tried solo too. Empty when the mock is off.
+function M.MockRoster()
+	local out = {}
+	for n, p in pairs(mock or {}) do out[#out + 1] = { name = n, class = p.class, online = true } end
+	table.sort(out, function(x, y) return x.name < y.name end)
+	return out
+end
+
+function M.ToggleMock()
+	if mock then
+		for n in pairs(mock) do members[n] = nil end
+		mock = nil
+		Okanvil:Print("PuG mock off.")
+	else
+		mock = {}
+		for i, p in ipairs(mockPlayers()) do
+			mock[p.name] = p
+			members[p.name] = { t = time() - (4 - i) * 120 }
+		end
+		Okanvil:Print("PuG mock on: 5 fake joined players in Whispers > Group. /pug mock again to remove.")
+		if M.ShowWhispers then M.ShowWhispers() end
+	end
+	changed()
+	if M.RefreshUI then M.RefreshUI() end   -- the board shows the mock players too
+end

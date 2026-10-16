@@ -200,7 +200,8 @@ local function isPvPItem(link)
 	return found
 end
 
--- gs, avgIlvl, pvpCount, pvpSlots  (pvpSlots = { "Hands", "Legs" })
+-- gs, avgIlvl, pvpCount, pvpSlots, audit  (pvpSlots = { "Hands", "Legs" };
+-- audit = enchants/gems/meta from Okanvil.Audit, nil if that module failed)
 local function readGear(unit)
 	local gs, avg
 
@@ -234,7 +235,13 @@ local function readGear(unit)
 	-- NOT a gearscore and must not be shown as one, so it is returned separately.
 	if not avg and ilvlCount > 0 then avg = math.floor(ilvlSum / ilvlCount) end
 
-	return gs, avg, pvpCount, pvpSlots
+	local audit
+	if ilvlCount > 0 and Okanvil.Audit then
+		local ok, res = pcall(Okanvil.Audit.Gear, unit)
+		if ok then audit = res elseif Okanvil.Err then Okanvil:Err("Audit.Gear", res) end
+	end
+
+	return gs, avg, pvpCount, pvpSlots, audit
 end
 
 -- ------------------------------------------------------------
@@ -249,6 +256,7 @@ local queue    = {}      -- names still to inspect
 local curName  = nil     -- who is in flight right now (nil = idle)
 local curUnit  = nil
 local waited   = 0       -- seconds the in-flight request has been outstanding
+local holding  = false   -- answered, cache held while the gems come in
 local total, done = 0, 0
 local active   = false
 local onDone   = nil
@@ -323,9 +331,9 @@ function fireNext()
 					if spec == "Feral (Bear)" then role = "tank"
 					elseif spec == "Feral (Cat)" then role = "dps"
 					else role = (ROLES[class] and ROLES[class][spec]) or "dps" end
-					local gs, avg, pvp, pvpSlots = readGear("player")
+					local gs, avg, pvp, pvpSlots, audit = readGear("player")
 					store(name, { spec = spec, class = class, role = role, icon = bestIcon,
-						gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots })
+						gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
 				end
 				done = done + 1
 				progress()
@@ -362,12 +370,102 @@ end
 -- fast as the server answers instead of on a fixed timer. A 25-man scan lands in
 -- a couple of seconds rather than the ~25s a 1s-per-player timer would take.
 -- ------------------------------------------------------------
+-- Gear that came in before its gems (Audit marks it gemsUnread) is asked for
+-- again a few seconds later, when the server has sent the rest. Twice at most.
+local gemRetries = {}
+local function recheckGems(name, audit)
+	if not (audit and audit.gemsUnread) then gemRetries[name] = nil; return end
+	local n = gemRetries[name] or 0
+	if n >= 2 or not (Okanvil.Comms and Okanvil.Comms.After) then return end
+	gemRetries[name] = n + 1
+	Okanvil:Trace("INSPECT", "gems not sent yet for " .. name .. ", asking again")
+	Okanvil.Comms.After(5, function() M.Watch({ name }) end)
+end
+
+-- The inspect answer carries each item and its enchant, but the gems land a
+-- moment later, and only while the inspect cache is still held: release it at
+-- once and the client falls back to what it sees on the character, which has no
+-- gems. So a read with no gems holds the cache, asks for every item's full
+-- tooltip (what the Inspect window does to draw them), and reads again.
+local GEM_WAIT = 1.5
+local nudgeTip
+local function nudgeItems(unit)
+	if not nudgeTip then
+		nudgeTip = CreateFrame("GameTooltip", "OkanvilInspectNudgeTip", nil, "GameTooltipTemplate")
+	end
+	for _, entry in ipairs(GEAR_SLOTS) do
+		nudgeTip:SetOwner(UIParent, "ANCHOR_NONE")
+		pcall(nudgeTip.SetInventoryItem, nudgeTip, unit, entry[1])
+	end
+	nudgeTip:Hide()
+end
+
+local function gemsLater(unit, name, after)
+	nudgeItems(unit)
+	Okanvil.Comms.After(GEM_WAIT, function()
+		local audit
+		if UnitExists(unit) and stripRealm(UnitName(unit)) == name then
+			local gs, avg, pvp, pvpSlots
+			gs, avg, pvp, pvpSlots, audit = readGear(unit)
+			if audit then
+				store(name, { gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
+				Okanvil:Trace("INSPECT", "gems " .. (audit.gemsUnread and "still missing" or "read") .. " for " .. name)
+			end
+		end
+		after(audit)
+	end)
+end
+
+-- An inspect the player opened by hand (the Inspect window, another addon)
+-- answers into the same cache. A group member read that way is stored too, so a
+-- fresh look at someone's gear replaces an old audit instead of being ignored.
+local manualUnit
+hooksecurefunc("NotifyInspect", function(unit)
+	if not active then manualUnit = unit end
+end)
+
+local function readManual()
+	local unit = manualUnit
+	manualUnit = nil
+	if not (unit and UnitExists(unit) and UnitIsPlayer(unit)) then return end
+	local name = stripRealm(UnitName(unit))
+	if not (name and unitFor(name)) then return end   -- group members only
+	local _, class = UnitClass(unit)
+	if not (class and cacheIsFor(class, activeGroup(true))) then return end
+	local spec, _, role, icon = readSpec(unit)
+	local gs, avg, pvp, pvpSlots, audit = readGear(unit)
+	if not (spec or gs or avg) then return end
+	store(name, { spec = spec, class = class, role = role, icon = icon,
+		gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
+	Okanvil:Trace("INSPECT", "manual read " .. name)
+	if audit and audit.gemsUnread and Okanvil.Comms and Okanvil.Comms.After then
+		gemsLater(unit, name, function(a2)
+			if active then return end      -- our own scan owns the cache now
+			if M.onWatchRead then pcall(M.onWatchRead, name) end
+		end)
+	end
+	-- a fresh look re-reads their achievements too
+	if Okanvil.Audit and Okanvil.Audit.WantAchievements then
+		M.Put(name, { achAt = 0 })
+		Okanvil.Audit.WantAchievements(name)
+	end
+	if M.onWatchRead then
+		local ok, err = pcall(M.onWatchRead, name)
+		if not ok and Okanvil.Err then Okanvil:Err("Inspect.onWatchRead", err) end
+	end
+end
+
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("INSPECT_TALENT_READY")
 ev:SetScript("OnEvent", function()
 	-- 3.3.5a fires this with no GUID argument, so the only way to know who it is
 	-- about is that we asked for exactly one player and are waiting on them.
-	if not (active and curUnit) then return end
+	if not (active and curUnit) then
+		-- not ours: the cache must stay with whoever opened it, so no release here
+		if manualUnit then readManual() end
+		return
+	end
+	if holding then return end    -- already answered; waiting on the gems
 
 	-- Confirm the unit still holds the player we asked about. If the roster moved
 	-- under us between request and answer, the cache now describes someone else --
@@ -389,10 +487,23 @@ ev:SetScript("OnEvent", function()
 		-- Gear is read even when the talents came back empty: the two are cached
 		-- separately by the client, and a player with no spec still has a gearscore
 		-- worth knowing.
-		local gs, avg, pvp, pvpSlots = readGear(curUnit)
+		local gs, avg, pvp, pvpSlots, audit = readGear(curUnit)
 		if (spec and class) or gs or avg then
 			store(curName, { spec = spec, class = class, role = role, icon = icon,
-				gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots })
+				gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
+			if audit and audit.gemsUnread and Okanvil.Comms and Okanvil.Comms.After then
+				-- hold the cache (and the queue) until the gems are in
+				holding = true
+				local name = curName
+				gemsLater(curUnit, name, function(a2)
+					holding = false
+					recheckGems(name, a2)
+					if ClearInspectPlayer then ClearInspectPlayer() end
+					done = done + 1
+					fireNext()
+				end)
+				return
+			end
 		end
 	end
 
@@ -410,7 +521,7 @@ end)
 -- it costs nothing between scans and nothing at all when idle.
 local tick = CreateFrame("Frame")
 tick:SetScript("OnUpdate", function(_, elapsed)
-	if not (active and curUnit) then return end
+	if not (active and curUnit) or holding then return end
 	waited = waited + elapsed
 	if waited < TIMEOUT then return end
 	-- A timed-out inspect leaves the client holding whoever it last managed to
@@ -448,9 +559,29 @@ function M.Info(name)
 		gs    = e.gs,    ilvl  = e.ilvl,
 		pvp   = e.pvp or 0,
 		pvpSlots = e.pvpSlots,
+		audit = e.audit,
+		ach   = e.ach,   achAt = e.achAt,
 		at    = e.at,
 		age   = time() - (e.at or 0),
 	}
+end
+
+-- Add fields to a player's entry without a new inspect (the Audit module's
+-- achievement read). Leaves `at` alone: that stamps the inspect, and these fields
+-- carry their own time.
+function M.Put(name, fields)
+	name = stripRealm(name)
+	if not name or name == "" then return end
+	local d = db().specs
+	local e = d[name] or { at = 0 }
+	for k, v in pairs(fields) do e[k] = v end
+	d[name] = e
+end
+
+-- Has this player's gear been audited recently enough to trust tonight?
+function M.HasAudit(name, maxAge)
+	local e = name and db().specs[stripRealm(name)]
+	return e ~= nil and e.audit ~= nil and (time() - (e.at or 0)) <= (maxAge or 3 * 3600)
 end
 
 -- gs, avgIlvl, pvpCount. `gs` is nil when no GearScore addon is installed -- then

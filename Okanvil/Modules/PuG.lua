@@ -60,6 +60,7 @@ local defaults = {
 	classRun = false,        -- VoA-style "one of each class" instead of role targets
 	classPer = 1,            -- how many of each class a class run wants
 	voaAsk = {},             -- [VoA slot key] = true: empty places the leader clicked to name
+	voaHand = {},            -- [name] = VoA slot key: placed by hand ("druid 5.4", never inspected)
 	presets = {},            -- [name] = a saved setup (raid, size, needs, note...)
 }
 
@@ -725,7 +726,9 @@ function M.VoABoard()
 	end
 	local unplaced = {}
 	local I = Okanvil.Inspect
-	for _, pl in ipairs(rosterList()) do
+	local roster = rosterList()
+	for _, pl in ipairs(M.MockRoster and M.MockRoster() or {}) do roster[#roster + 1] = pl end   -- /pug mock
+	for _, pl in ipairs(roster) do
 		local cls = pl.class and pl.class:upper()
 		local spec, role
 		if I and I.Get then
@@ -744,7 +747,12 @@ function M.VoABoard()
 		if hand == "tank" then role = "tank" elseif hand and role == "tank" then role = nil end
 
 		local target
-		if role == "tank" then
+		-- a hand placement is the leader's call and wins over spec and whisper
+		local hk = db.voaHand and db.voaHand[pl.name]
+		local hp = hk and byKey[hk]
+		if hp and (hp.def.tank or hp.def.class == cls) then
+			target = hp
+		elseif role == "tank" then
 			target = byKey.TANK1.who and byKey.TANK2 or byKey.TANK1
 		else
 			for _, p in ipairs(places) do
@@ -822,6 +830,30 @@ end
 function M.ToggleVoAAsk(key)
 	db.voaAsk = db.voaAsk or {}
 	db.voaAsk[key] = (not db.voaAsk[key]) or nil
+end
+
+-- Placing by hand: someone who said only "druid 5.4" and is out of inspect range
+-- can be put on the right place without waiting for the read.
+function M.VoAHandPlaced(name)
+	return name and db.voaHand and db.voaHand[name] or nil
+end
+
+-- The raiders the board could not place who would fit this place, in roster order.
+function M.VoACandidates(key)
+	local _, unplaced = M.VoABoard()
+	local def
+	for _, s in ipairs(VOA_SLOTS) do if s.key == key then def = s end end
+	local out = {}
+	if not def then return out end
+	for _, pl in ipairs(unplaced) do
+		if def.tank or (pl.class and pl.class:upper() == def.class) then out[#out + 1] = pl end
+	end
+	return out
+end
+
+function M.VoAPlace(name, key)
+	db.voaHand = db.voaHand or {}
+	db.voaHand[name] = key
 end
 
 -- ------------------------------------------------------------
@@ -1925,6 +1957,12 @@ SlashCmdList["OKPUG"] = function(arg)
 	elseif arg == "stop" then M.Stop()
 	elseif arg == "send" then M.SendNow()
 	elseif arg == "msg" then Print(outgoing())
+	elseif arg == "mock" then
+		if not (Okanvil.win and Okanvil.win:IsShown()) then Okanvil:Toggle() end
+		if Okanvil.ShowPanel then Okanvil:ShowPanel(ADDON) end
+		M.ToggleMock()
+	elseif arg == "enchscan" then
+		if Okanvil.Audit and Okanvil.Audit.ScanEnchants then Okanvil.Audit.ScanEnchants() end
 	else
 		-- open the window on our own page (the plugin name IS the panel key)
 		if not (Okanvil.win and Okanvil.win:IsShown()) then Okanvil:Toggle() end

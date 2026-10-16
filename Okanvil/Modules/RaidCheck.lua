@@ -314,25 +314,18 @@ end
 
 -- Is there anything left to LOOK at?
 --
--- Two separate questions, and the toast is only pointless once BOTH are settled:
---   * has everyone answered the ready check (nobody still on the hourglass)?
---   * is everyone flasked and fed?
---
--- "Everyone answered" is not the same as "everyone said yes". A raider who
--- answered NOT ready is exactly what you want to keep looking at, so that counts
--- as an outstanding problem, not a settled one.
+-- During a ready check: has everyone said READY? Once they have, the raid has
+-- spoken and the toast goes, even if someone is still missing a flask or food.
+-- A raider who answered NOT ready, or has not answered yet, keeps it up.
+-- Opened by hand (no ready check): it is pointless once everyone is flasked and fed.
 function RC:AllClear()
-	if #self:Problems() > 0 then return false end
-
-	if readyActive then
-		for _, p in ipairs(self:Scan()) do
-			if p.online and not p.dead then
-				local st = readyState and readyState[p.name]
-				if st ~= "ready" then return false end   -- waiting, or said no
-			end
+	if not readyActive then return #self:Problems() == 0 end
+	for _, p in ipairs(self:Scan()) do
+		if p.online and not p.dead then
+			local st = readyState and readyState[p.name]
+			if st ~= "ready" then return false end   -- waiting, or said no
 		end
 	end
-
 	return true
 end
 
@@ -958,8 +951,8 @@ function RC:HideToast()
 	end
 end
 
--- Everyone answered READY and everyone is flasked + fed -> there is nothing left
--- to read, so get out of the way instead of sitting there until the timer runs out.
+-- Everyone answered READY -> get out of the way instead of sitting there until
+-- the timer runs out.
 --
 -- Held for ALL_CLEAR_LINGER first, for two reasons: closing the instant the last
 -- person clicks Ready is jarring, and a late NOT-ready or a flask that ticks away
