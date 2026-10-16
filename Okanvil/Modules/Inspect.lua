@@ -136,7 +136,7 @@ local function readSpec(unit)
 		role = (map and map[spec]) or "dps"
 	end
 
-	return spec, class, role, bestIcon
+	return spec, class, role, bestIcon, bestPts
 end
 
 -- ------------------------------------------------------------
@@ -332,7 +332,7 @@ function fireNext()
 					elseif spec == "Feral (Cat)" then role = "dps"
 					else role = (ROLES[class] and ROLES[class][spec]) or "dps" end
 					local gs, avg, pvp, pvpSlots, audit = readGear("player")
-					store(name, { spec = spec, class = class, role = role, icon = bestIcon,
+					store(name, { spec = spec, class = class, role = role, icon = bestIcon, pts = bestPts,
 						gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
 				end
 				done = done + 1
@@ -432,10 +432,10 @@ local function readManual()
 	if not (name and unitFor(name)) then return end   -- group members only
 	local _, class = UnitClass(unit)
 	if not (class and cacheIsFor(class, activeGroup(true))) then return end
-	local spec, _, role, icon = readSpec(unit)
+	local spec, _, role, icon, pts = readSpec(unit)
 	local gs, avg, pvp, pvpSlots, audit = readGear(unit)
 	if not (spec or gs or avg) then return end
-	store(name, { spec = spec, class = class, role = role, icon = icon,
+	store(name, { spec = spec, class = class, role = role, icon = icon, pts = pts,
 		gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
 	Okanvil:Trace("INSPECT", "manual read " .. name)
 	if audit and audit.gemsUnread and Okanvil.Comms and Okanvil.Comms.After then
@@ -483,13 +483,13 @@ ev:SetScript("OnEvent", function()
 			total = total + 1
 		end
 	elseif stripRealm(UnitName(curUnit)) == curName then
-		local spec, class, role, icon = readSpec(curUnit)
+		local spec, class, role, icon, pts = readSpec(curUnit)
 		-- Gear is read even when the talents came back empty: the two are cached
 		-- separately by the client, and a player with no spec still has a gearscore
 		-- worth knowing.
 		local gs, avg, pvp, pvpSlots, audit = readGear(curUnit)
 		if (spec and class) or gs or avg then
-			store(curName, { spec = spec, class = class, role = role, icon = icon,
+			store(curName, { spec = spec, class = class, role = role, icon = icon, pts = pts,
 				gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
 			if audit and audit.gemsUnread and Okanvil.Comms and Okanvil.Comms.After then
 				-- hold the cache (and the queue) until the gems are in
@@ -555,7 +555,7 @@ function M.Info(name)
 	if not e then return nil end
 	return {
 		name  = stripRealm(name),
-		spec  = e.spec,  class = e.class, role = e.role, icon = e.icon,
+		spec  = e.spec,  class = e.class, role = e.role, icon = e.icon, pts = e.pts,
 		gs    = e.gs,    ilvl  = e.ilvl,
 		pvp   = e.pvp or 0,
 		pvpSlots = e.pvpSlots,
