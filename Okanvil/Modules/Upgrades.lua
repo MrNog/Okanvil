@@ -274,15 +274,16 @@ local ROW_SLOTS = {
 -- id -> name for every raid drop, so a list id names its 10/25/heroic copies
 -- without a server query, and id -> how high its version is
 local VERSION = { ["10n"] = 1, ["25n"] = 2, ["10h"] = 2, ["25h"] = 3 }
-local lootName, lootVersion
+local lootName, lootVersion, lootMode
 local function NameOf(id)
 	if not lootName then
-		lootName, lootVersion = {}, {}
+		lootName, lootVersion, lootMode = {}, {}, {}
 		for _, bosses in pairs(Loot() or {}) do
 			for _, boss in ipairs(bosses) do
 				for _, it in ipairs(boss.items) do
 					lootName[it.id] = it.name
 					lootVersion[it.id] = VERSION[(it.m or ""):match("^[^,]+")] or 0
+					lootMode[it.id] = (it.m or ""):match("^[^,]+")
 				end
 			end
 		end
@@ -398,10 +399,21 @@ RowsOf = function(spec, phase)
 			end
 		end
 		FixVersions(r)
+		-- place -> the id the list names there, to say which version a place is
+		r.idAt = {}
+		for id, n in pairs(r.rank) do r.idAt[n] = r.idAt[n] or id end
 		rows[#rows + 1] = r
 	end
 	rowCache[key] = rows
 	return rows
+end
+
+local MODE_LABEL = { ["10n"] = "10", ["10h"] = "10 HC", ["25n"] = "25", ["25h"] = "25 HC" }
+-- Which raid size / difficulty an item id drops in ("25 HC"), or "another version".
+function U.ModeLabel(id)
+	NameOf(id)
+	local m = lootMode[id] or lootMode[(OkanvilBisHordeToAli or {})[id] or id]
+	return MODE_LABEL[m] or "another version"
 end
 
 -- exact = this version's place on the list; byName = the best place of any version
@@ -557,10 +569,15 @@ end
 -- beats what you wear, whether it is that list's very BiS version.
 local function against(rows, phase, spec, link, id, current)
 	local name = GetItemInfo(link)
-	local best, show, bis
+	local best, show, bis, as
 	for _, row in ipairs(rows) do
 		local r, exact = RankIn(row, id, name)
 		if r then
+			-- a place the list gives another version of this item (the heroic one,
+			-- mostly) is that version's: remember which, for the label
+			if not best or r < best then
+				as = not exact and row.idAt and row.idAt[r] or nil
+			end
 			best = (best and math.min(best, r)) or r
 			-- BiS is the very version the list names (the heroic one, mostly);
 			-- the normal copy of a BiS item is an upgrade, not the BiS
@@ -591,7 +608,7 @@ local function against(rows, phase, spec, link, id, current)
 			end
 		end
 	end
-	return best, show, bis
+	return best, show, bis, as
 end
 
 local function judge(link, raid, spec)
@@ -614,9 +631,11 @@ local function judge(link, raid, spec)
 		if cur then tries[#tries + 1] = { cur, now, true } end
 		if phase ~= now then tries[#tries + 1] = { rows, phase, false } end
 		for _, t in ipairs(tries) do
-			local best, show, bis = against(t[1], t[2], spec, link, id, t[3])
+			local best, show, bis, as = against(t[1], t[2], spec, link, id, t[3])
 			-- BiS only off today's list; an older phase's #1 is an upgrade at most
-			if best and show then return { rank = best, bis = t[3] and bis or nil, list = t[2] } end
+			if best and show then
+				return { rank = best, bis = t[3] and bis or nil, list = t[2], as = as and U.ModeLabel(as) or nil }
+			end
 		end
 		-- with a list for your spec, only the lists count: a higher item level
 		-- off them is how a tank mace and a healer trinket turned up for a Blood DPS

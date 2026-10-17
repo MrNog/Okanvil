@@ -312,7 +312,8 @@ function Okanvil:BuildUpgrades(host)
 				local qr, qg, qb = GetItemQualityColor(u.quality or 4)
 				it.name:SetText(u.name); it.name:SetTextColor(qr, qg, qb)
 				local place = u.v.rank and (u.v.bis and "|cffff8000BiS|r"
-					or ("|cffe0b860#" .. u.v.rank .. "|r on your list")) or nil
+					or ("|cffe0b860#" .. u.v.rank .. "|r on your list"
+						.. (u.v.as and (" as |cffe0b860" .. u.v.as .. "|r") or ""))) or nil
 				it.sub:SetText((u.slot or "") .. (u.v.ilvl and ("  ·  |cff7cfc8a" .. u.v.ilvl .. "|r") or "")
 					.. (place and ("  ·  " .. place) or ""))
 				local cr, cg, cb = 0.49, 0.99, 0.54
