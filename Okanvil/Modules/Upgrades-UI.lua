@@ -171,6 +171,12 @@ function Okanvil:BuildUpgrades(host)
 		local hl = r:CreateTexture(nil, "HIGHLIGHT")
 		hl:SetTexture(FLAT); hl:SetAllPoints(); hl:SetVertexColor(1, 1, 1, 0.05)
 		r.icon = r:CreateTexture(nil, "ARTWORK")
+		-- a stripe in the verdict's colour, and a faint wash of it behind the row
+		r.bar = r:CreateTexture(nil, "ARTWORK")
+		r.bar:SetTexture(FLAT); r.bar:SetWidth(3)
+		r.bar:SetPoint("TOPLEFT", 10, -4); r.bar:SetPoint("BOTTOMLEFT", 10, 4)
+		r.wash = r:CreateTexture(nil, "BACKGROUND")
+		r.wash:SetTexture(FLAT); r.wash:SetPoint("TOPLEFT", 10, -2); r.wash:SetPoint("BOTTOMRIGHT", 0, 2)
 		r.icon:SetSize(ICON, ICON); r.icon:SetPoint("LEFT", 22, 0)
 		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 		r.val = W.Text(r, "", "head"); r.val:SetPoint("RIGHT", -6, 0); r.val:SetWidth(78)
@@ -288,9 +294,13 @@ function Okanvil:BuildUpgrades(host)
 			elseif open == nil then open = state.allOpen or isNext end
 			local r = bossRow()
 			r.caret:SetText(open and "v" or ">")
+			r.caret:SetTextColor(u3(open and C.accentText or C.textDim))
 			r.name:SetText((isNext and "|cffe0b860> |r" or "") .. U.BossLabel(b.boss) .. (isDead and "  |cff7cfc8akilled|r" or ""))
 			r.name:SetTextColor(u3(isDead and C.textDim or (isNext and C.accentText or C.text)))
-			r.tag:SetText(#ups .. " for you")
+			local nBis = 0
+			for _, u in ipairs(ups) do if u.v.bis then nBis = nBis + 1 end end
+			r.tag:SetText((nBis > 0 and ("|cffff8000" .. nBis .. " BiS|r  ") or "")
+				.. "|cffe0b860" .. #ups .. "|r for you")
 			r.onClick = function() state.open[b.boss] = not open; refresh() end
 			if not open then return end
 			for _, u in ipairs(ups) do
@@ -303,9 +313,15 @@ function Okanvil:BuildUpgrades(host)
 				it.icon:SetTexture(u.icon)
 				local qr, qg, qb = GetItemQualityColor(u.quality or 4)
 				it.name:SetText(u.name); it.name:SetTextColor(qr, qg, qb)
-				local place = u.v.rank and (u.v.bis and "BiS" or ("#" .. u.v.rank .. " on your list")) or nil
-				it.sub:SetText((u.slot or "") .. (u.v.ilvl and ("  ·  " .. u.v.ilvl) or "")
+				local place = u.v.rank and (u.v.bis and "|cffff8000BiS|r"
+					or ("|cffe0b860#" .. u.v.rank .. "|r on your list")) or nil
+				it.sub:SetText((u.slot or "") .. (u.v.ilvl and ("  ·  |cff7cfc8a" .. u.v.ilvl .. "|r") or "")
 					.. (place and ("  ·  " .. place) or ""))
+				local cr, cg, cb = 0.49, 0.99, 0.54
+				if u.v.bis then cr, cg, cb = 1, 0.5, 0
+				elseif u.v.rank then cr, cg, cb = u3(C.accentText) end
+				it.bar:SetVertexColor(cr, cg, cb, 0.9)
+				it.wash:SetVertexColor(cr, cg, cb, 0.05)
 				-- what it replaces, from the middle of the row
 				local half = math.floor((p:GetWidth() or 600) * 0.48)
 				it.name:SetWidth(half - ICON - 30); it.sub:SetWidth(half - ICON - 30)
@@ -314,13 +330,14 @@ function Okanvil:BuildUpgrades(host)
 					local wn, _, wq, wl, _, _, _, _, _, wt = GetItemInfo(u.v.worn)
 					it.vsIcon:SetTexture(wt); it.vsIcon:Show()
 					local wr, wg, wb = GetItemQualityColor(wq or 4)
-					it.vs:SetText(("|cff%02x%02x%02x%s|r  |cff8a8d93%s|r"):format(wr * 255, wg * 255, wb * 255,
-						wn or "?", wl or ""))
+					local gain = (u.v.ilvl and wl) and (u.v.ilvl - wl) or 0
+					it.vs:SetText(("|cff%02x%02x%02x%s|r  |cffd06a6a%s|r%s"):format(wr * 255, wg * 255, wb * 255,
+						wn or "?", wl or "", gain > 0 and ("  |cff7cfc8a+" .. gain .. "|r") or ""))
 					it.vsK:SetText("replaces")
 				else
 					it.vsIcon:Hide()
 					it.vsK:SetText("")
-					it.vs:SetText("|cff8a8d93empty slot|r")
+					it.vs:SetText("|cff7cfc8aempty slot|r")
 				end
 				it.val:SetText(U.Label(u.v))
 				if u.v.bis then it.val:SetTextColor(1, 0.5, 0)
