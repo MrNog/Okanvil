@@ -36,7 +36,7 @@ local function db()
 end
 
 function Okanvil:BuildUpgrades(host)
-	local state = { open = {} }
+	local state = { open = {}, allOpen = true }
 	local modeTabs = {}
 	local refresh
 
@@ -110,7 +110,7 @@ function Okanvil:BuildUpgrades(host)
 			prev = b
 		end
 		-- search: matching bosses open, the rest fold away
-		local openAll = big(W.Button(header, "Open all"))
+		local openAll = big(W.Button(header, "Close all"))
 		openAll:SetSize(96, CTRL_H); openAll:SetPoint("RIGHT", header, "RIGHT", -Okanvil.UI.PAD_X, 0)
 		openAll:SetScript("OnClick", function()
 			state.allOpen = not state.allOpen
