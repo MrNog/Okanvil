@@ -2864,8 +2864,20 @@ function C_.BuildRunTab(body)
 		clr:SetScript("OnClick", function()
 			Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Everyone picks again.|r", "Clear", Wi.Clear)
 		end)
-		if wrow.desc then wrow.desc:SetPoint("RIGHT", clr, "LEFT", -12, 0) end
-		wrow.text:SetPoint("RIGHT", clr, "LEFT", -12, 0)
+		-- Lock: keep the wishes in, take no new ones
+		local lock = W.Button(wrow, Wi.IsLocked() and "Unlock" or "Lock"); lock:SetSize(56, 22)
+		lock:SetPoint("RIGHT", clr, "LEFT", -6, 0)
+		lock:Tooltip("Lock: the wishes already sent stay, nobody can add one.\nThe raiders' wish window closes.")
+		lock:SetScript("OnClick", function()
+			Wi.SetLocked(not Wi.IsLocked())
+			lock:SetText(Wi.IsLocked() and "Unlock" or "Lock")
+		end)
+		lock:SetScript("OnShow", function(s)
+			if Wi.IsOn() then s:Enable() else s:Disable() end
+			s:SetText(Wi.IsLocked() and "Unlock" or "Lock")
+		end)
+		if wrow.desc then wrow.desc:SetPoint("RIGHT", lock, "LEFT", -12, 0) end
+		wrow.text:SetPoint("RIGHT", lock, "LEFT", -12, 0)
 	end
 
 	body.needH = -y + 8

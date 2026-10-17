@@ -85,6 +85,8 @@ local function store(lockKey, who, id)
 	l._at = time()
 	-- one wish per raid ID: the first one sent stands
 	if l[who] then return end
+	-- off or locked: the wishes already in stay, no new ones
+	if d.locked or not Wi.IsOn() then return end
 	l[who] = { id = id, name = GetItemInfo(id) }
 	Okanvil:Trace("WISH", who .. " wishes " .. tostring(l[who].name or id))
 	if Wi.onChange then Wi.onChange() end
@@ -129,6 +131,7 @@ local mySent, openWhenCalm      -- defined below, used by SetOn
 function Wi.SetOn(on)
 	local d = db()
 	d.on = on and true or false
+	d.locked = nil
 	if not on then Wi._test = nil end
 	local C = Okanvil.Comms
 	if d.on then
@@ -152,6 +155,7 @@ function Wi.SetOn(on)
 		end
 	else
 		if C and C.Send then C.Send("WISHOFF") end
+		if SR.PickWindow and SR.PickWindow.HideKind then SR.PickWindow.HideKind("wish") end
 		Okanvil:Print("Wishlist off.")
 	end
 	if Wi.onChange then Wi.onChange() end
@@ -186,9 +190,33 @@ function Wi.Clear()
 	if Wi.Live() then Wi.SetOn(true) end
 end
 
+-- Lock: the wishes already sent stay on the board, nobody can add one. Every
+-- raider's window closes; turning it on again, or Clear, opens it up again.
+function Wi.IsLocked() return db().locked and true or false end
+function Wi.Accepting() return Wi.Live() and not db().locked end
+local function applyLock(locked)
+	db().locked = locked or nil
+	if locked and SR.PickWindow and SR.PickWindow.HideKind then SR.PickWindow.HideKind("wish") end
+	if Wi.onChange then Wi.onChange() end
+end
+function Wi.SetLocked(locked)
+	applyLock(locked)
+	local C = Okanvil.Comms
+	if C and C.Send then C.Send("WISHLOCK", locked and "1" or "0") end
+	local msg = locked and "WISHLIST closed: no new wishes for this raid ID." or "WISHLIST open again: pick 1 item in Okanvil, or whisper " .. (me() or "me") .. ": wh [item]."
+	local inRaid = (GetNumRaidMembers() or 0) > 0
+	local chan = inRaid and "RAID" or ((GetNumPartyMembers() or 0) > 0 and "PARTY") or nil
+	if chan then SendChatMessage(msg, chan) end
+	Okanvil:Print(locked and "Wishlist locked: no new wishes." or "Wishlist unlocked.")
+end
+
 -- ---- Raider: send -------------------------------------------------------------
 function Wi.SendPick(lockKey, id)
 	if not id then return end
+	if not Wi.Accepting() then
+		Okanvil:Print("The wishlist is closed: wish not sent.")
+		return
+	end
 	store(lockKey, me(), id)
 	local C = Okanvil.Comms
 	if C and C.Send and C.Send("WISHPICK", lockKey, id) then
@@ -226,6 +254,7 @@ do
 			if sender == me() then return end
 			if not canTrigger(sender) then return end
 			db().on = true
+			db().locked = nil
 			if Wi.onChange then Wi.onChange() end
 			-- already sent this ID: send it again for whoever missed it, no window
 			local sent = mySent(lockKey)
@@ -238,7 +267,14 @@ do
 		C.On("WISHOFF", function(sender)
 			if not canTrigger(sender) then return end
 			db().on = false
+			db().locked = nil
+			pending = nil
+			if SR.PickWindow and SR.PickWindow.HideKind then SR.PickWindow.HideKind("wish") end
 			if Wi.onChange then Wi.onChange() end
+		end)
+		C.On("WISHLOCK", function(sender, v)
+			if not canTrigger(sender) or stripRealm(sender) == me() then return end
+			applyLock(v == "1")
 		end)
 		C.On("WISHCLEAR", function(sender, lockKey)
 			if not canTrigger(sender) or stripRealm(sender) == me() then return end
@@ -250,7 +286,12 @@ do
 		-- a wish someone whispered to an officer, passed on for them
 		C.On("WISHFOR", function(sender, lockKey, id, who)
 			if not canTrigger(sender) or not who or who == "" then return end
-			store(lockKey, stripRealm(who), id)
+			who = stripRealm(who)
+			store(lockKey, who, id)
+			-- our own whisper: it is our wish too, not only a line on the officers' list
+			if who == me() and tonumber(id) and SR.PickWindow and SR.PickWindow.MarkSent then
+				SR.PickWindow.MarkSent("wish", lockKey, tonumber(id))
+			end
 		end)
 	end
 end
@@ -282,6 +323,10 @@ local function onWhisper(text, sender)
 	if had then
 		local _, hl = GetItemInfo(had.id)
 		reply(sender, "Wish: you already have one for this raid ID: " .. (hl or had.name or "?"))
+		return
+	end
+	if db().locked then
+		reply(sender, "Wish: the wishlist is closed for this raid ID.")
 		return
 	end
 	store(lockKey, who, id)
@@ -624,7 +669,10 @@ SlashCmdList.OKWISH = function(arg)
 	elseif arg == "on" or arg == "off" then
 		if not canTrigger(me()) then Okanvil:Print("Only an officer, the raid leader or the master looter can do that."); return end
 		Wi.SetOn(arg == "on")
+	elseif arg == "lock" or arg == "unlock" then
+		if not canTrigger(me()) then Okanvil:Print("Only an officer, the raid leader or the master looter can do that."); return end
+		Wi.SetLocked(arg == "lock")
 	else
-		Okanvil:Print("/okwish on | off | clear | test")
+		Okanvil:Print("/okwish on | off | lock | unlock | clear | test")
 	end
 end

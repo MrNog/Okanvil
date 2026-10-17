@@ -529,6 +529,12 @@ function P.Send()
 end
 
 function P.DoSend()
+	-- switched off or locked while the window was open: nothing goes out
+	if state.kind == "wish" and Okanvil.Wish and not Okanvil.Wish.Accepting() then
+		Okanvil:Print("The wishlist is closed: wish not sent.")
+		win:Hide()
+		return
+	end
 	local payload = table.concat(picks, ";")
 	savePicks(state.gen)
 	state.locked = true
@@ -548,6 +554,24 @@ function P.DoSend()
 	end
 	-- done: the window gets out of the way; the answer arrives in chat
 	win:Hide()
+end
+
+-- Close the window if it is open on this kind of pick ("wish" / "sr").
+function P.HideKind(kind)
+	if win and win:IsShown() and state.kind == kind then win:Hide() end
+end
+
+-- A pick sent some other way (a "wh [item]" whisper an officer saved) counts as
+-- sent from this window: the Loot page shows it and the window stops asking.
+function P.MarkSent(kind, lockKey, id)
+	local d = db()
+	d.myPicks = d.myPicks or {}
+	local key = (kind == "wish" and "wish:" or "") .. lockKey .. ":" .. (me() or "")
+	local old = d.myPicks[key]
+	local gen = (win and win:IsShown() and state.lockKey == lockKey and state.kind == kind) and state.gen
+	d.myPicks[key] = { at = time(), list = { id }, sentGen = gen or (old and old.sentGen) or 0 }
+	if gen then win:Hide() end
+	if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
 end
 
 -- What this character sent, newest first: the items of its latest soft reserve
