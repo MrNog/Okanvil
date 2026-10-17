@@ -171,12 +171,10 @@ function Okanvil:BuildUpgrades(host)
 		local hl = r:CreateTexture(nil, "HIGHLIGHT")
 		hl:SetTexture(FLAT); hl:SetAllPoints(); hl:SetVertexColor(1, 1, 1, 0.05)
 		r.icon = r:CreateTexture(nil, "ARTWORK")
-		-- a stripe in the verdict's colour, and a faint wash of it behind the row
+		-- a stripe in the verdict's colour
 		r.bar = r:CreateTexture(nil, "ARTWORK")
 		r.bar:SetTexture(FLAT); r.bar:SetWidth(3)
 		r.bar:SetPoint("TOPLEFT", 10, -4); r.bar:SetPoint("BOTTOMLEFT", 10, 4)
-		r.wash = r:CreateTexture(nil, "BACKGROUND")
-		r.wash:SetTexture(FLAT); r.wash:SetPoint("TOPLEFT", 10, -2); r.wash:SetPoint("BOTTOMRIGHT", 0, 2)
 		r.icon:SetSize(ICON, ICON); r.icon:SetPoint("LEFT", 22, 0)
 		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 		r.val = W.Text(r, "", "head"); r.val:SetPoint("RIGHT", -6, 0); r.val:SetWidth(78)
@@ -321,7 +319,6 @@ function Okanvil:BuildUpgrades(host)
 				if u.v.bis then cr, cg, cb = 1, 0.5, 0
 				elseif u.v.rank then cr, cg, cb = u3(C.accentText) end
 				it.bar:SetVertexColor(cr, cg, cb, 0.9)
-				it.wash:SetVertexColor(cr, cg, cb, 0.05)
 				-- what it replaces, from the middle of the row
 				local half = math.floor((p:GetWidth() or 600) * 0.48)
 				it.name:SetWidth(half - ICON - 30); it.sub:SetWidth(half - ICON - 30)
