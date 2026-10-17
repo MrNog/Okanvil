@@ -298,14 +298,60 @@ end
 local MODES = { council = true, sr = true, roll = true }
 local MODE_TTL = 3 * 3600
 
-function SR.Mode()
+-- Who sets the mode for the group: the master looter, or with no master loot
+-- the group leader. Solo, you. Everyone else sees theirs, read-only.
+local function shortName(n) return n and (n:gsub("%-.*$", "")) or n end
+local function inGroup() return (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0 end
+local function setterName()
+	local L = Okanvil.Loot
+	local ml = L and L.MasterLooterName and L.MasterLooterName()
+	if ml and ml ~= "" then return shortName(ml) end
+	if (GetNumRaidMembers() or 0) > 0 then
+		for i = 1, GetNumRaidMembers() do
+			local name, rank = GetRaidRosterInfo(i)
+			if rank == 2 then return shortName(name) end
+		end
+	elseif (GetNumPartyMembers() or 0) > 0 then
+		if UnitIsPartyLeader("player") then return UnitName("player") end
+		for i = 1, GetNumPartyMembers() do
+			if UnitIsPartyLeader("party" .. i) then return shortName(UnitName("party" .. i)) end
+		end
+	end
+	return nil
+end
+function SR.ModeSetter() return setterName() end
+function SR.CanSetMode()
+	if not inGroup() then return true end
+	local who = setterName()
+	return who == nil or who:lower() == (UnitName("player") or ""):lower()
+end
+
+local remote            -- { mode, from } as the setter sent it
+local function ownMode()
 	local d = db()
 	if d.mode and d.modeAt and time() - d.modeAt < MODE_TTL then return d.mode end
 	return Okanvil.LITE and "sr" or "roll"
 end
 
+function SR.Mode()
+	-- in a group you follow the setter's mode, once it has told us
+	if inGroup() and not SR.CanSetMode() and remote and remote.from == setterName() then
+		return remote.mode
+	end
+	return ownMode()
+end
+
+local function sendMode()
+	local C = Okanvil.Comms
+	if C and C.Send and inGroup() and SR.CanSetMode() then C.Send("LOOTMODE", ownMode()) end
+end
+
 function SR.SetMode(m)
 	if m ~= nil and not MODES[m] then return false end
+	if not SR.CanSetMode() then
+		Okanvil:Print("The loot mode is set by " .. (setterName() or "the master looter") .. ".")
+		return false
+	end
 	m = m or "roll"
 	local was = SR.Mode()
 	db().mode, db().modeAt = m, time()
@@ -318,6 +364,7 @@ function SR.SetMode(m)
 		local want = (m == "council")
 		if (CC.active and true or false) ~= want then CC.SetActive(want) end
 	end
+	sendMode()
 	if SR.onChange then SR.onChange() end
 	if SR.onPanel then SR.onPanel() end
 	local RM = Okanvil.RollMgr
@@ -326,6 +373,42 @@ function SR.SetMode(m)
 		if not ok and Okanvil.Err then Okanvil:Err("SoftRes SetMode", err) end
 	end
 	return true
+end
+
+-- The setter's mode reaches everyone: LOOTMODE when it changes or when asked
+-- (LOOTMODEQ, sent on joining a group and when the master looter changes).
+local function repaint()
+	if SR.onChange then pcall(SR.onChange) end
+	if SR.onPanel then pcall(SR.onPanel) end
+	local RM = Okanvil.RollMgr
+	if RM and RM.Rebuild then pcall(RM.Rebuild) end
+end
+do
+	local C = Okanvil.Comms
+	if C and C.On then
+		C.On("LOOTMODE", function(sender, mode)
+			sender = shortName(sender)
+			if not MODES[mode] or sender ~= setterName() then return end
+			if remote and remote.mode == mode and remote.from == sender then return end
+			remote = { mode = mode, from = sender }
+			repaint()
+		end)
+		C.On("LOOTMODEQ", function() sendMode() end)
+	end
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
+	f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+	f:RegisterEvent("RAID_ROSTER_UPDATE")
+	local lastSetter, wasIn
+	f:SetScript("OnEvent", function()
+		local who, now = setterName(), inGroup()
+		if who == lastSetter and now == wasIn then return end
+		lastSetter, wasIn = who, now
+		if not now then remote = nil; repaint(); return end
+		if SR.CanSetMode() then sendMode()
+		elseif C and C.Send then C.Send("LOOTMODEQ") end
+		repaint()
+	end)
 end
 
 -- Whether soft reserves count right now.

@@ -937,19 +937,82 @@ SlashCmdList["Okanvil"] = function(arg)
 			or "dev mode |cff8a8d93OFF|r.")
 		return
 	end
-	if arg == "help" or arg == "?" then
-		Okanvil:Print("commands:")
-		Okanvil:Print("  |cffffd200/okanvil|r        open/close the window   |cff8a8d93(/okanvil tab = own chat tab)|r")
-		Okanvil:Print("  |cffffd200/okanvil brand <name>|r  your guild's skin  |cff8a8d93(empty = clear)|r")
-		Okanvil:Print("  |cffffd200/okanvil hub <url>|r     web hub link      |cff8a8d93(empty = clear)|r")
-		Okanvil:Print("  |cffffd200/okanvil dev|r          debug to the Okanvil chat tab")
-		Okanvil:Print("  |cffffd200/okroll|r         mini roll manager")
-		Okanvil:Print("  |cffffd200/okerr|r          error log  |cff8a8d93(clear)|r")
-		Okanvil:Print("  |cffffd200/okfocus|r    release a stuck keyboard focus")
-			Okanvil:Print("  |cff8a8d93every module opens from the minimap button.|r")
+	if arg == "help" or arg == "?" or arg:find("^help ") then
+		Okanvil:PrintHelp(raw:match("^%S+%s+(.+)$"))
 		return
 	end
 	Okanvil:Toggle()
+end
+
+-- Every slash command, by who uses it. /okanvil help prints it; /okanvil help
+-- <word> only the lines that mention the word. docs/SLASH_COMMANDS.md is the
+-- same list, longer.
+Okanvil.HELP = {
+	{ "Everyone", {
+		{ "/okanvil", "open or close the window" },
+		{ "/okanvil help [word]", "this list (only lines with that word)" },
+		{ "/okanvil tab", "send Okanvil's messages to their own chat tab" },
+		{ "/okanvil setup", "the first-run setup again" },
+		{ "/okroll [stop]", "the mini roll window (stop: end the open roll)" },
+		{ "/oktrade [clear]", "loot you still owe by trade, and to whom" },
+		{ "/okrc [list | say | aura]", "raid check: the popup, a list, announce, your buffs" },
+		{ "/oknotes [send | unlock | watch]", "boss notes: status, send, unlock editing, watch the timers" },
+		{ "/okfarm start | stop | reset", "farm session: gold and items per hour" },
+		{ "/okver", "who runs Okanvil, and which version" },
+		{ "/okerr [clear]", "the error log (clear: empty it)" },
+		{ "/okfocus", "free the keyboard if a text box is stuck on it" },
+	} },
+	{ "PuG leader", {
+		{ "/pug start | stop", "start or stop spamming the LFM line" },
+		{ "/pug send", "send the LFM line once" },
+		{ "/pug msg", "print the line that would be sent" },
+	} },
+	{ "Master looter / officer", {
+		{ "/okres mode council | sr | roll", "tonight's loot mode" },
+		{ "/okres open | lock", "take or stop \"sr [item]\" whispers" },
+		{ "/okres post | list", "raid chat: the SR rules, or every reserve" },
+		{ "/okres", "the soft-reserve list beside the mini roll" },
+		{ "/okwish on | off", "wishlist for the council (raiders get the window, or whisper wh [item])" },
+		{ "/okwish clear", "clear every wish on this raid ID" },
+		{ "/okcouncil board | close", "reopen the council board, or end the round" },
+		{ "/okcouncil auto on | off", "ask the council about every epic when a corpse opens" },
+		{ "/okcouncil ask [item links]", "a council round on items already in bags" },
+	} },
+	{ "Guild skin", {
+		{ "/okanvil brand <name>", "your guild's name on the window (empty: clear)" },
+		{ "/okanvil hub <url>", "your guild's web hub link (empty: clear)" },
+		{ "/okanvil generic", "clear the guild skin and the web hub" },
+	} },
+	{ "Testing, solo", {
+		{ "/okcouncil test [n] | test off", "a council round on gear you wear, nothing given" },
+		{ "/okres test | test raider | test off", "a soft-reserve night, or its window as a raider" },
+		{ "/okres test w <name> sr [item]", "fake a reserve whisper" },
+		{ "/okwish test", "your wish window" },
+		{ "/pug mock", "five fake players in the group" },
+		{ "/okloottest [id | name | world | ml | roll | clear]", "fake drops in the loot list" },
+		{ "/okanvil dev", "debug output to the Okanvil chat tab" },
+		{ "/okcomms", "every Okanvil addon message as it arrives" },
+	} },
+}
+
+function Okanvil:PrintHelp(filter)
+	filter = filter and filter:lower() or nil
+	self:Print(filter and ("commands with \"" .. filter .. "\":") or "commands:")
+	local any = false
+	for _, g in ipairs(Okanvil.HELP) do
+		local lines = {}
+		for _, c in ipairs(g[2]) do
+			if not filter or (c[1] .. " " .. c[2]):lower():find(filter, 1, true) then
+				lines[#lines + 1] = "  |cffffd200" .. c[1] .. "|r  |cff8a8d93" .. c[2] .. "|r"
+			end
+		end
+		if #lines > 0 then
+			any = true
+			self:Print("|cffe0b860" .. g[1] .. "|r")
+			for _, l in ipairs(lines) do self:Print(l) end
+		end
+	end
+	if not any then self:Print("|cff8a8d93nothing matches.|r") end
 end
 
 -- Emergency keyboard release: if anything ever traps the keyboard again, this

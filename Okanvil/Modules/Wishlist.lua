@@ -137,6 +137,13 @@ function Wi.SetOn(on)
 		prune()
 		if C and C.Send then C.Send("WISHPOST", r.key, r.size, lockKey, d.gen[lockKey]) end
 		Okanvil:Print("Wishlist on: everyone in the group with Okanvil gets the wish window.")
+		-- the rules for everyone, Okanvil or not: a raid warning when we may send one
+		local msg = ("WISHLIST open: pick 1 item for this raid ID in Okanvil, or whisper %s: wh [item]. "
+			.. "It tells the council what you want, it is not a reserve."):format(me() or "me")
+		local inRaid = (GetNumRaidMembers() or 0) > 0
+		local chan = inRaid and ((IsRaidLeader() or IsRaidOfficer()) and "RAID_WARNING" or "RAID")
+			or ((GetNumPartyMembers() or 0) > 0 and "PARTY") or nil
+		if chan then SendChatMessage(msg, chan) end
 		-- whoever turned it on raids too: they get the window like everyone else
 		if not mySent(lockKey) then
 			openWhenCalm({ r.key, r.size, false, 1, lockKey, me(), tostring(d.gen[lockKey]), "wish" })
@@ -237,8 +244,58 @@ do
 		C.On("WISHPICK", function(sender, lockKey, id)
 			store(lockKey, stripRealm(sender), id)
 		end)
+		-- a wish someone whispered to an officer, passed on for them
+		C.On("WISHFOR", function(sender, lockKey, id, who)
+			if not canTrigger(sender) or not who or who == "" then return end
+			store(lockKey, stripRealm(who), id)
+		end)
 	end
 end
+
+-- ---- Whispers: "wh [item]" for raiders without Okanvil ----------------------------
+-- Whoever turned the wishlist on (any officer, the raid leader, the master
+-- looter) answers "wh [item]" / "wish [item]": the wish is saved, passed to the
+-- other officers, and confirmed by whisper. One per raid ID, like the window.
+local function reply(to, text) SendChatMessage(text, "WHISPER", nil, to) end
+
+local function onWhisper(text, sender)
+	if not (Wi.IsOn() and canTrigger(me())) then return end
+	local rest = text:match("^%s*[Ww][Hh]%s+(.+)$") or text:match("^%s*[Ww][Ii][Ss][Hh]%s+(.+)$")
+	if not rest then return end
+	local who = stripRealm(sender)
+	local id = tonumber(rest:match("item:(%d+)"))
+	if not id and SR.FindItemByName then id = SR.FindItemByName((rest:gsub("[%[%]]", ""))) end
+	if not id then
+		reply(sender, "Wish: item not found. Whisper me: wh [item link]")
+		return
+	end
+	if SR.DropsHere and not SR.DropsHere(id) then
+		reply(sender, "Wish: that item does not drop in this raid.")
+		return
+	end
+	local lockKey = SR.LockKey()
+	local l = db().list[lockKey]
+	local had = l and l[who]
+	if had then
+		local _, hl = GetItemInfo(had.id)
+		reply(sender, "Wish: you already have one for this raid ID: " .. (hl or had.name or "?"))
+		return
+	end
+	store(lockKey, who, id)
+	local C = Okanvil.Comms
+	if C and C.Send then C.Send("WISHFOR", lockKey, id, who) end
+	local _, link = GetItemInfo(id)
+	reply(sender, "Wish saved: " .. (link or ("item " .. id)) .. " -- the council sees it, it is not a reserve.")
+end
+
+local wev = CreateFrame("Frame")
+wev:RegisterEvent("CHAT_MSG_WHISPER")
+wev:SetScript("OnEvent", function(_, _, text, sender)
+	if text and sender then
+		local ok, err = pcall(onWhisper, text, sender)
+		if not ok and Okanvil.Err then Okanvil:Err("Wishlist whisper", err) end
+	end
+end)
 
 -- ---- WH panel: every wish, docked beside the mini roll ---------------------------
 -- The council-night twin of the SR panel, opened from the mini roll's WH button.

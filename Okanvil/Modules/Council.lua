@@ -857,6 +857,9 @@ local function onAsked(sender, payload)
 			if P and P.CanIUse then can = P.CanIUse(link) end
 			-- lighter armour, only when it suits your spec and beats what you wear
 			if not can and P and P.LighterWorthAsking and P.LighterWorthAsking(link) then can = true end
+			-- rings, trinkets, necks, weapons: only if they suit one of your specs
+			-- (a spell-power neck is not a death knight's to ask for)
+			if can and P and P.FitsEitherSpec and not P.FitsEitherSpec(link) then can = false end
 			if can then
 				local equip = select(9, GetItemInfo(link))
 				items[#items + 1] = {
@@ -2802,24 +2805,26 @@ function C_.BuildRunTab(body)
 		return b
 	end
 
-	-- The version checker lives in Settings, and /okver opens it from anywhere.
-	-- It is not a council tool -- a mismatch is the first thing to rule out for
-	-- any module -- so this page keeps the one button that is its own.
-	local testB = sideBtn("Test with 3 items", 1, function() end)
-	local function paintTest()
-		testB:SetKind(C_.testMode and "primary" or "secondary")
-		testB.text:SetText(C_.testMode and "End test" or "Test with 3 items")
+	-- The test round is a command, /okcouncil test [n] (off to end it), not a
+	-- button: it is a tool for whoever builds the addon, not for the raid.
+	-- Council night on / off, top right. Picking SR or Roll ends it too, but
+	-- with Council picked there was no way to switch the night off.
+	local nightB = W.Button(body, "End council night")
+	nightB:SetSize(BW, BH)
+	nightB:SetPoint("TOPRIGHT", -14, -14)
+	local function paintNight()
+		if not (enabled() and C_.MayRun()) then nightB:Hide() return end
+		nightB:Show()
+		nightB:SetKind(C_.active and "secondary" or "primary")
+		nightB.text:SetText(C_.active and "End council night" or "Start council night")
 	end
-	testB:SetScript("OnClick", function()
-		if C_.testMode then C_.TestOff() else C_.Test(3) end
-		paintTest()
+	nightB:SetScript("OnClick", function()
+		C_.SetActive(not C_.active)
+		paintNight(); paintState()
 	end)
-	paintTest()
-	testB:Tooltip("A real round on gear you are wearing. Nothing is given away.\n"
-		.. "Ends when you close the windows.")
-	C_._paintTest = paintTest
-
-	if not canSeeBoard() then testB:Hide() end
+	nightB:Tooltip("Council night puts the Council row in the mini roll.\nOnly the master looter switches it.")
+	paintNight()
+	body:HookScript("OnShow", function() paintNight(); paintState() end)
 
 	-- ---- options ------------------------------------------------------
 	-- One button tall now, not two. The gap above the heading matches the one
@@ -3470,9 +3475,17 @@ do
 			-- OnLootWindow, not Rebuild: it OPENS the window as well as redrawing
 			-- it. Rebuild alone repainted a window that was not on screen, so the
 			-- Council row was correct but you had to go and find it by hand.
+			-- Opened only inside a raid or with loot on the list: logging in to
+			-- Dalaran with council night still on popped an empty "No loot yet".
 			if C_.active or C_.testMode then
 				local RMg = Okanvil.RollMgr
-				if RMg then pcall(RMg.OnLootWindow or RMg.Rebuild) end
+				local _, itype = IsInInstance()
+				local L = Okanvil.Loot
+				local drops = L and L.DropsByBoss and L.DropsByBoss() or {}
+				if RMg then
+					if itype == "raid" or #drops > 0 then pcall(RMg.OnLootWindow or RMg.Rebuild)
+					elseif RMg.Rebuild then pcall(RMg.Rebuild) end
+				end
 			end
 
 			-- And the board, for whoever was running the round.

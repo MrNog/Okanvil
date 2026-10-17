@@ -146,6 +146,9 @@ local function record(sender, message)
 	if not RF or not RF.parse then return end
 	local info = RF.parse(message)
 	if not info then return end
+	-- players advertising a raid prove it is open: the Upgrades phase reads this
+	local Up = Okanvil.Upgrades
+	if Up and Up.SeenLFM and info.instance then pcall(Up.SeenLFM, sender, info.instance) end
 
 	local now = time()
 	local existing = listings[sender]
@@ -703,9 +706,24 @@ local function my_gs()
 	return detected_gs()
 end
 
--- A Blood DK tanks or dps's on the same tree: Frost Presence is the tank one.
--- nil when no presence is up (zoning, dead).
+-- Talents only a tanking DK takes: they say "tank" whatever presence is up.
+local DK_TANK_TALENTS = { ["Anticipation"] = true, ["Frigid Dreadplate"] = true,
+	["Will of the Necropolis"] = true }
+local function dk_tank_talents()
+	local group = GetActiveTalentGroup and GetActiveTalentGroup(false) or 1
+	for tab = 1, 2 do
+		for i = 1, (GetNumTalents and GetNumTalents(tab, false, false) or 0) do
+			local name, _, _, _, rank = GetTalentInfo(tab, i, false, false, group)
+			if name and DK_TANK_TALENTS[name] and (rank or 0) > 0 then return true end
+		end
+	end
+	return false
+end
+
+-- A Blood DK tanks or dps's on the same tree: the tank talents decide, else
+-- the presence (Frost = tank). nil when neither says (zoning, dead).
 local function blood_role()
+	if dk_tank_talents() then return "Tank" end
 	local frost, blood, unholy = GetSpellInfo(48263), GetSpellInfo(48266), GetSpellInfo(48265)
 	-- a presence is a stance: the active one is the most reliable read
 	local form = GetShapeshiftForm and GetShapeshiftForm() or 0

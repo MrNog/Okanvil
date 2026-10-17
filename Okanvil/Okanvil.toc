@@ -35,6 +35,7 @@ Modules\Attendance.lua
 Modules\AttendanceLetters.lua
 Modules\Bosses-Data.lua
 Modules\ItemBoss-Data.lua
+Modules\Fit-Specs.lua
 Modules\Proficiency-Data.lua
 Modules\Council.lua
 Modules\LootPrio.lua

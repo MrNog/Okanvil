@@ -424,12 +424,22 @@ hooksecurefunc("NotifyInspect", function(unit)
 	if not active then manualUnit = unit end
 end)
 
+-- Only YOUR inspect counts: the Inspect window open on that player. GearScore
+-- and other addons inspect whoever you target, all evening, and reading each of
+-- those (gear, tooltips, achievements) gave the game a hitch every few seconds.
+-- And one read per player per minute at most.
+local MANUAL_EVERY = 60
+local manualAt = {}
+
 local function readManual()
 	local unit = manualUnit
 	manualUnit = nil
+	if not (InspectFrame and InspectFrame:IsShown()) then return end
 	if not (unit and UnitExists(unit) and UnitIsPlayer(unit)) then return end
 	local name = stripRealm(UnitName(unit))
 	if not (name and unitFor(name)) then return end   -- group members only
+	if manualAt[name] and GetTime() - manualAt[name] < MANUAL_EVERY then return end
+	manualAt[name] = GetTime()
 	local _, class = UnitClass(unit)
 	if not (class and cacheIsFor(class, activeGroup(true))) then return end
 	local spec, _, role, icon, pts = readSpec(unit)
@@ -444,9 +454,8 @@ local function readManual()
 			if M.onWatchRead then pcall(M.onWatchRead, name) end
 		end)
 	end
-	-- a fresh look re-reads their achievements too
+	-- achievements only if none were read tonight: the comparison is heavy
 	if Okanvil.Audit and Okanvil.Audit.WantAchievements then
-		M.Put(name, { achAt = 0 })
 		Okanvil.Audit.WantAchievements(name)
 	end
 	if M.onWatchRead then

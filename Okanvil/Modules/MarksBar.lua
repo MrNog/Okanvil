@@ -91,6 +91,15 @@ local SHORTCUTS = {
 		end,
 	},
 	{
+		key  = "upgrades",
+		icon = (Okanvil.ICONS and Okanvil.ICONS.upgrades) or "Interface\\Icons\\INV_Sword_39",
+		gate = function() return Okanvil:IsModuleEnabled("Okanvil-Upgrades") end,
+		run  = function()
+			if not Okanvil.win or not Okanvil.win:IsShown() then Okanvil:Toggle() end
+			Okanvil:ShowPanel("Okanvil-Upgrades")
+		end,
+	},
+	{
 		key  = "notes",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.notes) or "Interface\\Icons\\INV_Misc_Note_01",
 		gate = function() return Okanvil:IsModuleEnabled("Okanvil-Notes") end,
@@ -236,6 +245,7 @@ local function layoutTail(f)
 		prio   = "__council",
 		finder = "Okanvil-RaidFinder",   -- the bar's "finder" is the RAID finder
 		pug    = "Okanvil-PuG",
+		upgrades = "Okanvil-Upgrades",
 		notes  = "Okanvil-Notes",
 		recruit = "Okanvil-Recruit",
 		ranking = "Okanvil-Ranking",
@@ -265,7 +275,7 @@ local function layoutTail(f)
 	-- window come last. A boundary is drawn wherever this number changes.
 	local GROUP_OF = {
 		okanvil = 2,
-		loot = 3, notes = 3, finder = 3, pug = 3,   -- RAID
+		loot = 3, upgrades = 3, notes = 3, finder = 3, pug = 3,   -- RAID
 		invite = 4, recruit = 4, prio = 4, ranking = 4,   -- GUILD
 		ids = 5, farm = 5,                          -- TOOLS
 		buffs = 6, ready = 6, pull = 6,             -- acts on the raid
@@ -428,6 +438,7 @@ local function build()
 		prio    = "Loot priority",
 		finder  = "Raid Finder",
 		pug     = "PuG",
+		upgrades = "Upgrades",
 		notes   = "Notes",
 		recruit = "Recruit",
 		invite  = "Invite",

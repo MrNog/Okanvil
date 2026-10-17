@@ -1482,6 +1482,11 @@ local function showWin()
 	elseif pendingJumpNewest then
 		win._jumpNewest = true; pendingJumpNewest = false
 	end
+	-- who opened it: the window popping up on its own is otherwise untraceable
+	if not win:IsShown() and debugstack then
+		local where = (debugstack(2, 3, 0) or ""):gsub("Interface\\AddOns\\Okanvil\\", ""):gsub("\n", " < ")
+		Okanvil:Trace("ROLL", "mini roll opened: " .. where:sub(1, 240))
+	end
 	win:Show()                       -- always show (idempotent)
 	win:Raise()                      -- bring to front in case something covers it
 	shownDrops = dropCount()

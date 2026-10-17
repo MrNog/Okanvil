@@ -433,6 +433,7 @@ Okanvil.ICONS = {
 	raidfinder = "Interface\\Icons\\Ability_Warrior_BattleShout",
 	attendance = "Interface\\Icons\\INV_Misc_PocketWatch_01",
 	ranking    = "Interface\\Icons\\Ability_Marksmanship",
+	upgrades   = "Interface\\Icons\\INV_Sword_39",
 }
 
 Okanvil.NATIVE = {
@@ -507,7 +508,7 @@ end
 -- is FOR. A section with nothing enabled in it prints no header.
 Okanvil.NAV_GROUPS = {
 	{ section = nil,      items = { "Home" } },
-	{ section = "RAID",   items = { "Loot", "Notes", "Raid Finder", "PuG" } },
+	{ section = "RAID",   items = { "Loot", "Upgrades", "Notes", "Raid Finder", "PuG" } },
 	-- Loot Council is not here: it is the Council and Priority tabs of Loot.
 	-- GUILD keeps its header for the guild tools still to come.
 	{ section = "GUILD",  items = { "Ranking", "Attendance", "Recruit" } },
@@ -539,6 +540,7 @@ Okanvil.PANEL_KEY = {
 	["Ranking"] = "Okanvil-Ranking",
 	["ID Finder"] = "Okanvil-IDs",
 	["Farm"] = "Okanvil-Farm",
+	["Upgrades"] = "Okanvil-Upgrades",
 }
 
 -- The reverse, for a module row that knows its key but not its title.

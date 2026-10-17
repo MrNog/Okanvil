@@ -36,76 +36,148 @@ function Okanvil:BuildLoot()
 	-- Tonight's setup: the speed-run block (officers / ML), the loot mode tiles,
 	-- and what the picked mode needs below them.
 	local function buildBody(main)
+		-- a section heading: dim caps and a hairline, like the settings pages
+		local function heading(anchor, text, gap)
+			local h = CreateFrame("Frame", nil, main)
+			h:SetPoint("TOPLEFT", anchor, anchor == main and "TOPLEFT" or "BOTTOMLEFT", 0, -(gap or 0))
+			h:SetPoint("TOPRIGHT", anchor, anchor == main and "TOPRIGHT" or "BOTTOMRIGHT", 0, -(gap or 0))
+			h:SetHeight(26)
+			W.Section(h, text, 12, -6)
+			return h
+		end
+
+		-- ---- YOUR PICKS: the soft reserves and the wish you sent, as item cards.
+		-- Shown to everyone; folds away when you have sent nothing.
+		local picksHead = heading(main, "YOUR PICKS", 4)
+		local picks = CreateFrame("Frame", nil, main)
+		picks:SetPoint("TOPLEFT", picksHead, "BOTTOMLEFT", 0, 0)
+		picks:SetPoint("TOPRIGHT", picksHead, "BOTTOMRIGHT", 0, 0)
+		picks.cards = {}
+		local CARD_H, GAP = 64, 8
+
+		local function bossOf(id)
+			for _, raid in pairs(OkanvilRaidLoot or {}) do
+				for _, bb in ipairs(raid) do
+					for _, it in ipairs(bb.items or {}) do if it.id == id then return bb.boss end end
+				end
+			end
+		end
+
+		local function card(i)
+			local c = picks.cards[i]
+			if c then return c end
+			c = W.Frame(picks, "soft")
+			c:SetHeight(CARD_H)
+			c.icon = c:CreateTexture(nil, "ARTWORK"); c.icon:SetSize(38, 38); c.icon:SetPoint("LEFT", 9, 0)
+			c.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+			c.kind = W.Text(c, "", "note"); c.kind:SetPoint("TOPLEFT", c.icon, "TOPRIGHT", 10, 1)
+			c.name = W.Text(c, "", "body"); c.name:SetPoint("TOPLEFT", c.kind, "BOTTOMLEFT", 0, -3)
+			c.name:SetPoint("RIGHT", c, "RIGHT", -8, 0); c.name:SetJustifyH("LEFT")
+			c.sub = W.Text(c, "", "note", "dim"); c.sub:SetPoint("TOPLEFT", c.name, "BOTTOMLEFT", 0, -3)
+			c.sub:SetPoint("RIGHT", c, "RIGHT", -8, 0); c.sub:SetJustifyH("LEFT")
+			for _, fs in ipairs({ c.name, c.sub }) do if fs.SetWordWrap then fs:SetWordWrap(false) end end
+			picks.cards[i] = c
+			return c
+		end
+
+		local function paintMine()
+			local SR = Okanvil.SoftRes
+			local list = {}
+			for _, id in ipairs(SR and SR.MyPicks and SR.MyPicks("sr") or {}) do list[#list + 1] = { id = id, wish = false } end
+			-- a wish only means something while the Wishlist is on
+			local Wi = Okanvil.Wish
+			if Wi and Wi.IsOn() then
+				for _, id in ipairs(SR and SR.MyPicks and SR.MyPicks("wish") or {}) do list[#list + 1] = { id = id, wish = true } end
+			end
+			local n = #list
+			local w = picks:GetWidth() or 0
+			local cw = n > 0 and math.floor((w - 24 - GAP * (n - 1)) / n) or 0
+			for i = 1, math.max(n, #picks.cards) do
+				local e, c = list[i], picks.cards[i]
+				if e then
+					c = card(i)
+					c:ClearAllPoints()
+					c:SetPoint("TOPLEFT", 12 + (i - 1) * (cw + GAP), -4); c:SetWidth(cw)
+					local name, _, q, _, _, _, _, _, _, tex = GetItemInfo(e.id)
+					c.icon:SetTexture(tex or (GetItemIcon and GetItemIcon(e.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+					local r, g, bl = GetItemQualityColor(q or 4)
+					c.name:SetText(name or ("item " .. e.id)); c.name:SetTextColor(r, g, bl)
+					c.kind:SetText(e.wish and "|cffe0b860WISH|r" or "|cff8a8d93SOFT RESERVE|r")
+					c.sub:SetText(bossOf(e.id) or "")
+					-- the wish wears the gold edge it has on the council board
+					if e.wish then c:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 0.8)
+					else c:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1) end
+					c:Show()
+				elseif c then
+					c:Hide()
+				end
+			end
+			if n > 0 then
+				picksHead:Show(); picksHead:SetHeight(26); picks:SetHeight(CARD_H + 10)
+			else
+				picksHead:Hide(); picksHead:SetHeight(1); picks:SetHeight(1)
+			end
+		end
+		picks:SetScript("OnShow", paintMine)
+		picks:SetScript("OnSizeChanged", paintMine)
+		paintMine()
+		Okanvil.Loot_PaintMine = paintMine
+
+		-- ---- LOOT MODE: three tiles, one lit, and what the lit mode needs
+		local modesHead = heading(picks, "LOOT MODE", 8)
+		local modes = CreateFrame("Frame", nil, main)
+		modes:SetPoint("TOPLEFT", modesHead, "BOTTOMLEFT", 12, -2)
+		modes:SetPoint("TOPRIGHT", modesHead, "BOTTOMRIGHT", -12, -2)
+		Okanvil:Loot_BuildModes(modes)
+
+		local srp = W.Frame(main, "page")
+		srp:SetPoint("TOPLEFT", modes, "BOTTOMLEFT", -12, -10)
+		srp:SetPoint("TOPRIGHT", modes, "BOTTOMRIGHT", 12, -10)
+		Okanvil:Loot_BuildSoftRes(srp)
+
+		-- ---- MASTER LOOT: the speed-run block, for officers and whoever is master
+		-- looter right now (a pug leader sweeping loot)
+		local mlHead = heading(srp, "MASTER LOOT", 14)
 		local top = W.Frame(main, "page")
-		top:SetPoint("TOPLEFT", 0, 0)
-		top:SetPoint("TOPRIGHT", 0, 0)
+		top:SetPoint("TOPLEFT", mlHead, "BOTTOMLEFT", 0, 0)
+		top:SetPoint("TOPRIGHT", mlHead, "BOTTOMRIGHT", 0, 0)
 		top:SetHeight(128)
 		Okanvil:Loot_BuildCollectors(top)
-
-		-- The speed-run master-loot block is for officers, and for whoever is master
-		-- looter right now (a pug leader sweeping loot). Everyone else sees only the
-		-- history, which moves up to take the space.
 		local function applyTop()
 			local show = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio())
 				or (L.IsMasterLooter and L.IsMasterLooter())
 			local on = L.CollectorsEnabled and L.CollectorsEnabled()
 			if top.fields then if on then top.fields:Show() else top.fields:Hide() end end
-			if show then top:Show(); top:SetHeight(on and 148 or 50) else top:Hide(); top:SetHeight(1) end
+			if show then
+				mlHead:Show(); top:Show(); top:SetHeight(on and 148 or 50)
+			else
+				mlHead:Hide(); top:Hide(); top:SetHeight(1)
+			end
 		end
+		-- The page scrolls: its height is wherever the last block ends, measured
+		-- a frame after anything grows or shrinks (the speed-run fields, the SR
+		-- list, the picks), when the anchors have settled.
+		local measurer = CreateFrame("Frame", nil, main)
+		measurer:Hide()
+		measurer:SetScript("OnUpdate", function(self)
+			self:Hide()
+			local t, b = main:GetTop(), top:GetBottom()
+			if not (t and b) then return end
+			local sf = main:GetParent()
+			local view = sf and sf.GetHeight and sf:GetHeight() or 0
+			main:SetHeight(math.max(t - b + 16, view))
+			if sf and sf._relayout then sf._relayout() end
+		end)
+		local function remeasure() measurer:Show() end
+		Okanvil.Loot_Remeasure = remeasure
+		local baseApply = applyTop
+		applyTop = function() baseApply(); remeasure() end
 		applyTop()
 		fill.applyTop = applyTop
 		top.onToggle = applyTop
-
-		-- Shown to everyone: in a pug the master looter is whoever the leader picked.
-		-- Tonight's loot mode: four big tiles, one lit.
-		local modes = CreateFrame("Frame", nil, main)
-		modes:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -4)
-		modes:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", 0, -4)
-		Okanvil:Loot_BuildModes(modes)
-
-		-- Your own picks, for everyone: the soft reserve and the wish this
-		-- character sent. Collapses to nothing when there is neither.
-		local mine = CreateFrame("Frame", nil, main)
-		mine:SetPoint("TOPLEFT", modes, "BOTTOMLEFT", 0, -6)
-		mine:SetPoint("TOPRIGHT", modes, "BOTTOMRIGHT", 0, -6)
-		mine.text = W.Text(mine, "", "body")
-		mine.text:SetPoint("LEFT", 12, 0); mine.text:SetPoint("RIGHT", -12, 0)
-		mine.text:SetJustifyH("LEFT")
-		local function paintMine()
-			local SR = Okanvil.SoftRes
-			local function names(ids)
-				local out = {}
-				for _, id in ipairs(ids or {}) do
-					local n, _, q = GetItemInfo(id)
-					local r, g, b = 0.64, 0.21, 0.93
-					if q and GetItemQualityColor then r, g, b = GetItemQualityColor(q) end
-					out[#out + 1] = ("|cff%02x%02x%02x%s|r"):format(r * 255, g * 255, b * 255, n or ("item " .. id))
-				end
-				return #out > 0 and table.concat(out, ", ") or nil
-			end
-			local sr = SR and SR.MyPicks and names(SR.MyPicks("sr"))
-			-- a wish only means something while the Wishlist is on
-			local Wi = Okanvil.Wish
-			local wish = Wi and Wi.IsOn() and SR and SR.MyPicks and names(SR.MyPicks("wish"))
-			local bits = {}
-			if sr then bits[#bits + 1] = "|cff8a8d93Your SR:|r " .. sr end
-			if wish then bits[#bits + 1] = "|cff8a8d93Your wish:|r " .. wish end
-			if #bits > 0 then
-				mine.text:SetText(table.concat(bits, "     "))
-				mine:SetHeight(24); mine:Show()
-			else
-				mine.text:SetText(""); mine:SetHeight(1)
-			end
-		end
-		mine:SetScript("OnShow", paintMine)
-		paintMine()
-		Okanvil.Loot_PaintMine = paintMine
-
-		local srp = W.Frame(main, "page")
-		srp:SetPoint("TOPLEFT", mine, "BOTTOMLEFT", 0, -6)
-		srp:SetPoint("TOPRIGHT", mine, "BOTTOMRIGHT", 0, -6)
-		Okanvil:Loot_BuildSoftRes(srp)
-
+		main:HookScript("OnShow", remeasure)
+		local basePaint = Okanvil.Loot_PaintMine
+		Okanvil.Loot_PaintMine = function() basePaint(); remeasure() end
 	end
 
 	-- What dropped and who got it, on its own tab.
@@ -118,7 +190,7 @@ function Okanvil:BuildLoot()
 
 	-- Loot (tonight's setup) and History for everyone; Priority for officers.
 	local tabs = {
-		{ key = "loot", label = "Loot", height = 400, fill = true, build = buildBody },
+		{ key = "loot", label = "Loot", height = 400, build = buildBody },
 		{ key = "history", label = "History", height = 400, fill = true, build = buildHistory },
 	}
 	if officer then
@@ -358,9 +430,18 @@ function Okanvil:Loot_BuildModes(p)
 	local C = Okanvil.Colors
 	local tiles = {}
 
+	-- who set it, for everyone who cannot: the tiles show the group's mode
+	local who = W.Text(p, "", "note", "dim")
+	who:SetPoint("BOTTOMRIGHT", p, "TOPRIGHT", 0, 9)
+
 	local function paint()
 		local cur = SR.Mode()
+		local can = not SR.CanSetMode or SR.CanSetMode()
+		local setter = SR.ModeSetter and SR.ModeSetter()
+		who:SetText((not can and setter) and ("set by |cffe0b860" .. setter .. "|r") or "")
 		for _, t in ipairs(tiles) do
+			t:EnableMouse(can)
+			t:SetAlpha((can or t._mode == cur) and 1 or 0.55)
 			local on = t._mode == cur
 			if on then
 				t.bg:SetVertexColor(C.accentD[1], C.accentD[2], C.accentD[3], 0.55)
@@ -672,6 +753,7 @@ function Okanvil:Loot_BuildSoftRes(p)
 		-- the mini roll's SR button and panel follow the mode
 		if Okanvil.RollMgr and Okanvil.RollMgr.SyncSRButton then Okanvil.RollMgr.SyncSRButton() end
 		if Okanvil.SoftResPanel and Okanvil.SoftResPanel.Sync then Okanvil.SoftResPanel.Sync() end
+		if Okanvil.Loot_Remeasure then Okanvil.Loot_Remeasure() end
 	end
 	p:SetScript("OnShow", function() paint() end)
 	paint()

@@ -103,6 +103,7 @@ local function findByName(text)
 	for id in pairs(hits) do only = id; n = n + 1 end
 	return n == 1 and only or nil
 end
+SR.FindItemByName = findByName
 
 -- ---- The whisper ----------------------------------------------------------
 -- Answer a reserve whisper. `reply(text)` sends the answer; the test passes a
