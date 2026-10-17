@@ -1,7 +1,7 @@
 -- ============================================================
 -- Okanvil -- Upgrades page (RAID > Upgrades).
 -- Pick a raid and difficulty; every boss lists the drops that are an upgrade
--- for the spec you are in. Bosses killed on your lockout fold into one line.
+-- for the spec you are in. Bosses killed on your lockout stay in place, greyed.
 -- ============================================================
 
 local Okanvil = Okanvil
@@ -249,7 +249,7 @@ function Okanvil:BuildUpgrades(host)
 
 		local bosses = OkanvilRaidLoot and OkanvilRaidLoot[state.raid] or {}
 		local hereRaid = U.Here()
-		local y, nb, ni, waiting, killed, total = 6, 0, 0, 0, 0, 0
+		local y, nb, ni, waiting, total = 6, 0, 0, 0, 0
 		local W_ = p:GetWidth()
 
 		local function bossRow()
@@ -263,14 +263,6 @@ function Okanvil:BuildUpgrades(host)
 			y = y + BOSS_H
 			return r
 		end
-
-		-- killed bosses first, as one line you can open
-		local dead, live = {}, {}
-		for _, b in ipairs(bosses) do
-			if hereRaid == state.raid and U.Killed(state.raid, b.boss) then dead[#dead + 1] = b
-			else live[#live + 1] = b end
-		end
-		killed = #dead
 
 		local q = state.query or ""
 
@@ -313,7 +305,7 @@ function Okanvil:BuildUpgrades(host)
 				it.name:SetText(u.name); it.name:SetTextColor(qr, qg, qb)
 				local place = u.v.rank and (u.v.bis and "|cffff8000BiS|r"
 					or ("|cffe0b860#" .. u.v.rank .. "|r on your list"
-						.. (u.v.as and (" as |cffe0b860" .. u.v.as .. "|r") or ""))) or nil
+						.. (u.v.as and (" |cff8a8d93(the|r |cffe0b860" .. u.v.as .. "|r |cff8a8d93copy)|r") or ""))) or nil
 				it.sub:SetText((u.slot or "") .. (u.v.ilvl and ("  ·  |cff7cfc8a" .. u.v.ilvl .. "|r") or "")
 					.. (place and ("  ·  " .. place) or ""))
 				local cr, cg, cb = 0.49, 0.99, 0.54
@@ -348,13 +340,17 @@ function Okanvil:BuildUpgrades(host)
 			y = y + 4
 		end
 
-		-- killed bosses first, greyed and folded like the rest
-		for _, b in ipairs(dead) do drawBoss(b, false, true) end
+		-- the raid's own boss order; killed ones greyed in place
 		local nextDone = hereRaid ~= state.raid
-		for _, b in ipairs(live) do
-			local before = nb
-			drawBoss(b, not nextDone, false)
-			if nb > before then nextDone = true end
+		for _, b in ipairs(bosses) do
+			local isDead = hereRaid == state.raid and U.Killed(state.raid, b.boss)
+			if isDead then
+				drawBoss(b, false, true)
+			else
+				local before = nb
+				drawBoss(b, not nextDone, false)
+				if nb > before then nextDone = true end
+			end
 		end
 
 		status:ClearAllPoints()

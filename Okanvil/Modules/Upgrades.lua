@@ -57,11 +57,12 @@ end
 -- { class = "PALADIN", label = "Retribution", list = "Retribution" } or nil
 -- while talents are not loaded. Kept until a talent, form or presence change
 -- (the events below): the page asks for it once per item.
-local specCache
-local function readSpec()
+local specCache, offCache
+local function readSpec(group)
 	local _, class = UnitClass("player")
 	if not (class and TREES[class] and GetTalentTabInfo) then return nil end
-	local group = GetActiveTalentGroup and GetActiveTalentGroup(false) or 1
+	local active = GetActiveTalentGroup and GetActiveTalentGroup(false) or 1
+	group = group or active
 	local best, bestPts = nil, 0
 	for i = 1, (GetNumTalentTabs and GetNumTalentTabs()) or 3 do
 		local _, _, pts = GetTalentTabInfo(i, false, false, group)
@@ -70,7 +71,9 @@ local function readSpec()
 	if not best then return nil end
 	local t = TREES[class][best]
 	local label, list = t[1], t[2]
-	if class == "DEATHKNIGHT" and best == 1 then
+	-- tank or not is read off what you are wearing now: only for the spec you are in
+	if group ~= active then
+	elseif class == "DEATHKNIGHT" and best == 1 then
 		local role = Okanvil.RaidFinder_BloodRole and Okanvil.RaidFinder_BloodRole()
 		if role == "Tank" then label, list = "Blood Tank", "Blood tank" end
 	elseif class == "DRUID" and best == 2 and ((Okanvil.Prof and Okanvil.Prof.Tanking and Okanvil.Prof.Tanking()) or inBear()) then
@@ -82,6 +85,19 @@ end
 function U.Spec()
 	if specCache == nil then specCache = readSpec() or false end
 	return specCache or nil
+end
+
+-- Your other talent spec (dual spec), or nil: no second spec, or the same list.
+function U.OffSpec()
+	if offCache == nil then
+		offCache = false
+		if (GetNumTalentGroups and GetNumTalentGroups(false) or 1) >= 2 then
+			local active = GetActiveTalentGroup and GetActiveTalentGroup(false) or 1
+			local off, main = readSpec(active == 1 and 2 or 1), U.Spec()
+			if off and not (main and main.list == off.list) then offCache = off end
+		end
+	end
+	return offCache or nil
 end
 
 -- ------------------------------------------------------------
@@ -253,6 +269,66 @@ function U.SeenLFM(sender, instance)
 		wipe(verdicts)
 		Changed()
 	end
+end
+
+-- Upgrades reads LFM chat itself: Raid Finder only scans while its page is
+-- open. Parsing every line lags a busy raid, so a line is parsed only when it
+-- names a raid newer than the phase already known, and not at all inside a raid.
+local LFM_WORDS = {
+	T8  = { "uld" },
+	T9  = { "toc", "togc", "trial", "ony" },
+	T10 = { "icc", "icecrown" },
+	RS  = { "%f[%a]rs%f[%A]", "ruby", "halion" },
+}
+local function namesNewerRaid(msg)
+	local now = PHASE_ORDER[U.Phase()]
+	msg = msg:lower()
+	for p, words in pairs(LFM_WORDS) do
+		if PHASE_ORDER[p] > now then
+			for _, w in ipairs(words) do
+				if msg:find(w) then return true end
+			end
+		end
+	end
+end
+local lfmEv = CreateFrame("Frame")
+lfmEv:RegisterEvent("CHAT_MSG_CHANNEL")
+lfmEv:RegisterEvent("CHAT_MSG_YELL")
+lfmEv:SetScript("OnEvent", function(self, _, msg, sender)
+	if PHASE_ORDER[U.Phase()] >= PHASE_ORDER.RS then self:UnregisterAllEvents(); return end
+	if not (msg and sender and Okanvil.RF and Okanvil.RF.parse) then return end
+	local _, itype = IsInInstance()
+	if itype == "raid" or not namesNewerRaid(msg) then return end
+	local ok, info = pcall(Okanvil.RF.parse, msg)
+	if ok and info and info.instance then U.SeenLFM(sender, info.instance) end
+end)
+
+-- The guild shares the phase: a new player with no raid history of their own
+-- learns it from anyone who has. Announced at login; a lower announce gets one
+-- answer from the guild, from whoever's random delay runs out first.
+local function seenOrder() return PHASE_ORDER[udb().phaseSeen or ""] or 0 end
+local function announcePhase()
+	if Okanvil.Comms and udb().phaseSeen then Okanvil.Comms.SendGuild("UPPH", udb().phaseSeen) end
+end
+local answerDue
+if Okanvil.Comms and Okanvil.Comms.On then
+	Okanvil.Comms.On("UPPH", function(sender, p)
+		if not (p and PHASE_ORDER[p]) or sender == UnitName("player") then return end
+		if PHASE_ORDER[p] > seenOrder() then
+			local was = U.Phase()
+			udb().phaseSeen = p
+			Okanvil:Trace("UPGRADES", "server phase " .. p .. " (from " .. tostring(sender) .. ")")
+			if U.Phase() ~= was then wipe(verdicts); Changed() end
+		elseif PHASE_ORDER[p] < seenOrder() and not answerDue then
+			answerDue = true
+			Okanvil.Comms.After(2 + math.random() * 6, function()
+				if answerDue then announcePhase() end
+				answerDue = nil
+			end)
+		else
+			answerDue = nil   -- someone already answered
+		end
+	end)
 end
 
 function U.Phase()
@@ -435,6 +511,9 @@ local function Beats(row, link, id, wornLink, wid)
 	local _, wExact, wName = RankIn(row, wid, GetItemInfo(wornLink))
 	local dl, wl = Ilvl(link), Ilvl(wornLink)
 	if dl == wl then return dName < wName end
+	-- the list's place is another (higher) copy's: this lower copy does not
+	-- beat a piece of higher item level, whatever that copy's place
+	if not dExact and dl < wl then return false end
 	local d, w = dExact or (dName + 0.5), wExact or (wName + 0.5)
 	if d ~= w then return d < w end
 	return dl > wl
@@ -648,8 +727,8 @@ local function judge(link, raid, spec)
 end
 
 -- nil when the budget for this pass is spent (the caller shows it as loading)
-function U.Judge(link, raid)
-	local spec = U.Spec()
+function U.Judge(link, raid, spec)
+	spec = spec or U.Spec()
 	if not (spec and link) then return nil end
 	local key = link .. raid .. spec.label
 	local v = verdicts[key]
@@ -694,7 +773,7 @@ local function DropsIn(item, mode) return (item.m or ""):find(mode, 1, true) ~= 
 
 -- One boss's upgrades in this difficulty, best first; and how many items are
 -- still loading.
-function U.Of(boss, raid, mode)
+function U.Of(boss, raid, mode, spec)
 	local out, pending = {}, 0
 	for _, it in ipairs(boss.items) do
 		if DropsIn(it, mode) then
@@ -703,7 +782,7 @@ function U.Of(boss, raid, mode)
 				Ask(it.id)
 				pending = pending + 1
 			else
-				local v, later = U.Judge(link, raid)
+				local v, later = U.Judge(link, raid, spec)
 				if later then
 					pending = pending + 1
 				elseif v then
@@ -861,19 +940,28 @@ local function onUnitTip(tip)
 	if not unit or UnitIsPlayer(unit) then return end
 	local b = U.BossFor(raid, UnitName(unit))
 	if not b or U.Killed(raid, b.boss) then return end
-	local ups = U.Of(b, raid, mode)
-	if #ups == 0 then return end
-	local spec = U.Spec()
-	tip:AddLine(" ")
-	tip:AddLine("Upgrades · " .. (spec and spec.label or "?"), 0.88, 0.72, 0.38)
-	for i = 1, math.min(TIP_MAX, #ups) do
-		local u = ups[i]
-		local r, g, bl = GetItemQualityColor(u.quality or 4)
-		tip:AddDoubleLine(u.name, U.Label(u.v), r, g, bl, 0.49, 0.99, 0.54)
+	-- your spec, then your other spec (OS); always a line under each: an empty
+	-- tooltip reads as the feature missing
+	local function section(spec, tag, max)
+		local ups, pending = U.Of(b, raid, mode, spec)
+		tip:AddLine(" ")
+		tip:AddLine(tag .. " · " .. (spec and spec.label or "?"), 0.88, 0.72, 0.38)
+		if #ups == 0 then
+			tip:AddLine(pending > 0 and "loading items, hover again" or "none from this boss", 0.54, 0.55, 0.58)
+			return
+		end
+		for i = 1, math.min(max, #ups) do
+			local u = ups[i]
+			local r, g, bl = GetItemQualityColor(u.quality or 4)
+			tip:AddDoubleLine(u.name, U.Label(u.v), r, g, bl, 0.49, 0.99, 0.54)
+		end
+		if #ups > max then
+			tip:AddLine("+" .. (#ups - max) .. " more · /okup", 0.54, 0.55, 0.58)
+		end
 	end
-	if #ups > TIP_MAX then
-		tip:AddLine("+" .. (#ups - TIP_MAX) .. " more · /okup", 0.54, 0.55, 0.58)
-	end
+	section(U.Spec(), "Upgrades", TIP_MAX)
+	local off = U.OffSpec()
+	if off then section(off, "Off-spec", 4) end
 	tip:Show()
 end
 
@@ -901,6 +989,7 @@ ev:SetScript("OnEvent", function(_, event, ...)
 				local was = U.Phase()
 				U.LearnPhase()
 				if U.Phase() ~= was then wipe(verdicts); Changed() end
+				announcePhase()
 			end)
 		end
 		if RequestRaidInfo then RequestRaidInfo() end
@@ -926,7 +1015,7 @@ ev:SetScript("OnEvent", function(_, event, ...)
 	if event ~= "PLAYER_EQUIPMENT_CHANGED" then
 		-- talent events also fire for every inspect, and a druid shifts all fight
 		-- long: only a change of spec (tree, bear, presence) is worth a re-judge
-		specCache = nil
+		specCache, offCache = nil, nil
 		local spec = U.Spec()
 		local label = spec and spec.label
 		if label == lastLabel then return end
@@ -940,6 +1029,141 @@ end)
 
 -- /okup            open the page
 -- /okup <itemlink> what the judge says about one item
+-- ------------------------------------------------------------
+-- Drop alert: an upgrade for you drops (a corpse you loot, a roll, the master
+-- looter linking it in raid warning) -> a toast, the rat sound and one line in
+-- your own chat. Nothing anyone else sees. /okup sound turns it off.
+-- ------------------------------------------------------------
+local RAT_SOUND = [[Interface\AddOns\Okanvil\Media\rat.wav]]
+local alerted, lastSound = {}, 0
+
+-- RatStash's loot radar already shows its own toast (and sound) for the same drop
+local function ratStashRadar()
+	return IsAddOnLoaded("RatStash") and RatStashDB and RatStashDB.radar
+end
+
+-- The toast: icon, name, verdict, boss. Ten seconds, held while hovered; drag
+-- to move, right click to close.
+local toast
+local function makeToast()
+	local W = Okanvil.W
+	local t = CreateFrame("Button", "Okanvil_UpgradeToast", UIParent)
+	t:SetSize(320, 52)
+	local pos = udb().toastPos or { "CENTER", "CENTER", 0, 120 }
+	t:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4])
+	t:SetMovable(true); t:SetClampedToScreen(true)
+	t:RegisterForDrag("LeftButton"); t:RegisterForClicks("RightButtonUp")
+	t:SetScript("OnDragStart", function(self) self:StartMoving() end)
+	t:SetScript("OnDragStop", function(self)
+		self:StopMovingOrSizing()
+		local p, _, rp, x, y = self:GetPoint()
+		udb().toastPos = { p, rp, x, y }
+	end)
+	t:SetFrameStrata("HIGH")
+	Okanvil:Skin(t, "panel")
+	local ac = Okanvil.Colors and Okanvil.Colors.accent or { 0.75, 0.58, 0.23 }
+	t:SetBackdropBorderColor(ac[1], ac[2], ac[3])
+	t.icon = t:CreateTexture(nil, "ARTWORK")
+	t.icon:SetSize(40, 40); t.icon:SetPoint("LEFT", 6, 0)
+	t.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	t.top = W.Text(t, "UPGRADE DROPPED", "note", "accent")
+	t.top:SetPoint("TOPLEFT", t.icon, "TOPRIGHT", 8, -1)
+	t.name = W.Text(t, "", 13)
+	t.name:SetPoint("LEFT", t.icon, "RIGHT", 8, -2); t.name:SetPoint("RIGHT", -8, -2)
+	t.name:SetJustifyH("LEFT")
+	t.meta = W.Text(t, "", "note", "dim")
+	t.meta:SetPoint("BOTTOMLEFT", t.icon, "BOTTOMRIGHT", 8, 1)
+	t:SetScript("OnEnter", function(self)
+		self.hold = true
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetHyperlink(self.link)
+		GameTooltip:AddLine("Drag to move, right click to close.", 0.54, 0.55, 0.58)
+		GameTooltip:Show()
+	end)
+	t:SetScript("OnLeave", function(self) self.hold = nil; GameTooltip:Hide() end)
+	t:SetScript("OnClick", function(self) self:Hide() end)
+	t:SetScript("OnUpdate", function(self, elapsed)
+		if self.hold then return end
+		self.left = self.left - elapsed
+		if self.left <= 0 then self:Hide()
+		elseif self.left < 1 then self:SetAlpha(self.left) end
+	end)
+	t:Hide()
+	return t
+end
+
+local function bossOf(raid, id)
+	for _, b in ipairs((Loot() or {})[raid] or {}) do
+		for _, it in ipairs(b.items or {}) do if it.id == id then return b.boss end end
+	end
+end
+
+local function showToast(link, v, os, raid, id)
+	local name, _, quality, _, _, _, _, _, _, icon = GetItemInfo(link)
+	toast = toast or makeToast()
+	toast.link = link
+	toast.icon:SetTexture(icon)
+	local r, g, b = GetItemQualityColor(quality or 4)
+	toast.name:SetText(name); toast.name:SetTextColor(r, g, b)
+	local bits = { "|cff7dfc8a" .. U.Label(v) .. "|r" }
+	if os then bits[#bits + 1] = "OS " .. os.label end
+	local boss = bossOf(raid, id)
+	if boss then bits[#bits + 1] = boss end
+	toast.meta:SetText(table.concat(bits, "  "))
+	toast.left = 10
+	toast:SetAlpha(1)
+	toast:Show()
+end
+
+local function alertDrop(link, retry)
+	if not link or udb().sound == false or not active() then return end
+	local raid = U.Here()
+	if not raid then return end
+	local id = tonumber(link:match("item:(%d+)"))
+	if not id or (alerted[id] and GetTime() - alerted[id] < 600) then return end
+	if not GetItemInfo(link) then
+		-- not cached yet: ask, and look once more
+		if retry then return end
+		Ask(id)
+		if Okanvil.Comms and Okanvil.Comms.After then Okanvil.Comms.After(1.5, function() alertDrop(link, true) end) end
+		return
+	end
+	local v, os = U.Judge(link, raid), nil
+	if not v then
+		local off = U.OffSpec()
+		v = off and U.Judge(link, raid, off)
+		os = v and off
+	end
+	if not v then return end
+	alerted[id] = GetTime()
+	Okanvil:Print("|cff7dfc8aUpgrade|r " .. link .. " -- " .. U.Label(v) .. (os and (" |cff8a8d93(OS " .. os.label .. ")|r") or ""))
+	if ratStashRadar() then return end
+	showToast(link, v, os, raid, id)
+	if GetTime() - lastSound > 2 then
+		lastSound = GetTime()
+		PlaySoundFile(RAT_SOUND)
+	end
+end
+
+local function alertText(msg)
+	for link in (msg or ""):gmatch("|c%x+|Hitem:[^|]+|h%[[^%]]+%]|h|r") do alertDrop(link) end
+end
+
+local aev = CreateFrame("Frame")
+aev:RegisterEvent("START_LOOT_ROLL")
+aev:RegisterEvent("LOOT_OPENED")
+aev:RegisterEvent("CHAT_MSG_RAID_WARNING")
+aev:RegisterEvent("CHAT_MSG_RAID_LEADER")
+aev:SetScript("OnEvent", function(_, event, a1)
+	local ok, err = pcall(function()
+		if event == "START_LOOT_ROLL" then alertDrop(GetLootRollItemLink(a1))
+		elseif event == "LOOT_OPENED" then
+			for i = 1, GetNumLootItems() do alertDrop(GetLootSlotLink(i)) end
+		else alertText(a1) end
+	end)
+	if not ok and Okanvil.Err then Okanvil:Err("Upgrades drop alert", err) end
+end)
+
 SLASH_OKUPGRADES1 = "/okup"
 -- /okup audit: every drop of every raid that is out, for the spec you are in,
 -- with the verdict and why, saved for review (Okanvil.db.upgrades.audit) --
@@ -1050,6 +1274,27 @@ end
 
 SlashCmdList.OKUPGRADES = function(arg)
 	if arg and arg:lower():match("^%s*audit") then U.Audit(); return end
+	if arg and arg:lower():match("^%s*toast") then
+		-- your best upgrade in this raid (or ICC), to see the toast and drag it into place
+		local raid, mode = U.Here()
+		raid, mode = raid or "icc", mode or "25n"
+		for _, b in ipairs((Loot() or {})[raid] or {}) do
+			local u = U.Of(b, raid, mode)[1]
+			if u then
+				showToast(u.link, u.v, nil, raid, tonumber(u.link:match("item:(%d+)")))
+				PlaySoundFile(RAT_SOUND)
+				return
+			end
+		end
+		Okanvil:Print("Upgrades: no upgrade found yet (items still loading?), try again in a moment.")
+		return
+	end
+	if arg and arg:lower():match("^%s*sound") then
+		udb().sound = (udb().sound == false) and true or false
+		Okanvil:Print("Upgrades drop sound " .. (udb().sound and "on" or "off") .. ".")
+		if udb().sound then PlaySoundFile(RAT_SOUND) end
+		return
+	end
 	local ph = arg and arg:match("^%s*[Pp]hase%s*(%S*)")
 	if ph then
 		ph = ph:upper()

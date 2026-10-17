@@ -146,10 +146,6 @@ local function record(sender, message)
 	if not RF or not RF.parse then return end
 	local info = RF.parse(message)
 	if not info then return end
-	-- players advertising a raid prove it is open: the Upgrades phase reads this
-	local Up = Okanvil.Upgrades
-	if Up and Up.SeenLFM and info.instance then pcall(Up.SeenLFM, sender, info.instance) end
-
 	local now = time()
 	local existing = listings[sender]
 	if existing then

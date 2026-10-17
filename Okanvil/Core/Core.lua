@@ -957,6 +957,8 @@ Okanvil.HELP = {
 		{ "/okup [item link]", "the Upgrades page, or whether one item is an upgrade" },
 		{ "/okup phase [T7 .. RS | auto]", "the server's phase, read from the game; set it by hand, or back to auto" },
 		{ "/okup audit", "check every drop of every open raid for your spec (saved for review)" },
+		{ "/okup sound", "the toast, rat sound and chat line when an upgrade drops: on / off" },
+		{ "/okup toast", "show the upgrade toast once, to see it and drag it into place" },
 		{ "/oktrade [clear]", "loot you still owe by trade, and to whom" },
 		{ "/okrc [list | say | aura]", "raid check: the popup, a list, announce, your buffs" },
 		{ "/oknotes [send | unlock | watch]", "boss notes: status, send, unlock editing, watch the timers" },
