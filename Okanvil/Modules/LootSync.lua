@@ -39,6 +39,7 @@ local ZONE_DELAY  = 15          -- after zoning in: let the lockout answer arriv
 local WEEK_SLACK  = 2 * 86400   -- two clients may place the week boundary a little apart
 
 local lastOfferAt = -OFFER_GAP
+local offeredRuns = {}          -- zone|difficulty|week -> true once offered this session
 local queued = {}               -- sends held back while in combat: fn()
 
 local function trace(line)
@@ -47,6 +48,14 @@ end
 
 local function me() return (UnitName and UnitName("player")) or "" end
 local function short(n) return n and (n:gsub("%-.*$", "")) or n end
+
+-- A winner saved as the word "You" means whoever recorded it. Matching rows by
+-- winner name, an unresolved "You" on either side never matched the real name
+-- and the merge added the same item a second time.
+local function resolveYou(n, owner)
+	if n == "You" or n == (YOU or "You") then return owner end
+	return n
+end
 
 local function isOfficer(name)
 	local U = Okanvil.U
@@ -86,7 +95,7 @@ local function encode(mode, s)
 	for _, d in ipairs(s.drops or {}) do
 		if d.receivedBy and d.receivedBy ~= "" and d.id then
 			out[#out + 1] = table.concat({
-				d.id, d.boss or "", d.receivedBy, d.de and "1" or "0",
+				d.id, d.boss or "", resolveYou(d.receivedBy, me()), d.de and "1" or "0",
 				d.corpse or "", d.slot or 0, d.t or 0, d.item or "",
 			}, "\t")
 			rows = rows + 1
@@ -127,6 +136,15 @@ end
 -- ------------------------------------------------------------
 local function merge(s, r, used, sender)
 	local drops = s.drops
+	r.who = resolveYou(r.who, sender)
+	-- Same boss correction as a local capture: a sender on an older boss table
+	-- (Rowan's Rifle under Marrowgar) would otherwise never match our Trash row.
+	local real = OkanvilItemBoss and OkanvilItemBoss[r.id]
+	if real then r.boss = real end
+	local mine = me()
+	for _, d in ipairs(drops) do
+		d.receivedBy = resolveYou(d.receivedBy, mine)
+	end
 	local function claim(d)
 		used[d] = true
 		if d.receivedBy and d.receivedBy ~= "" then return false end
@@ -150,6 +168,12 @@ local function merge(s, r, used, sender)
 			and (not d.receivedBy or d.receivedBy == "") then
 			return claim(d)
 		end
+	end
+	-- We saw this item drop ourselves and every copy already has its winner, so a
+	-- different winner from the sender is their mistake, not a copy we missed.
+	-- (Officers on an older build still send rows their login fix gave the wrong name.)
+	for _, d in ipairs(drops) do
+		if d.id == r.id and d.boss == r.boss and not d.syncFrom then return false end
 	end
 	local name, _, rarity = GetItemInfo(r.link ~= "" and r.link or r.id)
 	local icon = (GetItemIcon and GetItemIcon(r.id)) or nil
@@ -201,6 +225,12 @@ function S.Offer(why)
 	if not (IsInInstance and select(2, IsInInstance()) == "raid") then return end
 	local now = (GetTime and GetTime()) or 0
 	if now - lastOfferAt < OFFER_GAP then return end
+	-- Once per run per session. Every ICC teleporter is a loading screen, and each
+	-- one re-ran the whole exchange between every officer in the raid.
+	local zone, _, diff = GetInstanceInfo()
+	local run = tostring(zone) .. "|" .. tostring(diff) .. "|" .. tostring(L.WeekStart())
+	if offeredRuns[run] then return end
+	offeredRuns[run] = true
 	lastOfferAt = now
 	trace("offer (" .. tostring(why) .. ")")
 	whenCalm(function() send("O") end)

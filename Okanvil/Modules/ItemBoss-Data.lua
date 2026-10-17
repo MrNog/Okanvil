@@ -375,7 +375,8 @@ OkanvilItemBoss = {
 	[45928]="Thorim", [45929]="Thorim", [45930]="Thorim",
 	[45931]="Thorim", [45933]="Thorim",
 
-	-- Trash (28)
+	-- Trash (29)
+	[50444]="Trash",
 	[45538]="Trash", [45539]="Trash", [45540]="Trash",
 	[45541]="Trash", [45542]="Trash", [45543]="Trash",
 	[45544]="Trash", [45547]="Trash", [45548]="Trash",
