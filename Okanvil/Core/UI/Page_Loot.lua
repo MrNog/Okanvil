@@ -86,7 +86,7 @@ function Okanvil:BuildLoot()
 			for _, id in ipairs(SR and SR.MyPicks and SR.MyPicks("sr") or {}) do list[#list + 1] = { id = id, wish = false } end
 			-- a wish only means something while the Wishlist is on
 			local Wi = Okanvil.Wish
-			if Wi and Wi.IsOn() then
+			if Wi and Wi.Live() then
 				for _, id in ipairs(SR and SR.MyPicks and SR.MyPicks("wish") or {}) do list[#list + 1] = { id = id, wish = true } end
 			end
 			local n = #list
