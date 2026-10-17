@@ -341,7 +341,8 @@ end
 -- mini roll on screen to sit beside.
 local function allowed()
 	local rm = rollWin()
-	return isML() and (SR.Summary() ~= nil or Okanvil.LITE) and rm and rm:IsShown()
+	-- only in SR mode: a list left over from another night does not belong on a council or roll night
+	return isML() and SR.WhisperMode() and (SR.Summary() ~= nil or Okanvil.LITE) and rm and rm:IsShown()
 end
 
 function P.Show()
@@ -392,7 +393,9 @@ do
 end
 
 SLASH_OKRES1 = "/okres"
-SlashCmdList["OKRES"] = function()
+SlashCmdList["OKRES"] = function(msg)
+	-- /okres mode|open|lock|post|list|test -- see SoftRes-Live.lua
+	if SR.Slash and SR.Slash(msg) then return end
 	if not isML() then Okanvil:Print("Soft reserves: only the master looter has this list."); return end
 	if not (SR.Summary() or Okanvil.LITE) then Okanvil:Print("Soft reserves: none loaded -- paste the CSV on the Loot page."); return end
 	local rm = rollWin()

@@ -192,7 +192,7 @@ function Okanvil:BuildShell()
 		  open = function() Okanvil:ShowPanel("Okanvil-PuG") end },
 		{ label = "Council night", mod = "__council",
 		  on = function() return Okanvil.Council and Okanvil.Council.active end,
-		  open = function() Okanvil:OpenLootTab("council") end },
+		  open = function() Okanvil:OpenLootTab("loot") end },
 		{ label = "Farming",       mod = "Okanvil-Farm",
 		  on = function() return Okanvil.Farm and Okanvil.Farm.IsRunning and Okanvil.Farm.IsRunning() end,
 		  open = function() Okanvil:ShowPanel("Okanvil-Farm") end },
@@ -433,6 +433,7 @@ Okanvil.ICONS = {
 	raidfinder = "Interface\\Icons\\Ability_Warrior_BattleShout",
 	attendance = "Interface\\Icons\\INV_Misc_PocketWatch_01",
 	ranking    = "Interface\\Icons\\Ability_Marksmanship",
+	upgrades   = "Interface\\Icons\\INV_Sword_39",
 }
 
 Okanvil.NATIVE = {
@@ -507,7 +508,7 @@ end
 -- is FOR. A section with nothing enabled in it prints no header.
 Okanvil.NAV_GROUPS = {
 	{ section = nil,      items = { "Home" } },
-	{ section = "RAID",   items = { "Loot", "Notes", "Raid Finder", "PuG" } },
+	{ section = "RAID",   items = { "Loot", "Upgrades", "Notes", "Raid Finder", "PuG" } },
 	-- Loot Council is not here: it is the Council and Priority tabs of Loot.
 	-- GUILD keeps its header for the guild tools still to come.
 	{ section = "GUILD",  items = { "Ranking", "Attendance", "Recruit" } },
@@ -539,6 +540,7 @@ Okanvil.PANEL_KEY = {
 	["Ranking"] = "Okanvil-Ranking",
 	["ID Finder"] = "Okanvil-IDs",
 	["Farm"] = "Okanvil-Farm",
+	["Upgrades"] = "Okanvil-Upgrades",
 }
 
 -- The reverse, for a module row that knows its key but not its title.
@@ -839,9 +841,9 @@ function Okanvil:ShowPanel(key)
 	-- Invite was a page; its settings are a Settings tab now. A window last
 	-- closed on it, or an old shortcut, lands there instead of on a blank page.
 	if key == "__invite" then return self:OpenSettingsTab("invite") end
-	-- The Loot Council page is the Council tab of the Loot page now; an old
-	-- shortcut or a window last closed on it lands there.
-	if key == COUNCIL then return self:OpenLootTab("council") end
+	-- The Loot Council page is gone: the council sits under the Council tile on
+	-- the Loot page, so an old shortcut or a window last closed on it lands there.
+	if key == COUNCIL then return self:OpenLootTab("loot") end
 	self:CloseDropdown()
 	self:ClearAllFocus()          -- switching pages releases any text-box focus
 	for _, b in ipairs(self._navButtons) do

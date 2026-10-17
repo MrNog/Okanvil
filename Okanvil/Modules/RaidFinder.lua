@@ -146,6 +146,9 @@ local function record(sender, message)
 	if not RF or not RF.parse then return end
 	local info = RF.parse(message)
 	if not info then return end
+	-- players advertising a raid prove it is open: the Upgrades phase reads this
+	local Up = Okanvil.Upgrades
+	if Up and Up.SeenLFM and info.instance then pcall(Up.SeenLFM, sender, info.instance) end
 
 	local now = time()
 	local existing = listings[sender]
@@ -620,6 +623,11 @@ end
 -- real names). A bad/missing id => no link, never an error.
 -- ------------------------------------------------------------
 Okanvil.RaidFinder_Achievements = {
+	{ raid = "os10",     name = "Besting the Black Dragonflight (10)", id = 1876 },
+	{ raid = "os25",     name = "Besting the Black Dragonflight (25)", id = 625 },
+	-- Sartharion with all three drakes up, the OS achievement pugs ask for
+	{ raid = "os10d3",   name = "The Twilight Zone (10)",         id = 2051, tag = "3D" },
+	{ raid = "os25d3",   name = "The Twilight Zone (25)",         id = 2054, tag = "3D" },
 	{ raid = "naxx10",   name = "The Fall of Naxxramas (10)",     id = 576 },
 	{ raid = "naxx25",   name = "The Fall of Naxxramas (25)",     id = 577 },
 	{ raid = "ulduar10", name = "The Siege of Ulduar (10)",       id = 2886 },
@@ -628,10 +636,15 @@ Okanvil.RaidFinder_Achievements = {
 	{ raid = "toc25nm",  name = "Call of the Crusade (25)",       id = 3916 },
 	{ raid = "toc10hc",  name = "Call of the Grand Crusade (10)", id = 3918 },
 	{ raid = "toc25hc",  name = "Call of the Grand Crusade (25)", id = 3812 },
-	{ raid = "icc10nm",  name = "Fall of the Lich King (10)",     id = 4532 },
-	{ raid = "icc25nm",  name = "Fall of the Lich King (25)",     id = 4608 },
+	-- alt: the Lich King kill alone ("The Frozen Throne") counts for the audit chip
+	{ raid = "icc10nm",  name = "Fall of the Lich King (10)",     id = 4532, alt = { 4530 } },
+	{ raid = "icc25nm",  name = "Fall of the Lich King (25)",     id = 4608, alt = { 4597 } },
 	{ raid = "icc10hc",  name = "Bane of the Fallen King (10 HC)",id = 4583 },
 	{ raid = "icc25hc",  name = "The Light of Dawn (25 HC)",      id = 4584 },
+	{ raid = "rs10nm",   name = "The Twilight Destroyer (10)",    id = 4817 },
+	{ raid = "rs25nm",   name = "The Twilight Destroyer (25)",    id = 4815 },
+	{ raid = "rs10hc",   name = "Heroic: The Twilight Destroyer (10 HC)", id = 4818 },
+	{ raid = "rs25hc",   name = "Heroic: The Twilight Destroyer (25 HC)", id = 4816 },
 }
 local ach_by_raid = {}
 for _, a in ipairs(Okanvil.RaidFinder_Achievements) do ach_by_raid[a.raid] = a.id end
@@ -693,6 +706,39 @@ local function my_gs()
 	return detected_gs()
 end
 
+-- Talents only a tanking DK takes: they say "tank" whatever presence is up.
+local DK_TANK_TALENTS = { ["Anticipation"] = true, ["Frigid Dreadplate"] = true,
+	["Will of the Necropolis"] = true }
+local function dk_tank_talents()
+	local group = GetActiveTalentGroup and GetActiveTalentGroup(false) or 1
+	for tab = 1, 2 do
+		for i = 1, (GetNumTalents and GetNumTalents(tab, false, false) or 0) do
+			local name, _, _, _, rank = GetTalentInfo(tab, i, false, false, group)
+			if name and DK_TANK_TALENTS[name] and (rank or 0) > 0 then return true end
+		end
+	end
+	return false
+end
+
+-- A Blood DK tanks or dps's on the same tree: the tank talents decide, else
+-- the presence (Frost = tank). nil when neither says (zoning, dead).
+local function blood_role()
+	if dk_tank_talents() then return "Tank" end
+	local frost, blood, unholy = GetSpellInfo(48263), GetSpellInfo(48266), GetSpellInfo(48265)
+	-- a presence is a stance: the active one is the most reliable read
+	local form = GetShapeshiftForm and GetShapeshiftForm() or 0
+	if form > 0 and GetShapeshiftFormInfo then
+		local _, name = GetShapeshiftFormInfo(form)
+		if name and name == frost then return "Tank" end
+		if name and (name == blood or name == unholy) then return "DPS" end
+	end
+	if frost and UnitBuff("player", frost) then return "Tank" end
+	if (blood and UnitBuff("player", blood)) or (unholy and UnitBuff("player", unholy)) then return "DPS" end
+	return nil
+end
+
+local lastBloodRole
+-- "Blood DPS Death Knight" (or "Blood DPS" with shortSpec), and the points in that tree.
 local function my_spec()
 	if not GetTalentTabInfo then return nil end
 	-- 3.3.5a: GetTalentTabInfo(tab) -> name, iconTexture, pointsSpent, background, ...
@@ -704,12 +750,16 @@ local function my_spec()
 		if pts and pts > bestPts then bestPts, bestName = pts, name end
 	end
 	if not bestName then return nil end
-	-- append the class -> "Holy Paladin" (unless shortSpec keeps just "Holy")
-	local class = UnitClass and select(1, UnitClass("player"))
-	if class and not (db and db.shortSpec) then
-		return bestName .. " " .. class
+	local class, token = UnitClass("player")
+	if token == "DEATHKNIGHT" and bestName == "Blood" then
+		local r = blood_role()
+		if r then bestName = "Blood " .. r end
 	end
-	return bestName
+	-- append the class -> "Holy Paladin" (unless shortSpec keeps just "Holy")
+	if class and not (db and db.shortSpec) then
+		return bestName .. " " .. class, bestPts
+	end
+	return bestName, bestPts
 end
 
 -- Which role does THIS character play? Derived from the talent tab with the most points,
@@ -748,6 +798,7 @@ local function my_role()
 	-- A Feral druid is bear OR cat and the tab cannot tell them apart. Rather than guess
 	-- wrong half the time, such a spec matches BOTH roles (see passes_filter).
 	if class == "DRUID" and tab == "Feral Combat" then return "feral" end
+	if class == "DEATHKNIGHT" and tab == "Blood" and blood_role() == "DPS" then return "dps" end
 	return (tab and map[tab]) or "dps"
 end
 
@@ -755,6 +806,7 @@ end
 Okanvil.RaidFinder_DetectedGS = detected_gs
 Okanvil.RaidFinder_MyGS = my_gs
 Okanvil.RaidFinder_MySpec = my_spec
+Okanvil.RaidFinder_BloodRole = blood_role
 Okanvil.RaidFinder_MyRole = my_role
 
 -- "inv for <raid> - <gs>gs <spec> [achiev]" -- shared by Join (sends) and /w (fills box)
@@ -890,7 +942,7 @@ local function make_row(parent)
 		s._hl:SetVertexColor(1, 1, 1, 0.06)
 		if s._info and s._info.message then
 			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-			for _, line in ipairs(Okanvil.U.wrapLines(s._info.message, 60)) do GameTooltip:AddLine(line, 1, 1, 1) end
+			for _, line in ipairs(Okanvil.U.wrapLines(Okanvil.U.paintClasses(s._info.message), 60)) do GameTooltip:AddLine(line, 0.75, 0.75, 0.75) end
 			GameTooltip:AddLine("Last spam: " .. (time() - s._info.lastSeen) .. "s ago", 0.6, 0.6, 0.6)
 			if s._info.locked then
 				GameTooltip:AddLine("|cffff5555You are saved to this raid|r")
@@ -1112,80 +1164,99 @@ end
 -- SETTINGS TAB (overlay page from W.Dashboard tabs)
 -- ------------------------------------------------------------
 local function buildSettings(pg)
+	local X = 14
 	local y = -12
 
-	-- ---- Save Raid Gear: shows your spec + GS, lets you override the GS, and
-	-- previews the whisper /w and Join send (spec + GS auto-filled). ----
-	local hdr = W.Text(pg, "|cffe0b860Raid Gear|r  |cff8a8d93(auto-fills /w + Join with your spec + GS)|r", "body")
-	hdr:SetPoint("TOPLEFT", 12, y); y = y - 22
+	-- One setting per row: title, what it does, ON / OFF on the right.
+	local function toggle(title, desc, key, after)
+		local r = W.ToggleRow(pg, title, desc,
+			function() return db[key] end,
+			function(v) db[key] = v; if after then after(v) end end)
+		r:SetPoint("TOPLEFT", X, y); r:SetPoint("RIGHT", pg, "RIGHT", -X, 0)
+		y = y - r:GetHeight()
+		return r
+	end
 
-	local specLine = W.Text(pg, "", "body")
-	specLine:SetPoint("TOPLEFT", 12, y); y = y - 22
+	-- ---- RAID GEAR: your spec and GS as the /w and Join send them ----------
+	y = W.Section(pg, "RAID GEAR", X, y)
 
-	-- GS override row: label + edit box + note
-	local ovLabel = W.Text(pg, "Override GS (blank = use detected):", "label", "dim")
-	ovLabel:SetPoint("TOPLEFT", 12, y)
-	local preview = W.Text(pg, "", "label", "dim")
+	local card = W.Frame(pg, "soft")
+	card:SetPoint("TOPLEFT", X, y); card:SetPoint("RIGHT", pg, "RIGHT", -X, 0)
+	card:SetHeight(58)
+
+	local specK = W.Text(card, "SPEC", "note", "dim"); specK:SetPoint("TOPLEFT", 12, -10)
+	local specV = W.Text(card, "", "head"); specV:SetPoint("TOPLEFT", specK, "BOTTOMLEFT", 0, -3)
+	local gsK = W.Text(card, "GEARSCORE", "note", "dim"); gsK:SetPoint("TOPLEFT", 300, -10)
+	local gsV = W.Text(card, "", "head", "accent"); gsV:SetPoint("TOPLEFT", gsK, "BOTTOMLEFT", 0, -3)
+
+	local ovLabel = W.Text(card, "Override GS", "label", "dim")
+	ovLabel:SetPoint("TOPLEFT", gsV, "TOPRIGHT", 24, -2)
 	local refreshGear   -- fwd decl (edit-box callback needs it)
-	local ov = W.EditBox(pg, function(text)
+	local ov = W.EditBox(card, function(text)
 		local n = tonumber((text or ""):gsub("[^%d.]", ""))
 		if n and n < 100 then n = n * 1000 end          -- allow "6.2" meaning 6200
 		db.gsOverride = n and math.floor(n) or 0
 		refreshGear()
 	end)
-	ov:SetSize(70, 20); ov:SetPoint("LEFT", ovLabel, "RIGHT", 8, 0)
+	ov:SetSize(64, 20); ov:SetPoint("LEFT", ovLabel, "RIGHT", 8, 0)
 	if db.gsOverride and db.gsOverride > 0 then ov.edit:SetText(tostring(db.gsOverride)) end
 
 	function refreshGear()
-		local spec = Okanvil.RaidFinder_MySpec() or "?"
-		local det  = Okanvil.RaidFinder_DetectedGS()
-		local used = Okanvil.RaidFinder_MyGS()
-		specLine:SetText(("Active spec: |cff4a90d9%s|r   Detected GS: |cffe0b860%s|r%s"):format(
-			spec, det and (string.format("%.1fk", det/1000)) or "n/a",
-			(db.gsOverride and db.gsOverride > 0) and ("   Using override: |cffe0b860"..string.format("%.1fk", db.gsOverride/1000).."|r") or ""))
-		-- preview against a sample ICC25 listing
-		local sample = { raid = "icc25nm", instance = "Icecrown Citadel", size = 25, roles = {} }
-		preview:SetText("|cff8a8d93/w fills:|r |cffffffff" .. Okanvil.RaidFinder_BuildWhisper(sample) .. "|r")
+		local spec = Okanvil.RaidFinder_MySpec()
+		local _, token = UnitClass("player")
+		local c = token and RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
+		local hex = c and ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) or "|cffdcddde"
+		specV:SetText(hex .. (spec or "?") .. "|r")
+		local det = Okanvil.RaidFinder_DetectedGS()
+		gsV:SetText(det and string.format("%.1fk", det / 1000) or "n/a")
 	end
 	-- expose so the talent-change event can live-refresh the spec/GS line
 	Okanvil.RaidFinder_RefreshGear = refreshGear
 	refreshGear()
-	y = y - 24
-	preview:SetPoint("TOPLEFT", 12, y); y = y - 26
+	y = y - 58 - 6
 
-	-- divider gap
-	y = y - 6
+	toggle("Short spec name", "\"Blood DPS\" instead of \"Blood DPS Death Knight\"", "shortSpec",
+		function() refreshGear() end)
 
-	local function check(label, key)
-		local c = W.Check(pg, label, function() return db[key] end, function(v) db[key] = v end)
-		c:SetPoint("TOPLEFT", 12, y); y = y - 26
-		return c
-	end
-	check("Scan chat channels (Trade / General / Global / LookingForGroup)", "scanChannels")
-	check("Scan yell", "scanYell")
-	check("Keep scanning in background (even when this tab is closed)", "background")
-	check("Show raids I'm already saved to", "showSaved")
-	check("Short spec name in Join whisper", "shortSpec")
+	-- ---- SCANNING --------------------------------------------------------
+	y = y - 18
+	y = W.Section(pg, "SCANNING", X, y)
+	toggle("Chat channels", "Trade, General, Global, LookingForGroup", "scanChannels")
+	toggle("Yell", "LFM lines shouted in Dalaran", "scanYell")
+	toggle("Keep scanning in the background", "Even with this tab closed", "background")
 
-	y = y - 24   -- breathing room before the sliders (label sits above the track)
-	-- expiry slider (drop a listing N seconds after its last spam)
-	local exp = W.Slider(pg, "Listing expiry (seconds)", 20, 300, 5,
+	-- ---- LIST ------------------------------------------------------------
+	y = y - 18
+	y = W.Section(pg, "LIST", X, y)
+	toggle("Show raids I'm saved to", "Shown with \"saved\" so you skip them", "showSaved")
+
+	-- sliders paint their label above the bar: room for it first
+	-- two sliders on one row
+	y = y - 30
+	local s1 = W.Slider(pg, "Hide listings after (sec)", 20, 300, 5,
 		function() return db.expiry end,
 		function(v) db.expiry = v end)
-	exp:SetPoint("TOPLEFT", 12, y); exp:SetWidth(240); y = y - 60
-
-	-- min GS filter
-	local mgs = W.Slider(pg, "Minimum GS (0 = show all)", 0, 7000, 100,
+	s1:SetPoint("TOPLEFT", X, y); s1:SetWidth(220)
+	local s2 = W.Slider(pg, "Minimum GS", 0, 7000, 100,
 		function() return db.minGS end,
 		function(v) db.minGS = v; if page_visible() then Okanvil.RaidFinder_Render() end end)
-	mgs:SetPoint("TOPLEFT", 12, y); mgs:SetWidth(240); y = y - 64
+	s2:SetPoint("TOPLEFT", X + 260, y); s2:SetWidth(220)
+	y = y - 14 - 18
 
-	-- Verify Achievement IDs
-	local vb = W.Button(pg, "Verify Achievement IDs")
-	vb:SetPoint("TOPLEFT", 12, y); vb:SetSize(190, 24)
+	-- ---- TOOLS -----------------------------------------------------------
+	y = y - 10
+	y = W.Section(pg, "TOOLS", X, y)
+	local vb = W.Button(pg, "Verify achievement IDs")
+	vb:SetPoint("TOPLEFT", X, y); vb:SetSize(180, 24)
 	vb:SetScript("OnClick", function() Okanvil.RaidFinder_VerifyAchievements() end)
-	local vh = W.Text(pg, "Checks the achievement link IDs against this server (OK / DIFF / NIL).", "label", "dim")
+	local vh = W.Text(pg, "Checks the achievement links against this server", "note", "dim")
 	vh:SetPoint("LEFT", vb, "RIGHT", 10, 0)
+	y = y - 24 - 16
+
+	-- the tab scrolls when the window is short
+	pg:SetHeight(-y)
+	local sf = pg:GetParent()
+	if sf and sf._relayout then sf._relayout() end
 end
 
 -- ------------------------------------------------------------
@@ -1210,7 +1281,7 @@ local function buildUI(panel)
 			else Okanvil:Print("Mini Raid Browser not loaded.") end
 		end,
 		tabs = {
-			{ key = "settings", label = "Settings", height = 460, build = function(pg) buildSettings(pg) end },
+			{ key = "settings", label = "Settings", height = 640, build = function(pg) buildSettings(pg) end },
 		},
 	})
 	local main = dash.main
@@ -1405,9 +1476,23 @@ ev:RegisterEvent("UPDATE_INSTANCE_INFO")   -- lockout list arrived (answer to Re
 ev:RegisterEvent("PLAYER_TALENT_UPDATE")
 ev:RegisterEvent("CHARACTER_POINTS_CHANGED")
 ev:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")   -- dual-spec swap
+ev:RegisterEvent("UPDATE_SHAPESHIFT_FORM")        -- a DK presence swap (Blood tank vs dps)
+ev:RegisterEvent("UNIT_AURA")                     -- ...which some cores only report as an aura change
 ev:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
+	-- every unit's auras fire this; only our own presence is of interest
+	if event == "UNIT_AURA" and arg1 ~= "player" then return end
 	if event == "PLAYER_TALENT_UPDATE" or event == "CHARACTER_POINTS_CHANGED"
-	   or event == "ACTIVE_TALENT_GROUP_CHANGED" then
+	   or event == "ACTIVE_TALENT_GROUP_CHANGED" or event == "UPDATE_SHAPESHIFT_FORM"
+	   or (event == "UNIT_AURA" and arg1 == "player") then
+		if event == "UNIT_AURA" then
+			-- only a DK's presence changes the spec line; anything else is noise
+			if select(2, UnitClass("player")) ~= "DEATHKNIGHT" then return end
+			local r = Okanvil.RaidFinder_BloodRole and Okanvil.RaidFinder_BloodRole()
+			if r == lastBloodRole then return end
+			lastBloodRole = r
+		end
+		-- a druid shifts form all fight long; only a DK presence matters here
+		if event == "UPDATE_SHAPESHIFT_FORM" and select(2, UnitClass("player")) ~= "DEATHKNIGHT" then return end
 		if Okanvil.RaidFinder_RefreshGear then Okanvil.RaidFinder_RefreshGear() end
 		-- a dual-spec swap changes what "My role" means -> re-filter the list
 		if filter.role == "mine" and Okanvil.RaidFinder_Render then Okanvil.RaidFinder_Render() end

@@ -487,11 +487,12 @@ function W.Slider(parent, label, lo, hi, step, getFn, setFn, onRelease)
 
 	local title = W.Text(s, nil, nil, "dim")
 	title:SetPoint("BOTTOMLEFT", s, "TOPLEFT", 0, 5)
-	local function paint(v) title:SetText(label .. ": |cffffd200" .. v .. "|r") end
+	local function paint(v) if v == 0 then v = 0 end; title:SetText(label .. ": |cffffd200" .. v .. "|r") end
 	paint(getFn()); s:SetValue(getFn())
 
 	s:SetScript("OnValueChanged", function(_, v)
 		v = math.floor(v / step + 0.5) * step
+		if v == 0 then v = 0 end   -- -0 prints as "-0"
 		paint(v); s._pending = v
 		if not onRelease then setFn(v) end
 	end)

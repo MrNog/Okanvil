@@ -107,8 +107,48 @@ end
 local function moveText(mv)
 	if mv == nil or mv == 0 then return "" end
 	if mv == "new" then return "|cffe0b860NEW|r" end
-	if mv > 0 then return "|cff4fd16a+" .. mv .. "|r" end
-	return "|cffe0564f" .. mv .. "|r"
+	-- places climbed or lost since the previous ranking; paintMove adds the arrow
+	if mv > 0 then return "|cff4fd16a" .. mv .. "|r" end
+	return "|cffe0564f" .. -mv .. "|r"
+end
+
+-- The movement number with an arrow beside it: green pointing up for places
+-- climbed, red pointing down for places lost. The client has no plain solid
+-- triangle, so it is drawn from 1px strips of flat colour, 13 wide down to 1.
+local ARROW_H = 7
+local function paintMove(fs, mv)
+	fs:SetText(moveText(mv))
+	local a = fs._arrow
+	if not a then
+		a = CreateFrame("Frame", nil, fs:GetParent())
+		a:SetSize(ARROW_H * 2 - 1, ARROW_H)
+		a.strips = {}
+		for i = 1, ARROW_H do
+			local t = a:CreateTexture(nil, "OVERLAY")
+			t:SetTexture(FLAT)
+			t:SetSize(i * 2 - 1, 1)
+			a.strips[i] = t
+		end
+		fs._arrow = a
+	end
+	if type(mv) ~= "number" or mv == 0 then a:Hide(); return end
+	local up = mv > 0
+	local r, g, b = 0.31, 0.82, 0.42
+	if not up then r, g, b = 0.88, 0.34, 0.31 end
+	for i, t in ipairs(a.strips) do
+		t:ClearAllPoints()
+		-- the 1px tip sits at the top for up, at the bottom for down
+		if up then t:SetPoint("TOP", a, "TOP", 0, -(i - 1))
+		else t:SetPoint("BOTTOM", a, "BOTTOM", 0, i - 1) end
+		t:SetVertexColor(r, g, b, 1)
+	end
+	a:ClearAllPoints()
+	if fs:GetJustifyH() == "LEFT" then
+		a:SetPoint("RIGHT", fs, "LEFT", -3, 0)
+	else
+		a:SetPoint("RIGHT", fs, "RIGHT", -(fs:GetStringWidth() + 4), 0)
+	end
+	a:Show()
 end
 
 local function pctText(p, suffix)
@@ -271,7 +311,11 @@ function Okanvil:BuildRanking(host)
 	local yIcon = you:CreateTexture(nil, "ARTWORK"); yIcon:SetSize(18, 18)
 	yIcon:SetPoint("BOTTOMLEFT", yRank, "TOPLEFT", 0, 6)
 	local yName = W.Text(you, "", "head"); yName:SetPoint("LEFT", yIcon, "RIGHT", 6, 0)
-	local yMove = W.Text(you, "", "label"); yMove:SetPoint("LEFT", yName, "RIGHT", 6, 0)
+	-- pinned to the card's right edge: a font swap can leave yName measuring
+	-- narrower than it draws, and an arrow chained to its end lands on the name
+	local yMove = W.Text(you, "", "label"); yMove:SetPoint("RIGHT", you, "RIGHT", -12, 0)
+	yMove:SetPoint("TOP", yName, "TOP", 0, 0); yMove:SetPoint("BOTTOM", yName, "BOTTOM", 0, 0)
+	yMove:SetJustifyH("RIGHT")
 	local yNone = W.Text(you, "", "label", "dim")
 	yNone:SetPoint("BOTTOMLEFT", yBase, "BOTTOMLEFT", 12, 10)
 	yNone:SetPoint("RIGHT", you, "RIGHT", -12, 0)
@@ -490,7 +534,7 @@ function Okanvil:BuildRanking(host)
 			yNone:Hide(); yRank:Show(); yOf:Show()
 			yRank:SetText("#" .. rank)
 			yOf:SetText(("of %d  %s%s"):format(of, R.BOARD_LABEL[kind], size ~= state.size and ("  " .. size .. "-man") or ""))
-			yMove:SetText(moveText(R.Move(size, kind, p.key, rank, state.period)))
+			paintMove(yMove, R.Move(size, kind, p.key, rank, state.period))
 			local vals = {
 				{ R.BOARD_UNIT[kind], fmtRate(p.rate, kind) },
 				{ "PTS", ("|cffe0b860%.1f|r"):format(p.pts) },
@@ -501,7 +545,7 @@ function Okanvil:BuildRanking(host)
 			yIcon:ClearAllPoints(); yIcon:SetPoint("BOTTOMLEFT", yRank, "TOPLEFT", 0, 6)
 			bestLbl:ClearAllPoints(); bestLbl:SetPoint("TOPLEFT", tiles[3], "BOTTOMLEFT", 1, -14)
 		else
-			yRank:Hide(); yOf:Hide(); yMove:SetText("")
+			yRank:Hide(); yOf:Hide(); paintMove(yMove, nil)
 			for i = 1, 4 do tiles[i]:Hide() end
 			yNone:Show()
 			yNone:SetText("Not on the ranking yet.")
@@ -591,7 +635,7 @@ function Okanvil:BuildRanking(host)
 				c.top:SetVertexColor(r, g, bl, 0.9)
 				classIcon(c.icon, p.class)
 				c.name:SetText(p.name); c.name:SetTextColor(r, g, bl)
-				c.move:SetText(moveText(R.Move(state.size, state.kind, p.key, i, state.period)))
+				paintMove(c.move, R.Move(state.size, state.kind, p.key, i, state.period))
 				c.sub:SetText(("|cffe0b860%.1f pts|r%s%d fight%s%s%s"):format(
 					p.pts, DOT, p.fights, p.fights == 1 and "" or "s", DOT, pctText(p.srv, " srv"))
 					.. (p.hc and (DOT .. "|cffff8000H|r") or ""))
@@ -617,7 +661,7 @@ function Okanvil:BuildRanking(host)
 			classIcon(r.icon, p.class)
 			-- H = their best came from Heroic
 			r.name:SetText(p.name .. (p.hc and "  |cffff8000H|r" or "")); r.name:SetTextColor(cr, cg, cb)
-			r.move:SetText(moveText(R.Move(state.size, state.kind, p.key, i, state.period)))
+			paintMove(r.move, R.Move(state.size, state.kind, p.key, i, state.period))
 			r.rate:SetText(fmtRate(p.rate, state.kind))
 			r.pts:SetText(("%.1f"):format(p.pts))
 			if p.srv then

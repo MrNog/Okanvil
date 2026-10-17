@@ -855,6 +855,11 @@ local function onAsked(sender, payload)
 			link = full or link
 			local can = true
 			if P and P.CanIUse then can = P.CanIUse(link) end
+			-- lighter armour, only when it suits your spec and beats what you wear
+			if not can and P and P.LighterWorthAsking and P.LighterWorthAsking(link) then can = true end
+			-- rings, trinkets, necks, weapons: only if they suit one of your specs
+			-- (a spell-power neck is not a death knight's to ask for)
+			if can and P and P.FitsEitherSpec and not P.FitsEitherSpec(link) then can = false end
 			if can then
 				local equip = select(9, GetItemInfo(link))
 				items[#items + 1] = {
@@ -974,6 +979,16 @@ local COL_SPEC = 396     -- equipped item name, just right of its icon
 local COL_DIFF = 640     -- the ilvl gap
 local COL_VOTE = 700     -- council votes: count, two names, the Vote button
 local BOARD_W  = 980
+
+-- Sets "<colour><text>|r", cutting the text with "..." until it fits maxW pixels.
+local function fitText(fs, hex, text, maxW)
+	fs:SetText(hex .. text .. "|r")
+	if fs:GetStringWidth() <= maxW then return end
+	for n = #text - 1, 1, -1 do
+		fs:SetText(hex .. text:sub(1, n):gsub("[%s,]+$", "") .. "...|r")
+		if fs:GetStringWidth() <= maxW then return end
+	end
+end
 
 -- "<idx>=<response>/<equippedID>/<diff>", with the two gear fields optional so an
 -- older client (or one that could not read its own slot) still parses. An
@@ -1993,8 +2008,7 @@ function C_.RepaintBoard(open)
 	-- The full ladder under the item name: the PRIO column gives each candidate's
 	-- position, but the ladder shows the SHAPE of the decision -- who is level with
 	-- whom (>) and where it steps down (>>). A number alone does not say that.
-	f.prio:SetText((prioLine and not db().hidePrio)
-		and ("|cff8a8d93prio|r  " .. prioLine) or "")
+	f.prio:SetText(prioLine and ("|cff8a8d93prio|r  " .. prioLine) or "")
 
 	local isMark = MARK_FROM[Okanvil.U.itemIDFromLink(link)] ~= nil
 	for i = 1, math.max(#vis, #f.rows) do
@@ -2204,8 +2218,12 @@ function C_.RepaintBoard(open)
 			-- token the loot history uses.
 			local L = Okanvil.Loot
 			r._who = d.name        -- for the inspect/whisper click
-			r.who:SetText(L and L.ClassColorName and L.ClassColorName(d.name) or d.name)
 			local tok = L and L.ClassOf and L.ClassOf(d.name)
+			-- an answer on lighter armour than they wear is an exception: say so
+			local P = Okanvil.Prof
+			local lighter = tok and P and P.LighterArmor and P.LighterArmor(link, tok)
+			r.who:SetText((L and L.ClassColorName and L.ClassColorName(d.name) or d.name)
+				.. (lighter and ("  |cff8a8d93" .. lighter .. "|r") or ""))
 			local tc = tok and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[tok]
 			if tc then
 				r.cls:SetTexCoord(tc[1], tc[2], tc[3], tc[4])
@@ -2214,16 +2232,36 @@ function C_.RepaintBoard(open)
 				r.cls:Hide()
 			end
 
+			-- WISH: this is the item they said they are after this raid ID. A gold
+			-- frame round the row and a pill after the name; it informs, it does
+			-- not decide.
+			local wished = Okanvil.Wish and Okanvil.Wish.Wants(d.name, link)
+			if not r.wishEdge then
+				r.wishEdge = CreateFrame("Frame", nil, r)
+				r.wishEdge:SetPoint("TOPLEFT", 1, 1); r.wishEdge:SetPoint("BOTTOMRIGHT", -1, 0)
+				r.wishEdge:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+				r.wishEdge:SetBackdropBorderColor(0.88, 0.72, 0.38, 1)
+				r.wishPill = CreateFrame("Frame", nil, r)
+				r.wishPill:SetSize(34, 15)
+				r.wishPill:SetPoint("LEFT", r.who, "RIGHT", 6, 0)
+				local pbg = r.wishPill:CreateTexture(nil, "ARTWORK")
+				pbg:SetAllPoints(); pbg:SetTexture("Interface\\Buttons\\WHITE8x8")
+				pbg:SetVertexColor(0.88, 0.72, 0.38, 1)
+				local pt = W.Text(r.wishPill, "WISH", "note")
+				pt:SetPoint("CENTER", 0, 0); pt:SetTextColor(0.08, 0.08, 0.09)
+			end
+			if wished then r.wishEdge:Show(); r.wishPill:Show() else r.wishEdge:Hide(); r.wishPill:Hide() end
+
 			-- ALREADY WON TONIGHT: a count (gold for one, red for two or more) and
 			-- the items themselves after the name, so the council can spread the
 			-- loot instead of stacking it on one raider. Hover an icon for the item.
 			do
 				local won = (L and L.WonTonight and L.WonTonight(d.name)) or {}
 				r.wonIcons = r.wonIcons or {}
-				if not r.wonN then
-					r.wonN = W.Text(r, "", "body")
-					r.wonN:SetPoint("LEFT", r.who, "RIGHT", 6, 0)
-				end
+				if not r.wonN then r.wonN = W.Text(r, "", "body") end
+				-- after the WISH pill when there is one
+				r.wonN:ClearAllPoints()
+				r.wonN:SetPoint("LEFT", wished and r.wishPill or r.who, "RIGHT", 6, 0)
 				local nShow = math.min(3, #won)
 				if #won > 0 then
 					r.wonN:SetText(#won)
@@ -2341,23 +2379,22 @@ function C_.RepaintBoard(open)
 				local hex = (eqQ and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[eqQ])
 					and ("|c" .. ITEM_QUALITY_COLORS[eqQ].hex:gsub("^|c", "")) or "|cffffffff"
 				-- Two items (rings, trinkets) share the column, so each gets half.
-				local maxLen = d.eq2 and 14 or 32
-				local short = eqName or "?"
-				if #short > maxLen then short = short:sub(1, maxLen - 1) .. "..." end
-				r.spec:SetText(hex .. short .. "|r")
+				-- Trimmed by drawn width, not characters: the font size varies with
+				-- the UI scale, so a character count still ran into the next item.
+				local colW = COL_DIFF - 8 - COL_GEAR
+				local nameW = (d.eq2 and math.floor(colW / 2) or colW) - (COL_SPEC - COL_GEAR) - 6
+				fitText(r.spec, hex, eqName or "?", nameW)
 				if d.eq2 then
 					local n2, l2, q2, _, _, _, _, _, _, tex2 = GetItemInfo(d.eq2)
 					r._eqLink2 = l2
 					tex2 = tex2 or (GetItemIcon and GetItemIcon(d.eq2))
 					r.eqIcon2:ClearAllPoints()
-					r.eqIcon2:SetPoint("LEFT", r.spec, "RIGHT", 8, 0)
+					r.eqIcon2:SetPoint("LEFT", r, "LEFT", COL_GEAR + math.floor(colW / 2), 0)
 					if tex2 then r.eqIcon2:SetTexture(tex2) else r.eqIcon2:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark") end
 					r.eqIcon2:Show()
 					local hex2 = (q2 and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q2])
 						and ("|c" .. ITEM_QUALITY_COLORS[q2].hex:gsub("^|c", "")) or "|cffffffff"
-					local s2 = n2 or "?"
-					if #s2 > maxLen then s2 = s2:sub(1, maxLen - 1) .. "..." end
-					r.spec2:SetText(hex2 .. s2 .. "|r")
+					fitText(r.spec2, hex2, n2 or "?", nameW)
 				end
 			else
 				r.eqIcon:Hide()
@@ -2718,7 +2755,8 @@ C_._repaintHeader = function()
 	if fill and fill.dash and fill.dash.Refresh then fill.dash:Refresh() end
 end
 
--- The "Round" tab: how a round is started, and the settings that shape it.
+-- The council's panel under the Guild run tile on the Loot page: the night's
+-- state, the solo test, and the one option. body.needH is the height it uses.
 function C_.BuildRunTab(body)
 	-- Two columns: what the council IS doing on the left, the buttons that act on
 	-- it pinned right. Centred controls in a wide page leave the eye hunting;
@@ -2753,8 +2791,7 @@ function C_.BuildRunTab(body)
 			hint:SetText("Open the mini roll and press |cffe0b860Ask this one|r on an item.")
 		else
 			state:SetText("|cff8a8d93Council night is off|r")
-			hint:SetText("Turn it on above, or say yes when you are asked at the "
-				.. "start of a raid.")
+			hint:SetText("Only the master looter turns it on: pick Guild run.")
 		end
 	end
 	paintState()
@@ -2768,24 +2805,26 @@ function C_.BuildRunTab(body)
 		return b
 	end
 
-	-- The version checker lives in Settings, and /okver opens it from anywhere.
-	-- It is not a council tool -- a mismatch is the first thing to rule out for
-	-- any module -- so this page keeps the one button that is its own.
-	local testB = sideBtn("Test with 3 items", 1, function() end)
-	local function paintTest()
-		testB:SetKind(C_.testMode and "primary" or "secondary")
-		testB.text:SetText(C_.testMode and "End test" or "Test with 3 items")
+	-- The test round is a command, /okcouncil test [n] (off to end it), not a
+	-- button: it is a tool for whoever builds the addon, not for the raid.
+	-- Council night on / off, top right. Picking SR or Roll ends it too, but
+	-- with Council picked there was no way to switch the night off.
+	local nightB = W.Button(body, "End council night")
+	nightB:SetSize(BW, BH)
+	nightB:SetPoint("TOPRIGHT", -14, -14)
+	local function paintNight()
+		if not (enabled() and C_.MayRun()) then nightB:Hide() return end
+		nightB:Show()
+		nightB:SetKind(C_.active and "secondary" or "primary")
+		nightB.text:SetText(C_.active and "End council night" or "Start council night")
 	end
-	testB:SetScript("OnClick", function()
-		if C_.testMode then C_.TestOff() else C_.Test(3) end
-		paintTest()
+	nightB:SetScript("OnClick", function()
+		C_.SetActive(not C_.active)
+		paintNight(); paintState()
 	end)
-	paintTest()
-	testB:Tooltip("A real round on gear you are wearing. Nothing is given away.\n"
-		.. "Ends when you close the windows.")
-	C_._paintTest = paintTest
-
-	if not canSeeBoard() then testB:Hide() end
+	nightB:Tooltip("Council night puts the Council row in the mini roll.\nOnly the master looter switches it.")
+	paintNight()
+	body:HookScript("OnShow", function() paintNight(); paintState() end)
 
 	-- ---- options ------------------------------------------------------
 	-- One button tall now, not two. The gap above the heading matches the one
@@ -2803,35 +2842,33 @@ function C_.BuildRunTab(body)
 		return c
 	end
 
-	opt("Ask when I become master looter",
-		"Offers council night at the start of a raid",
-		"When the master looter becomes you. Asks once per raid ID; a reload keeps "
-			.. "your answer. Say no and rolls carry on as they are.",
-		function() return db().askOnML == true end,
-		function(v) db().askOnML = v end)
-
 	opt("Ask automatically when a corpse opens",
 		"On a council night, every epic goes to the raid as one question",
 		"Only on a council night, and only for epics.",
 		function() return db().autoAsk end,
 		function(v) db().autoAsk = v end)
 
-	-- Only an officer ever sees the ladder, so only an officer is offered a switch
-	-- for it.
-	if Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() then
-		opt("Hide the priority ladder on the board",
-			"For a council that decides without the website's order",
-			"The ladder is only ever shown to officers.",
-			function() return db().hidePrio end,
-			function(v) db().hidePrio = v; C_.RepaintBoard() end)
+	-- Any officer can switch it, not only the master looter (Wishlist.lua).
+	local Wi = Okanvil.Wish
+	if Wi and Wi.CanTrigger() then
+		local wrow = opt("Wishlist",
+			"Raiders pick one item per raid ID; the board marks it WISH",
+			"Off by default. Turning it on opens the wish window for raiders with Okanvil.\n"
+				.. "Only tells the council what a raider is after -- it is not a reserve.",
+			function() return Wi.IsOn() end,
+			function(v) Wi.SetOn(v) end)
+		-- Clear beside the switch, the same as the WH panel's
+		local clr = W.Button(wrow, "Clear"); clr:SetSize(52, 22)
+		clr:SetPoint("RIGHT", wrow.btn, "LEFT", -6, 0)
+		clr:Tooltip("Clear every wish on this raid ID.\nEveryone gets the window again.")
+		clr:SetScript("OnClick", function()
+			Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Everyone picks again.|r", "Clear", Wi.Clear)
+		end)
+		if wrow.desc then wrow.desc:SetPoint("RIGHT", clr, "LEFT", -12, 0) end
+		wrow.text:SetPoint("RIGHT", clr, "LEFT", -12, 0)
 	end
 
-	opt("Whisper the winner when it cannot be given",
-		"Auto loot or item already in bags: they trade you",
-		"Under auto loot the item is in your bags -- the winner is told to trade you.",
-		function() return db().whisperWinner == true end,
-		function(v) db().whisperWinner = v end)
-
+	body.needH = -y + 8
 	body.refresh = paintState
 	C_._paintState = paintState
 	return body
@@ -2906,6 +2943,9 @@ function C_.Test(num)
 		end
 	end
 	if #pool == 0 then pool = TEST_FALLBACK end
+	-- your own wish first, so the WISH row shows in the test (/okwish test)
+	local myWish = Okanvil.Wish and Okanvil.Wish.Of(UnitName("player"))
+	if myWish and not GetItemInfo(myWish) then myWish = nil end
 
 	-- One piece of gear from the BAGS as well, first in the list. Equipped items
 	-- are not in the bags, so awarding one could never show the "owed by trade"
@@ -2928,6 +2968,7 @@ function C_.Test(num)
 	-- nothing the first one did not.
 	local picked, seen = {}, {}
 	if bagItem then picked[1] = bagItem; seen[bagItem] = true end
+	if myWish and not seen[myWish] then picked[#picked + 1] = myWish; seen[myWish] = true end
 	local guard = 0
 	while #picked < num and guard < 200 do
 		guard = guard + 1
@@ -3359,13 +3400,16 @@ do
 		-- rows with no name or icon.
 		-- Every automatic council option is opt-in. They used to default ON, so
 		-- installs that already saved them are switched off once; anyone who
-		-- wants one turns it back on in the Council tab of the Loot page.
+		-- wants one turns it back on under the Guild run tile of the Loot page.
 		do
 			local d = db()
 			if not d._autoOffV1 then
 				d.askOnML, d.autoAsk, d.whisperWinner = false, false, false
 				d._autoOffV1 = true
 			end
+			-- "Ask when I become master looter" is gone: the Guild run tile is the
+			-- choice now, so a switch saved on before must not keep asking.
+			d.askOnML = nil
 		end
 
 		-- COUNCIL NIGHT survives a reload, for NIGHT_TTL, so it covers a raid night and
@@ -3375,7 +3419,10 @@ do
 		do
 			local d = db()
 			local at = tonumber(d.activeAt or 0) or 0
-			if at > 0 and (time() - at) < NIGHT_TTL then
+			-- the loot mode decides: council night only comes back with Council picked
+			local SRM = Okanvil.SoftRes
+			local councilMode = not (SRM and SRM.Mode) or SRM.Mode() == "council"
+			if at > 0 and (time() - at) < NIGHT_TTL and councilMode then
 				C_.active = true
 				Okanvil:Print("|cffe0b860Loot council:|r council night restored.")
 			else
@@ -3428,9 +3475,17 @@ do
 			-- OnLootWindow, not Rebuild: it OPENS the window as well as redrawing
 			-- it. Rebuild alone repainted a window that was not on screen, so the
 			-- Council row was correct but you had to go and find it by hand.
+			-- Opened only inside a raid or with loot on the list: logging in to
+			-- Dalaran with council night still on popped an empty "No loot yet".
 			if C_.active or C_.testMode then
 				local RMg = Okanvil.RollMgr
-				if RMg then pcall(RMg.OnLootWindow or RMg.Rebuild) end
+				local _, itype = IsInInstance()
+				local L = Okanvil.Loot
+				local drops = L and L.DropsByBoss and L.DropsByBoss() or {}
+				if RMg then
+					if itype == "raid" or #drops > 0 then pcall(RMg.OnLootWindow or RMg.Rebuild)
+					elseif RMg.Rebuild then pcall(RMg.Rebuild) end
+				end
 			end
 
 			-- And the board, for whoever was running the round.
@@ -3517,7 +3572,9 @@ function C_.HasOpenRound()
 end
 
 -- The board on request (mini roll's Council button, /okcouncil board).
+-- The mini roll's Council button: opens the board, or closes it when it is open.
 function C_.OpenBoard()
+	if board and board:IsShown() then board:Hide(); return end
 	if C_.current then C_.RepaintBoard(true) end
 end
 

@@ -39,20 +39,61 @@ end
 -- GameTooltip's own wrap cuts a long line off with "..." after a few rows, so
 -- callers that need the whole text add these lines one by one, unwrapped.
 -- A single word longer than `width` gets a line to itself, uncut.
+-- A chat link ("|c..|H..|h[The Light of Dawn]|h|r") is one unbreakable word:
+-- split across lines its escape codes break and the name shows half-coloured
+-- or not at all. Width counts visible characters, not the hidden codes.
+local function visibleLen(s)
+	return #(s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|H.-|h", ""):gsub("|h", ""))
+end
+
 function U.wrapLines(text, width)
-	local lines, cur = {}, ""
-	for word in tostring(text or ""):gmatch("%S+") do
+	text = tostring(text or "")
+	-- protect spaces inside links so the word split below keeps each link whole
+	text = text:gsub("|H.-|h.-|h", function(link) return (link:gsub(" ", "\1")) end)
+	local lines, cur, curLen = {}, "", 0
+	for word in text:gmatch("%S+") do
+		word = word:gsub("\1", " ")
+		local len = visibleLen(word)
 		if cur == "" then
-			cur = word
-		elseif #cur + 1 + #word <= width then
-			cur = cur .. " " .. word
+			cur, curLen = word, len
+		elseif curLen + 1 + len <= width then
+			cur, curLen = cur .. " " .. word, curLen + 1 + len
 		else
 			lines[#lines + 1] = cur
-			cur = word
+			cur, curLen = word, len
 		end
 	end
 	if cur ~= "" then lines[#lines + 1] = cur end
 	return lines
+end
+
+-- Class words in LFM spam ("Ppala", "BOOMIE", "Resto Sham") painted in their
+-- class colour, so a long message reads by role at a glance. Only whole letter
+-- runs match, and words carrying escape codes (links, colours) are left alone.
+local CLASS_WORD_HEX = {}
+local function classWords(hex, list)
+	for w in list:gmatch("%S+") do CLASS_WORD_HEX[w] = hex end
+end
+classWords("c41f3b", "dk dks bdk fdk udk deathknight deathknights")
+classWords("ff7d0a", "druid druids dudu rdudu rdruid boomie boomies boomy boomkin boomkins moonkin feral ferals bear kitty")
+classWords("abd473", "hunter hunters hunt hunts")
+classWords("69ccf0", "mage mages fmage amage")
+classWords("f58cba", "pala palas pal paladin paladins pally pallies ppala ppal hpala hpal hpally ppally ret rets retri")
+classWords("ffffff", "priest priests spriest spriests hpriest dpriest disc")
+classWords("fff569", "rogue rogues rog")
+classWords("0070de", "sham shams shaman shamans shammy rsham esham ele enh enha")
+classWords("9482c9", "lock locks warlock warlocks wl demo affli")
+classWords("c79c6e", "warr warrs warrior warriors fwarr pwarr fury arms")
+
+function U.paintClasses(text)
+	text = tostring(text or "")
+	return (text:gsub("%S+", function(word)
+		if word:find("|", 1, true) then return word end
+		return (word:gsub("%a+", function(run)
+			local hex = CLASS_WORD_HEX[run:lower()]
+			return hex and ("|cff" .. hex .. run .. "|r") or run
+		end))
+	end))
 end
 
 -- Accepts a link, a bare "item:50735", or a plain item ID (string or number).
