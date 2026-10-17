@@ -61,6 +61,9 @@ Modules\RaidFinder.lua
 Modules\RaidFinder-Mini.lua
 Modules\Raids-Data.lua
 Modules\RaidLoot-Data.lua
+Modules\Upgrades-Bis-Data.lua
+Modules\Upgrades.lua
+Modules\Upgrades-UI.lua
 Modules\PuG.lua
 Modules\PuG-Whispers.lua
 Modules\PuG-UI.lua
