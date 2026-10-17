@@ -564,7 +564,9 @@ local function against(rows, phase, spec, link, id, current)
 			best = (best and math.min(best, r)) or r
 			-- BiS is the very version the list names (the heroic one, mostly);
 			-- the normal copy of a BiS item is an upgrade, not the BiS
-			if exact == 1 then bis = true end
+			-- (two rings and two trinkets are worn: the list's top two are both BiS)
+			local bisPlaces = #(ROW_SLOTS[row.name] or {}) > 1 and 2 or 1
+			if exact and exact <= bisPlaces then bis = true end
 			-- an upgrade if it beats the piece in ANY of the row's slots
 			for _, s in ipairs(ROW_SLOTS[row.name] or {}) do
 				local l = GetInventoryItemLink("player", s)
