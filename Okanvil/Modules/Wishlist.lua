@@ -66,6 +66,8 @@ Wi.CanTrigger = function() return canTrigger(me()) end
 -- On by the switch (saved), or for this session by /okwish test (not saved, so
 -- a test never leaves the switch on after a reload).
 function Wi.IsOn() return (db().on or Wi._test) and true or false end
+-- Wishes count only on a council night: on, and the loot mode is Council.
+function Wi.Live() return Wi.IsOn() and (Wi._test or SR.Mode() == "council") and true or false end
 
 local function prune()
 	local d, cutoff = db(), time() - KEEP_DAYS * 86400
@@ -90,7 +92,7 @@ end
 
 -- The item this raider wished for on this raid's lockout, or nil.
 function Wi.Of(who)
-	if not Wi.IsOn() then return nil end
+	if not Wi.Live() then return nil end
 	local l = db().list[SR.LockKey()]
 	local w = l and l[stripRealm(who)]
 	return w and w.id or nil, w and w.name
@@ -181,7 +183,7 @@ function Wi.Clear()
 	if C and C.Send then C.Send("WISHCLEAR", lockKey) end
 	Okanvil:Print("Wishes cleared for this raid ID.")
 	-- still on: everyone gets the window again
-	if Wi.IsOn() then Wi.SetOn(true) end
+	if Wi.Live() then Wi.SetOn(true) end
 end
 
 -- ---- Raider: send -------------------------------------------------------------
@@ -206,6 +208,7 @@ end
 -- ---- Wire -----------------------------------------------------------------------
 local pending
 openWhenCalm = function(args)
+	if not Wi.Live() then return end
 	if UnitAffectingCombat and UnitAffectingCombat("player") then pending = args; return end
 	SR.PickWindow.Open(unpack(args))
 end
@@ -259,7 +262,7 @@ end
 local function reply(to, text) SendChatMessage(text, "WHISPER", nil, to) end
 
 local function onWhisper(text, sender)
-	if not (Wi.IsOn() and canTrigger(me())) then return end
+	if not (Wi.Live() and canTrigger(me())) then return end
 	local rest = text:match("^%s*[Ww][Hh]%s+(.+)$") or text:match("^%s*[Ww][Ii][Ss][Hh]%s+(.+)$")
 	if not rest then return end
 	local who = stripRealm(sender)

@@ -303,6 +303,27 @@ local function build()
 	f:SetScript("OnDragStop", f.StopMovingOrSizing)
 	Okanvil:Skin(f, "panel")
 	tinsert(UISpecialFrames, "Okanvil_PickWindow")
+	-- the main window's wallpaper: BORDER layer (above the backdrop), its strength
+	-- from Settings, a dark fade easing off to the right where the smith stands
+	local art = f:CreateTexture(nil, "BORDER")
+	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
+	art:SetTexture("Interface\\AddOns\\Okanvil\\Media\\window-bg")
+	local fade = f:CreateTexture(nil, "ARTWORK")
+	fade:SetPoint("TOPLEFT", 1, -1); fade:SetPoint("BOTTOMRIGHT", -1, 1)
+	fade:SetTexture("Interface\\Buttons\\WHITE8X8")
+	do
+		local d = C.panelD
+		fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.85, d[1], d[2], d[3], 0.35)
+	end
+	local function paintArt()
+		local db = Okanvil.db or {}
+		if (db.ratArt or "on") == "off" then art:Hide(); fade:Hide(); return end
+		local w, h = f:GetWidth() or 0, f:GetHeight() or 0
+		if w > 0 and h > 0 then art:SetTexCoord(1 - math.min(1, (w / h) / 2), 1, 0, 1) end
+		art:SetAlpha(db.ratAlpha or 0.45); art:Show(); fade:Show()
+	end
+	f:HookScript("OnSizeChanged", paintArt)
+	f:HookScript("OnShow", paintArt)
 
 	local hdr = W.Frame(f, "raise")
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(28)
