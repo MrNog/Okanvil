@@ -1777,6 +1777,17 @@ local function canArrange()
 	return false
 end
 
+-- The raid's real size: its difficulty (10 or 25), not the size the LFM
+-- builder last had, which can be a 25 left over while you run a 10.
+local function raidSize()
+	local _, itype = IsInInstance()
+	local d
+	if itype == "raid" then d = GetInstanceDifficulty and GetInstanceDifficulty()
+	else d = GetRaidDifficulty and GetRaidDifficulty() end
+	if d == 1 or d == 3 then return 10 elseif d == 2 or d == 4 then return 25 end
+	return tonumber(db.size) or 25
+end
+
 -- name -> raid index, current subgroup
 local function raidIndexOf(name)
 	local n = (GetNumRaidMembers and GetNumRaidMembers()) or 0
@@ -1803,7 +1814,7 @@ end
 -- a 10-man has 2 groups, not 8, and filling group 5 of a ToC10 puts someone
 -- outside the raid entirely.
 local function firstOpenGroup()
-	local size = (db.size == 10) and 2 or 5
+	local size = (raidSize() == 10) and 2 or 5
 	for g = 1, size do
 		if groupCount(g) < 5 then return g end
 	end
@@ -1822,7 +1833,7 @@ local function placeOne(name)
 	local idx, cur = raidIndexOf(name)
 	if not idx then return false end          -- not in the raid (yet)
 
-	local size = (db.size == 10) and 2 or 5
+	local size = (raidSize() == 10) and 2 or 5
 	if cur and cur <= size then return false end   -- already seated; hands off
 
 	local want = firstOpenGroup()
@@ -1935,7 +1946,7 @@ aev:SetScript("OnEvent", Okanvil:CombatSafe("pug.autoGroup", function()
 	end
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive(ADDON) then return end
 	if not canArrange() then return end
-	if db.sortGroups and db.size ~= 10 and SetRaidSubgroup then
+	if db.sortGroups and raidSize() ~= 10 and SetRaidSubgroup then
 		sortPass()
 		return
 	end
