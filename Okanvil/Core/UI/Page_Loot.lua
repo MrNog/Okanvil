@@ -13,15 +13,14 @@ local u3             = Okanvil.UI.u3
 local newFillPanel   = Okanvil.UI.newFillPanel
 local newScrollPanel = Okanvil.UI.newScrollPanel
 
--- ONE page for loot. It used to be two -- Loot and Loot Council -- with names
--- close enough that the master looter could not tell which to open. Now:
---   Loot      tonight's setup: speed-run fields, loot mode, soft reserves
+-- ONE page for loot, three tabs:
+--   Loot      tonight's setup: your picks, the loot mode tiles and what the
+--             picked mode needs (the council's panel under Council), the
+--             master looter's speed-run fields
 --   History   what dropped and who got it
---   Council   the loot council's settings (officers)
 --   Priority  the ladder pasted from the site (officers)
--- Neither page is used DURING the raid: that is the mini roll, which the header
--- opens. Council night is a header button too -- it is the state of the night,
--- not a setting inside a tab.
+-- None of it is used DURING the raid: that is the mini roll, which the header
+-- opens.
 --
 -- Officer or not is read once, at build: the shell rebuilds this page when the
 -- guild roster changes the answer (InvalidatePanel(LOOT)).
@@ -161,17 +160,7 @@ function Okanvil:BuildLoot()
 		top:SetPoint("TOPRIGHT", mlHead, "BOTTOMRIGHT", 0, 0)
 		top:SetHeight(128)
 		Okanvil:Loot_BuildCollectors(top)
-		local function applyTop()
-			-- only the master looter sweeps loot: an officer who is not ML has nothing to set here
-		local show = L.IsMasterLooter and L.IsMasterLooter()
-			local on = L.CollectorsEnabled and L.CollectorsEnabled()
-			if top.fields then if on then top.fields:Show() else top.fields:Hide() end end
-			if show then
-				mlHead:Show(); top:Show(); top:SetHeight(on and 148 or 50)
-			else
-				mlHead:Hide(); top:Hide(); top:SetHeight(1)
-			end
-		end
+
 		-- The page scrolls: its height is wherever the last block ends, measured
 		-- a frame after anything grows or shrinks (the speed-run fields, the SR
 		-- list, the picks), when the anchors have settled.
@@ -188,8 +177,19 @@ function Okanvil:BuildLoot()
 		end)
 		local function remeasure() measurer:Show() end
 		Okanvil.Loot_Remeasure = remeasure
-		local baseApply = applyTop
-		applyTop = function() baseApply(); remeasure() end
+
+		local function applyTop()
+			-- only the master looter sweeps loot: an officer who is not ML has nothing to set here
+			local show = L.IsMasterLooter and L.IsMasterLooter()
+			local on = L.CollectorsEnabled and L.CollectorsEnabled()
+			if top.fields then if on then top.fields:Show() else top.fields:Hide() end end
+			if show then
+				mlHead:Show(); top:Show(); top:SetHeight(on and 148 or 50)
+			else
+				mlHead:Hide(); top:Hide(); top:SetHeight(1)
+			end
+			remeasure()
+		end
 		applyTop()
 		fill.applyTop = applyTop
 		top.onToggle = applyTop
@@ -212,10 +212,8 @@ function Okanvil:BuildLoot()
 		{ key = "history", label = "History", height = 400, fill = true, build = buildHistory },
 	}
 	if officer then
-		for _, t in ipairs({
-			{ key = "prio", label = "Priority", height = 400, fill = true,
-			  build = function(pg) Okanvil:Loot_BuildPrio(pg) end },
-		}) do tabs[#tabs + 1] = t end
+		tabs[#tabs + 1] = { key = "prio", label = "Priority", height = 400, fill = true,
+			build = function(pg) Okanvil:Loot_BuildPrio(pg) end }
 	end
 
 	local function takeML()
@@ -259,7 +257,6 @@ function Okanvil:BuildLoot()
 		end,
 		-- "Set me as ML" -- only shown when you're the leader and NOT already ML.
 		tertiaryText = function() return "Set me as ML" end,
-		tertiaryWidth = 110,
 		tertiaryShown = function()
 			if not (L and L.CanSetLootMethod and L.CanSetLootMethod()) then return false end
 			return not (L.IsMasterLooter and L.IsMasterLooter())
@@ -284,7 +281,7 @@ function Okanvil:BuildLoot()
 		-- the tabs are pills over one body
 		pills = true,
 		tabs = tabs,
-		-- The Council tab repaints the header while it is being built.
+		-- the council's panel repaints the header while the tabs are being built
 		onReady = function(d) fill.dash = d end,
 	})
 	fill.dash = dash
@@ -429,11 +426,10 @@ function Okanvil:Loot_BuildCollectors(p)
 	-- other. Both are in Settings > Loot now, as one control.
 end
 
--- ---- Loot mode: four big tiles ----
+-- ---- Loot mode: three big tiles ----
 --
 -- One click picks how tonight's loot is shared out (SoftRes.lua, SR.Mode).
--- The lit tile is the mode; nothing lit means none picked yet, which behaves
--- the way loot did before modes.
+-- The lit tile is the mode; with none picked it is Roll.
 local MODE_TILES = {
 	{ mode = "council", title = "Council", sub = "Officers decide" },
 	{ mode = "sr",      title = "SR",      sub = "Soft reserves" },
@@ -493,7 +489,7 @@ function Okanvil:Loot_BuildModes(p)
 		tiles[i] = t
 	end
 
-	-- Four equal columns; re-laid out whenever the page width changes.
+	-- Equal columns; re-laid out whenever the page width changes.
 	local function layout()
 		local w = p:GetWidth() or 0
 		if w <= 0 then return end
@@ -514,12 +510,12 @@ end
 
 -- ---- Soft reserves: what the picked mode needs, nothing else ----
 --
--- SR: the counts and whether whispers are taken, then
--- reserves per player and the actions, then what has been reserved. Import CSV
--- swaps the list for the paste box until the import is done.
+-- SR: the counts and whether whispers are taken, then reserves per player and
+-- the actions. The list itself is in the mini roll's SR panel; Import CSV opens
+-- the paste box here until the import is done.
 -- Council: the council's own panel. Roll: one quiet line -- nothing to set.
 -- The roll call's wording lives in Settings > Loot with the other templates.
-local SR_LINE1_H, SR_LINE2_H, SR_ROW_H, SR_MAX_ROWS, SR_PASTE_H = 42, 40, 22, 8, 118
+local SR_LINE1_H, SR_LINE2_H, SR_PASTE_H = 42, 40, 118
 function Okanvil:Loot_BuildSoftRes(p)
 	local SR = Okanvil.SoftRes
 	p:SetHeight(40)
@@ -570,7 +566,6 @@ function Okanvil:Loot_BuildSoftRes(p)
 		b.Sync = function() if SR.RaidLabel then b.text:SetText(SR.RaidLabel()) end end
 		return b
 	end
-
 
 	local sr = CreateFrame("Frame", nil, p)
 	sr:SetPoint("TOPLEFT"); sr:SetPoint("BOTTOMRIGHT")
@@ -623,31 +618,8 @@ function Okanvil:Loot_BuildSoftRes(p)
 	end)
 	hair(-SR_LINE1_H - SR_LINE2_H)
 
-	-- the reserved items, or the paste box in their place
+	-- a pointer to the list, or the paste box in its place
 	local top = -SR_LINE1_H - SR_LINE2_H
-	local rows = {}
-	local function row(i)
-		if rows[i] then return rows[i] end
-		local r = CreateFrame("Button", nil, sr)
-		r:SetHeight(SR_ROW_H)
-		r:SetPoint("TOPLEFT", 1, top - (i - 1) * SR_ROW_H)
-		r:SetPoint("TOPRIGHT", -1, top - (i - 1) * SR_ROW_H)
-		r.hl = r:CreateTexture(nil, "HIGHLIGHT"); r.hl:SetTexture(FLAT); r.hl:SetVertexColor(1, 1, 1, 0.04); r.hl:SetAllPoints()
-		r.who = W.Text(r, "", "label"); r.who:SetPoint("RIGHT", -X + 1, 0); r.who:SetJustifyH("RIGHT")
-		r.item = W.Text(r, "", "body"); r.item:SetPoint("LEFT", X - 1, 0); r.item:SetPoint("RIGHT", r.who, "LEFT", -12, 0)
-		r.item:SetJustifyH("LEFT")
-		if r.item.SetWordWrap then r.item:SetWordWrap(false) end
-		r:SetScript("OnEnter", function(s)
-			if not s._id then return end
-			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-			GameTooltip:SetHyperlink("item:" .. s._id)
-			SR.AddTooltip(GameTooltip, s._id)
-			GameTooltip:Show()
-		end)
-		r:SetScript("OnLeave", function() GameTooltip:Hide() end)
-		rows[i] = r
-		return r
-	end
 	local more = W.Text(sr, "", "note", "dim")
 
 	local paste = CreateFrame("Frame", nil, sr)
@@ -672,16 +644,6 @@ function Okanvil:Loot_BuildSoftRes(p)
 		pasting = false
 		paint()
 	end)
-
-	local function itemText(id, fallback)
-		local name, _, q = GetItemInfo(id)
-		name = name or fallback or ("item " .. id)
-		-- not `local r, g, b = f and f()`: `and` keeps only the first return
-		local r, g, b
-		if GetItemQualityColor then r, g, b = GetItemQualityColor(q or 4) end
-		if not (r and g and b) then r, g, b = 0.64, 0.21, 0.93 end
-		return ("|cff%02x%02x%02x%s|r"):format(r * 255, g * 255, b * 255, name)
-	end
 
 	paint = function()
 		local mode = SR.Mode()
@@ -717,7 +679,6 @@ function Okanvil:Loot_BuildSoftRes(p)
 
 		local h = SR_LINE1_H + SR_LINE2_H
 		if pasting then
-			for _, r in ipairs(rows) do r:Hide() end
 			more:Hide()
 			paste:Show()
 			impB.text:SetText("Close")
@@ -725,9 +686,6 @@ function Okanvil:Loot_BuildSoftRes(p)
 		else
 			paste:Hide()
 			impB.text:SetText("Import CSV")
-			-- the list itself lives in the mini roll's SR panel, where the
-			-- master looter uses it: here only the counts above
-			for _, r in ipairs(rows) do r:Hide() end
 			more:ClearAllPoints()
 			more:SetPoint("TOPLEFT", X, -h - 6)
 			more:SetText(ni and "The list is in the mini roll: SR button."
@@ -749,7 +707,7 @@ function Okanvil:Loot_BuildSoftRes(p)
 		if Okanvil.SoftResPanel and Okanvil.SoftResPanel.Sync then Okanvil.SoftResPanel.Sync() end
 		if Okanvil.Loot_Remeasure then Okanvil.Loot_Remeasure() end
 	end
-	p:SetScript("OnShow", function() paint() end)
+	p:SetScript("OnShow", paint)
 	paint()
 end
 
@@ -804,8 +762,6 @@ local function buildMessages(p, y0)
 	-- be on separate pages -- the toggle under Collectors, the text here -- so
 	-- neither half said anything about the other, and the box sat empty with the
 	-- switch on and nothing to explain why nothing was sent.
-	-- 30px higher than it used to be: the Free template above is gone, and the
-	-- gap it left read as a missing control.
 	local wy = y0 - 148
 	local wh = W.Text(p, "ON AWARD", "note", "dim"); wh:SetPoint("TOPLEFT", X, wy)
 	wy = wy - 24

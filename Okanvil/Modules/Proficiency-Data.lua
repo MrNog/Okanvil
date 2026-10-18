@@ -329,14 +329,7 @@ local STAT = {
 	AP = "ITEM_MOD_ATTACK_POWER_SHORT", SP = "ITEM_MOD_SPELL_POWER_SHORT",
 	-- mana per 5: a healer's stat even on a trinket with no main stat at all
 	MP5 = "ITEM_MOD_POWER_REGEN0_SHORT", MP5B = "ITEM_MOD_MANA_REGENERATION_SHORT",
-	-- tank stats: a dps spec has no use for them even on a strength item
-	DEF = "ITEM_MOD_DEFENSE_SKILL_RATING_SHORT", DODGE = "ITEM_MOD_DODGE_RATING_SHORT",
-	PARRY = "ITEM_MOD_PARRY_RATING_SHORT", BLOCK = "ITEM_MOD_BLOCK_RATING_SHORT",
-	BLOCKV = "ITEM_MOD_BLOCK_VALUE_SHORT",
 }
-local TANK_STATS = { "DEF", "DODGE", "PARRY", "BLOCK", "BLOCKV" }
--- the stats that make an item "about" a role; MP5 is not one of them
-local MAIN = { "INT", "SPI", "STR", "AGI", "AP", "SP" }
 local PHYSICAL = { want = { "STR", "AGI", "AP" }, never = { "SPI", "SP", "MP5", "MP5B" } }
 -- melee without a use for Intellect: Intellect plate is a holy paladin's
 local MELEE = { want = { "STR", "AGI", "AP" }, never = { "SPI", "SP", "INT", "MP5", "MP5B" } }
@@ -357,13 +350,13 @@ local SPEC_STATS = {
 	WARLOCK     = { CASTER, CASTER, CASTER },
 }
 
--- The talent tree with the most points, in the active spec.
 -- The talent group the spec checks read: the active one, or the other dual
 -- spec while P.FitsEitherSpec asks about it.
 local readGroup
 local function activeGroup() return GetActiveTalentGroup and GetActiveTalentGroup(false) or 1 end
 local function specGroup() return readGroup or activeGroup() end
 
+-- The talent tree with the most points, in that group.
 local function myTree()
 	local group = specGroup()
 	local best, bestPts = nil, -1
@@ -409,13 +402,7 @@ function P.LighterWorthAsking(link)
 	return false
 end
 
--- Do this item's stats suit the spec you are in? A death knight is not asked
--- about a spell-power neck or Intellect plate. An item with no main stat at all
--- (a crit trinket, a tier token) passes, and so does one the client has not
--- cached yet -- that is decided once it is.
--- Tanking right now? A prot paladin or warrior by tree, a DK by Frost
--- Presence (Blood and Frost both tank in it), a druid in bear form.
--- talents only a tank takes: a feral tank out of bear form, a DK tank in any presence
+-- Talents only a tank takes: a feral tank out of bear form, a DK tank in any presence.
 local BEAR_TALENTS = { ["Protector of the Pack"] = true, ["Natural Reaction"] = true }
 local DK_TANK_TALENTS = { ["Anticipation"] = true, ["Frigid Dreadplate"] = true,
 	["Will of the Necropolis"] = true }
@@ -428,6 +415,8 @@ local function hasTalent(tab, wanted)
 	return false
 end
 
+-- Tanking right now? A prot paladin or warrior by tree, a DK by its tank
+-- talents or Frost Presence, a feral druid by its tank talents or bear form.
 local function tankingNow(class, tree)
 	if class == "PALADIN" then return tree == 2 end
 	if class == "WARRIOR" then return tree == 3 end
@@ -491,8 +480,7 @@ local function effectKind(link)
 end
 
 -- ------------------------------------------------------------
--- Is this item meant for the spec you are in? The same answer RatStash gives
--- (Upgrade.lua MeantFor), for every class and spec:
+-- Is this item meant for the spec you are in? For every class and spec:
 --   1. weapon type and hands the spec fights with (Blood swings a two-hander,
 --      Frost dual-wields, a prot tank holds a one-hander and a shield...);
 --   2. ClassLoot, when installed: no stars at all for the spec = not its;
@@ -553,7 +541,7 @@ local HANDS = {
 local MELEE_LOC = { INVTYPE_WEAPON = true, INVTYPE_WEAPONMAINHAND = true, INVTYPE_WEAPONOFFHAND = true,
 	INVTYPE_2HWEAPON = true }
 
--- item subtype -> the type names the weight tables' "bad" lists use
+-- item subtype -> the type names Fit-Specs.lua's "bad" lists use
 local KIND = {
 	Plate = "Plate", Mail = "Mail", Leather = "Leather", Shields = "Shield",
 	Daggers = "Dagger", ["Fist Weapons"] = "Fist", Staves = "Staff", Bows = "Bow", Crossbows = "Crossbow",
@@ -567,7 +555,7 @@ local SPEC_WEAPONS = {
 	RogueCombat = { Sword = true, Fist = true, Axe = true, Mace = true },
 }
 
--- RatStash's map from its spec keys to ClassLoot's
+-- spec key -> ClassLoot's keys for it
 local CLASSLOOT = {
 	WarriorArms = { "WarriorDPS", "WarriorArms" }, WarriorFury = { "WarriorDPS", "WarriorFury" },
 	WarriorTank = { "WarriorProt", "WarriorTanking" },
@@ -678,7 +666,10 @@ function P.FitsSpec(link, key, noClassLoot, listed)
 	return true
 end
 
--- the spec you are in right now
+-- Do this item's stats suit the spec you are in? A death knight is not asked
+-- about a spell-power neck or Intellect plate. An item with no main stat at all
+-- (a crit trinket, a tier token) passes, and so does one the client has not
+-- cached yet -- that is decided once it is.
 function P.StatsFitMe(link, listed)
 	return P.FitsSpec(link, mySpecKey(), nil, listed)
 end

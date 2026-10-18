@@ -1248,7 +1248,6 @@ function Okanvil:BuildAttendance(host)
 		end,
 		onTertiary = function() A.SetOurIdFromMine() end,
 		tertiaryText = function() return "Our ID = mine" end,
-		tertiaryWidth = 120,
 		tertiaryTip = "You raided with the guild this week: use this character's lockouts of the mandatory "
 			.. "raids as the guild's IDs for the week.",
 		statusText = function()

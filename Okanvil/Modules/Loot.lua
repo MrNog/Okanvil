@@ -1035,7 +1035,7 @@ local DROP_MATCH_WINDOW = 300
 -- Holding is not owning: while the item sits with the ML it is still open for rolls.
 -- (The UI draws the same distinction as `heldByML` when it decides what to show.)
 -- Who hands loot out without being the master looter now: a pug's leader holding
--- the bags and trading to winners, an old ML still carrying what he looted. Anyone
+-- the bags and trading to winners, an old ML still carrying what they looted. Anyone
 -- who calls a roll is one, for the rest of the session. What they hold is held
 -- for someone, not theirs. (A field on L, not a local: this file is at Lua's limit.)
 L._holders = L._holders or {}
@@ -1179,7 +1179,7 @@ end
 
 -- (No claimRollDrop / _slotSeen reconciliation any more. De-dup is now by loot-method
 -- authority: under need/greed START_LOOT_ROLL is the only source; under master loot the
--- corpse scan is, guarded once-per-corpse by scannedCorpses. The two never compete, so
+-- corpse scan is, guarded once per corpse per run (scannedOnRun). The two never compete, so
 -- there is nothing to reconcile.)
 
 local recvSeen = {}
@@ -1598,7 +1598,7 @@ local function captureCorpse()
 			if acceptItem(id, rarity, lootName) and inWindow[id] > (known[id] or 0) then
 				local boe = isBoE(link)
 				-- allowDup=true: each loot SLOT is its own row, so two identical trophies
-				-- on one corpse become two assignable rows. scannedCorpses (above) stops a
+				-- on one corpse become two assignable rows. scannedOnRun (above) stops a
 				-- re-open from doubling them -- one scan per physical corpse.
 				local dp = storeDrop(boss, id, link, lootName, rarity, boe, nil, nil, true)
 				if dp then
@@ -2409,7 +2409,7 @@ function L.NoteExternalRoll(link, winners, mayMint, caller)
 					local rank
 					-- The one calling the roll holds this copy: it is the copy being
 					-- rolled. Master loot can change hands mid-raid -- the old ML still
-					-- carries what he looted, and rolls it -- and matching only the ML
+					-- carries what they looted, and rolls it -- and matching only the ML
 					-- of NOW made it look owned and minted a second copy.
 					local holder = (prev.heldBy and prev.heldBy ~= "" and prev.heldBy) or prev.receivedBy
 					if caller and holder and holder ~= "" and noRealm(holder) == noRealm(caller) then

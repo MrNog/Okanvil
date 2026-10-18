@@ -82,7 +82,6 @@ function Okanvil:BuildUpgrades(host)
 			specFS = W.Text(header, "", nil, "dim")
 			specFS:SetPoint("RIGHT", nextT, "LEFT", -14, 0)
 		end,
-
 	})
 
 	-- raid and difficulty in a bar of their own at the top of the page: beside
@@ -129,7 +128,6 @@ function Okanvil:BuildUpgrades(host)
 			modeTabs[m] = b
 			prev = b
 		end
-		-- search: matching bosses open, the rest fold away
 		local openAll = big(W.Button(header, "Close all"))
 		openAll:SetSize(96, CTRL_H); openAll:SetPoint("RIGHT", header, "RIGHT", -Okanvil.UI.PAD_X, 0)
 		openAll:SetScript("OnClick", function()
@@ -138,10 +136,9 @@ function Okanvil:BuildUpgrades(host)
 			openAll.text:SetText(state.allOpen and "Close all" or "Open all")
 			refresh()
 		end)
-		local search = W.EditBox(header, function(text)
-			state.query = (text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
-			refresh()
-		end)
+		-- search: matching bosses open, the rest fold away. Read as it is typed;
+		-- Enter only lets go of the keyboard.
+		local search = W.EditBox(header, function() end)
 		search:SetHeight(CTRL_H); search:SetWidth(200)
 		search:SetPoint("RIGHT", openAll, "LEFT", -8, 0)
 		search.edit:SetFont(Okanvil:Font(), 13)
@@ -374,7 +371,7 @@ function Okanvil:BuildUpgrades(host)
 		cells[i] = b
 		return b
 	end
-	-- the BiS piece's enchant and gems, small, two by two in Bistooltip's order
+	-- the BiS piece's enchant and gems, small, two by two in the list's order
 	local enhs = {}
 	local function enhIcon(i)
 		if enhs[i] then return enhs[i] end
@@ -447,22 +444,22 @@ function Okanvil:BuildUpgrades(host)
 				for k, eid in ipairs(row.e or {}) do
 					if k > 6 then break end
 					if eid ~= 0 then
-					nE = nE + 1
-					local e = enhIcon(nE)
-					e:ClearAllPoints()
-					-- the block centred on the item icons, 3px between gems
-					local lines = math.ceil(math.min(#row.e, 6) / 2)
-					local top = y - math.floor((BIS_ICON - (lines * (ENH + 3) - 3)) / 2)
-					e:SetPoint("TOPLEFT", grid, "TOPLEFT", x + SLOT_W + ((k - 1) % 2) * (ENH + 3),
-						top - math.floor((k - 1) / 2) * (ENH + 3))
-					if eid < 0 then
-						e.spell, e.item, e.link = -eid, nil, "spell:" .. (-eid)
-						e.icon:SetTexture((select(3, GetSpellInfo(-eid))) or "Interface\\Icons\\INV_Misc_QuestionMark")
-					else
-						e.spell, e.item, e.link = nil, eid, "item:" .. eid
-						e.icon:SetTexture((GetItemIcon and GetItemIcon(eid)) or "Interface\\Icons\\INV_Misc_QuestionMark")
-					end
-					e:Show()
+						nE = nE + 1
+						local e = enhIcon(nE)
+						e:ClearAllPoints()
+						-- the block centred on the item icons, 3px between gems
+						local lines = math.ceil(math.min(#row.e, 6) / 2)
+						local top = y - math.floor((BIS_ICON - (lines * (ENH + 3) - 3)) / 2)
+						e:SetPoint("TOPLEFT", grid, "TOPLEFT", x + SLOT_W + ((k - 1) % 2) * (ENH + 3),
+							top - math.floor((k - 1) / 2) * (ENH + 3))
+						if eid < 0 then
+							e.spell, e.item, e.link = -eid, nil, "spell:" .. (-eid)
+							e.icon:SetTexture((select(3, GetSpellInfo(-eid))) or "Interface\\Icons\\INV_Misc_QuestionMark")
+						else
+							e.spell, e.item, e.link = nil, eid, "item:" .. eid
+							e.icon:SetTexture((GetItemIcon and GetItemIcon(eid)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+						end
+						e:Show()
 					end
 				end
 				for r = 1, 6 do
@@ -515,14 +512,12 @@ function Okanvil:BuildUpgrades(host)
 			if b then b:SetKind(m == state.mode and "tabOn" or "tab") end
 		end
 		if state.dd then state.dd:refreshText() end
-		dash:Refresh()
 		for _, r in ipairs(bossRows) do r:Hide() end
 		for _, r in ipairs(itemRows) do r:Hide() end
 
 		local bosses = OkanvilRaidLoot and OkanvilRaidLoot[state.raid] or {}
 		local hereRaid = U.Here()
 		local y, nb, ni, waiting, total = 6, 0, 0, 0, 0
-		local W_ = p:GetWidth()
 
 		local function bossRow()
 			nb = nb + 1

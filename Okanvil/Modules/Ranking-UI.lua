@@ -272,7 +272,6 @@ function Okanvil:BuildRanking(host)
 		footerHeight = 0,
 		onSecondary = showImport,
 		secondaryText = function() return "Import" end,
-		secondaryWidth = 90,
 		secondaryShown = isOfficer,
 		statusText = function()
 			local d, s = R.Data(), Okanvil.db and Okanvil.db.ranking

@@ -232,8 +232,18 @@ local filter = ""
 local scroll = 0
 local ROWS, ROW_H, WIN_W, SLOT_H = 12, 22, 380, 28
 
--- a wish is kept apart from a soft reserve on the same lockout
-local function picksKey() return (state.kind == "wish" and "wish:" or "") .. state.lockKey .. ":" .. (me() or "") end
+-- Where this character's picks are saved (db.myPicks): one key per kind and
+-- lockout, so a wish is kept apart from a soft reserve on the same raid ID.
+function SR.PickKey(kind, lockKey)
+	return (kind == "wish" and "wish:" or "") .. lockKey .. ":" .. (me() or "")
+end
+local function picksKey() return SR.PickKey(state.kind, state.lockKey) end
+
+-- Before the first kill a lock key ends in the date ("icc25:20261018"), not an ID.
+local function idOfLockKey(lockKey)
+	local id = lockKey:match(":(%d+)$")
+	return (id and not id:match("^20%d%d%d%d%d%d$")) and id or nil
+end
 
 -- `sentGen` is the round these picks were sent in: once sent, the window is
 -- read-only until the master looter clears the list.
@@ -583,28 +593,12 @@ end
 function P.MarkSent(kind, lockKey, id)
 	local d = db()
 	d.myPicks = d.myPicks or {}
-	local key = (kind == "wish" and "wish:" or "") .. lockKey .. ":" .. (me() or "")
+	local key = SR.PickKey(kind, lockKey)
 	local old = d.myPicks[key]
 	local gen = (win and win:IsShown() and state.lockKey == lockKey and state.kind == kind) and state.gen
 	d.myPicks[key] = { at = time(), list = { id }, sentGen = gen or (old and old.sentGen) or 0 }
 	if gen then win:Hide() end
 	if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
-end
-
--- What this character sent, newest first: the items of its latest soft reserve
--- (kind "sr") or wish (kind "wish") from the last week, or nil. The Loot page
--- shows it, so a raider sees their own pick without the window.
-function SR.MyPicks(kind)
-	local mine, best = ":" .. (me() or ""), nil
-	local cutoff = time() - KEEP_DAYS * 86400
-	for k, p in pairs(db().myPicks or {}) do
-		local isWish = k:find("^wish:") ~= nil
-		if isWish == (kind == "wish") and k:sub(-#mine) == mine and p.sentGen ~= nil
-			and (p.at or 0) >= cutoff and (not best or (p.at or 0) > (best.at or 0)) then
-			best = p
-		end
-	end
-	return best and best.list or nil
 end
 
 -- Every pick set this character sent and still holds: one per raid ID and kind,
@@ -622,14 +616,13 @@ function SR.MyPickSets()
 		if k:sub(-#mine) == mine and p.sentGen ~= nil and (p.at or 0) >= cutoff and p.list and #p.list > 0 then
 			local isWish = k:find("^wish:") ~= nil
 			local lockKey = k:sub(isWish and 6 or 1, -#mine - 1)
-			local id = lockKey:match(":(%d+)$")
-			-- a date (before the first kill) is not an ID; an ID that left the saved list reset
-			local isID = id and not id:match("^20%d%d%d%d%d%d$")
+			local id = idOfLockKey(lockKey)
 			-- wishes are for 25s only: a wish saved on a 10 is not shown
 			local size = tonumber(lockKey:match("^%a+(%d+):"))
-			if not (isID and any and not saved[id]) and not (isWish and size ~= 25) then
+			-- an ID that left the saved list has reset, and its picks with it
+			if not (id and any and not saved[id]) and not (isWish and size ~= 25) then
 				out[#out + 1] = { kind = isWish and "wish" or "sr", lockKey = lockKey, list = p.list, at = p.at or 0,
-					id = isID and id or nil }
+					id = id }
 			end
 		end
 	end
@@ -643,9 +636,7 @@ function SR.MyPickSets()
 		for i = #out, 1, -1 do
 			if out[i].kind == "sr" and out[i].lockKey:match("^(%a+)") == raidKey then table.remove(out, i) end
 		end
-		local id = lk:match(":(%d+)$")
-		out[#out + 1] = { kind = "sr", lockKey = lk, list = held, at = time(),
-			id = (id and not id:match("^20%d%d%d%d%d%d$")) and id or nil }
+		out[#out + 1] = { kind = "sr", lockKey = lk, list = held, at = time(), id = idOfLockKey(lk) }
 	end
 	table.sort(out, function(a, b)
 		if a.kind ~= b.kind then return a.kind == "wish" end
@@ -667,7 +658,7 @@ local function onReply(text)
 	if not (saved or changed or removed) then return end
 	local d = db()
 	d.myPicks = d.myPicks or {}
-	local key = SR.LockKey() .. ":" .. (me() or "")
+	local key = SR.PickKey("sr", SR.LockKey())
 	local old = d.myPicks[key]
 	local list = {}
 	for _, id in ipairs(old and old.list or {}) do list[#list + 1] = id end
@@ -750,7 +741,7 @@ function SR.TestRaider()
 	SR.SetMode("sr")
 	local lockKey = SR.LockKey()
 	SR.RemoveReserve(me())
-	if db().myPicks then db().myPicks[lockKey .. ":" .. (me() or "")] = nil end
+	if db().myPicks then db().myPicks[SR.PickKey("sr", lockKey)] = nil end
 	SR.PostPick()
 	local post = db().post
 	P.Open(post.raid, post.size, post.hc, post.limit, post.lockKey, me(), post.gen)

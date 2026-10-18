@@ -1211,8 +1211,7 @@ local function buildSettings(pg)
 	refreshGear()
 	y = y - 58 - 6
 
-	toggle("Short spec name", "\"Blood DPS\" instead of \"Blood DPS Death Knight\"", "shortSpec",
-		function() refreshGear() end)
+	toggle("Short spec name", "\"Blood DPS\" instead of \"Blood DPS Death Knight\"", "shortSpec", refreshGear)
 
 	-- ---- SCANNING --------------------------------------------------------
 	y = y - 18
@@ -1226,8 +1225,7 @@ local function buildSettings(pg)
 	y = W.Section(pg, "LIST", X, y)
 	toggle("Show raids I'm saved to", "Shown with \"saved\" so you skip them", "showSaved")
 
-	-- sliders paint their label above the bar: room for it first
-	-- two sliders on one row
+	-- two sliders on one row; each paints its label above the bar, so room for it first
 	y = y - 30
 	local s1 = W.Slider(pg, "Hide listings after (sec)", 20, 300, 5,
 		function() return db.expiry end,
@@ -1477,18 +1475,17 @@ ev:RegisterEvent("UNIT_AURA")                     -- ...which some cores only re
 ev:SetScript("OnEvent", function(_, event, arg1, arg2, ...)
 	-- every unit's auras fire this; only our own presence is of interest
 	if event == "UNIT_AURA" and arg1 ~= "player" then return end
-	if event == "PLAYER_TALENT_UPDATE" or event == "CHARACTER_POINTS_CHANGED"
-	   or event == "ACTIVE_TALENT_GROUP_CHANGED" or event == "UPDATE_SHAPESHIFT_FORM"
-	   or (event == "UNIT_AURA" and arg1 == "player") then
-		if event == "UNIT_AURA" then
-			-- only a DK's presence changes the spec line; anything else is noise
+	local presence = event == "UNIT_AURA" or event == "UPDATE_SHAPESHIFT_FORM"
+	if presence or event == "PLAYER_TALENT_UPDATE" or event == "CHARACTER_POINTS_CHANGED"
+	   or event == "ACTIVE_TALENT_GROUP_CHANGED" then
+		if presence then
+			-- a druid shifts form all fight long: only a DK's presence changes the
+			-- spec line, and only when it flips Blood between tank and dps
 			if select(2, UnitClass("player")) ~= "DEATHKNIGHT" then return end
 			local r = Okanvil.RaidFinder_BloodRole and Okanvil.RaidFinder_BloodRole()
 			if r == lastBloodRole then return end
 			lastBloodRole = r
 		end
-		-- a druid shifts form all fight long; only a DK presence matters here
-		if event == "UPDATE_SHAPESHIFT_FORM" and select(2, UnitClass("player")) ~= "DEATHKNIGHT" then return end
 		if Okanvil.RaidFinder_RefreshGear then Okanvil.RaidFinder_RefreshGear() end
 		-- a dual-spec swap changes what "My role" means -> re-filter the list
 		if filter.role == "mine" and Okanvil.RaidFinder_Render then Okanvil.RaidFinder_Render() end

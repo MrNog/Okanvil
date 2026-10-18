@@ -91,13 +91,15 @@ local function readSpec(group)
 	if not best then return nil end
 	local t = TREES[class][best]
 	local label, list = t[1], t[2]
-	-- tank or not is read off what you are wearing now: only for the spec you are in
-	if group ~= active then
-	elseif class == "DEATHKNIGHT" and best == 1 then
-		local role = Okanvil.RaidFinder_BloodRole and Okanvil.RaidFinder_BloodRole()
-		if role == "Tank" then label, list = "Blood Tank", "Blood tank" end
-	elseif class == "DRUID" and best == 2 and ((Okanvil.Prof and Okanvil.Prof.Tanking and Okanvil.Prof.Tanking()) or inBear()) then
-		label, list = "Feral Tank", "Feral tank"
+	-- tank or not is read off your presence or form now: only for the spec you are in
+	if group == active then
+		if class == "DEATHKNIGHT" and best == 1 then
+			local role = Okanvil.RaidFinder_BloodRole and Okanvil.RaidFinder_BloodRole()
+			if role == "Tank" then label, list = "Blood Tank", "Blood tank" end
+		elseif class == "DRUID" and best == 2
+			and ((Okanvil.Prof and Okanvil.Prof.Tanking and Okanvil.Prof.Tanking()) or inBear()) then
+			label, list = "Feral Tank", "Feral tank"
+		end
 	end
 	return { class = class, label = label, list = list }
 end
@@ -413,6 +415,13 @@ end
 -- Satrina's Impeding Scarab) and the lists name the Alliance id. The map's keys
 -- are Alliance ids, its values Horde ones, so a Horde id is looked up in reverse.
 local hordeToAli
+local function HordeToAli()
+	if not hordeToAli then
+		hordeToAli = {}
+		for ali, horde in pairs(OkanvilBisHordeToAli or {}) do hordeToAli[horde] = ali end
+	end
+	return hordeToAli
+end
 
 -- The loot table names the Horde copy of each faction item of the Crusader's
 -- coliseum. An Alliance character gets the Alliance copy instead (id and name),
@@ -420,8 +429,7 @@ local hordeToAli
 -- wishlist, the loot recorder -- then sees the items that really drop for it.
 function U.FactionLoot()
 	if UnitFactionGroup("player") ~= "Alliance" then return end
-	local toAli = {}
-	for ali, horde in pairs(OkanvilBisHordeToAli or {}) do toAli[horde] = ali end
+	local toAli = HordeToAli()
 	for _, bosses in pairs(OkanvilRaidLoot or {}) do
 		for _, b in ipairs(bosses) do
 			for _, it in ipairs(b.items or {}) do
@@ -435,13 +443,7 @@ function U.FactionLoot()
 	end
 end
 
-local function AliId(id)
-	if not hordeToAli then
-		hordeToAli = {}
-		for ali, horde in pairs(OkanvilBisHordeToAli or {}) do hordeToAli[horde] = ali end
-	end
-	return hordeToAli[id] or id
-end
+local function AliId(id) return HordeToAli()[id] or id end
 
 -- rows of the list for this spec + raid:
 --   { { name = "Finger", top = id, rank = { [id] = n }, byName = { [name] = best n } }, ... }
@@ -504,12 +506,11 @@ RowsOf = function(spec, phase)
 	return rows
 end
 
-local MODE_LABEL = { ["10n"] = "10", ["10h"] = "10 HC", ["25n"] = "25", ["25h"] = "25 HC" }
 -- Which raid size / difficulty an item id drops in ("25 HC"), or "another version".
 function U.ModeLabel(id)
 	NameOf(id)
 	local m = lootMode[id] or lootMode[(OkanvilBisHordeToAli or {})[id] or id]
-	return MODE_LABEL[m] or "another version"
+	return U.MODE_LABEL[m] or "another version"
 end
 
 -- exact = this version's place on the list; byName = the best place of any version
@@ -1126,8 +1127,6 @@ ev:SetScript("OnEvent", function(_, event, ...)
 	Changed()
 end)
 
--- /okup            open the page
--- /okup <itemlink> what the judge says about one item
 -- ------------------------------------------------------------
 -- Drop alert: an upgrade for you drops (a corpse you loot, a roll, the master
 -- looter linking it in raid warning) -> a toast, the rat sound and one line in
@@ -1135,7 +1134,6 @@ end)
 -- ------------------------------------------------------------
 local RAT_SOUND = [[Interface\AddOns\Okanvil\Media\rat.wav]]
 local alerted, lastSound = {}, 0
-
 
 -- The toast: icon, name, verdict, boss. Ten seconds, held while hovered; drag
 -- to move, right click to close.
@@ -1344,10 +1342,9 @@ local function onItemTip(tip)
 end
 
 -- ------------------------------------------------------------
--- "Fits": who the item is for, in stars, on every raid item (ClassLoot's look,
--- with no item missing). 5 stars: on that spec's BiS list (either copy, normal
--- or heroic). 4 stars: the class wears it and its stats and weapon suit the
--- spec (the same rules the Upgrades page uses).
+-- "Fits": who the item is for, in stars, on every raid item. 5 stars: on that
+-- spec's BiS list (either copy, normal or heroic). 4 stars: the class wears it
+-- and its stats and weapon suit the spec (the same rules the Upgrades page uses).
 -- ------------------------------------------------------------
 local FIT_TO_BIS = {
 	WarriorArms = { "Warrior", "Arms" }, WarriorFury = { "Warrior", "Fury" }, WarriorTank = { "Warrior", "Protection" },
@@ -1435,8 +1432,6 @@ local function modeText(m)
 	return size .. " Player" .. (hc == "h" and " (Heroic)" or "")
 end
 
--- Class lines in the stars' rows: per tier every class in a comma list, each
--- in its class colour, wrapped
 -- "Classes: Rogue" on the tooltip (tier pieces, class-only items): only those
 -- classes, as tokens; nil when the item has no such line. Cached per item.
 local classOnly = {}
@@ -1490,8 +1485,8 @@ local function starRows(link, name, id, rows)
 	end
 	for _, stars in ipairs({ 5, 4 }) do
 		local line, len, first = "", 0, true
-		-- a wrapped line keeps the stars' width on the left, as empty spacers
-		-- (ClassLoot's |T:0|t), so the tooltip measures it at its real width
+		-- a wrapped line keeps the stars' width on the left, as empty spacers,
+		-- so the tooltip measures it at its real width
 		local function flush()
 			if line ~= "" then rows[#rows + 1] = { first and STAR:rep(stars) or BLANK:rep(stars), line } end
 			line, len, first = "", 0, false
@@ -1504,8 +1499,8 @@ local function starRows(link, name, id, rows)
 			local hex = ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255)
 			-- every spec of the class: the class alone
 			local txt = #specs >= perClass[class] and cls or (cls .. " (" .. table.concat(specs, ", ") .. ")")
-			-- wrapped at every comma, the ones inside the brackets too, as ClassLoot
-			-- did: one long class cannot run off the edge
+			-- wrapped at every comma, the ones inside the brackets too: one long
+			-- class cannot run off the edge
 			local pieces = {}
 			for part in (txt .. ","):gmatch("([^,]*),") do pieces[#pieces + 1] = (part:gsub("^%s+", "")) end
 			for k, part in ipairs(pieces) do
@@ -1520,8 +1515,8 @@ local function starRows(link, name, id, rows)
 	end
 end
 
--- "Boss" and "Instance" rows, as ClassLoot drew them: every boss that drops it,
--- and the raid with the difficulties this copy drops in
+-- "Boss" and "Instance" rows: every boss that drops it, and the raid with the
+-- difficulties this copy drops in
 local LABEL = "|cfff2e68c"
 local function dropRows(id, rows)
 	local drops = dropsOf(id)
@@ -1576,8 +1571,8 @@ local function onFitTip(tip)
 	local tname = tip:GetName()
 	local firstLine = tip:NumLines() + 1
 	for _, r in ipairs(rows) do tip:AddDoubleLine(r[1], r[2]) end
-	-- ClassLoot's layout: the right text moved from the right edge to just after
-	-- the widest left label (stars, Boss, Instance)
+	-- the right text moved from the right edge to just after the widest left
+	-- label (stars, Boss, Instance)
 	local maxLeft = 0
 	for i = firstLine, tip:NumLines() do
 		local l = _G[tname .. "TextLeft" .. i]
@@ -1609,7 +1604,6 @@ for _, t in ipairs({ GameTooltip, ItemRefTooltip }) do
 	end)
 end
 
-SLASH_OKUPGRADES1 = "/okup"
 -- /okup audit: every drop of every raid that is out, for the spec you are in,
 -- with the verdict and why, saved for review (Okanvil.db.upgrades.audit) --
 -- one pass over everything instead of spotting wrong rows one by one.
@@ -1647,20 +1641,6 @@ function U.Audit()
 	--   list: drops on a spec's BiS list for this phase that the filter refuses
 	local P = Okanvil.Prof
 	local fitLines, listLines = {}, {}
-	local KEY_LIST = {
-		WarriorArms = "Arms", WarriorFury = "Fury", WarriorTank = "Protection",
-		PaladinHoly = "Holy", PaladinTank = "Protection", PaladinRetribution = "Retribution",
-		HunterBeastMastery = "Beast mastery", HunterMarksman = "Marksmanship", HunterSurvival = "Survival",
-		RogueAssassination = "Assassination", RogueCombat = "Combat",
-		PriestDiscipline = "Discipline", PriestHoly = "Holy", PriestShadow = "Shadow",
-		DeathKnightBloodDps = "Blood dps", DeathKnightBloodTank = "Blood tank", DeathKnightFrostDps = "Frost",
-		DeathKnightUnholyDps = "Unholy",
-		ShamanElemental = "Elemental", ShamanEnhancement = "Enhancement", ShamanRestoration = "Restoration",
-		MageArcane = "Arcane", MageFire = "Fire", MageFrost = "Frost",
-		WarlockAffliction = "Affliction", WarlockDemonology = "Demonology", WarlockDestruction = "Destruction",
-		DruidBalance = "Balance", DruidFeralDps = "Feral dps", DruidFeralTank = "Feral tank",
-		DruidRestoration = "Restoration",
-	}
 	if P and P.FitsSpec and P.SpecKeys then
 		for raid, bosses in pairs(Loot() or {}) do
 			if U.RaidOut(raid) then
@@ -1693,8 +1673,9 @@ function U.Audit()
 		-- each spec's list for this phase: anything the filter would refuse
 		local now = U.Phase()
 		for _, sk in ipairs(P.SpecKeys()) do
-			local cls = OkanvilBis and OkanvilBis[CLASS_BIS[sk.class]]
-			local rowsOf = cls and KEY_LIST[sk.key] and cls[KEY_LIST[sk.key]] and cls[KEY_LIST[sk.key]][now]
+			local b = FIT_TO_BIS[sk.key]
+			local lists = b and OkanvilBis and OkanvilBis[b[1]]
+			local rowsOf = lists and lists[b[2]] and lists[b[2]][now]
 			for _, row in ipairs(rowsOf or {}) do
 				for n = 1, 6 do
 					local id = row[n]
@@ -1717,24 +1698,29 @@ function U.Audit()
 			pending > 0 and (", " .. pending .. " not cached -- run it again in a minute") or ""))
 end
 
+-- /okup                open the page
+-- /okup <item link>    what the judge says about one item
+-- /okup drops|fits|bis|sound  switch one tooltip part (or the drop alert) on / off
+-- /okup toast | audit | phase [..]
+local SWITCHES = {
+	drops = { "dropTip", "Boss and instance lines on item tooltips" },
+	fits  = { "fitTip", "Fits stars on item tooltips" },
+	bis   = { "bisTip", "BiS lines on item tooltips" },
+	sound = { "sound", "Upgrades drop sound" },
+}
+SLASH_OKUPGRADES1 = "/okup"
 SlashCmdList.OKUPGRADES = function(arg)
-	if arg and arg:lower():match("^%s*audit") then U.Audit(); return end
-	if arg and arg:lower():match("^%s*drops") then
-		udb().dropTip = (udb().dropTip == false) and true or false
-		Okanvil:Print("Boss and instance lines on item tooltips " .. (udb().dropTip and "on" or "off") .. ".")
+	local word = arg and arg:lower():match("^%s*(%a+)")
+	if word == "audit" then U.Audit(); return end
+	local sw = SWITCHES[word]
+	if sw then
+		local key = sw[1]
+		udb()[key] = (udb()[key] == false) and true or false
+		Okanvil:Print(sw[2] .. " " .. (udb()[key] and "on" or "off") .. ".")
+		if key == "sound" and udb().sound then PlaySoundFile(RAT_SOUND) end
 		return
 	end
-	if arg and arg:lower():match("^%s*fits") then
-		udb().fitTip = (udb().fitTip == false) and true or false
-		Okanvil:Print("Fits stars on item tooltips " .. (udb().fitTip and "on" or "off") .. ".")
-		return
-	end
-	if arg and arg:lower():match("^%s*bis") then
-		udb().bisTip = (udb().bisTip == false) and true or false
-		Okanvil:Print("BiS lines on item tooltips " .. (udb().bisTip and "on" or "off") .. ".")
-		return
-	end
-	if arg and arg:lower():match("^%s*toast") then
+	if word == "toast" then
 		-- your best upgrade in this raid (or ICC), to see the toast and drag it into place
 		local raid, mode = U.Here()
 		raid, mode = raid or "icc", mode or "25n"
@@ -1747,12 +1733,6 @@ SlashCmdList.OKUPGRADES = function(arg)
 			end
 		end
 		Okanvil:Print("Upgrades: no upgrade found yet (items still loading?), try again in a moment.")
-		return
-	end
-	if arg and arg:lower():match("^%s*sound") then
-		udb().sound = (udb().sound == false) and true or false
-		Okanvil:Print("Upgrades drop sound " .. (udb().sound and "on" or "off") .. ".")
-		if udb().sound then PlaySoundFile(RAT_SOUND) end
 		return
 	end
 	local ph = arg and arg:match("^%s*[Pp]hase%s*(%S*)")
@@ -1779,7 +1759,7 @@ SlashCmdList.OKUPGRADES = function(arg)
 			.. (v and ("|cff7cfc8a" .. U.Label(v) .. "|r") or "|cff8a8d93no upgrade|r"))
 		return
 	end
-	if not active() then Okanvil:Print("Upgrades is off (Modules).") return end
+	if not active() then Okanvil:Print("Upgrades is off (Modules)."); return end
 	if not Okanvil.win or not Okanvil.win:IsShown() then Okanvil:Toggle() end
 	Okanvil:ShowPanel(U.ADDON)
 end

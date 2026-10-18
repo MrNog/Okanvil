@@ -21,7 +21,6 @@ local W = Okanvil.W
 local WIN_W, WIN_H = 540, 520
 local X = 20                      -- side gutter
 local CONTENT_TOP = -76           -- below the header rule
-local ROW_H = 28                  -- one extra per row
 
 local WALLPAPER = "Interface\\AddOns\\Okanvil\\Media\\setup-bg"
 
@@ -74,24 +73,27 @@ local setupF
 -- an addon counts when it is ENABLED in the addon list (loaded or not yet), and
 -- the player keeps one of the two. The setup asks on its Addons page; after
 -- that the login check asks again only if one comes back on.
---   on / off: is Okanvil's version on, and turn it off
+--   on / off / reset: is Okanvil's version on, turn it off, back to its default
 --   module:   the Okanvil module behind it, switched on with Okanvil's pick
 local function upgDB() Okanvil.db.upgrades = Okanvil.db.upgrades or {}; return Okanvil.db.upgrades end
+local function idsDB() OkanvilIDsDB = OkanvilIDsDB or {}; return OkanvilIDsDB end
 local RIVALS = {
 	{ addon = "Bistooltip", line = "BiS lists on item tooltips", sub = "Which specs want the item, BIS / alt 2 / ...",
 	  module = "Okanvil-Upgrades",
-	  on = function() return upgDB().bisTip ~= false end, off = function() upgDB().bisTip = false end },
+	  on = function() return upgDB().bisTip ~= false end, off = function() upgDB().bisTip = false end,
+	  reset = function() upgDB().bisTip = nil end },
 	{ addon = "ClassLoot", line = "Who an item fits", sub = "Stars per class and spec, on every raid item",
 	  module = "Okanvil-Upgrades",
-	  on = function() return upgDB().fitTip ~= false end, off = function() upgDB().fitTip = false end },
+	  on = function() return upgDB().fitTip ~= false end, off = function() upgDB().fitTip = false end,
+	  reset = function() upgDB().fitTip = nil end },
 	{ addon = "RCLootCouncil", line = "Loot council", sub = "The popup raiders answer, the officers' board",
 	  module = "__council" },
 	{ addon = "WoWPuG", line = "Build a PuG", sub = "LFM line, spam, whisper invites", module = "Okanvil-PuG" },
 	{ addon = "RaidBrowser", line = "Raid finder", sub = "Raids advertised in chat, in one list",
 	  module = "Okanvil-RaidFinder" },
 	{ addon = "SpellID", line = "IDs on tooltips", sub = "Spell and item IDs, for WeakAuras", module = "Okanvil-IDs",
-	  on = function() return not (OkanvilIDsDB and OkanvilIDsDB.tipIDs == false) end,
-	  off = function() OkanvilIDsDB = OkanvilIDsDB or {}; OkanvilIDsDB.tipIDs = false end },
+	  on = function() return idsDB().tipIDs ~= false end, off = function() idsDB().tipIDs = false end,
+	  reset = function() idsDB().tipIDs = nil end },
 }
 Okanvil.RIVALS = RIVALS
 
@@ -99,7 +101,7 @@ local function addonEnabled(name)
 	local _, _, _, enabled, _, reason = GetAddOnInfo(name)
 	return enabled and reason ~= "MISSING"
 end
--- the rivals this install has, enabled
+-- installed, on or off
 local function addonInstalled(name)
 	local _, _, _, _, _, reason = GetAddOnInfo(name)
 	return reason ~= "MISSING"
@@ -348,7 +350,6 @@ function Okanvil:ShowSetup(fromVersion)
 		return function() for _, p in ipairs(paints) do p() end end
 	end
 
-
 	-- ---- pages ----
 	local PAGES = {
 		{
@@ -559,13 +560,8 @@ function Okanvil:ShowSetup(fromVersion)
 		if self_.RefreshRatArt then self_:RefreshRatArt() end
 		for _, r in ipairs(rivals) do
 			if pick[r.addon] == "okanvil" then
-				if r.on and r.off then
-					-- its own switch back on (a "Keep mine" earlier turned it off)
-					if r.addon == "SpellID" then
-						if OkanvilIDsDB then OkanvilIDsDB.tipIDs = nil end
-					elseif r.addon == "Bistooltip" then upgDB().bisTip = nil
-					elseif r.addon == "ClassLoot" then upgDB().fitTip = nil end
-				end
+				-- its own switch back on (a "Keep mine" earlier turned it off)
+				if r.reset then r.reset() end
 				if addonEnabled(r.addon) then keepOkanvil(r); reload = true end
 			else
 				if r.off then r.off() end

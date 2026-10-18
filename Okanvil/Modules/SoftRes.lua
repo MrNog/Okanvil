@@ -416,15 +416,12 @@ do
 	end)
 end
 
--- Whether soft reserves count right now.
+-- Whether soft reserves count right now. SR mode is also the one that takes
+-- reserves by whisper ("sr [item]"), hence the second name.
 function SR.Active()
 	return SR.Mode() == "sr"
 end
-
--- Whether reserves are taken by whisper ("sr [item]") in this mode.
-function SR.WhisperMode()
-	return SR.Mode() == "sr"
-end
+SR.WhisperMode = SR.Active
 
 -- Whether the loot council may be asked right now.
 function SR.CouncilAllowed()

@@ -487,12 +487,14 @@ function W.Slider(parent, label, lo, hi, step, getFn, setFn, onRelease)
 
 	local title = W.Text(s, nil, nil, "dim")
 	title:SetPoint("BOTTOMLEFT", s, "TOPLEFT", 0, 5)
-	local function paint(v) if v == 0 then v = 0 end; title:SetText(label .. ": |cffffd200" .. v .. "|r") end
+	local function paint(v)
+		if v == 0 then v = 0 end   -- -0 prints as "-0"
+		title:SetText(label .. ": |cffffd200" .. v .. "|r")
+	end
 	paint(getFn()); s:SetValue(getFn())
 
 	s:SetScript("OnValueChanged", function(_, v)
 		v = math.floor(v / step + 0.5) * step
-		if v == 0 then v = 0 end   -- -0 prints as "-0"
 		paint(v); s._pending = v
 		if not onRelease then setFn(v) end
 	end)
@@ -886,8 +888,7 @@ W.OpenMenu = openMenu
 --   dash:Refresh()       -- repaint header label/status
 --   dash:ToggleDrawer()  -- show/hide the stat column
 -- ============================================================
--- every page's header buttons are one size, so pages match side by side (a
--- page's own secondaryWidth / tertiaryWidth no longer changes it)
+-- every page's header buttons are one size, so pages match side by side
 local BTN_W, BTN_H, BTN_FONT = 130, 24, 13
 W.HEADER_BTN_W, W.HEADER_BTN_H, W.HEADER_BTN_FONT = BTN_W, BTN_H, BTN_FONT
 -- the label one size up, to match the taller button; fixed like every button

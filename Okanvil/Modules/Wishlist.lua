@@ -70,7 +70,6 @@ Wi.CanTrigger = function() return canTrigger(me()) end
 function Wi.IsOn() return (db().on or Wi._test) and true or false end
 -- Wishes are for the guild's 25-man raids only.
 local function is25() return (SR.Raid().size or 25) == 25 end
-Wi.Is25 = is25
 -- Wishes count only on a council night in a 25: on, and the loot mode is Council.
 function Wi.Live() return Wi.IsOn() and (Wi._test or (SR.Mode() == "council" and is25())) and true or false end
 
@@ -132,6 +131,14 @@ end
 
 local mySent, openWhenCalm      -- defined below, used by SetOn
 
+-- A line for the whole group, Okanvil or not: a raid warning when we may send one.
+local function announce(msg)
+	local inRaid = (GetNumRaidMembers() or 0) > 0
+	local chan = inRaid and ((IsRaidLeader() or IsRaidOfficer()) and "RAID_WARNING" or "RAID")
+		or ((GetNumPartyMembers() or 0) > 0 and "PARTY") or nil
+	if chan then SendChatMessage(msg, chan) end
+end
+
 -- ---- Officer: on / off --------------------------------------------------------
 function Wi.SetOn(on)
 	if on and not is25() then
@@ -152,13 +159,8 @@ function Wi.SetOn(on)
 		prune()
 		if C and C.Send then C.Send("WISHPOST", r.key, r.size, lockKey, d.gen[lockKey]) end
 		Okanvil:Print("Wishlist on: everyone in the group with Okanvil gets the wish window.")
-		-- the rules for everyone, Okanvil or not: a raid warning when we may send one
-		local msg = ("WISHLIST open: pick 1 item for this raid ID in Okanvil, or whisper %s: wh [item]. "
-			.. "It tells the council what you want, it is not a reserve."):format(me() or "me")
-		local inRaid = (GetNumRaidMembers() or 0) > 0
-		local chan = inRaid and ((IsRaidLeader() or IsRaidOfficer()) and "RAID_WARNING" or "RAID")
-			or ((GetNumPartyMembers() or 0) > 0 and "PARTY") or nil
-		if chan then SendChatMessage(msg, chan) end
+		announce(("WISHLIST open: pick 1 item for this raid ID in Okanvil, or whisper %s: wh [item]. "
+			.. "It tells the council what you want, it is not a reserve."):format(me() or "me"))
 		-- whoever turned it on raids too: they get the window like everyone else
 		if not mySent(lockKey) then
 			openWhenCalm({ r.key, r.size, false, 1, lockKey, me(), tostring(d.gen[lockKey]), "wish" })
@@ -179,7 +181,7 @@ local function wipeLocal(lockKey)
 	local s = Okanvil.db.softres and Okanvil.db.softres.myPicks
 	if lockKey then
 		db().list[lockKey] = nil
-		if s then s["wish:" .. lockKey .. ":" .. (me() or "")] = nil end
+		if s then s[SR.PickKey("wish", lockKey)] = nil end
 	else
 		db().list = {}
 		for k in pairs(s or {}) do
@@ -202,7 +204,7 @@ end
 
 -- Lock: the wishes already sent stay on the board, nobody can add one. Every
 -- raider's window closes; turning it on again, or Clear, opens it up again.
--- a lock only means something while the wishlist is on
+-- A lock only means something while the wishlist is on.
 function Wi.IsLocked() return (Wi.IsOn() and db().locked) and true or false end
 function Wi.Accepting() return Wi.Live() and not db().locked end
 local function applyLock(locked)
@@ -214,12 +216,8 @@ function Wi.SetLocked(locked)
 	applyLock(locked)
 	local C = Okanvil.Comms
 	if C and C.Send then C.Send("WISHLOCK", locked and "1" or "0") end
-	local msg = locked and "WISHLIST LOCKED: your wishes are saved, no new wishes for this raid ID."
-		or "WISHLIST open again: pick 1 item in Okanvil, or whisper " .. (me() or "me") .. ": wh [item]."
-	local inRaid = (GetNumRaidMembers() or 0) > 0
-	local chan = inRaid and ((IsRaidLeader() or IsRaidOfficer()) and "RAID_WARNING" or "RAID")
-		or ((GetNumPartyMembers() or 0) > 0 and "PARTY") or nil
-	if chan then SendChatMessage(msg, chan) end
+	announce(locked and "WISHLIST LOCKED: your wishes are saved, no new wishes for this raid ID."
+		or "WISHLIST open again: pick 1 item in Okanvil, or whisper " .. (me() or "me") .. ": wh [item].")
 	Okanvil:Print(locked and "Wishlist locked: no new wishes." or "Wishlist unlocked.")
 end
 
@@ -242,7 +240,7 @@ end
 -- The wish this character already sent on a lockout (the pick window keeps it).
 mySent = function(lockKey)
 	local s = Okanvil.db.softres and Okanvil.db.softres.myPicks
-	local p = s and s["wish:" .. lockKey .. ":" .. (me() or "")]
+	local p = s and s[SR.PickKey("wish", lockKey)]
 	return p and p.sentGen ~= nil and p.list and p.list[1] or nil
 end
 
@@ -671,25 +669,23 @@ function Wi.Test()
 	local lockKey = SR.LockKey(r)
 	if d.list[lockKey] then d.list[lockKey][me()] = nil end
 	local s = Okanvil.db.softres and Okanvil.db.softres.myPicks
-	if s then s["wish:" .. lockKey .. ":" .. (me() or "")] = nil end
+	if s then s[SR.PickKey("wish", lockKey)] = nil end
 	SR.PickWindow.Open(r.key, r.size, false, 1, lockKey, me(), "0", "wish")
 	if Wi.onChange then Wi.onChange() end
 end
 
 SLASH_OKWISH1 = "/okwish"
+-- officer commands: arg -> what it does
+local OFFICER_CMD = {
+	clear = Wi.Clear, reset = Wi.Clear,
+	on = function() Wi.SetOn(true) end, off = function() Wi.SetOn(false) end,
+	lock = function() Wi.SetLocked(true) end, unlock = function() Wi.SetLocked(false) end,
+}
 SlashCmdList.OKWISH = function(arg)
 	arg = (arg or ""):lower()
-	if arg == "test" then Wi.Test()
-	elseif arg == "reset" or arg == "clear" then
-		if not canTrigger(me()) then Okanvil:Print("Only an officer, the raid leader or the master looter can do that."); return end
-		Wi.Clear()
-	elseif arg == "on" or arg == "off" then
-		if not canTrigger(me()) then Okanvil:Print("Only an officer, the raid leader or the master looter can do that."); return end
-		Wi.SetOn(arg == "on")
-	elseif arg == "lock" or arg == "unlock" then
-		if not canTrigger(me()) then Okanvil:Print("Only an officer, the raid leader or the master looter can do that."); return end
-		Wi.SetLocked(arg == "lock")
-	else
-		Okanvil:Print("/okwish on | off | lock | unlock | clear | test")
-	end
+	if arg == "test" then Wi.Test(); return end
+	local fn = OFFICER_CMD[arg]
+	if not fn then Okanvil:Print("/okwish on | off | lock | unlock | clear | test"); return end
+	if not canTrigger(me()) then Okanvil:Print("Only an officer, the raid leader or the master looter can do that."); return end
+	fn()
 end

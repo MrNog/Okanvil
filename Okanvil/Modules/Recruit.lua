@@ -957,13 +957,11 @@ function Rec_BuildUI(parent)
 		-- and the priority ladder sync. Officer-gated both ways: it overwrites what
 		-- the receiver has.
 		secondaryText = function() return "Share message" end,
-		secondaryWidth = 120,
 		secondaryShown = function()
 			return Okanvil.U and Okanvil.U.isOfficer and Okanvil.U.isOfficer(UnitName("player"))
 		end,
 		onSecondary = function() Rec_ShareMessage() end,
 		tertiaryText = function() return "Whispers" end,
-		tertiaryWidth = 90,
 		onTertiary = function() if f.whispers then f.whispers:Toggle() end end,
 		-- State, then the night's tally, on one line in the header. The counts used
 		-- to sit at the bottom of Setup, which is the one place you are not looking

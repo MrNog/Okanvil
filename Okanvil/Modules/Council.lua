@@ -2718,45 +2718,14 @@ function C_.OpenPicker()
 	picker:Show()
 end
 
--- ============================================================
--- COUNCIL NIGHT in the Loot page header.
---
--- The council has no page of its own any more: its settings and the priority
--- ladder are tabs of the Loot page, and council night is a button in that
--- page's header. These three are what the button reads and does.
--- The master looter switches it; everyone else sees the ML's state.
--- ============================================================
-function C_.NightText()
-	if not C_.MayRun() then
-		return C_.remoteNight and ("Council night: ON (" .. C_.remoteNight .. ")")
-			or "Council night: OFF"
-	end
-	return C_.active and "Council night: ON" or "Council night: OFF"
-end
-
-function C_.NightKind()
-	if not C_.MayRun() then return C_.remoteNight and "primary" or "secondary" end
-	return C_.active and "primary" or "secondary"
-end
-
-function C_.NightClick()
-	if not C_.MayRun() then
-		Okanvil:Print("Loot council: only the master looter switches council night.")
-		C_.QueryNight()
-		return
-	end
-	C_.SetActive(not C_.active)
-	C_._repaintHeader()
-end
-
 -- Repaint whatever header shows council night: the Loot page, when built.
 C_._repaintHeader = function()
 	local fill = Okanvil._lootFill
 	if fill and fill.dash and fill.dash.Refresh then fill.dash:Refresh() end
 end
 
--- The council's panel under the Guild run tile on the Loot page: the night's
--- state, the solo test, and the one option. body.needH is the height it uses.
+-- The council's panel under the Council tile on the Loot page: the night's
+-- state, its on / off switch, and the options. body.needH is the height it uses.
 function C_.BuildRunTab(body)
 	-- Two columns: what the council IS doing on the left, the buttons that act on
 	-- it pinned right. Centred controls in a wide page leave the eye hunting;
@@ -2791,29 +2760,19 @@ function C_.BuildRunTab(body)
 			hint:SetText("Open the mini roll and press |cffe0b860Ask this one|r on an item.")
 		else
 			state:SetText("|cff8a8d93Council night is off|r")
-			hint:SetText("Only the master looter turns it on: pick Guild run.")
+			hint:SetText("Only the master looter turns it on: pick Council.")
 		end
 	end
 	paintState()
 
-	-- ---- right: actions -----------------------------------------------
-	local function sideBtn(label, row, fn)
-		local b = W.Button(body, label)
-		b:SetSize(BW, BH)
-		b:SetPoint("TOPRIGHT", -14, -14 - (row - 1) * (BH + 6))
-		b:SetScript("OnClick", fn)
-		return b
-	end
-
-	-- The test round is a command, /okcouncil test [n] (off to end it), not a
-	-- button: it is a tool for whoever builds the addon, not for the raid.
-	-- Council night on / off, top right. Picking SR or Roll ends it too, but
-	-- with Council picked there was no way to switch the night off.
+	-- ---- right: council night on / off -------------------------------
+	-- Picking SR or Roll ends the night too; this is the switch while Council
+	-- stays picked. The test round is /okcouncil test, not a button.
 	local nightB = W.Button(body, "End council night")
 	nightB:SetSize(BW, BH)
 	nightB:SetPoint("TOPRIGHT", -14, -14)
 	local function paintNight()
-		if not (enabled() and C_.MayRun()) then nightB:Hide() return end
+		if not (enabled() and C_.MayRun()) then nightB:Hide(); return end
 		nightB:Show()
 		nightB:SetKind(C_.active and "secondary" or "primary")
 		nightB.text:SetText(C_.active and "End council night" or "Start council night")
@@ -3122,132 +3081,24 @@ function C_.TestOff()
 end
 
 -- ============================================================
--- "IS TONIGHT A COUNCIL NIGHT?"
+-- WHO RUNS THE LOOT. On every loot-method / roster change, acts only when the
+-- master looter moved: the old one's council-night state no longer applies,
+-- and the new one is asked for theirs.
 --
--- One way in, and only when "Ask when I become master looter" is switched on
--- (off by default): the master looter CHANGES and it is now you -> "use loot
--- council?". Only on a change: the same ML seen again on a roster update is not
--- a new question, and a No stands until the ML moves.
---
--- Nothing here ever SETS master loot. A prompt that made you the ML on a raid
--- zone-in let a second officer take master loot off the real one by clicking
--- Yes; the Loot page's "Set me as ML" button is the only way, and it asks first.
---
--- Its own frame, not Okanvil:Confirm: that reuses ONE dialog, so the Logs
--- prompt firing on the same zone-in would silently replace this one.
+-- Nothing here ever SETS master loot: the Loot page's "Set me as ML" button is
+-- the only way, and it asks first.
 -- ============================================================
 local lastML            -- ML name seen by the last check; "" = no master loot
 
-local function sameName(a, b)
-	return a and b and a:gsub("%-.*", ""):lower() == b:gsub("%-.*", ""):lower()
-end
-
--- The answer (Yes or No) is kept for the raid it was given in, so a /reload or a
--- relog does not ask again. It is the same raid while the loot run key matches,
--- or for NIGHT_TTL unless you are now in a DIFFERENT raid instance (the key moves
--- from "week|" to "lock|" after the first kill, and the question is often
--- answered outside, before zoning in). A new ID or the next night asks again.
--- Changing it by hand is always the Council toggle on the Loot page.
-
-local function raidContext()
-	local L = Okanvil.Loot
-	local key, zone, diff = L and L.RunKey and L.RunKey()
-	local inRaid = select(2, IsInInstance()) == "raid"
-	return key, zone, diff, inRaid
-end
-
-local function rememberAnswer(yes)
-	local key, zone, diff, inRaid = raidContext()
-	db().nightAnswer = { yes = yes and true or false, at = time(),
-		key = key, zone = zone, diff = diff, raid = inRaid }
-end
-
-local function answeredForThisRaid()
-	local a = db().nightAnswer
-	if type(a) ~= "table" or not a.at then return false end
-	if time() - a.at >= NIGHT_TTL then return false end
-	local key, zone, diff, inRaid = raidContext()
-	if a.key and a.key == key then return true end
-	if a.raid and inRaid and (a.zone ~= zone or a.diff ~= diff) then return false end
-	return true
-end
-
-local askNightF
-local function askCouncilNight()
-	if not askNightF then
-		local f = CreateFrame("Frame", nil, UIParent)
-		f:SetSize(320, 120)
-		-- The middle of the screen, clear of the Logs prompt at the top: a raid
-		-- zone-in fires both, and stacked there they read as one muddled box.
-		f:SetPoint("CENTER", 0, 60)
-		f:SetFrameStrata("FULLSCREEN_DIALOG")
-		f:SetToplevel(true)
-		Okanvil:Skin(f)
-
-		f.txt = W.Text(f, "", "body")
-		f.txt:SetPoint("TOPLEFT", 14, -16)
-		f.txt:SetPoint("TOPRIGHT", -14, -16)
-		f.txt:SetJustifyH("CENTER")
-		if f.txt.SetSpacing then f.txt:SetSpacing(5) end
-
-		local yes = W.Button(f, "Yes", "primary")
-		yes:SetSize(140, 24); yes:SetPoint("BOTTOMLEFT", 14, 14)
-		yes:SetScript("OnClick", function()
-			f:Hide()
-			Okanvil:Trace("COUNCIL", "Yes to council tonight")
-			rememberAnswer(true)
-			C_.SetActive(true)
-		end)
-
-		local no = W.Button(f, "No")
-		no:SetSize(140, 24); no:SetPoint("BOTTOMRIGHT", -14, 14)
-		no:SetScript("OnClick", function()
-			f:Hide()
-			Okanvil:Trace("COUNCIL", "No to council tonight")
-			rememberAnswer(false)
-			C_.SetActive(false)
-		end)
-		askNightF = f
-	end
-	askNightF.txt:SetText("You are the master looter.\nUse |cffe0b860loot council|r tonight?\n"
-		.. "|cff8a8d93Rolls keep working either way.|r")
-	-- Tall enough for the text it was just given, plus the buttons under it.
-	local th = askNightF.txt:GetStringHeight() or 40
-	askNightF:SetHeight(16 + th + 18 + 24 + 14)
-	if PlaySound then PlaySound("igMainMenuOpen") end
-	Okanvil:Trace("COUNCIL", "asking: council tonight?")
-	askNightF:Show()
-end
-
-local function mayAsk()
-	if not (enabled() and not C_.testMode and not C_.active and db().askOnML == true) then
-		return false
-	end
-	if answeredForThisRaid() then
-		Okanvil:Trace("COUNCIL", "not asking: already answered for this raid")
-		return false
-	end
-	return true
-end
-
--- Branch 1: runs on every loot-method / roster change, acts only when the ML moved.
 local function mlCheck()
 	local L = Okanvil.Loot
 	if not (L and L.MasterLooterName) then return end
 	local ml = L.MasterLooterName() or ""
 	if ml == lastML then return end
 	lastML = ml
-	-- A new master looter: the old one's council-night state no longer applies.
 	C_.remoteNight = nil
 	if C_._repaintHeader then pcall(C_._repaintHeader) end
 	if ml ~= "" then C_.QueryNight() end
-	local me = UnitName("player")
-	if not sameName(ml, me) then
-		-- Someone else (or nobody) runs the loot now: a question about it is stale.
-		if askNightF and askNightF:IsShown() then askNightF:Hide() end
-		return
-	end
-	if mayAsk() then askCouncilNight() end
 end
 
 do
@@ -3418,16 +3269,15 @@ do
 		-- rows with no name or icon.
 		-- Every automatic council option is opt-in. They used to default ON, so
 		-- installs that already saved them are switched off once; anyone who
-		-- wants one turns it back on under the Guild run tile of the Loot page.
+		-- wants one turns it back on under the Council tile of the Loot page.
 		do
 			local d = db()
 			if not d._autoOffV1 then
-				d.askOnML, d.autoAsk, d.whisperWinner = false, false, false
+				d.autoAsk = false
 				d._autoOffV1 = true
 			end
-			-- "Ask when I become master looter" is gone: the Guild run tile is the
-			-- choice now, so a switch saved on before must not keep asking.
-			d.askOnML = nil
+			-- settings of options that no longer exist (the Council tile is the choice now)
+			d.askOnML, d.nightAnswer, d.whisperWinner, d.hidePrio = nil, nil, nil, nil
 		end
 
 		-- COUNCIL NIGHT survives a reload, for NIGHT_TTL, so it covers a raid night and
@@ -3589,7 +3439,6 @@ function C_.HasOpenRound()
 	return false
 end
 
--- The board on request (mini roll's Council button, /okcouncil board).
 -- The mini roll's Council button: opens the board, or closes it when it is open.
 function C_.OpenBoard()
 	if board and board:IsShown() then board:Hide(); return end

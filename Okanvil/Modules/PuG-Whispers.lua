@@ -510,15 +510,16 @@ function M.AuditDetail(name)
 end
 
 -- ------------------------------------------------------------
--- /pug mock: four made-up joined players, one per badge state, so the audit
+-- /pug mock: five made-up joined players, one per badge state, so the audit
 -- rows can be checked solo. They live only in memory, never touch the inspect
 -- cache, and Whisper / Kick on them print instead of acting.
 -- ------------------------------------------------------------
 local function mockPlayers()
-	local ach = {}
-	for i, c in ipairs(Okanvil.Audit.RaidChips(M.db and M.db.raid)) do ach[c.id] = i <= 2 end
-	local all = {}
-	for _, c in ipairs(Okanvil.Audit.RaidChips(M.db and M.db.raid)) do all[c.id] = true end
+	local ach, all = {}, {}
+	for i, c in ipairs(Okanvil.Audit.RaidChips(M.db and M.db.raid)) do
+		ach[c.id] = i <= 2
+		all[c.id] = true
+	end
 	return {
 		{ name = "Lightwardh", class = "PALADIN", sub = "|cff7cfc8aholy|r",
 			info = { gs = 5912, ilvl = 258, pvp = 0, ach = all,

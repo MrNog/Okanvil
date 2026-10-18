@@ -110,15 +110,10 @@ SR.FindItemByName = findByName
 -- printer instead. Returns true when the line was a reserve command at all.
 function SR.HandleWhisper(sender, msg, class, reply)
 	local text = trim(msg or "")
-	local cmd, rest = text:match("^[Ss][Rr]%f[%A](.*)$")
-	if not cmd then
-		if text:lower() ~= "sr" then return false end
-		rest = ""
-	else
-		rest = trim(cmd)
-	end
+	local after = text:match("^[Ss][Rr]%f[%A](.*)$")
+	if not after and text:lower() ~= "sr" then return false end
+	local rest = trim(after)
 	sender = stripRealm(sender)
-	local d = Okanvil.db.softres
 
 	local function mine()
 		local ids = SR.ReservesOf(sender)
@@ -362,7 +357,7 @@ local function testOff()
 	if L.WorldTest then L.WorldTest(false) end
 	L._testML = nil
 	if RM and RM.ApplyMode then pcall(RM.ApplyMode) end
-	Okanvil:Print(("SR test off: %d test drops removed, list cleared, mode back to Normal roll."):format(n))
+	Okanvil:Print(("SR test off: %d test drops removed, list cleared, mode back to Roll."):format(n))
 end
 
 -- /okres <cmd>; returns true when it handled the command.

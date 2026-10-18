@@ -1445,7 +1445,6 @@ local function build(panel)
 		-- refuses them) and has nobody to audit, so showing the buttons would
 		-- only promise something that never happens.
 		secondaryText = function() return "Send to raid" end,
-		secondaryWidth = 100,
 		-- CanEdit is now true outside a guild (your notes are yours alone there),
 		-- but sending needs an officer AND a guild to send to -- so these two ask
 		-- the stricter question rather than riding on the edit gate.
@@ -1459,7 +1458,6 @@ local function build(panel)
 		end,
 
 		tertiaryText = function() return "Who has them?" end,
-		tertiaryWidth = 110,
 		tertiaryTip = "Ask the group to report back. Anyone who does not answer\nis not running Okanvil -- which is what you want to know\nbefore a pull, not after one.",
 		tertiaryShown = function() return N.CanShare and N.CanShare() end,
 		onTertiary = function() N.RunAudit() end,

@@ -266,6 +266,7 @@ local pendingItemScroll   -- scroll offset that puts the selected item on screen
 -- roll names an exact page and always outranks "go to the newest boss".
 local pendingJumpNewest = false
 local function isML() return amML() end
+RM.IsML = isML
 
 -- The one raider who soft-reserved this drop, when exactly one did: the item is
 -- theirs without a roll. Not offered when that raider is no longer in the group.
@@ -279,7 +280,6 @@ local function soleReserver(d)
 	if inGroup and not (UnitInRaid(name) or UnitInParty(name)) then return nil end
 	return name
 end
-RM.IsML = isML
 
 local function buildWindow()
 	if win then return win end

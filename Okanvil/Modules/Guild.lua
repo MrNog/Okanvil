@@ -217,8 +217,8 @@ local function snapshotRaid(trigger, bossName)
 		boss = bossName or "", trigger = trigger,
 		char = UnitName("player") or "",   -- which toon took it: lockout IDs are per character
 		count = #players, players = players,
-		-- set: the snapshot waits until we are saved. Snapshots from older versions were
-		-- taken at the first pull, before the lockout existed; G.FillLockout fills those.
+		-- set: the auto snapshot waits until we are saved. One taken by hand before the
+		-- first kill has none yet; G.FillLockout fills it in.
 		lockoutId = myLockoutId(zone, difficultyID),
 	}
 end
@@ -277,9 +277,9 @@ end
 -- again and overwrites the snapshot's spec with whatever it just read; anyone
 -- it could not reach (offline, out of range) keeps the recent guess or none.
 --
--- In combat it waits: a snapshot can be taken mid-fight, and an
--- inspect round in the middle of a boss both misses whoever is out of range and
--- is the last thing anyone wants running then. Busy (another module is already
+-- In combat it waits: a snapshot can be taken mid-fight, and an inspect round
+-- in the middle of a boss both misses whoever is out of range and is the last
+-- thing anyone wants running then. Busy (another module is already
 -- scanning) it tries again a few times.
 -- ------------------------------------------------------------
 local afterCombat = {}
@@ -326,8 +326,9 @@ end
 -- ------------------------------------------------------------
 -- The LOCKOUT ID of a snapshot taken before anyone was saved.
 --
--- Snapshots from older versions were taken at the first pull; the lockout only exists once the
--- first boss is dead. So after each fight in a raid we ask the server for our
+-- A snapshot taken before the first kill (by hand, or by an older version at the
+-- first pull) has no lockout yet: it only exists once the first boss is dead.
+-- So after each fight in a raid we ask the server for our
 -- lockouts (RequestRaidInfo is async: the answer is UPDATE_INSTANCE_INFO) and fill
 -- the newest snapshot of this instance that is still missing its id -- only one
 -- taken in the last 12 hours, so an old snapshot never picks up a new lockout.
@@ -423,8 +424,9 @@ end
 -- Guild members and the current group are answered at once from the roster.
 -- Everyone else (pugs) goes through /who, one name at a time. Servers differ in
 -- how soon they answer the next /who: the queue starts fast and, each time an
--- answer never comes, doubles the wait and asks that name once more. The query runs silently -- results go to the event, not the Who
--- window or chat -- and steps aside whenever the player runs a /who themselves.
+-- answer never comes, doubles the wait and asks that name once more. The query
+-- runs silently -- results go to the event, not the Who window or chat -- and
+-- steps aside whenever the player runs a /who themselves.
 -- ------------------------------------------------------------
 local WHO_GAP_MIN, WHO_GAP_MAX, WHO_TIMEOUT = 1, 6, 4
 local whoGap = WHO_GAP_MIN   -- learned for the session
@@ -723,8 +725,8 @@ end
 
 -- ------------------------------------------------------------
 -- Auto-capture when this toon becomes saved to the raid, i.e. at the first boss
--- kill. The first pull was too early: it is usually trash, while the raid is
--- still filling (18 of 25 captured). 3.3.5a has no kill event, so after each
+-- kill: the first pull is usually trash, while the raid is still filling.
+-- 3.3.5a has no kill event, so after each
 -- fight in a raid we ask for our lockouts, and the answer that shows us saved to
 -- this instance takes the snapshot. On a raid continued from an earlier night we
 -- are already saved, so it is taken after the first fight instead.
@@ -778,8 +780,8 @@ local function trySavedSnapshot()
 end
 
 -- The snapshot is the roster at the first kill, so whoever joins after it would
--- be missing. After each later fight, add the latecomers to
--- this raid's snapshot, keeping the raid group they are in now. Attendance then
+-- be missing. After each later fight, add the latecomers to this raid's
+-- snapshot, keeping the raid group they are in now. Attendance then
 -- gets them too: its night merges in names it does not have yet.
 local topUpQueued = false
 local function topUpSnapshot()
@@ -833,7 +835,7 @@ local function afterRaidFight()
 end
 
 ev:SetScript("OnEvent", function(_, event)
-	-- Modulo Guild DESLIGADO = nao faz snapshot nem reage a grupo.
+	-- Guild module off: no snapshot, no reacting to the group.
 	if Okanvil.ModuleActive and not Okanvil:ModuleActive("__guild") then return end
 	if event == "PLAYER_REGEN_DISABLED" then
 		-- passive work: wait for the fight to end

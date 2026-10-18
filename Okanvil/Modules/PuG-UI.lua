@@ -1512,10 +1512,9 @@ local WHISPERS = {
 				said = "|cffff80ff" .. (a.said or "") .. "|r",
 				-- a "declined" can be asked again
 				canInvite = a.status ~= "invited" and a.status ~= "joined",
-				badge = M.AuditBadge and M.AuditBadge(a.name),
-				detail = M.AuditDetail and M.AuditDetail(a.name) }
+				badge = M.AuditBadge(a.name), detail = M.AuditDetail(a.name) }
 		end
-		for _, p in ipairs(M.GroupMembers and M.GroupMembers() or {}) do
+		for _, p in ipairs(M.GroupMembers()) do
 			local sub = p.sub or M.SubLabel(p.name)
 			out[#out + 1] = { name = p.name, class = p.class, status = "joined", t = p.t,
 				sub = sub ~= "" and sub or "|cff6f7176spec not read|r",
@@ -1558,7 +1557,6 @@ function M.BuildUI(parent)
 		-- the Whispers panel is its own window docked to Okanvil's right edge
 		onSecondary = function() M.ToggleWhispers() end,
 		secondaryText = function() return "Whispers" end,
-		secondaryWidth = 90,
 		primaryText = function() return M.IsActive() and "STOP spamming" or "START spamming" end,
 		primaryKind = function() return M.IsActive() and "primary" or "secondary" end,
 		onPrimary = function() M.Toggle(); M.RefreshUI() end,
