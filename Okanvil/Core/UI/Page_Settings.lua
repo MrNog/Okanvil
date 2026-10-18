@@ -113,11 +113,14 @@ function Okanvil:Settings_General(p)
 		y1 = (W.Section(p, text, C1, top))
 		y2 = y1
 	end
+	-- a hint, then a gap before the next control's label (the label sits above
+	-- its slider bar, and grows with the text size)
+	local GAP = 14
 	local function hint(text, col)
 		if col == 2 then
-			y2 = W.Hint(p, text, C2 + 2, y2, COL_W - 10)
+			y2 = W.Hint(p, text, C2 + 2, y2, COL_W - 10) - GAP
 		else
-			y1 = W.Hint(p, text, C1 + 2, y1, COL_W - 10)
+			y1 = W.Hint(p, text, C1 + 2, y1, COL_W - 10) - GAP
 		end
 	end
 
@@ -130,7 +133,7 @@ function Okanvil:Settings_General(p)
 	y1 = y1 - SLIDER_TOP
 	W.Slider(p, "Window scale", 0.6, 1.8, 0.05, function() return db.scale end,
 		function(v) db.scale = v; db.scaleSetByUser = true; Okanvil.win:SetScale(v) end, true):SetPoint("TOPLEFT", C1, y1)
-	y1 = y1 - 22
+	y1 = y1 - 26
 	hint("text, icons and spacing together", 1)
 
 	-- How solid the window is. With the panels inside it see-through, this is
@@ -138,14 +141,14 @@ function Okanvil:Settings_General(p)
 	y1 = y1 - SLIDER_TOP
 	W.Slider(p, "Window opacity", 0.3, 1.0, 0.05, function() return db.bgAlpha or 0.95 end,
 		function(v) db.bgAlpha = v; Okanvil:ReskinAll(v) end):SetPoint("TOPLEFT", C1, y1)
-	y1 = y1 - 22
+	y1 = y1 - 26
 	hint("1 = solid, lower = see the game through it", 1)
 
 	-- Text only; buttons keep their size. Applied on release.
 	y1 = y1 - SLIDER_TOP
 	W.Slider(p, "Text size", 0.85, 1.5, 0.05, function() return db.textScale or 1 end,
 		function(v) db.textScale = v; Okanvil:ApplyFonts() end, true):SetPoint("TOPLEFT", C1, y1)
-	y1 = y1 - 22
+	y1 = y1 - 26
 	hint("page text only -- some lists fit best after a /reload", 1)
 
 	-- RIGHT: the art, its toggle and its opacity as one block. The slider does
@@ -155,7 +158,7 @@ function Okanvil:Settings_General(p)
 		function(v) db.ratArt = v and "on" or "off"; Okanvil:RefreshRatArt() end)
 	showChk:SetHeight(26); showChk.btn:SetSize(46, 18); showChk:SetWidth(260)
 	showChk:SetPoint("TOPLEFT", C2, y2)
-	y2 = y2 - 24 - SLIDER_TOP
+	y2 = y2 - 26 - GAP - SLIDER_TOP
 	W.Slider(p, "Wallpaper strength", 0.0, 0.8, 0.05, function() return db.ratAlpha end,
 		function(v) db.ratAlpha = v; Okanvil:RefreshRatArt() end):SetPoint("TOPLEFT", C2, y2)
 	y2 = y2 - 22
@@ -572,7 +575,8 @@ function Okanvil:Settings_Invite(p)
 		sortChk:SetPoint("TOPLEFT", X, -206 + Y0)
 		sortChk:Tooltip("When you lead a 25-man, each person who joins goes to their role's groups once. Move them afterwards and they stay put.")
 		local sortHint = W.Text(p, "25-man: melee and tanks to groups 1-2, ranged 3-4, healers 5. "
-			.. "Each person is placed once, when they join.", "note", "dim")
+			.. "10-man: no sort, everyone goes in groups 1-2. Each person is placed once, when they join. "
+			.. "10 or 25 is your raid difficulty.", "note", "dim")
 		sortHint:SetPoint("TOPLEFT", X + 2, -232 + Y0); sortHint:SetWidth(600); sortHint:SetJustifyH("LEFT")
 
 		-- PuG spam: also /yell the line. Off by default.

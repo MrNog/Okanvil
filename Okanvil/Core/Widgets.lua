@@ -886,6 +886,20 @@ W.OpenMenu = openMenu
 --   dash:Refresh()       -- repaint header label/status
 --   dash:ToggleDrawer()  -- show/hide the stat column
 -- ============================================================
+-- every page's header buttons are one size, so pages match side by side (a
+-- page's own secondaryWidth / tertiaryWidth no longer changes it)
+local BTN_W, BTN_H, BTN_FONT = 130, 24, 13
+W.HEADER_BTN_W, W.HEADER_BTN_H, W.HEADER_BTN_FONT = BTN_W, BTN_H, BTN_FONT
+-- the label one size up, to match the taller button; fixed like every button
+-- label, so Settings > Text size does not grow it past the box
+local function headerFont(b)
+	local t = b and b.text
+	if not t then return b end
+	t._okSize, t._okFixed = BTN_FONT, true
+	t:SetFont(Okanvil:Font(), BTN_FONT)
+	return b
+end
+W.HeaderFont = headerFont
 function W.Dashboard(parent, cfg)
 	cfg = cfg or {}
 	local D = { pages = {}, tabBtns = {} }
@@ -958,7 +972,7 @@ function W.Dashboard(parent, cfg)
 		-- is really an ON/OFF switch can show its state as the button fill.
 		cta = W.Button(header, cfg.primaryText and cfg.primaryText() or "",
 			cfg.primaryKind and cfg.primaryKind() or "primary")
-		cta:SetSize(150, 22); cta:SetPoint("RIGHT", -10, 0)
+		headerFont(cta):SetSize(BTN_W, BTN_H); cta:SetPoint("RIGHT", -10, 0)
 		cta:SetScript("OnClick", function() cfg.onPrimary() end)
 		D.cta = cta
 	end
@@ -967,7 +981,7 @@ function W.Dashboard(parent, cfg)
 	local cta2
 	if cfg.onSecondary then
 		cta2 = W.Button(header, cfg.secondaryText and cfg.secondaryText() or "", "secondary")
-		cta2:SetSize(cfg.secondaryWidth or 130, 22)
+		headerFont(cta2):SetSize(BTN_W, BTN_H)
 		if cta then cta2:SetPoint("RIGHT", cta, "LEFT", -6, 0)
 		else cta2:SetPoint("RIGHT", -10, 0) end
 		cta2:SetScript("OnClick", function() cfg.onSecondary() end)
@@ -979,7 +993,7 @@ function W.Dashboard(parent, cfg)
 	local cta3
 	if cfg.onTertiary then
 		cta3 = W.Button(header, cfg.tertiaryText and cfg.tertiaryText() or "", "secondary")
-		cta3:SetSize(cfg.tertiaryWidth or 120, 22)
+		headerFont(cta3):SetSize(BTN_W, BTN_H)
 		if cta2 then cta3:SetPoint("RIGHT", cta2, "LEFT", -6, 0)
 		elseif cta then cta3:SetPoint("RIGHT", cta, "LEFT", -6, 0)
 		else cta3:SetPoint("RIGHT", -10, 0) end
