@@ -2815,6 +2815,22 @@ local function isLootCaller(who, event)
 	return (ml and who and noRealm(ml):lower() == noRealm(who):lower()) and true or false
 end
 
+-- Does a call say it is a roll? Whole words, typed fast and wrong: ms / m.s /
+-- mainspec / main, os / o.s / offspec / off, need / greed, and roll however it
+-- is spelt -- rol, rool, rolll, r0ll, rolls. (A field on L: this file is at Lua's
+-- limit of locals.)
+L._ROLL_WORDS = { ms = true, mspec = true, mainspec = true, main = true, os = true, ospec = true,
+	offspec = true, off = true, need = true, greed = true }
+function L._rollWord(text)
+	text = (text or ""):lower():gsub("m%.s%.?", "ms"):gsub("o%.s%.?", "os")
+	for w in text:gmatch("%a+") do
+		if L._ROLL_WORDS[w] then return true end
+		if w:match("^r+[o0]+l+[sz]?$") or w == "rll" or w == "roolz" then return true end
+	end
+	-- "r0ll": the zero is not a letter, so look at the raw text once more
+	return text:find("%f[%w]r+0+l+%f[%W]") ~= nil
+end
+
 local function onRollAnnounce(msg, sender, event)
 	if type(msg) ~= "string" then return end
 
@@ -2889,8 +2905,7 @@ local function onRollAnnounce(msg, sender, event)
 	-- "ms"/"os" are matched as WHOLE WORDS (%f is Lua's frontier pattern). As bare
 	-- substrings they hide inside "boss", "close", "most" -- which would make almost
 	-- any raid warning look like a roll call.
-	if lower:find("roll") or lower:find("%f[%w]ms%f[%W]") or lower:find("%f[%w]os%f[%W]")
-		or lower:find("%f[%w]offspec%f[%W]") or lower:find("%f[%w]mainspec%f[%W]") then
+	if L._rollWord(lower) then
 		L.NoteExternalRoll(link, winnerCount(lower), isLootCaller(sender, event), sender)
 		return
 	end
