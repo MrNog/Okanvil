@@ -30,6 +30,26 @@ local CLASS_BIS = {
 	WARRIOR = "Warrior", PALADIN = "Paladin", HUNTER = "Hunter", ROGUE = "Rogue", PRIEST = "Priest",
 	DEATHKNIGHT = "Death knight", SHAMAN = "Shaman", MAGE = "Mage", WARLOCK = "Warlock", DRUID = "Druid",
 }
+U.CLASS_BIS = CLASS_BIS
+-- each BiS list's own colour, by its school or role (the class keeps its class colour)
+local SPEC_COLOR = {
+	["Death knight"] = { ["Blood dps"] = "E0303A", ["Blood tank"] = "B01E28", Frost = "5CB8FF", Unholy = "5FD35F" },
+	Druid = { Balance = "7A8CFF", ["Feral dps"] = "FF9A2E", ["Feral tank"] = "E0303A", Restoration = "5FD35F" },
+	Hunter = { ["Beast mastery"] = "5FD35F", Marksmanship = "E8665A", Survival = "FF7EB6" },
+	Mage = { Arcane = "B36BFF", Fire = "FF7A1F", ["Fire FFB"] = "FFA54A", Frost = "5CB8FF" },
+	Paladin = { Holy = "FFD966", Protection = "C9CED6", Retribution = "F58CBA" },
+	Priest = { Discipline = "F2F2F2", Holy = "FFD966", Shadow = "8A55D6" },
+	Rogue = { Assassination = "7CCB3A", Combat = "FFF569" },
+	Shaman = { Elemental = "4A9BFF", Enhancement = "FFB347", Restoration = "3FD0B0" },
+	Warlock = { Affliction = "5FD35F", Demonology = "9482C9", Destruction = "FF6A1F" },
+	Warrior = { Arms = "C79C6E", Fury = "E0303A", Protection = "C9CED6" },
+}
+-- "Rogue", "Combat" -> "|cffFFF569Combat|r" (uncoloured if unknown)
+function U.SpecText(cls, list, text)
+	local hex = SPEC_COLOR[cls] and SPEC_COLOR[cls][list]
+	text = text or list
+	return hex and ("|cff" .. hex .. text .. "|r") or text
+end
 -- tree index -> { label, BiS list name } (nil list = no BiS list, item level only)
 local TREES = {
 	WARRIOR     = { { "Arms", "Arms" }, { "Fury", "Fury" }, { "Protection", "Protection" } },
@@ -1164,6 +1184,333 @@ aev:SetScript("OnEvent", function(_, event, a1)
 	if not ok and Okanvil.Err then Okanvil:Err("Upgrades drop alert", err) end
 end)
 
+-- ------------------------------------------------------------
+-- BiS lines on every item tooltip: each spec whose list names this item, with
+-- its icon, and every phase that names it ("T9 BIS / T10 alt 2"). Phases not
+-- out on the server are left out; sorted by place, yours first among equals.
+-- /okup bis turns it off.
+-- ------------------------------------------------------------
+local BIS_CLASS_TOKEN = {}
+for token, name in pairs(CLASS_BIS) do BIS_CLASS_TOKEN[name] = token end
+local bisIndex      -- [id] = { ["Rogue|Combat"] = { class, list, places = { [phase] = rank } } }
+
+local function buildBisIndex()
+	bisIndex = {}
+	for clsName, specs in pairs(OkanvilBis or {}) do
+		for list, phases in pairs(specs) do
+			for phase, rows in pairs(phases) do
+				for _, row in ipairs(rows) do
+					-- two rings and two trinkets are worn: the list's top two are both BIS
+					local pair = row.slot == "Finger" or row.slot == "Trinket"
+					for n, id in ipairs(row) do
+						local rank = (pair and n == 2) and 1 or n
+						local byItem = bisIndex[id] or {}
+						bisIndex[id] = byItem
+						local k = clsName .. "|" .. list
+						local e = byItem[k] or { class = clsName, list = list, places = {} }
+						byItem[k] = e
+						if not e.places[phase] or rank < e.places[phase] then e.places[phase] = rank end
+					end
+				end
+			end
+		end
+	end
+end
+
+local function onItemTip(tip)
+	if udb().bisTip == false or not active() then return end
+	local _, link = tip:GetItem()
+	local id = link and tonumber(link:match("item:(%d+)"))
+	if not id then return end
+	if not bisIndex then buildBisIndex() end
+	local byItem = bisIndex[AliId(id)]
+	if not byItem then return end
+	local now = PHASE_ORDER[U.Phase()] or 4
+	local mine = U.Spec()
+	local rows = {}
+	for _, e in pairs(byItem) do
+		local parts, latest = {}, nil
+		for _, phase in ipairs(OkanvilBisPhases or {}) do
+			local rank = e.places[phase]
+			if rank and (PHASE_ORDER[phase] or 0) <= now then
+				parts[#parts + 1] = phase .. (rank == 1 and " BIS" or (" alt " .. rank))
+				latest = rank
+			end
+		end
+		if #parts > 0 then
+			local own = mine and CLASS_BIS[mine.class] == e.class and mine.list == e.list
+			-- sorted by its place on the newest list that names it: BIS, alt 2, alt 3...
+			rows[#rows + 1] = { e = e, text = table.concat(parts, " / "), own = own, rank = latest }
+		end
+	end
+	if #rows == 0 then return end
+	table.sort(rows, function(a, b)
+		if a.rank ~= b.rank then return a.rank < b.rank end
+		if a.own ~= b.own then return a.own end
+		if a.e.class ~= b.e.class then return a.e.class < b.e.class end
+		return a.e.list < b.e.list
+	end)
+	tip:AddLine(" ")
+	for _, r in ipairs(rows) do
+		local icons = OkanvilBisIcons and OkanvilBisIcons[r.e.class]
+		local icon = icons and (icons[r.e.list] or icons.classIcon)
+		local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[BIS_CLASS_TOKEN[r.e.class] or ""] or { r = 1, g = 1, b = 0 }
+		-- the whole line in the class colour: with the rank colours on the right,
+		-- a second colour per spec is one too many
+		local left = (icon and ("|T" .. icon .. ":18|t ") or "")
+			.. ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) .. r.e.class .. " - " .. r.e.list .. "|r"
+		-- the places in one quiet grey; only a BIS stands out, in gold
+		if r.rank == 1 then
+			tip:AddDoubleLine(left, r.text, 1, 1, 1, 1, 0.82, 0.25)
+		else
+			tip:AddDoubleLine(left, r.text, 1, 1, 1, 0.72, 0.73, 0.75)
+		end
+	end
+	tip:Show()
+end
+
+-- ------------------------------------------------------------
+-- "Fits": who the item is for, in stars, on every raid item (ClassLoot's look,
+-- with no item missing). 5 stars: on that spec's BiS list (either copy, normal
+-- or heroic). 4 stars: the class wears it and its stats and weapon suit the
+-- spec (the same rules the Upgrades page uses).
+-- ------------------------------------------------------------
+local FIT_TO_BIS = {
+	WarriorArms = { "Warrior", "Arms" }, WarriorFury = { "Warrior", "Fury" }, WarriorTank = { "Warrior", "Protection" },
+	PaladinHoly = { "Paladin", "Holy" }, PaladinTank = { "Paladin", "Protection" },
+	PaladinRetribution = { "Paladin", "Retribution" },
+	HunterBeastMastery = { "Hunter", "Beast mastery" }, HunterMarksman = { "Hunter", "Marksmanship" },
+	HunterSurvival = { "Hunter", "Survival" },
+	RogueAssassination = { "Rogue", "Assassination" }, RogueCombat = { "Rogue", "Combat" },
+	PriestDiscipline = { "Priest", "Discipline" }, PriestHoly = { "Priest", "Holy" }, PriestShadow = { "Priest", "Shadow" },
+	DeathKnightBloodDps = { "Death knight", "Blood dps" }, DeathKnightBloodTank = { "Death knight", "Blood tank" },
+	DeathKnightFrostDps = { "Death knight", "Frost" }, DeathKnightUnholyDps = { "Death knight", "Unholy" },
+	ShamanElemental = { "Shaman", "Elemental" }, ShamanEnhancement = { "Shaman", "Enhancement" },
+	ShamanRestoration = { "Shaman", "Restoration" },
+	MageArcane = { "Mage", "Arcane" }, MageFire = { "Mage", "Fire" }, MageFrost = { "Mage", "Frost" },
+	WarlockAffliction = { "Warlock", "Affliction" }, WarlockDemonology = { "Warlock", "Demonology" },
+	WarlockDestruction = { "Warlock", "Destruction" },
+	DruidBalance = { "Druid", "Balance" }, DruidFeralDps = { "Druid", "Feral dps" },
+	DruidFeralTank = { "Druid", "Feral tank" }, DruidRestoration = { "Druid", "Restoration" },
+}
+local STAR = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_1:12|t"
+local BLANK = "|T:12:12|t"       -- an empty spacer one star wide
+local bisByName     -- [item name] = { ["Rogue|Combat"] = true }
+
+local function onList(id, name, cls, list)
+	if not bisIndex then buildBisIndex() end
+	local k = cls .. "|" .. list
+	local byItem = bisIndex[AliId(id)]
+	if byItem and byItem[k] then return true end
+	if not bisByName then
+		bisByName = {}
+		local seed = OkanvilIDs_Seed or {}
+		for lid, specs in pairs(bisIndex) do
+			local n = seed[lid] or GetItemInfo(lid)
+			if n then
+				bisByName[n] = bisByName[n] or {}
+				for sk in pairs(specs) do bisByName[n][sk] = true end
+			end
+		end
+	end
+	return name and bisByName[name] and bisByName[name][k] or false
+end
+
+local FIT_WRAP = 34       -- characters per class line before it wraps
+-- right-hand lines this tooltip moved left; put back when it is cleared, or the
+-- next tooltip's right column (sell price, "Bank 0") would sit in the middle
+local movedRight = {}
+local function restoreRight(tip)
+	local moved = movedRight[tip]
+	if not moved then return end
+	local name = tip:GetName()
+	for i in pairs(moved) do
+		local l, r = _G[name .. "TextLeft" .. i], _G[name .. "TextRight" .. i]
+		if l and r then
+			r:ClearAllPoints()
+			r:SetPoint("RIGHT", l, "LEFT", 40, 0)
+			r:SetWidth(0)            -- back to sizing to its text
+		end
+		moved[i] = nil
+	end
+end
+for _, t in ipairs({ GameTooltip, ItemRefTooltip }) do t:HookScript("OnTooltipCleared", restoreRight) end
+
+-- Where an item drops, from the loot table: [id] = { { raid, boss, m }, ... }
+local dropIndex
+local function dropsOf(id)
+	if not dropIndex then
+		dropIndex = {}
+		for raid, bosses in pairs(Loot() or {}) do
+			for _, bo in ipairs(bosses) do
+				for _, it in ipairs(bo.items or {}) do
+					dropIndex[it.id] = dropIndex[it.id] or {}
+					table.insert(dropIndex[it.id], { raid = raid, boss = bo.boss, m = it.m or "" })
+				end
+			end
+		end
+	end
+	return dropIndex[id]
+end
+local RAID_TITLE = {}
+for _, r in ipairs(OkanvilRaids or {}) do RAID_TITLE[r.key] = r.name end
+-- "25h" -> "25 Player (Heroic)", as the game's own instance names read
+local function modeText(m)
+	local size, hc = m:match("^(%d+)(%a)$")
+	if not size then return m end
+	return size .. " Player" .. (hc == "h" and " (Heroic)" or "")
+end
+
+-- Class lines in the stars' rows: per tier every class in a comma list, each
+-- in its class colour, wrapped
+local function starRows(link, name, id, rows)
+	local P = Okanvil.Prof
+	if not (P and P.FitsSpec and P.CanUse and OkanvilFitSpecs) then return end
+	local tiers = { [5] = {}, [4] = {} }
+	local order = { [5] = {}, [4] = {} }
+	local perClass = {}
+	for _, sp in ipairs(OkanvilFitSpecs) do
+		perClass[sp.class] = (perClass[sp.class] or 0) + 1
+		if P.CanUse(link, sp.class) then
+			local b = FIT_TO_BIS[sp.key]
+			local stars
+			if b and onList(id, name, b[1], b[2]) then stars = 5
+			elseif P.FitsSpec(link, sp.key, true) then stars = 4 end
+			if stars then
+				local t = tiers[stars]
+				if not t[sp.class] then t[sp.class] = {}; table.insert(order[stars], sp.class) end
+				table.insert(t[sp.class], sp.label)
+			end
+		end
+	end
+	for _, stars in ipairs({ 5, 4 }) do
+		local line, len, first = "", 0, true
+		-- a wrapped line keeps the stars' width on the left, as empty spacers
+		-- (ClassLoot's |T:0|t), so the tooltip measures it at its real width
+		local function flush()
+			if line ~= "" then rows[#rows + 1] = { first and STAR:rep(stars) or BLANK:rep(stars), line } end
+			line, len, first = "", 0, false
+		end
+		local list = order[stars]
+		for i, class in ipairs(list) do
+			local specs = tiers[stars][class]
+			local cls = CLASS_BIS[class] or class
+			local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class] or { r = 1, g = 1, b = 1 }
+			local hex = ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255)
+			-- every spec of the class: the class alone
+			local txt = #specs >= perClass[class] and cls or (cls .. " (" .. table.concat(specs, ", ") .. ")")
+			-- wrapped at every comma, the ones inside the brackets too, as ClassLoot
+			-- did: one long class cannot run off the edge
+			local pieces = {}
+			for part in (txt .. ","):gmatch("([^,]*),") do pieces[#pieces + 1] = (part:gsub("^%s+", "")) end
+			for k, part in ipairs(pieces) do
+				-- a comma after every piece but the very last one
+				local bit = part .. ((k < #pieces or i < #list) and "," or "")
+				if len > 0 and len + #bit + 1 > FIT_WRAP then flush() end
+				line = line .. (len > 0 and " " or "") .. hex .. bit .. "|r"
+				len = len + #bit + 1
+			end
+		end
+		flush()
+	end
+end
+
+-- "Boss" and "Instance" rows, as ClassLoot drew them: every boss that drops it,
+-- and the raid with the difficulties this copy drops in
+local LABEL = "|cfff2e68c"
+local function dropRows(id, rows)
+	local drops = dropsOf(id)
+	if not drops then return end
+	local bosses, places, seenB, seenP = {}, {}, {}, {}
+	for _, d in ipairs(drops) do
+		local bn = U.BossLabel(d.boss)
+		if not seenB[bn] then seenB[bn] = true; bosses[#bosses + 1] = bn end
+		for m in d.m:gmatch("[^,]+") do
+			local place = (RAID_TITLE[d.raid] or d.raid) .. ": " .. modeText(m)
+			if not seenP[place] then seenP[place] = true; places[#places + 1] = place end
+		end
+	end
+	-- a token drops from half the raid: the first few, then how many more
+	if #bosses > 4 then
+		local more = #bosses - 3
+		for i = #bosses, 4, -1 do bosses[i] = nil end
+		bosses[4] = "and " .. more .. " more"
+	end
+	for i, bn in ipairs(bosses) do rows[#rows + 1] = { i == 1 and (LABEL .. "Boss|r") or " ", LABEL .. bn .. "|r" } end
+	for i, pl in ipairs(places) do rows[#rows + 1] = { i == 1 and (LABEL .. "Instance|r") or " ", LABEL .. pl .. "|r" } end
+end
+
+local function onFitTip(tip)
+	if not active() then return end
+	local _, link = tip:GetItem()
+	if not link then return end
+	local name, _, quality, _, _, _, _, _, equip = GetItemInfo(link)
+	if not name then return end
+	local id = tonumber(link:match("item:(%d+)"))
+	local rows = {}
+	-- stars: gear only (tokens, patterns and quest items have no slot)
+	local gear = equip and equip ~= "" and (quality or 0) >= 3
+		and equip ~= "INVTYPE_BAG" and equip ~= "INVTYPE_TABARD" and equip ~= "INVTYPE_BODY"
+	-- an item on a BiS list already says whose it is, line by line: the stars
+	-- are for the rest
+	local listed = false
+	if udb().bisTip ~= false and id then
+		if not bisIndex then buildBisIndex() end
+		local now = PHASE_ORDER[U.Phase()] or 4
+		for _, e in pairs(bisIndex[AliId(id)] or {}) do
+			for phase in pairs(e.places) do
+				if (PHASE_ORDER[phase] or 0) <= now then listed = true end
+			end
+		end
+	end
+	if gear and not listed and udb().fitTip ~= false then starRows(link, name, id, rows) end
+	-- where it drops: any raid item, tokens too
+	if udb().dropTip ~= false and id then dropRows(id, rows) end
+	if #rows == 0 then return end
+	tip:AddLine(" ")
+	local tname = tip:GetName()
+	local firstLine = tip:NumLines() + 1
+	for _, r in ipairs(rows) do tip:AddDoubleLine(r[1], r[2]) end
+	-- ClassLoot's layout: the right text moved from the right edge to just after
+	-- the widest left label (stars, Boss, Instance)
+	local maxLeft = 0
+	for i = firstLine, tip:NumLines() do
+		local l = _G[tname .. "TextLeft" .. i]
+		if l then maxLeft = math.max(maxLeft, l:GetWidth()) end
+	end
+	movedRight[tip] = movedRight[tip] or {}
+	local moved = {}
+	for i = firstLine, tip:NumLines() do
+		local l, r = _G[tname .. "TextLeft" .. i], _G[tname .. "TextRight" .. i]
+		if l and r then
+			r:ClearAllPoints()
+			r:SetPoint("LEFT", l, "LEFT", maxLeft + 10, 0)
+			movedRight[tip][i] = true
+			moved[#moved + 1] = r
+		end
+	end
+	tip:Show()
+	-- the tooltip sized itself for the right column at its old place: widen it
+	-- (and the moved strings) so no name is cut to "Ma..."
+	local need = 0
+	for _, r in ipairs(moved) do
+		local w = r:GetStringWidth()
+		r:SetWidth(w + 2)
+		need = math.max(need, w)
+	end
+	need = maxLeft + 10 + need + 24
+	if tip:GetWidth() < need then tip:SetWidth(need) end
+end
+
+for _, t in ipairs({ GameTooltip, ItemRefTooltip }) do
+	t:HookScript("OnTooltipSetItem", function(tip)
+		local ok, err = pcall(onFitTip, tip)
+		if not ok and Okanvil.Err then Okanvil:Err("Fits tooltip", err) end
+		ok, err = pcall(onItemTip, tip)
+		if not ok and Okanvil.Err then Okanvil:Err("BiS tooltip", err) end
+	end)
+end
+
 SLASH_OKUPGRADES1 = "/okup"
 -- /okup audit: every drop of every raid that is out, for the spec you are in,
 -- with the verdict and why, saved for review (Okanvil.db.upgrades.audit) --
@@ -1274,6 +1621,21 @@ end
 
 SlashCmdList.OKUPGRADES = function(arg)
 	if arg and arg:lower():match("^%s*audit") then U.Audit(); return end
+	if arg and arg:lower():match("^%s*drops") then
+		udb().dropTip = (udb().dropTip == false) and true or false
+		Okanvil:Print("Boss and instance lines on item tooltips " .. (udb().dropTip and "on" or "off") .. ".")
+		return
+	end
+	if arg and arg:lower():match("^%s*fits") then
+		udb().fitTip = (udb().fitTip == false) and true or false
+		Okanvil:Print("Fits stars on item tooltips " .. (udb().fitTip and "on" or "off") .. ".")
+		return
+	end
+	if arg and arg:lower():match("^%s*bis") then
+		udb().bisTip = (udb().bisTip == false) and true or false
+		Okanvil:Print("BiS lines on item tooltips " .. (udb().bisTip and "on" or "off") .. ".")
+		return
+	end
 	if arg and arg:lower():match("^%s*toast") then
 		-- your best upgrade in this raid (or ICC), to see the toast and drag it into place
 		local raid, mode = U.Here()

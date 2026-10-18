@@ -36,7 +36,15 @@ local function db()
 end
 
 function Okanvil:BuildUpgrades(host)
-	local state = { open = {}, allOpen = true }
+	local state = { open = {}, allOpen = true, view = db().view == "bis" and "bis" or "me" }
+	local viewTabs, specFS = {}
+	-- the spec in your class colour
+	local function specText()
+		local spec = U.Spec()
+		local c = spec and RAID_CLASS_COLORS and RAID_CLASS_COLORS[spec.class]
+		local hex = c and ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) or "|cffe0b860"
+		return "|cff8a8d93Spec|r " .. (spec and (hex .. spec.label .. "|r") or "|cff8a8d93?|r")
+	end
 	local modeTabs = {}
 	local refresh
 
@@ -56,13 +64,25 @@ function Okanvil:BuildUpgrades(host)
 		icon = Okanvil.ICONS.upgrades,
 		drawerWidth = 0,
 		footerHeight = 0,
-		-- the spec in your class colour
-		statusText = function()
-			local spec = U.Spec()
-			local c = spec and RAID_CLASS_COLORS and RAID_CLASS_COLORS[spec.class]
-			local hex = c and ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) or "|cffe0b860"
-			return "|cff8a8d93Spec|r " .. (spec and (hex .. spec.label .. "|r") or "|cff8a8d93?|r")
+		-- two views, one switch at the right of the header: the drops for you, or
+		-- any spec's BiS list; the spec you are in just before it
+		headerBuild = function(header)
+			local nextT
+			for _, v in ipairs({ { "bis", "BiS lists" }, { "me", "For me" } }) do
+				local b = W.HeaderFont(W.Button(header, v[2]))
+				b:SetSize(W.HEADER_BTN_W - 30, W.HEADER_BTN_H)
+				if nextT then b:SetPoint("RIGHT", nextT, "LEFT", 0, 0)
+				else b:SetPoint("RIGHT", header, "RIGHT", -10, 0) end
+				b:SetScript("OnClick", function()
+					state.view = v[1]; db().view = v[1]; refresh()
+				end)
+				viewTabs[v[1]] = b
+				nextT = b
+			end
+			specFS = W.Text(header, "", nil, "dim")
+			specFS:SetPoint("RIGHT", nextT, "LEFT", -14, 0)
 		end,
+
 	})
 
 	-- raid and difficulty in a bar of their own at the top of the page: beside
@@ -223,8 +243,265 @@ function Okanvil:BuildUpgrades(host)
 		end
 	end
 
+	-- ---- BiS lists view: any class, spec and phase; each slot's top 6 as icons,
+	-- two columns of slots so the whole list fits without a scroll ----
+	local bis = CreateFrame("Frame", nil, dash.main)
+	bis:SetAllPoints(dash.main)
+	bis:Hide()
+	local BIS_ICON, BIS_GAP, BIS_ROW, SLOT_W, ENH_W, ENH = 42, 6, 58, 70, 50, 16
+	local RANK_HEX = { "ff4040", "bf66ff", "ff9926", "4d99ff", "59e659", "b3b3b3" }
+	local mySpec = U.Spec()
+	state.bClass = db().bisClass or (mySpec and U.CLASS_BIS[mySpec.class]) or "Warrior"
+	state.bList = db().bisList or (mySpec and mySpec.list)
+	state.bPhase = db().bisPhase or U.Phase()
+
+	-- "Death knight" -> its class colour, for the dropdowns
+	local TOKEN = {}
+	for token, name in pairs(U.CLASS_BIS) do TOKEN[name] = token end
+	local function tint(cls, text)
+		local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[TOKEN[cls] or ""]
+		if not c then return text end
+		return ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) .. text .. "|r"
+	end
+	local function specIcon(cls, list)
+		local icons = OkanvilBisIcons and OkanvilBisIcons[cls]
+		local tex = icons and (icons[list] or icons.classIcon)
+		return tex and ("|T" .. tex .. ":16|t ") or ""
+	end
+
+	local function listsOf(cls)
+		local out = {}
+		for list in pairs((OkanvilBis or {})[cls] or {}) do out[#out + 1] = list end
+		table.sort(out)
+		return out
+	end
+	local function fixList()
+		local lists = listsOf(state.bClass)
+		for _, l in ipairs(lists) do if l == state.bList then return end end
+		state.bList = lists[1]
+	end
+	fixList()
+
+	local bbar = CreateFrame("Frame", nil, bis)
+	bbar:SetPoint("TOPLEFT", 0, 0); bbar:SetPoint("TOPRIGHT", 0, 0); bbar:SetHeight(BAR_H)
+	W.Hairline(bbar, "BOTTOM", 0)
+	local cdd = W.DropDown(bbar,
+		function()
+			local out = {}
+			for cls in pairs(OkanvilBis or {}) do out[#out + 1] = { text = tint(cls, cls), value = cls, key = cls } end
+			table.sort(out, function(a, b) return a.key < b.key end)
+			return out
+		end,
+		function() return tint(state.bClass, state.bClass) end,
+		function(v) state.bClass = v; fixList(); db().bisClass, db().bisList = v, state.bList; refresh() end)
+	cdd:SetSize(170, CTRL_H); cdd:SetPoint("LEFT", bbar, "LEFT", Okanvil.UI.PAD_X, 0); big(cdd)
+	local sdd = W.DropDown(bbar,
+		function()
+			local out = {}
+			for _, l in ipairs(listsOf(state.bClass)) do
+				out[#out + 1] = { text = specIcon(state.bClass, l) .. U.SpecText(state.bClass, l), value = l }
+			end
+			return out
+		end,
+		function() return state.bList and (specIcon(state.bClass, state.bList) .. U.SpecText(state.bClass, state.bList)) or "" end,
+		function(v) state.bList = v; db().bisList = v; refresh() end)
+	sdd:SetSize(190, CTRL_H); sdd:SetPoint("LEFT", cdd, "RIGHT", 8, 0); big(sdd)
+	local phaseTabs, prevP = {}, sdd
+	for _, ph in ipairs(OkanvilBisPhases or {}) do
+		local b = big(W.Button(bbar, ph, "tab"))
+		b:SetSize(52, CTRL_H)
+		b:SetPoint("LEFT", prevP, "RIGHT", prevP == sdd and 14 or 2, 0)
+		b:SetScript("OnClick", function() state.bPhase = ph; db().bisPhase = ph; refresh() end)
+		phaseTabs[ph] = b
+		prevP = b
+	end
+	-- back to the spec you are in, today's phase
+	local mine = big(W.Button(bbar, "My spec"))
+	mine:SetSize(96, CTRL_H); mine:SetPoint("RIGHT", bbar, "RIGHT", -Okanvil.UI.PAD_X, 0)
+	mine:SetScript("OnClick", function()
+		local sp = U.Spec()
+		if sp then state.bClass, state.bList = U.CLASS_BIS[sp.class] or state.bClass, sp.list end
+		state.bPhase = U.Phase()
+		fixList()
+		db().bisClass, db().bisList, db().bisPhase = state.bClass, state.bList, state.bPhase
+		refresh()
+	end)
+
+	local grid = CreateFrame("Frame", nil, bis)
+	grid:SetPoint("TOPLEFT", 0, -BAR_H - 10); grid:SetPoint("BOTTOMRIGHT", 0, 0)
+	local slotTexts, cells, heads = {}, {}, {}
+	local horde = UnitFactionGroup("player") == "Horde"
+
+	local function cell(i)
+		if cells[i] then return cells[i] end
+		local b = CreateFrame("Button", nil, grid)
+		b:SetSize(BIS_ICON, BIS_ICON)
+		b.icon = b:CreateTexture(nil, "ARTWORK"); b.icon:SetAllPoints()
+		b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		-- you have it: a check mark in the corner
+		b.own = b:CreateTexture(nil, "OVERLAY")
+		b.own:SetSize(22, 22); b.own:SetPoint("BOTTOMRIGHT", 3, -3)
+		b.own:SetTexture("Interface\\RaidFrame\\ReadyCheck-Ready")
+		-- and a gold frame round it
+		-- "BIS" on the second ring / trinket: two are worn, both are BIS
+		b.tag = W.Text(b, "", "note")
+		b.tag:SetPoint("TOPLEFT", 2, -1)
+		b.edge = {}
+		for _, side in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
+			local t = b:CreateTexture(nil, "OVERLAY")
+			t:SetTexture(FLAT); t:SetVertexColor(1, 0.82, 0.25, 1)
+			if side == "TOP" or side == "BOTTOM" then
+				t:SetHeight(2); t:SetPoint(side .. "LEFT", -1, side == "TOP" and 1 or -1)
+				t:SetPoint(side .. "RIGHT", 1, side == "TOP" and 1 or -1)
+			else
+				t:SetWidth(2); t:SetPoint("TOP" .. side, side == "LEFT" and -1 or 1, 1)
+				t:SetPoint("BOTTOM" .. side, side == "LEFT" and -1 or 1, -1)
+			end
+			b.edge[#b.edge + 1] = t
+		end
+		local hl = b:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints()
+		hl:SetTexture(FLAT); hl:SetVertexColor(1, 1, 1, 0.15)
+		b:SetScript("OnEnter", function(s)
+			if not s.id then return end
+			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+			GameTooltip:SetHyperlink("item:" .. s.id)
+			GameTooltip:Show()
+		end)
+		b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		b:SetScript("OnClick", function(s)
+			local _, link = GetItemInfo(s.id or 0)
+			if not link then return end
+			if IsModifiedClick("CHATLINK") then ChatEdit_InsertLink(link)
+			elseif IsModifiedClick("DRESSUP") then DressUpItemLink(link) end
+		end)
+		cells[i] = b
+		return b
+	end
+	-- the BiS piece's enchant and gems, small, two by two in Bistooltip's order
+	local enhs = {}
+	local function enhIcon(i)
+		if enhs[i] then return enhs[i] end
+		local b = CreateFrame("Button", nil, grid)
+		b:SetSize(ENH, ENH)
+		b.icon = b:CreateTexture(nil, "ARTWORK"); b.icon:SetAllPoints()
+		b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		local hl = b:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints()
+		hl:SetTexture(FLAT); hl:SetVertexColor(1, 1, 1, 0.15)
+		b:SetScript("OnEnter", function(s)
+			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+			GameTooltip:SetHyperlink(s.link)
+			GameTooltip:Show()
+		end)
+		b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		b:SetScript("OnClick", function(s)
+			if not IsModifiedClick("CHATLINK") then return end
+			local link = s.spell and GetSpellLink(s.spell) or select(2, GetItemInfo(s.item or 0))
+			if link then ChatEdit_InsertLink(link) end
+		end)
+		enhs[i] = b
+		return b
+	end
+
+	local function label(pool, i, size, role)
+		if not pool[i] then pool[i] = W.Text(grid, "", size, role) end
+		pool[i]:ClearAllPoints()
+		pool[i]:Show()
+		return pool[i]
+	end
+
+	local function paintBis()
+		cdd:refreshText(); sdd:refreshText()
+		for ph, b in pairs(phaseTabs) do b:SetKind(ph == state.bPhase and "tabOn" or "tab") end
+		for _, c in ipairs(cells) do c:Hide() end
+		for _, t in ipairs(slotTexts) do t:Hide() end
+		for _, t in ipairs(heads) do t:Hide() end
+		for _, e in ipairs(enhs) do e:Hide() end
+		local rows = (((OkanvilBis or {})[state.bClass] or {})[state.bList] or {})[state.bPhase] or {}
+		-- slots with no items on this phase's list are left out
+		local filled = {}
+		for _, row in ipairs(rows) do if row[1] then filled[#filled + 1] = row end end
+		local half = math.ceil(#filled / 2)
+		local ICONS_X = SLOT_W + ENH_W
+		local colW = ICONS_X + 6 * (BIS_ICON + BIS_GAP)
+		local nT, nC, nH, nE = 0, 0, 0, 0
+		if #filled == 0 then
+			nH = nH + 1
+			label(heads, nH, "body", "dim"):SetPoint("TOPLEFT", Okanvil.UI.PAD_X, 0)
+			heads[nH]:SetText("No list for " .. (state.bList or "?") .. " in " .. state.bPhase .. ".")
+			return
+		end
+		for col = 0, (#filled > half) and 1 or 0 do
+			local x = Okanvil.UI.PAD_X + col * (colW + 28)
+			nH = nH + 1
+			label(heads, nH, "note", "dim"):SetPoint("TOPLEFT", grid, "TOPLEFT", x, 0)
+			heads[nH]:SetText("SLOT")
+			for r = 1, 6 do
+				nH = nH + 1
+				label(heads, nH, "note"):SetPoint("TOP", grid, "TOPLEFT",
+					x + ICONS_X + (r - 1) * (BIS_ICON + BIS_GAP) + BIS_ICON / 2, 0)
+				heads[nH]:SetText("|cff" .. RANK_HEX[r] .. (r == 1 and "BIS" or tostring(r)) .. "|r")
+			end
+			for i = col * half + 1, math.min(#filled, (col + 1) * half) do
+				local row = filled[i]
+				local y = -18 - (i - col * half - 1) * BIS_ROW
+				nT = nT + 1
+				label(slotTexts, nT, "body"):SetPoint("LEFT", grid, "TOPLEFT", x, y - BIS_ICON / 2)
+				slotTexts[nT]:SetText(row.slot or "")
+				for k, eid in ipairs(row.e or {}) do
+					if k > 6 then break end
+					if eid ~= 0 then
+					nE = nE + 1
+					local e = enhIcon(nE)
+					e:ClearAllPoints()
+					-- the block centred on the item icons, 3px between gems
+					local lines = math.ceil(math.min(#row.e, 6) / 2)
+					local top = y - math.floor((BIS_ICON - (lines * (ENH + 3) - 3)) / 2)
+					e:SetPoint("TOPLEFT", grid, "TOPLEFT", x + SLOT_W + ((k - 1) % 2) * (ENH + 3),
+						top - math.floor((k - 1) / 2) * (ENH + 3))
+					if eid < 0 then
+						e.spell, e.item, e.link = -eid, nil, "spell:" .. (-eid)
+						e.icon:SetTexture((select(3, GetSpellInfo(-eid))) or "Interface\\Icons\\INV_Misc_QuestionMark")
+					else
+						e.spell, e.item, e.link = nil, eid, "item:" .. eid
+						e.icon:SetTexture((GetItemIcon and GetItemIcon(eid)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+					end
+					e:Show()
+					end
+				end
+				for r = 1, 6 do
+					local id = row[r]
+					if id then
+						-- the lists name the Alliance copy of faction items
+						if horde then id = (OkanvilBisHordeToAli or {})[id] or id end
+						nC = nC + 1
+						local c = cell(nC)
+						c:ClearAllPoints()
+						c:SetPoint("TOPLEFT", grid, "TOPLEFT", x + ICONS_X + (r - 1) * (BIS_ICON + BIS_GAP), y)
+						c.id = id
+						c.icon:SetTexture((GetItemIcon and GetItemIcon(id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+						local have = (GetItemCount(id, true) or 0) > 0
+						if have then c.own:Show() else c.own:Hide() end
+						for _, t in ipairs(c.edge) do if have then t:Show() else t:Hide() end end
+						local pair = row.slot == "Finger" or row.slot == "Trinket"
+						c.tag:SetText((pair and r == 2) and ("|cff" .. RANK_HEX[1] .. "BIS|r") or "")
+						c:Show()
+					end
+				end
+			end
+		end
+	end
+
 	refresh = function()
 		if not host:IsVisible() then return end
+		dash:Refresh()
+		for v, b in pairs(viewTabs) do b:SetKind(v == state.view and "primary" or nil) end
+		if specFS then specFS:SetText(specText()) end
+		if state.view == "bis" then
+			bar:Hide(); body:Hide(); bis:Show()
+			paintBis()
+			return
+		end
+		bis:Hide(); bar:Show(); body:Show()
 		U.BeginPass(20)
 		-- only the raid's own difficulties, side by side: a hidden tab keeps no gap
 		local prevTab = state.dd
