@@ -1057,10 +1057,6 @@ end)
 local RAT_SOUND = [[Interface\AddOns\Okanvil\Media\rat.wav]]
 local alerted, lastSound = {}, 0
 
--- RatStash's loot radar already shows its own toast (and sound) for the same drop
-local function ratStashRadar()
-	return IsAddOnLoaded("RatStash") and RatStashDB and RatStashDB.radar
-end
 
 -- The toast: icon, name, verdict, boss. Ten seconds, held while hovered; drag
 -- to move, right click to close.
@@ -1157,7 +1153,6 @@ local function alertDrop(link, retry)
 	if not v then return end
 	alerted[id] = GetTime()
 	Okanvil:Print("|cff7dfc8aUpgrade|r " .. link .. " -- " .. U.Label(v) .. (os and (" |cff8a8d93(OS " .. os.label .. ")|r") or ""))
-	if ratStashRadar() then return end
 	showToast(link, v, os, raid, id)
 	if GetTime() - lastSound > 2 then
 		lastSound = GetTime()
