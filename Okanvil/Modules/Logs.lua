@@ -825,10 +825,12 @@ ev:SetScript("OnEvent", function(_, event, arg1, ...)
 			-- Stamp `seen` first: it may be minutes old (that is how we just got here),
 			-- and leaving it stale would make the very next check call this idle again.
 			db._cur.seen = time()
+			-- the timer comes back whether or not the client kept logging: it is
+			-- the session's clock, and a relog that left logging on hid it for good
+			buildRec()
+			rec:Show()
 			if not LoggingCombat() then
-				buildRec()
 				LoggingCombat(true)
-				rec:Show()
 				toast("REC -- resumed (still logging)", "00ff00")
 			end
 		elseif inInstance and itype == "raid" and not LoggingCombat() then
