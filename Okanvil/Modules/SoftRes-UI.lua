@@ -32,9 +32,12 @@ end
 
 local function rollWin() return _G.Okanvil_RollMgr end
 
+-- who sees the list: the master looter, an officer or the raid leader (as WH)
 local function isML()
 	local RM = Okanvil.RollMgr
-	return RM and RM.IsML and RM.IsML() or false
+	if RM and RM.IsML and RM.IsML() then return true end
+	local Wi = Okanvil.Wish
+	return Wi and Wi.CanTrigger and Wi.CanTrigger() or false
 end
 
 local function classColor(token)
@@ -396,7 +399,7 @@ SLASH_OKRES1 = "/okres"
 SlashCmdList["OKRES"] = function(msg)
 	-- /okres mode|open|lock|post|list|test -- see SoftRes-Live.lua
 	if SR.Slash and SR.Slash(msg) then return end
-	if not isML() then Okanvil:Print("Soft reserves: only the master looter has this list."); return end
+	if not isML() then Okanvil:Print("Soft reserves: only the master looter, an officer or the raid leader see this list."); return end
 	if not (SR.Summary() or Okanvil.LITE) then Okanvil:Print("Soft reserves: none loaded -- paste the CSV on the Loot page."); return end
 	local rm = rollWin()
 	if not (rm and rm:IsShown()) and Okanvil.RollMgr and Okanvil.RollMgr.Toggle then Okanvil.RollMgr.Toggle() end

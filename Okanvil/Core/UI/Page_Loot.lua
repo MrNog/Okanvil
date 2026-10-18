@@ -80,29 +80,47 @@ function Okanvil:BuildLoot()
 			return c
 		end
 
+		-- "ICC 10 · ID 48213", or "ICC 10 · no ID yet" before the first kill
+		local function idLabel(set)
+			local SR = Okanvil.SoftRes
+			local key, size = set.lockKey:match("^(%a+)(%d+):")
+			local raid = (key and SR and SR.RaidLabel) and SR.RaidLabel({ key = key, size = tonumber(size) }) or ""
+			return raid .. "  ·  " .. (set.id and ("ID " .. set.id) or "no ID yet")
+		end
+
+		-- what the picked loot mode uses: Council your wish, SR your soft
+		-- reserves (one row per raid ID), Roll nothing
 		local function paintMine()
 			local SR = Okanvil.SoftRes
-			local list = {}
-			for _, id in ipairs(SR and SR.MyPicks and SR.MyPicks("sr") or {}) do list[#list + 1] = { id = id, wish = false } end
-			-- a wish only means something while the Wishlist is on
-			local Wi = Okanvil.Wish
-			if Wi and Wi.Live() then
-				for _, id in ipairs(SR and SR.MyPicks and SR.MyPicks("wish") or {}) do list[#list + 1] = { id = id, wish = true } end
+			local mode = SR and SR.Mode and SR.Mode()
+			local want = (mode == "council" and "wish") or (mode == "sr" and "sr") or nil
+			local sets = {}
+			for _, set in ipairs(want and SR.MyPickSets and SR.MyPickSets() or {}) do
+				if set.kind == want then sets[#sets + 1] = set end
 			end
-			local n = #list
+			local list = {}
 			local w = picks:GetWidth() or 0
-			local cw = n > 0 and math.floor((w - 24 - GAP * (n - 1)) / n) or 0
-			for i = 1, math.max(n, #picks.cards) do
+			for rowI, set in ipairs(sets) do
+				local n = #set.list
+				local cw = math.floor((w - 24 - GAP * (n - 1)) / n)
+				for j, id in ipairs(set.list) do
+					list[#list + 1] = { id = id, wish = set.kind == "wish", set = set, row = rowI, col = j, cw = cw }
+				end
+			end
+			local nRows = #sets
+			for i = 1, math.max(#list, #picks.cards) do
 				local e, c = list[i], picks.cards[i]
 				if e then
 					c = card(i)
 					c:ClearAllPoints()
-					c:SetPoint("TOPLEFT", 12 + (i - 1) * (cw + GAP), -4); c:SetWidth(cw)
+					c:SetPoint("TOPLEFT", 12 + (e.col - 1) * (e.cw + GAP), -4 - (e.row - 1) * (CARD_H + GAP))
+					c:SetWidth(e.cw)
 					local name, _, q, _, _, _, _, _, _, tex = GetItemInfo(e.id)
 					c.icon:SetTexture(tex or (GetItemIcon and GetItemIcon(e.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
 					local r, g, bl = GetItemQualityColor(q or 4)
 					c.name:SetText(name or ("item " .. e.id)); c.name:SetTextColor(r, g, bl)
-					c.kind:SetText(e.wish and "|cffe0b860WISH|r" or "|cff8a8d93SOFT RESERVE|r")
+					c.kind:SetText((e.wish and "|cffe0b860WISH|r" or "|cff8a8d93SOFT RESERVE|r")
+						.. "  |cff6f7176" .. idLabel(e.set) .. "|r")
 					c.sub:SetText(bossOf(e.id) or "")
 					-- the wish wears the gold edge it has on the council board
 					if e.wish then c:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 0.8)
@@ -112,8 +130,8 @@ function Okanvil:BuildLoot()
 					c:Hide()
 				end
 			end
-			if n > 0 then
-				picksHead:Show(); picksHead:SetHeight(26); picks:SetHeight(CARD_H + 10)
+			if nRows > 0 then
+				picksHead:Show(); picksHead:SetHeight(26); picks:SetHeight(nRows * (CARD_H + GAP) + 2)
 			else
 				picksHead:Hide(); picksHead:SetHeight(1); picks:SetHeight(1)
 			end
@@ -590,10 +608,8 @@ function Okanvil:Loot_BuildSoftRes(p)
 		seg[n] = b
 	end
 	local srRaidB = raidButton(sr); srRaidB:SetPoint("LEFT", seg[3], "RIGHT", 14, 0)
-	local listB = W.Button(sr, "Post list", "primary"); listB:SetSize(80, 22); listB:SetPoint("TOPRIGHT", -X, y2)
-	listB:SetScript("OnClick", function() SR.PostList() end)
-	listB:Tooltip("Posts every reserved item and who reserved it in raid chat.")
-	local postB = W.Button(sr, "Post rules"); postB:SetSize(84, 22); postB:SetPoint("RIGHT", listB, "LEFT", -6, 0)
+	-- no "post the list" button: a whole list in raid chat is spam; it lives in the mini roll
+	local postB = W.Button(sr, "Post rules", "primary"); postB:SetSize(84, 22); postB:SetPoint("TOPRIGHT", -X, y2)
 	postB:SetScript("OnClick", function()
 		-- the rules go to raid chat for everyone; raiders with Okanvil also get
 		-- the pick window, so they do not have to whisper
@@ -711,43 +727,23 @@ function Okanvil:Loot_BuildSoftRes(p)
 		else
 			paste:Hide()
 			impB.text:SetText("Import CSV")
-			local items = SR.All()
-			local n = math.min(#items, SR_MAX_ROWS)
-			for i = 1, math.max(n, #rows) do
-				local it = items[i]
-				if i <= n and it then
-					local r = row(i)
-					r._id = it.id
-					r.item:SetText(itemText(it.id, it.name))
-					r.who:SetText(SR.Names(it.id, false))
-					r:Show()
-				elseif rows[i] then
-					rows[i]:Hide()
-				end
-			end
-			h = h + n * SR_ROW_H
-			if #items > SR_MAX_ROWS then
-				more:ClearAllPoints()
-				more:SetPoint("TOPLEFT", X, -h - 4)
-				more:SetText("+" .. (#items - SR_MAX_ROWS) .. " more  |cff6f7176(Post list shows all)|r")
-				more:Show()
-				h = h + 20
-			else
-				more:Hide()
-			end
-			if #items == 0 then
-				more:ClearAllPoints()
-				more:SetPoint("TOPLEFT", X, -h - 6)
-				more:SetText("Nothing reserved yet. Raiders whisper you:  sr [item]")
-				more:Show()
-				h = h + 24
-			end
+			-- the list itself lives in the mini roll's SR panel, where the
+			-- master looter uses it: here only the counts above
+			for _, r in ipairs(rows) do r:Hide() end
+			more:ClearAllPoints()
+			more:SetPoint("TOPLEFT", X, -h - 6)
+			more:SetText(ni and "The list is in the mini roll: SR button."
+				or "Nothing reserved yet. Raiders whisper you:  sr [item]")
+			more:Show()
+			h = h + 24
 		end
 		p:SetHeight(h + 4)
 	end
 
 	SR.onChange = function()
 		paint()
+		-- your own reserves show in YOUR PICKS
+		if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
 		if Okanvil._paintModes then Okanvil._paintModes() end
 		if Okanvil.RollMgr and Okanvil.RollMgr.Refresh then Okanvil.RollMgr.Refresh() end
 		-- the mini roll's SR button and panel follow the mode

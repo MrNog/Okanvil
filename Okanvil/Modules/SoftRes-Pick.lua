@@ -55,17 +55,34 @@ function SR.RaidHere()
 end
 
 -- The raid the master looter is setting up: the one we are in, else the one
--- picked on the Loot page, else ICC 25.
+-- picked on the Loot page, else ICC. The size is your raid difficulty (10 or
+-- 25, right-click your portrait), what the raid will really be.
+local function groupSize()
+	if not GetRaidDifficulty then return nil end
+	local d = GetRaidDifficulty()
+	if d == 1 or d == 3 then return 10 elseif d == 2 or d == 4 then return 25 end
+end
 function SR.Raid()
 	local here = SR.RaidHere()
 	if here then return here end
 	local p = db().raidPick
-	if p and raidDef(p.key) then return { key = p.key, size = p.size, hc = false } end
-	return { key = "icc", size = 25, hc = false }
+	local size = groupSize()
+	if p and raidDef(p.key) then return { key = p.key, size = size or p.size, hc = false } end
+	return { key = "icc", size = size or 25, hc = false }
 end
 
 function SR.SetRaid(key, size, hc)
 	db().raidPick = { key = key, size = size, hc = hc and true or false }
+	-- the size IS the raid difficulty: picking ICC 10 sets 10 player (leader or solo)
+	if SetRaidDifficulty and GetRaidDifficulty and (size == 10 or size == 25) then
+		local want = (size == 10) and 1 or 2
+		local cur = GetRaidDifficulty()
+		local heroic = (cur == 3 or cur == 4)
+		if heroic then want = want + 2 end
+		local lead = ((GetNumRaidMembers() or 0) == 0 and (GetNumPartyMembers() or 0) == 0)
+			or IsRaidLeader() or IsPartyLeader()
+		if cur ~= want and lead then SetRaidDifficulty(want) end
+	end
 	if SR.onChange then SR.onChange() end
 end
 
@@ -590,6 +607,100 @@ function SR.MyPicks(kind)
 	return best and best.list or nil
 end
 
+-- Every pick set this character sent and still holds: one per raid ID and kind,
+-- wishes first, newest first. A raid ID that is no longer in your saved list has
+-- reset, and its picks with it. Each: { kind = "wish"|"sr", lockKey, list, at }.
+function SR.MyPickSets()
+	local mine, out = ":" .. (me() or ""), {}
+	local cutoff = time() - KEEP_DAYS * 86400
+	local saved, any = {}, false
+	for i = 1, (GetNumSavedInstances and GetNumSavedInstances() or 0) do
+		local _, id = GetSavedInstanceInfo(i)
+		if id then saved[tostring(id)] = true; any = true end
+	end
+	for k, p in pairs(db().myPicks or {}) do
+		if k:sub(-#mine) == mine and p.sentGen ~= nil and (p.at or 0) >= cutoff and p.list and #p.list > 0 then
+			local isWish = k:find("^wish:") ~= nil
+			local lockKey = k:sub(isWish and 6 or 1, -#mine - 1)
+			local id = lockKey:match(":(%d+)$")
+			-- a date (before the first kill) is not an ID; an ID that left the saved list reset
+			local isID = id and not id:match("^20%d%d%d%d%d%d$")
+			-- wishes are for 25s only: a wish saved on a 10 is not shown
+			local size = tonumber(lockKey:match("^%a+(%d+):"))
+			if not (isID and any and not saved[id]) and not (isWish and size ~= 25) then
+				out[#out + 1] = { kind = isWish and "wish" or "sr", lockKey = lockKey, list = p.list, at = p.at or 0,
+					id = isID and id or nil }
+			end
+		end
+	end
+	-- the list you hold (as master looter, or shared to the raid) is the truth
+	-- for this raid's soft reserves, however they were made: it replaces your
+	-- own records of that raid, whatever size or ID they were saved under
+	local held = SR.ReservesOf and SR.ReservesOf(me()) or {}
+	if #held > 0 then
+		local lk = SR.LockKey()
+		local raidKey = lk:match("^(%a+)")
+		for i = #out, 1, -1 do
+			if out[i].kind == "sr" and out[i].lockKey:match("^(%a+)") == raidKey then table.remove(out, i) end
+		end
+		local id = lk:match(":(%d+)$")
+		out[#out + 1] = { kind = "sr", lockKey = lk, list = held, at = time(),
+			id = (id and not id:match("^20%d%d%d%d%d%d$")) and id or nil }
+	end
+	table.sort(out, function(a, b)
+		if a.kind ~= b.kind then return a.kind == "wish" end
+		return a.at > b.at
+	end)
+	return out
+end
+
+-- A soft reserve made by whisper: the master looter's Okanvil answers "SR saved:
+-- [item]", "SR changed: [old] -> [new]" or "SR removed." -- kept as yours, so
+-- YOUR PICKS shows it like one sent from the window.
+local function linkIds(text)
+	local ids = {}
+	for id in text:gmatch("|Hitem:(%d+)") do ids[#ids + 1] = tonumber(id) end
+	return ids
+end
+local function onReply(text)
+	local saved, changed, removed = text:match("^SR saved: "), text:match("^SR changed: "), text:match("^SR removed")
+	if not (saved or changed or removed) then return end
+	local d = db()
+	d.myPicks = d.myPicks or {}
+	local key = SR.LockKey() .. ":" .. (me() or "")
+	local old = d.myPicks[key]
+	local list = {}
+	for _, id in ipairs(old and old.list or {}) do list[#list + 1] = id end
+	local ids = linkIds(text)
+	if removed then
+		list = {}
+	elseif changed and ids[2] then
+		for i, id in ipairs(list) do if id == ids[1] then table.remove(list, i); break end end
+		list[#list + 1] = ids[2]
+	elseif saved and ids[1] then
+		local have
+		for _, id in ipairs(list) do if id == ids[1] then have = true end end
+		if not have then list[#list + 1] = ids[1] end
+	end
+	d.myPicks[key] = { at = time(), list = list, sentGen = (old and old.sentGen) or 0 }
+	if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
+end
+local rev = CreateFrame("Frame")
+rev:RegisterEvent("CHAT_MSG_WHISPER")
+rev:SetScript("OnEvent", function(_, _, text)
+	if text then pcall(onReply, text) end
+end)
+
+-- Drop this character's own record of its soft reserves (not its wishes): the
+-- list they were on was cleared.
+function SR.ForgetMyReserves()
+	local mine = ":" .. (me() or "")
+	for k in pairs(db().myPicks or {}) do
+		if not k:find("^wish:") and k:sub(-#mine) == mine then db().myPicks[k] = nil end
+	end
+	if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
+end
+
 -- ---- Wire handlers -----------------------------------------------------------
 local pendingOpen
 local function openWhenCalm(args)
@@ -611,6 +722,12 @@ do
 			if sender == me() then return end
 			if SR.IsLeadOrML and not SR.IsLeadOrML(sender) then return end
 			openWhenCalm({ raid, size, hc == "1", limit, lockKey, sender, g or "0" })
+		end)
+		C.On("SRCLEAR", function(sender)
+			sender = stripRealm(sender)
+			if sender == me() then return end
+			if SR.IsLeadOrML and not SR.IsLeadOrML(sender) then return end
+			SR.ForgetMyReserves()
 		end)
 		C.On("SRPICK", function(sender, lockKey, payload)
 			local n, why = SR.ReceivePicks(sender, lockKey, payload)

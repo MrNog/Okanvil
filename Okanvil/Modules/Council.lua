@@ -2852,7 +2852,7 @@ function C_.BuildRunTab(body)
 	local Wi = Okanvil.Wish
 	if Wi and Wi.CanTrigger() then
 		local wrow = opt("Wishlist",
-			"Raiders pick one item per raid ID; the board marks it WISH",
+			"25-man raids: raiders pick one item per raid ID; the board marks it WISH",
 			"Off by default. Turning it on opens the wish window for raiders with Okanvil.\n"
 				.. "Only tells the council what a raider is after -- it is not a reserve.",
 			function() return Wi.IsOn() end,
@@ -2865,17 +2865,23 @@ function C_.BuildRunTab(body)
 			Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Everyone picks again.|r", "Clear", Wi.Clear)
 		end)
 		-- Lock: keep the wishes in, take no new ones
-		local lock = W.Button(wrow, Wi.IsLocked() and "Unlock" or "Lock"); lock:SetSize(56, 22)
+		local lock = W.Button(wrow, "Lock"); lock:SetSize(62, 22)
 		lock:SetPoint("RIGHT", clr, "LEFT", -6, 0)
 		lock:Tooltip("Lock: the wishes already sent stay, nobody can add one.\nThe raiders' wish window closes.")
+		-- locked: gold, like an ON switch
+		local function paintLock()
+			local on = Wi.IsLocked()
+			lock:SetKind(on and "primary" or nil)
+			lock.text:SetText(on and "Locked" or "Lock")
+		end
 		lock:SetScript("OnClick", function()
+			if not Wi.IsOn() then Okanvil:Print("Turn the wishlist on first."); return end
 			Wi.SetLocked(not Wi.IsLocked())
-			lock:SetText(Wi.IsLocked() and "Unlock" or "Lock")
+			paintLock()
 		end)
-		lock:SetScript("OnShow", function(s)
-			if Wi.IsOn() then s:Enable() else s:Disable() end
-			s:SetText(Wi.IsLocked() and "Unlock" or "Lock")
-		end)
+		lock:SetScript("OnShow", paintLock)
+		paintLock()
+		Wi._paintLock = paintLock
 		if wrow.desc then wrow.desc:SetPoint("RIGHT", lock, "LEFT", -12, 0) end
 		wrow.text:SetPoint("RIGHT", lock, "LEFT", -12, 0)
 	end

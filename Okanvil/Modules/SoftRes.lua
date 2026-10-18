@@ -148,6 +148,10 @@ function SR.Clear()
 	local d = db()
 	d.items, d.names, d.at, d.from, d.nItems, d.nPlayers = nil, nil, nil, nil, nil, nil
 	d.bosses, d.order = nil, nil
+	-- every raider's own record of their reserves goes with the list
+	if SR.ForgetMyReserves then SR.ForgetMyReserves() end
+	local C = Okanvil.Comms
+	if C and C.Send then C.Send("SRCLEAR") end
 	if SR.onChange then SR.onChange() end
 	if SR.onPanel then SR.onPanel() end
 end
@@ -355,8 +359,9 @@ function SR.SetMode(m)
 	m = m or "roll"
 	local was = SR.Mode()
 	db().mode, db().modeAt = m, time()
-	-- Picking a reserve mode opens whispers; the first pull locks them again.
-	if m == "sr" and was ~= m and SR.SetIntake and not SR.IntakeOpen() then SR.SetIntake(true) end
+	-- A mode change leaves reserve whispers locked: they open with Open or
+	-- Post rules, never by themselves.
+	if was ~= m and SR.SetIntake and SR.IntakeOpen() then SR.SetIntake(false) end
 	-- Council IS council night, and every other mode ends it. Only the one who
 	-- may run the council switches it; anyone else just changes their own view.
 	local CC = Okanvil.Council

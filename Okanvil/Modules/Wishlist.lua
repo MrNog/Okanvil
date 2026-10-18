@@ -40,6 +40,8 @@ function Wi.onChange()
 	local RM = Okanvil.RollMgr
 	if RM and RM.SyncSRButton then pcall(RM.SyncSRButton) end
 	if Wi.Panel then pcall(Wi.Panel.Sync); pcall(Wi.Panel.Paint) end
+	-- the Loot page's Lock button
+	if Wi._paintLock then pcall(Wi._paintLock) end
 end
 
 local KEEP_DAYS = 8
@@ -66,8 +68,11 @@ Wi.CanTrigger = function() return canTrigger(me()) end
 -- On by the switch (saved), or for this session by /okwish test (not saved, so
 -- a test never leaves the switch on after a reload).
 function Wi.IsOn() return (db().on or Wi._test) and true or false end
--- Wishes count only on a council night: on, and the loot mode is Council.
-function Wi.Live() return Wi.IsOn() and (Wi._test or SR.Mode() == "council") and true or false end
+-- Wishes are for the guild's 25-man raids only.
+local function is25() return (SR.Raid().size or 25) == 25 end
+Wi.Is25 = is25
+-- Wishes count only on a council night in a 25: on, and the loot mode is Council.
+function Wi.Live() return Wi.IsOn() and (Wi._test or (SR.Mode() == "council" and is25())) and true or false end
 
 local function prune()
 	local d, cutoff = db(), time() - KEEP_DAYS * 86400
@@ -129,6 +134,11 @@ local mySent, openWhenCalm      -- defined below, used by SetOn
 
 -- ---- Officer: on / off --------------------------------------------------------
 function Wi.SetOn(on)
+	if on and not is25() then
+		Okanvil:Print("|cffff5555Wishlist not turned on:|r wishes are for 25-man raids only, and this raid is "
+			.. SR.RaidLabel() .. ". Set the raid difficulty to 25.")
+		return
+	end
 	local d = db()
 	d.on = on and true or false
 	d.locked = nil
@@ -192,7 +202,8 @@ end
 
 -- Lock: the wishes already sent stay on the board, nobody can add one. Every
 -- raider's window closes; turning it on again, or Clear, opens it up again.
-function Wi.IsLocked() return db().locked and true or false end
+-- a lock only means something while the wishlist is on
+function Wi.IsLocked() return (Wi.IsOn() and db().locked) and true or false end
 function Wi.Accepting() return Wi.Live() and not db().locked end
 local function applyLock(locked)
 	db().locked = locked or nil
@@ -203,9 +214,11 @@ function Wi.SetLocked(locked)
 	applyLock(locked)
 	local C = Okanvil.Comms
 	if C and C.Send then C.Send("WISHLOCK", locked and "1" or "0") end
-	local msg = locked and "WISHLIST closed: no new wishes for this raid ID." or "WISHLIST open again: pick 1 item in Okanvil, or whisper " .. (me() or "me") .. ": wh [item]."
+	local msg = locked and "WISHLIST LOCKED: your wishes are saved, no new wishes for this raid ID."
+		or "WISHLIST open again: pick 1 item in Okanvil, or whisper " .. (me() or "me") .. ": wh [item]."
 	local inRaid = (GetNumRaidMembers() or 0) > 0
-	local chan = inRaid and "RAID" or ((GetNumPartyMembers() or 0) > 0 and "PARTY") or nil
+	local chan = inRaid and ((IsRaidLeader() or IsRaidOfficer()) and "RAID_WARNING" or "RAID")
+		or ((GetNumPartyMembers() or 0) > 0 and "PARTY") or nil
 	if chan then SendChatMessage(msg, chan) end
 	Okanvil:Print(locked and "Wishlist locked: no new wishes." or "Wishlist unlocked.")
 end
@@ -253,6 +266,7 @@ do
 			sender = stripRealm(sender)
 			if sender == me() then return end
 			if not canTrigger(sender) then return end
+			if tonumber(size) ~= 25 then return end
 			db().on = true
 			db().locked = nil
 			if Wi.onChange then Wi.onChange() end
@@ -649,8 +663,11 @@ end
 -- this ID is dropped first so it can be run again.
 function Wi.Test()
 	local d = db()
+	if Wi.IsLocked() then Okanvil:Print("The wishlist is locked: no new wishes."); return end
 	Wi._test = true
+	-- wishes are for 25s: the test is the 25 of the raid picked
 	local r = SR.Raid()
+	r = { key = r.key, size = 25, hc = r.hc }
 	local lockKey = SR.LockKey(r)
 	if d.list[lockKey] then d.list[lockKey][me()] = nil end
 	local s = Okanvil.db.softres and Okanvil.db.softres.myPicks

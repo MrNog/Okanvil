@@ -910,7 +910,9 @@ function RM.SyncSRButton()
 	-- CSV) before any list is loaded.
 	-- SR in SR mode; WH (the wishes) on a council night with the wishlist on
 	local WP = Okanvil.Wish and Okanvil.Wish.Panel
-	if isML() and SRM and SRM.WhisperMode() and (SRM.Summary() or Okanvil.LITE) then
+	-- the same people as WH: an officer, the raid leader or the master looter
+	local canSee = isML() or (Okanvil.Wish and Okanvil.Wish.CanTrigger and Okanvil.Wish.CanTrigger())
+	if canSee and SRM and SRM.WhisperMode() and (SRM.Summary() or Okanvil.LITE) then
 		win.srBtn.text:SetText("SR")
 		win.srBtn:Tooltip("Soft reserves: every reserved item, who reserved it,\nand what happened to it tonight.")
 		win.srBtn:Show()
