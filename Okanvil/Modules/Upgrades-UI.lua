@@ -343,9 +343,6 @@ function Okanvil:BuildUpgrades(host)
 		b.own:SetSize(22, 22); b.own:SetPoint("BOTTOMRIGHT", 3, -3)
 		b.own:SetTexture("Interface\\RaidFrame\\ReadyCheck-Ready")
 		-- and a gold frame round it
-		-- "BIS" on the second ring / trinket: two are worn, both are BIS
-		b.tag = W.Text(b, "", "note")
-		b.tag:SetPoint("TOPLEFT", 2, -1)
 		b.edge = {}
 		for _, side in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
 			local t = b:CreateTexture(nil, "OVERLAY")
@@ -482,8 +479,6 @@ function Okanvil:BuildUpgrades(host)
 						local have = (GetItemCount(id, true) or 0) > 0
 						if have then c.own:Show() else c.own:Hide() end
 						for _, t in ipairs(c.edge) do if have then t:Show() else t:Hide() end end
-						local pair = row.slot == "Finger" or row.slot == "Trinket"
-						c.tag:SetText((pair and r == 2) and ("|cff" .. RANK_HEX[1] .. "BIS|r") or "")
 						c:Show()
 					end
 				end

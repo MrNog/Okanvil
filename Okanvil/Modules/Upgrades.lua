@@ -530,17 +530,26 @@ local function Beats(row, link, id, wornLink, wid)
 	local _, dExact, dName = RankIn(row, id, GetItemInfo(link))
 	local _, wExact, wName = RankIn(row, wid, GetItemInfo(wornLink))
 	local dl, wl = Ilvl(link), Ilvl(wornLink)
+	-- two copies of the same item (normal and heroic, 10 and 25): the higher
+	-- item level is the better one, whichever copy the list happens to name
+	local dn, wn = GetItemInfo(link), GetItemInfo(wornLink)
+	if dn and dn == wn then return dl > wl end
 	if dl == wl then return dName < wName end
 	-- the list's place is another (higher) copy's: this lower copy does not
 	-- beat a piece of higher item level, whatever that copy's place
 	if not dExact and dl < wl then return false end
+	-- and the same for what you wear: a lower copy of a listed piece does not
+	-- keep that copy's place against a drop of higher item level
+	if not wExact and wl < dl then return true end
 	local d, w = dExact or (dName + 0.5), wExact or (wName + 0.5)
 	if d ~= w then return d < w end
 	return dl > wl
 end
 
 -- Set pieces: the tooltip's "Sanctified Lightsworn Battlegear (4/5)" line names
--- the set and how many you wear. Cached until your gear changes.
+-- the set. How many you wear is counted here, from the item ids in your slots:
+-- on a transmog server the client counts the looks and says 3/5 for a real 4.
+-- Cached until your gear changes.
 local scan = CreateFrame("GameTooltip", "OkanvilUpgradesSetScan", nil, "GameTooltipTemplate")
 local wornSet, itemSet = {}, {}
 
@@ -555,17 +564,6 @@ local function ReadSet()
 	return false
 end
 
-local function WornSet(slot)
-	if wornSet[slot] == nil then
-		scan:SetOwner(UIParent, "ANCHOR_NONE")
-		scan:SetInventoryItem("player", slot)
-		local name, n = ReadSet()
-		wornSet[slot] = name and { name = name, n = n } or false
-		scan:Hide()
-	end
-	return wornSet[slot]
-end
-
 -- the set an item belongs to, false for none, nil while it isn't cached.
 -- An uncached item is asked for once (Ask) and never scanned until it is.
 local function SetOf(id)
@@ -578,6 +576,87 @@ local function SetOf(id)
 		scan:Hide()
 	end
 	return itemSet[id]
+end
+
+local function wornId(slot)
+	local l = GetInventoryItemLink("player", slot)
+	return l and tonumber(l:match("item:(%d+)"))
+end
+-- how many pieces of this set you wear, by item id
+local function setCount(name)
+	local n = 0
+	for slot = 1, 19 do
+		local id = wornId(slot)
+		if id and SetOf(id) == name then n = n + 1 end
+	end
+	return n
+end
+U.SetCount = setCount
+
+local function WornSet(slot)
+	if wornSet[slot] == nil then
+		local id = wornId(slot)
+		local name = id and SetOf(id)
+		if name == nil and id then return false end      -- not cached yet: ask again later
+		wornSet[slot] = name and { name = name, n = setCount(name) } or false
+	end
+	return wornSet[slot]
+end
+
+-- The item tooltip's set block, told the truth: "(4/5)", the pieces you wear
+-- lit, and the bonuses you have green -- counted from the item ids you wear.
+local SET_ON, SET_OFF = { 1, 1, 0.6 }, { 0.5, 0.5, 0.5 }
+local function fixSetTip(tip)
+	local name = tip:GetName()
+	if not name then return end
+	local setName, setLine, total
+	for i = 2, tip:NumLines() do
+		local fs = _G[name .. "TextLeft" .. i]
+		local t = fs and fs:GetText()
+		local sn, _, tot = (t or ""):match("^(.-) %((%d+)/(%d+)%)$")
+		if sn then setName, setLine, total = sn, i, tot; break end
+	end
+	if not setName then return end
+	local have = setCount(setName)
+	if have == 0 then return end                      -- not yours: the client's count stands
+	local wornNames = {}
+	for slot = 1, 19 do
+		local l = GetInventoryItemLink("player", slot)
+		local n = l and GetItemInfo(l)
+		if n then wornNames[n] = true end
+	end
+	_G[name .. "TextLeft" .. setLine]:SetText(setName .. " (" .. have .. "/" .. total .. ")")
+	-- the piece names, an empty line, then the bonuses: the block ends at the
+	-- first line after the gap that is not a bonus
+	local pieces = true
+	for i = setLine + 1, tip:NumLines() do
+		local fs = _G[name .. "TextLeft" .. i]
+		local t = fs and fs:GetText()
+		if not t or t == "" or t == " " then
+			if not pieces then break end
+			pieces = false
+		else
+			local need, bonus = t:match("^%((%d+)%) Set: (.*)$")
+			if need then
+				pieces = false
+				if tonumber(need) <= have then fs:SetText("Set: " .. bonus); fs:SetTextColor(0.1, 1, 0.1) end
+			elseif t:match("^Set: ") then
+				pieces = false                        -- already green
+			elseif pieces then
+				local piece = t:gsub("^%s+", "")
+				local c = wornNames[piece] and SET_ON or SET_OFF
+				fs:SetTextColor(c[1], c[2], c[3])
+			else
+				break                                 -- past the bonuses
+			end
+		end
+	end
+end
+for _, t in ipairs({ GameTooltip, ItemRefTooltip }) do
+	t:HookScript("OnTooltipSetItem", function(tip)
+		local ok, err = pcall(fixSetTip, tip)
+		if not ok and Okanvil.Err then Okanvil:Err("Set tooltip", err) end
+	end)
 end
 
 local TIER_ROWS = { Head = true, Shoulder = true, Chest = true, Hands = true, Legs = true }
@@ -1358,9 +1437,40 @@ end
 
 -- Class lines in the stars' rows: per tier every class in a comma list, each
 -- in its class colour, wrapped
+-- "Classes: Rogue" on the tooltip (tier pieces, class-only items): only those
+-- classes, as tokens; nil when the item has no such line. Cached per item.
+local classOnly = {}
+local CLASSES_PREFIX = (ITEM_CLASSES_ALLOWED or "Classes: %s"):gsub("%%s", "")
+local function allowedClasses(link, id)
+	if classOnly[id] ~= nil then return classOnly[id] or nil end
+	local byName = {}
+	for _, list in ipairs({ LOCALIZED_CLASS_NAMES_MALE or {}, LOCALIZED_CLASS_NAMES_FEMALE or {} }) do
+		for token, nm in pairs(list) do byName[nm] = token end
+	end
+	scan:SetOwner(UIParent, "ANCHOR_NONE")
+	scan:SetHyperlink(link)
+	local found = false
+	for i = 2, scan:NumLines() do
+		local fs = _G["OkanvilUpgradesSetScanTextLeft" .. i]
+		local t = fs and fs:GetText()
+		if t and t:sub(1, #CLASSES_PREFIX) == CLASSES_PREFIX then
+			found = {}
+			for nm in t:sub(#CLASSES_PREFIX + 1):gmatch("[^,]+") do
+				local token = byName[(nm:gsub("^%s+", ""):gsub("%s+$", ""))]
+				if token then found[token] = true end
+			end
+			break
+		end
+	end
+	scan:Hide()
+	classOnly[id] = found
+	return found or nil
+end
+
 local function starRows(link, name, id, rows)
 	local P = Okanvil.Prof
 	if not (P and P.FitsSpec and P.CanUse and OkanvilFitSpecs) then return end
+	local only = id and allowedClasses(link, id)
 	local tiers = { [5] = {}, [4] = {} }
 	local order = { [5] = {}, [4] = {} }
 	local perClass = {}
@@ -1473,28 +1583,21 @@ local function onFitTip(tip)
 		local l = _G[tname .. "TextLeft" .. i]
 		if l then maxLeft = math.max(maxLeft, l:GetWidth()) end
 	end
+	-- Every left label padded to the same width with an empty spacer (|T:h:w|t
+	-- draws nothing): the tooltip then measures each line with room for the
+	-- moved text, so nothing is cut to "He..." -- on every redraw, not just once
 	movedRight[tip] = movedRight[tip] or {}
-	local moved = {}
 	for i = firstLine, tip:NumLines() do
 		local l, r = _G[tname .. "TextLeft" .. i], _G[tname .. "TextRight" .. i]
 		if l and r then
+			local pad = math.floor(maxLeft - l:GetWidth() + 16)
+			if pad > 0 then l:SetText((l:GetText() or "") .. "|T:1:" .. pad .. "|t") end
 			r:ClearAllPoints()
 			r:SetPoint("LEFT", l, "LEFT", maxLeft + 10, 0)
 			movedRight[tip][i] = true
-			moved[#moved + 1] = r
 		end
 	end
 	tip:Show()
-	-- the tooltip sized itself for the right column at its old place: widen it
-	-- (and the moved strings) so no name is cut to "Ma..."
-	local need = 0
-	for _, r in ipairs(moved) do
-		local w = r:GetStringWidth()
-		r:SetWidth(w + 2)
-		need = math.max(need, w)
-	end
-	need = maxLeft + 10 + need + 24
-	if tip:GetWidth() < need then tip:SetWidth(need) end
 end
 
 for _, t in ipairs({ GameTooltip, ItemRefTooltip }) do
