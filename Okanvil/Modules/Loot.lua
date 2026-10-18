@@ -1034,6 +1034,19 @@ local DROP_MATCH_WINDOW = 300
 --
 -- Holding is not owning: while the item sits with the ML it is still open for rolls.
 -- (The UI draws the same distinction as `heldByML` when it decides what to show.)
+-- Who hands loot out without being the master looter now: a pug's leader holding
+-- the bags and trading to winners, an old ML still carrying what he looted. Anyone
+-- who calls a roll is one, for the rest of the session. What they hold is held
+-- for someone, not theirs. (A field on L, not a local: this file is at Lua's limit.)
+L._holders = L._holders or {}
+function L.IsHolder(name)
+	if not name or name == "" then return false end
+	local key = (name:gsub("%-.*$", "")):lower()
+	local ml = L.MasterLooterName and L.MasterLooterName()
+	if ml and (ml:gsub("%-.*$", "")):lower() == key then return true end
+	return L._holders[key] == true
+end
+
 local function unowned(dp)
 	if not dp then return false end
 	-- Sitting in the ML's bags waiting to be handed out: still open.
@@ -1041,9 +1054,9 @@ local function unowned(dp)
 		return true
 	end
 	if not dp.receivedBy or dp.receivedBy == "" then return true end
-	-- Rows captured before `heldBy` existed stored the ML in receivedBy.
-	local ml = L.MasterLooterName and L.MasterLooterName()
-	return ml ~= nil and dp.receivedBy == ml
+	-- Rows captured before `heldBy` existed stored the ML in receivedBy; the
+	-- loot holders' items arrive the same way
+	return L.IsHolder(dp.receivedBy)
 end
 
 -- strict=true: only ever returns a drop that is still up for grabs, never one that
@@ -2334,8 +2347,10 @@ end
 -- tell the UI to select it. findOpenDrop (defined above) prefers an un-awarded copy.
 -- mayMint: the call came from the master looter or a raid warning, the only ones
 -- trusted to put an item on the list that we never saw drop.
-function L.NoteExternalRoll(link, winners, mayMint)
+function L.NoteExternalRoll(link, winners, mayMint, caller)
 	if not link then return end
+	-- whoever calls a roll hands loot out: what they hold is up for grabs
+	if caller and caller ~= "" then L._holders[(caller:gsub("%-.*$", "")):lower()] = true end
 	local id = itemIDFromLink(link)
 	if not id or id == 0 then return end
 	local s = activeBucket and activeBucket()
@@ -2392,7 +2407,15 @@ function L.NoteExternalRoll(link, winners, mayMint)
 				local prev = sess.drops[i]
 				if prev.id == id then
 					local rank
-					if unowned(prev) then
+					-- The one calling the roll holds this copy: it is the copy being
+					-- rolled. Master loot can change hands mid-raid -- the old ML still
+					-- carries what he looted, and rolls it -- and matching only the ML
+					-- of NOW made it look owned and minted a second copy.
+					local holder = (prev.heldBy and prev.heldBy ~= "" and prev.heldBy) or prev.receivedBy
+					if caller and holder and holder ~= "" and noRealm(holder) == noRealm(caller) then
+						local rolled = prev.rollDone or (prev.rolls and #prev.rolls > 0)
+						rank = rolled and 1.5 or 1
+					elseif unowned(prev) then
 						local holder = prev.heldBy
 						if not holder or holder == "" or (ml and noRealm(holder) == noRealm(ml)) then
 							local rolled = prev.rollDone or (prev.rolls and #prev.rolls > 0)
@@ -2815,7 +2838,9 @@ local function onRollAnnounce(msg, sender, event)
 		return
 	end
 
-	local lower = msg:lower()
+	-- The words are read with the links taken out, each left as a space: a link ends
+	-- in "|h|r", so "[Bracers]MS" read as "...rms" and the MS was not a word.
+	local lower = msg:gsub("|c%x+|Hitem:.-|h.-|h|r", " "):gsub("|Hitem:[^|]+|h%[.-%]|h", " "):lower()
 	-- Winner / result lines carry an item link too -> never treat them as a new roll,
 	-- or a "won" line would steal the selection back to the item that just finished.
 	-- WHOLE WORDS (%f is Lua's frontier pattern). As bare substrings these hide inside
@@ -2838,7 +2863,7 @@ local function onRollAnnounce(msg, sender, event)
 		local who = msg:match("^(%S+) won |c%x+|Hitem:")
 		if who and wl and L.MarkWinner and canOpenRoll(sender, event) then
 			if not (cur and cur.id == tonumber(wl)) then
-				L.NoteExternalRoll(msg:match("|c%x+|Hitem:.-|h.-|h|r"), nil, isLootCaller(sender, event))
+				L.NoteExternalRoll(msg:match("|c%x+|Hitem:.-|h.-|h|r"), nil, isLootCaller(sender, event), sender)
 			end
 			L.MarkWinner(tonumber(wl), noRealm(who))
 			rollTrace(("winner announced by %s: %s won %s"):format(tostring(sender), who, wl))
@@ -2866,7 +2891,7 @@ local function onRollAnnounce(msg, sender, event)
 	-- any raid warning look like a roll call.
 	if lower:find("roll") or lower:find("%f[%w]ms%f[%W]") or lower:find("%f[%w]os%f[%W]")
 		or lower:find("%f[%w]offspec%f[%W]") or lower:find("%f[%w]mainspec%f[%W]") then
-		L.NoteExternalRoll(link, winnerCount(lower), isLootCaller(sender, event))
+		L.NoteExternalRoll(link, winnerCount(lower), isLootCaller(sender, event), sender)
 		return
 	end
 
@@ -2892,7 +2917,7 @@ local function onRollAnnounce(msg, sender, event)
 	if rest == "" and not isLootCaller(sender, event) then
 		rollTrace(("%s from %s: bare link, not the ML, not a roll call"):format(link, tostring(sender)))
 	elseif rest == "" then
-		L.NoteExternalRoll(link, winnerCount(lower), true)
+		L.NoteExternalRoll(link, winnerCount(lower), true, sender)
 	else
 		rollTrace(("%s from %s: not read as a roll call"):format(link, tostring(sender)))
 	end

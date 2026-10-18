@@ -1256,8 +1256,10 @@ function RM.Refresh()
 				-- more than "X receives loot" -- the award confirm is the ML's alone -- so
 				-- hiding the holder left every handed-out item looking unclaimed.
 				local holder = (not d.awarded) and d.heldBy ~= nil and d.heldBy ~= "" and d.heldBy or nil
-				local heldByML = not d.awarded and ((holder ~= nil and holder == mlName)
-					or (mlName ~= nil and d.receivedBy == mlName))
+				-- the ML, or anyone handing loot out (a pug leader holding the bags)
+				local isHolder = L.IsHolder or function() return false end
+				local heldByML = not d.awarded and ((holder ~= nil and (holder == mlName or isHolder(holder)))
+					or (mlName ~= nil and d.receivedBy == mlName) or isHolder(d.receivedBy))
 
 				-- "passed" only ever means NOBODY has it, so a known owner outranks it:
 				-- an item everyone passed on can still be handed out by the master
