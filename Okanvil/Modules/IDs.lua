@@ -771,6 +771,50 @@ ItemRefTooltip:HookScript("OnTooltipSetItem", function(self)
 end)
 
 -- ------------------------------------------------------------
+-- IDs on tooltips: spells, buffs and debuffs, spell links, items -- what a
+-- WeakAura needs, without opening the finder. /okids tips turns it off.
+-- ------------------------------------------------------------
+local function tipsOn()
+	return db and db.tipIDs ~= false and Okanvil:ModuleActive("Okanvil-IDs")
+end
+-- one line under a gap, label and number both in Okanvil gold
+local function addID(tip, label, id)
+	if not (id and tipsOn()) then return end
+	tip:AddLine(" ")
+	tip:AddDoubleLine(label, tostring(id), 0.88, 0.72, 0.38, 0.88, 0.72, 0.38)
+	tip:Show()
+end
+for _, fn in ipairs({ "SetUnitBuff", "SetUnitDebuff", "SetUnitAura" }) do
+	local aura = (fn == "SetUnitBuff" and UnitBuff) or (fn == "SetUnitDebuff" and UnitDebuff) or UnitAura
+	hooksecurefunc(GameTooltip, fn, function(self, ...)
+		addID(self, "Spell ID", (select(11, aura(...))))
+	end)
+end
+GameTooltip:HookScript("OnTooltipSetSpell", function(self)
+	addID(self, "Spell ID", (select(3, self:GetSpell())))
+end)
+hooksecurefunc("SetItemRef", function(link)
+	local id = link and link:match("^spell:(%d+)")
+	if id then addID(ItemRefTooltip, "Spell ID", id) end
+end)
+for _, t in ipairs({ GameTooltip, ItemRefTooltip }) do
+	t:HookScript("OnTooltipSetItem", function(self)
+		local _, link = self:GetItem()
+		addID(self, "Item ID", link and link:match("item:(%d+)"))
+	end)
+end
+SLASH_OKIDS1 = "/okids"
+SlashCmdList.OKIDS = function(arg)
+	if not db then return end
+	if (arg or ""):lower():match("^%s*tips") then
+		db.tipIDs = (db.tipIDs == false) and true or false
+		Okanvil:Print("IDs on tooltips " .. (db.tipIDs and "on" or "off") .. ".")
+	else
+		Okanvil:Print("/okids tips -- spell and item IDs on tooltips: on / off")
+	end
+end
+
+-- ------------------------------------------------------------
 -- events / boot
 -- ------------------------------------------------------------
 local ev = CreateFrame("Frame")
