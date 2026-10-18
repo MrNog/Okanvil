@@ -153,8 +153,8 @@ function Okanvil:BuildLoot()
 		srp:SetPoint("TOPRIGHT", modes, "BOTTOMRIGHT", 12, -10)
 		Okanvil:Loot_BuildSoftRes(srp)
 
-		-- ---- MASTER LOOT: the speed-run block, for officers and whoever is master
-		-- looter right now (a pug leader sweeping loot)
+		-- ---- MASTER LOOT: the speed-run block, for whoever is master looter right
+		-- now (an officer or a pug leader sweeping loot)
 		local mlHead = heading(srp, "MASTER LOOT", 14)
 		local top = W.Frame(main, "page")
 		top:SetPoint("TOPLEFT", mlHead, "BOTTOMLEFT", 0, 0)
@@ -162,8 +162,8 @@ function Okanvil:BuildLoot()
 		top:SetHeight(128)
 		Okanvil:Loot_BuildCollectors(top)
 		local function applyTop()
-			local show = (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio())
-				or (L.IsMasterLooter and L.IsMasterLooter())
+			-- only the master looter sweeps loot: an officer who is not ML has nothing to set here
+		local show = L.IsMasterLooter and L.IsMasterLooter()
 			local on = L.CollectorsEnabled and L.CollectorsEnabled()
 			if top.fields then if on then top.fields:Show() else top.fields:Hide() end end
 			if show then
@@ -448,16 +448,14 @@ function Okanvil:Loot_BuildModes(p)
 	local C = Okanvil.Colors
 	local tiles = {}
 
-	-- who set it, for everyone who cannot: the tiles show the group's mode
-	local who = W.Text(p, "", "note", "dim")
-	who:SetPoint("BOTTOMRIGHT", p, "TOPRIGHT", 0, 9)
-
 	local function paint()
 		local cur = SR.Mode()
 		local can = not SR.CanSetMode or SR.CanSetMode()
 		local setter = SR.ModeSetter and SR.ModeSetter()
-		who:SetText((not can and setter) and ("set by |cffe0b860" .. setter .. "|r") or "")
+		-- who set it, for everyone who cannot: on the lit tile, under its name
+		local by = (not can and setter) and ("  |cff8a8d93·  set by|r |cffe0b860" .. setter .. "|r") or ""
 		for _, t in ipairs(tiles) do
+			t.sub:SetText(t._sub .. (t._mode == cur and by or ""))
 			t:EnableMouse(can)
 			t:SetAlpha((can or t._mode == cur) and 1 or 0.55)
 			local on = t._mode == cur
@@ -477,7 +475,7 @@ function Okanvil:Loot_BuildModes(p)
 
 	for i, def in ipairs(MODE_TILES) do
 		local t = CreateFrame("Button", nil, p)
-		t._mode = def.mode
+		t._mode, t._sub = def.mode, def.sub
 		t:SetHeight(MODE_TILE_H)
 		Okanvil:Skin(t, "dark")
 		t.bg = t:CreateTexture(nil, "BACKGROUND", nil, 1)
