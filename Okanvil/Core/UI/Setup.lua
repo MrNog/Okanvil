@@ -18,7 +18,7 @@
 local Okanvil = Okanvil
 local W = Okanvil.W
 
-local WIN_W, WIN_H = 540, 450
+local WIN_W, WIN_H = 540, 520
 local X = 20                      -- side gutter
 local CONTENT_TOP = -76           -- below the header rule
 local ROW_H = 28                  -- one extra per row
@@ -39,20 +39,129 @@ local ESSENTIALS = {
 	  off = "No notes, and note-driven WeakAuras show nothing." },
 }
 
--- Optional for everyone. One line each; the tooltip has the rest.
+-- Optional for everyone, on two pages: a name and one line of what it does.
 -- `officer` = on by default for an officer; `all` = on by default for everyone.
 local EXTRAS = {
-	{ key = "__loot",             line = "Loot history -- drops per boss, Mini Roll",  officer = true },
-	{ key = "__guild",            line = "Raid snapshots -- who was in each raid",     all = true },
-	{ key = "Okanvil-RaidFinder", line = "Raid Finder -- find pug raids in chat",      all = true },
-	{ key = "Okanvil-PuG",        line = "PuG -- build a raid and spam the LFM line",  officer = true },
-	{ key = "Okanvil-Recruit",    line = "Recruit -- recruitment ads, auto-invite",    officer = true },
-	{ key = "Okanvil-Logs",       line = "Combat Logs -- auto-log each raid",          officer = true },
-	{ key = "Okanvil-IDs",        line = "ID Finder -- spell and item IDs for WAs" },
-	{ key = "Okanvil-Farm",       line = "Farm -- gold per hour while farming" },
+	{ key = "__loot", page = "raid", name = "Loot", officer = true,
+	  line = "Every drop per boss, who won it, and the mini roll for the master looter." },
+	{ key = "Okanvil-Upgrades", page = "raid", name = "Upgrades", all = true,
+	  line = "Which drops beat your gear, BiS lists for every spec, a toast when one drops." },
+	{ key = "Okanvil-RaidFinder", page = "raid", name = "Raid Finder", all = true,
+	  line = "LFM spam from chat turned into one list of raids you can join." },
+	{ key = "Okanvil-PuG", page = "raid", name = "PuG", officer = true,
+	  line = "Build your own raid: LFM line, spam, whispers caught and invited." },
+	{ key = "Okanvil-Ranking", page = "guild", name = "Ranking", all = true,
+	  line = "The guild's log rankings, and each raider's rank on their tooltip." },
+	{ key = "__guild", page = "guild", name = "Raid snapshots", all = true,
+	  line = "Who was in each raid, saved quietly for attendance." },
+	{ key = "Okanvil-Recruit", page = "guild", name = "Recruit", officer = true,
+	  line = "Recruitment ads on a timer, and invites for whoever answers." },
+	{ key = "Okanvil-Logs", page = "guild", name = "Combat Logs", officer = true,
+	  line = "Combat logging starts and stops by itself in every raid." },
+	{ key = "Okanvil-IDs", page = "guild", name = "ID Finder",
+	  line = "Spell and item IDs for WeakAuras, searchable, and on tooltips." },
+	{ key = "Okanvil-Farm", page = "guild", name = "Farm",
+	  line = "Gold per hour while you farm." },
 }
 
+-- Raised when an update adds a step every install should see: an install that
+-- finished an older setup gets it again once, opened on the first new step.
+Okanvil.SETUP_VERSION = 2
+
 local setupF
+
+-- Jobs Okanvil and another addon both do. Like ElvUI's incompatible-addon check:
+-- an addon counts when it is ENABLED in the addon list (loaded or not yet), and
+-- the player keeps one of the two. The setup asks on its Addons page; after
+-- that the login check asks again only if one comes back on.
+--   on / off: is Okanvil's version on, and turn it off
+--   module:   the Okanvil module behind it, switched on with Okanvil's pick
+local function upgDB() Okanvil.db.upgrades = Okanvil.db.upgrades or {}; return Okanvil.db.upgrades end
+local RIVALS = {
+	{ addon = "Bistooltip", line = "BiS lists on item tooltips", sub = "Which specs want the item, BIS / alt 2 / ...",
+	  module = "Okanvil-Upgrades",
+	  on = function() return upgDB().bisTip ~= false end, off = function() upgDB().bisTip = false end },
+	{ addon = "ClassLoot", line = "Who an item fits", sub = "Stars per class and spec, on every raid item",
+	  module = "Okanvil-Upgrades",
+	  on = function() return upgDB().fitTip ~= false end, off = function() upgDB().fitTip = false end },
+	{ addon = "RCLootCouncil", line = "Loot council", sub = "The popup raiders answer, the officers' board",
+	  module = "__council" },
+	{ addon = "WoWPuG", line = "Build a PuG", sub = "LFM line, spam, whisper invites", module = "Okanvil-PuG" },
+	{ addon = "RaidBrowser", line = "Raid finder", sub = "Raids advertised in chat, in one list",
+	  module = "Okanvil-RaidFinder" },
+	{ addon = "SpellID", line = "IDs on tooltips", sub = "Spell and item IDs, for WeakAuras", module = "Okanvil-IDs",
+	  on = function() return not (OkanvilIDsDB and OkanvilIDsDB.tipIDs == false) end,
+	  off = function() OkanvilIDsDB = OkanvilIDsDB or {}; OkanvilIDsDB.tipIDs = false end },
+}
+Okanvil.RIVALS = RIVALS
+
+local function addonEnabled(name)
+	local _, _, _, enabled, _, reason = GetAddOnInfo(name)
+	return enabled and reason ~= "MISSING"
+end
+-- the rivals this install has, enabled
+local function addonInstalled(name)
+	local _, _, _, _, _, reason = GetAddOnInfo(name)
+	return reason ~= "MISSING"
+end
+-- the rivals this install has: enabled ones only (the login check), or every
+-- installed one, on or off (the setup's page, so a turned-off one can come back)
+local function rivalsHere(installed)
+	local out = {}
+	for _, r in ipairs(RIVALS) do
+		if (installed and addonInstalled(r.addon)) or addonEnabled(r.addon) then out[#out + 1] = r end
+	end
+	return out
+end
+local function oursOn(r)
+	if r.module and not Okanvil:IsModuleEnabled(r.module) then return false end
+	return not r.on or r.on()
+end
+-- Keep Okanvil's: the other addon is turned off (a reload follows). Keep theirs:
+-- Okanvil's version goes off (the whole module when it is nothing else).
+local function keepOkanvil(r) DisableAddOn(r.addon) end
+local function keepTheirs(r)
+	if r.off then r.off() elseif r.module then Okanvil:SetModuleEnabled(r.module, false) end
+end
+
+-- After login: any rival on while Okanvil's version is on too -> one dialog.
+StaticPopupDialogs.OKANVIL_RIVALS = {
+	text = "These addons do a job Okanvil already does:\n\n%s\n\nKeep Okanvil's, or yours?",
+	button1 = "Okanvil",
+	button2 = "Keep mine",
+	OnAccept = function(_, list)
+		for _, r in ipairs(list or {}) do keepOkanvil(r) end
+		ReloadUI()
+	end,
+	OnCancel = function(_, list, reason)
+		if reason ~= "clicked" then return end
+		for _, r in ipairs(list or {}) do keepTheirs(r) end
+		Okanvil:Print("kept your addons; Okanvil's versions are off. /okanvil setup to change it.")
+	end,
+	timeout = 0, whileDead = 1, hideOnEscape = false,
+}
+function Okanvil:CheckRivals()
+	if self.db.setupPending or InCombatLockdown() then return end
+	local list, names = {}, {}
+	for _, r in ipairs(rivalsHere()) do
+		if IsAddOnLoaded(r.addon) and oursOn(r) then
+			list[#list + 1] = r
+			names[#names + 1] = GOLD .. r.addon .. "|r -- " .. r.line
+		end
+	end
+	if #list == 0 then return end
+	local dlg = StaticPopup_Show("OKANVIL_RIVALS", table.concat(names, "\n"))
+	if dlg then dlg.data = list end
+end
+do
+	local ev = CreateFrame("Frame")
+	ev:RegisterEvent("PLAYER_LOGIN")
+	ev:SetScript("OnEvent", function()
+		if Okanvil.Comms and Okanvil.Comms.After then
+			Okanvil.Comms.After(8, function() Okanvil:CheckRivals() end)
+		end
+	end)
+end
 
 local function finish()
 	Okanvil.db.setupPending = nil
@@ -75,7 +184,8 @@ local function icon(parent, path, size)
 	return t
 end
 
-function Okanvil:ShowSetup()
+function Okanvil:ShowSetup(fromVersion)
+	local applyAll, tourB
 	if setupF then setupF:Hide() end
 	local self_ = self
 	local C = self.Colors
@@ -126,6 +236,14 @@ function Okanvil:ShowSetup()
 	end
 	local MB = self.MarksBar
 	local wantBar = not (self.db.marksbar and self.db.marksbar.enabled == false)
+	-- the Addons page: Okanvil's pick by default
+	local rivals = rivalsHere(true)
+	-- what is in use now: the other addon when it is on and Okanvil's is off,
+	-- else Okanvil's
+	local pick = {}
+	for _, r in ipairs(rivals) do
+		pick[r.addon] = (addonEnabled(r.addon) and not oursOn(r)) and "theirs" or "okanvil"
+	end
 	local wantWall = (self.db.ratArt or "on") ~= "off"
 
 	-- First run: fill the draft from the rank. A re-run keeps what is set now.
@@ -186,6 +304,50 @@ function Okanvil:ShowSetup()
 		btn:SetScript("OnClick", function() set(not get()); paint() end)
 		return btn, paint
 	end
+
+	-- One page of extras: icon, name, what it does in a line, ON / OFF. The raid
+	-- page also carries the marks bar, the other one the forge wallpaper.
+	local function extrasPage(host, which)
+		para(host, "What each one does. Change any of them later on the Modules page.", 0, 0, CW, "body", "dim")
+		local y = -24
+		local paints = {}
+		local function row(ic, name, line, get, set)
+			local fr = CreateFrame("Frame", nil, host)
+			fr:SetPoint("TOPLEFT", 0, y); fr:SetPoint("TOPRIGHT", 0, y)
+			fr:SetHeight(40)
+			local t = icon(fr, ic, 22); t:SetPoint("TOPLEFT", 0, -4)
+			local nm = W.Text(fr, name, "body"); nm:SetPoint("TOPLEFT", t, "TOPRIGHT", 10, 2)
+			local btn, paint = toggle(fr, get, set)
+			btn:SetPoint("TOPRIGHT", 0, -4)
+			local ds = W.Text(fr, line, "note", "dim")
+			ds:SetPoint("TOPLEFT", nm, "BOTTOMLEFT", 0, -2)
+			ds:SetPoint("RIGHT", btn, "LEFT", -10, 0); ds:SetJustifyH("LEFT")
+			local hair = fr:CreateTexture(nil, "ARTWORK")
+			hair:SetTexture("Interface\\Buttons\\WHITE8x8"); hair:SetHeight(1)
+			hair:SetVertexColor(C.border[1], C.border[2], C.border[3], 0.6)
+			hair:SetPoint("BOTTOMLEFT", 0, 0); hair:SetPoint("BOTTOMRIGHT", 0, 0)
+			paints[#paints + 1] = paint
+			y = y - 44
+		end
+		for _, e in ipairs(EXTRAS) do
+			local it = byKey[e.key]
+			if it and e.page == which then
+				local key = e.key
+				row(it.icon, e.name, e.line, function() return want[key] end, function(v) want[key] = v end)
+			end
+		end
+		if which == "raid" and MB then
+			row("Interface\\TargetingFrame\\UI-RaidTargetingIcon_8", "Marks bar",
+				"Raid marks, ready check and pull timer while you lead or assist.",
+				function() return wantBar end, function(v) wantBar = v end)
+		elseif which == "guild" then
+			row("Interface\\Icons\\Trade_BlackSmithing", "Forge wallpaper",
+				"The smith at the anvil behind every page. Off: plain dark panels.",
+				function() return wantWall end, function(v) wantWall = v end)
+		end
+		return function() for _, p in ipairs(paints) do p() end end
+	end
+
 
 	-- ---- pages ----
 	local PAGES = {
@@ -259,54 +421,36 @@ function Okanvil:ShowSetup()
 				return function() for _, p in ipairs(paints) do p() end end
 			end,
 		},
+		{ name = "Raid tools", icon = I.loot, since = 2, build = function(host) return extrasPage(host, "raid") end },
+		{ name = "Guild and tools", icon = I.modules, since = 2, build = function(host) return extrasPage(host, "guild") end },
 		{
-			name = "Extras", icon = I.modules,
+			name = "Addons", icon = "Interface\\Icons\\INV_Misc_Gear_01", rivals = true, since = 2,
 			build = function(host)
-				para(host, "All optional. Hover a row for details.", 0, 0, CW, "body", "dim")
-				local y = -24
+				local y = para(host, "You have addons that do the same job as Okanvil. Pick one for each, "
+					.. "or tooltips and loot windows show things twice.", 0, 0, CW, "body", "dim") - 2
 				local paints = {}
-				local function row(ic, line, tip, get, set)
+				for _, r in ipairs(rivals) do
 					local fr = CreateFrame("Frame", nil, host)
-					fr:SetPoint("TOPLEFT", 0, y)
-					fr:SetPoint("TOPRIGHT", 0, y)
-					fr:SetHeight(ROW_H - 4)
-					fr:EnableMouse(true)
-					local t = icon(fr, ic, 20); t:SetPoint("LEFT", 0, 0)
-					local txt = W.Text(fr, line, "body")
-					txt:SetPoint("LEFT", t, "RIGHT", 8, 0)
-					local btn, paint = toggle(fr, get, set)
-					btn:SetPoint("RIGHT", 0, 0)
-					if tip then
-						fr:SetScript("OnEnter", function(s)
-							GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-							GameTooltip:SetText(tip, 1, 1, 1, 1, true)
-							GameTooltip:Show()
-						end)
-						fr:SetScript("OnLeave", function() GameTooltip:Hide() end)
+					fr:SetPoint("TOPLEFT", 0, y); fr:SetPoint("TOPRIGHT", 0, y)
+					fr:SetHeight(34)
+					local nm = W.Text(fr, r.line, "body"); nm:SetPoint("TOPLEFT", 0, -2)
+					local sb = W.Text(fr, r.sub, "note", "dim"); sb:SetPoint("TOPLEFT", nm, "BOTTOMLEFT", 0, -2)
+					local theirs = W.Button(fr, r.addon); theirs:SetSize(110, 22); theirs:SetPoint("RIGHT", 0, 0)
+					local ours = W.Button(fr, "Okanvil"); ours:SetSize(80, 22); ours:SetPoint("RIGHT", theirs, "LEFT", -2, 0)
+					local function paint()
+						ours:SetKind(pick[r.addon] == "okanvil" and "primary" or nil)
+						theirs:SetKind(pick[r.addon] == "theirs" and "primary" or nil)
 					end
+					ours:SetScript("OnClick", function() pick[r.addon] = "okanvil"; paint() end)
+					theirs:SetScript("OnClick", function() pick[r.addon] = "theirs"; paint() end)
 					paints[#paints + 1] = paint
-					y = y - ROW_H
+					y = y - 38
 				end
-				for _, e in ipairs(EXTRAS) do
-					local it = byKey[e.key]
-					if it then
-						local key = e.key
-						row(it.icon, e.line, it.desc,
-							function() return want[key] end, function(v) want[key] = v end)
-					end
-				end
-				if MB then
-					row("Interface\\TargetingFrame\\UI-RaidTargetingIcon_8",
-						"Marks bar -- marks, pull timer, shortcuts",
-						"Raid marks, ready check and pull timer while you lead or assist, "
-						.. "plus shortcuts into Okanvil.",
-						function() return wantBar end, function(v) wantBar = v end)
-				end
-				row("Interface\\Icons\\Trade_BlackSmithing",
-					"Forge wallpaper -- the art behind the window",
-					"The smith at the anvil behind every page. Off = plain dark panels. "
-					.. "Its strength is in Settings.",
-					function() return wantWall end, function(v) wantWall = v end)
+				local mrt = addonEnabled("MRT")
+				local note = (mrt and (GOLD .. "MRT|r also has Invite, Note and Raid Check. It is one addon, so "
+					.. "Okanvil does not turn it off: switch those parts off in MRT's own options.\n\n") or "")
+					.. "Finish turns off the ones you did not pick and reloads the UI."
+				para(host, note, 0, y - 4, CW, "note", "dim")
 				return function() for _, p in ipairs(paints) do p() end end
 			end,
 		},
@@ -320,6 +464,10 @@ function Okanvil:ShowSetup()
 				local howto = W.Text(host, "", "body", "dim")
 				howto:SetWidth(CW)
 				howto:SetJustifyH("LEFT")
+				-- Finish, then the tour (after the reload, when the setup needs one)
+				tourB = W.Button(host, "Finish and take the tour", "primary")
+				tourB:SetSize(200, 24)
+				tourB:SetScript("OnClick", function() applyAll(true) end)
 				return function()
 					local on = {}
 					for _, it in ipairs(items) do
@@ -332,11 +480,19 @@ function Okanvil:ShowSetup()
 					howto:SetPoint("TOPLEFT", summary, "BOTTOMLEFT", 0, -18)
 					howto:SetText(GOLD .. "Open Okanvil|r with |cff00ff00/okanvil|r or the anvil "
 						.. "on the minimap.\n\n" .. GOLD .. "Run this again|r with "
-						.. "|cff00ff00/okanvil setup|r.")
+						.. "|cff00ff00/okanvil setup|r.\n\n" .. GOLD .. "New to Okanvil?|r The tour shows "
+						.. "what each part does, one page each.")
+					tourB:ClearAllPoints()
+					tourB:SetPoint("TOP", howto, "BOTTOM", 0, -18)
 				end
 			end,
 		},
 	}
+
+	-- no rival addons: no Addons page
+	if #rivals == 0 then
+		for i = #PAGES, 1, -1 do if PAGES[i].rivals then table.remove(PAGES, i) end end
+	end
 
 	-- Build every page once into its own host; paging only shows / hides.
 	for _, pg in ipairs(PAGES) do
@@ -381,6 +537,18 @@ function Okanvil:ShowSetup()
 	prev:SetScript("OnClick", function() if cur > 1 then show(cur - 1) end end)
 	nxt:SetScript("OnClick", function()
 		if cur < #PAGES then show(cur + 1); return end
+		applyAll(false)
+	end)
+	applyAll = function(tour)
+		-- the Addons page: Okanvil's pick switches its module on; theirs, ours off
+		local reload = false
+		for _, r in ipairs(rivals) do
+			if pick[r.addon] == "okanvil" then
+				if r.module and byKey[r.module] then want[r.module] = true end
+			elseif r.module and byKey[r.module] and not r.off then
+				want[r.module] = false
+			end
+		end
 		for _, it in ipairs(items) do
 			if want[it.key] ~= self_:IsModuleEnabled(it.key) then
 				self_:SetModuleEnabled(it.key, want[it.key])
@@ -389,10 +557,209 @@ function Okanvil:ShowSetup()
 		if MB and MB.Toggle then MB:Toggle(wantBar) end
 		self_.db.ratArt = wantWall and "on" or "off"
 		if self_.RefreshRatArt then self_:RefreshRatArt() end
+		for _, r in ipairs(rivals) do
+			if pick[r.addon] == "okanvil" then
+				if r.on and r.off then
+					-- its own switch back on (a "Keep mine" earlier turned it off)
+					if r.addon == "SpellID" then
+						if OkanvilIDsDB then OkanvilIDsDB.tipIDs = nil end
+					elseif r.addon == "Bistooltip" then upgDB().bisTip = nil
+					elseif r.addon == "ClassLoot" then upgDB().fitTip = nil end
+				end
+				if addonEnabled(r.addon) then keepOkanvil(r); reload = true end
+			else
+				if r.off then r.off() end
+				-- theirs, turned off earlier: back on (the UI reloads to load it)
+				if not addonEnabled(r.addon) then EnableAddOn(r.addon); reload = true end
+			end
+		end
+		self_.db.setupVersion = Okanvil.SETUP_VERSION
 		finish()
 		self_:Print("setup saved. |cff8a8d93Run it again any time with|r |cff00ff00/okanvil setup|r.")
-	end)
+		if reload then
+			if tour then self_.db.tourPending = true end
+			ReloadUI()
+		elseif tour then
+			self_:ShowTour()
+		end
+	end
 
+	f:Show()
+	-- an update with new steps opens on the first of them; Back still shows the rest
+	local start = 1
+	if fromVersion then
+		for i, pg in ipairs(PAGES) do
+			if (pg.since or 1) > fromVersion then start = i; break end
+		end
+	end
+	show(start)
+end
+
+-- ============================================================
+-- The tour: after the setup (or /okanvil tour), one page per part of Okanvil
+-- this character has on -- what it does in a line, three things it does, and
+-- where to open it. Nothing to choose; Back / Next / Done.
+-- ============================================================
+local TOUR = {
+	{ key = "__loot", title = "Loot",
+	  what = "Every drop in the raid, per boss, and who it went to.",
+	  points = { "The mini roll: the master looter puts an item up, the raid rolls MS / OS in one window.",
+		"History: every drop of every raid, searchable, kept per character.",
+		"Soft reserves (SR) and the loot mode for the night, on the Loot page." },
+	  where = "RAID > Loot, or /okroll for the mini roll" },
+	{ key = "__council", title = "Loot Council",
+	  what = "On a council night the officers decide, and the raid tells them what it wants.",
+	  points = { "An item up: a popup asks what it is worth to you; your answer shows on the board.",
+		"Wishlist: one item per raid ID that you are after, marked WISH on the board.",
+		"The officers see the board, the votes and the loot priority ladder." },
+	  where = "RAID > Loot, the Council tile" },
+	{ key = "Okanvil-Upgrades", title = "Upgrades",
+	  what = "Which raid drops beat what you wear, for the spec you are in.",
+	  points = { "Each boss lists its drops that are an upgrade: BiS, #2 on your list, +13 ilvl.",
+		"BiS lists: any class, spec and phase, gems and enchants included.",
+		"Hover a boss for its upgrades; when one drops, a toast and the rat sound." },
+	  where = "RAID > Upgrades, or /okup" },
+	{ key = "Okanvil-Upgrades", title = "Item tooltips",
+	  what = "Every item tooltip says who it is for and where it drops.",
+	  points = { "BiS lists: each spec that has it, BIS or alt 2..6, phase by phase.",
+		"Stars for the items no list names: who it fits by class and spec.",
+		"Boss and instance: which boss drops it, 10 or 25, normal or heroic." },
+	  where = "Hover any item. /okup bis, /okup fits, /okup drops turn each off" },
+	{ key = "Okanvil-Notes", title = "Notes",
+	  what = "Boss notes that open by themselves in each room.",
+	  points = { "Your assignment for each boss, on screen as you walk in.",
+		"The guild's WeakAuras read your name from the note.",
+		"Timed lines count from DBM's pull." },
+	  where = "RAID > Notes" },
+	{ key = "Okanvil-RaidFinder", title = "Raid Finder",
+	  what = "The LFM spam in chat, turned into one list of raids you can join.",
+	  points = { "Raid, size, roles wanted, GS asked and reserved loot, read from each message.",
+		"Raids you are already saved to are marked, so you do not whisper for nothing.",
+		"Whisper the leader in one click." },
+	  where = "RAID > Raid Finder" },
+	{ key = "Okanvil-PuG", title = "PuG",
+	  what = "Build your own raid.",
+	  points = { "The LFM line written for you: raid, size, roles, GS, reserved loot.",
+		"It spams the line for you, and catches the whispers that answer it.",
+		"Invite and seat people by role, and check their gear." },
+	  where = "RAID > PuG" },
+	{ key = "Okanvil-Ranking", title = "Ranking",
+	  what = "The guild's log rankings, inside the game.",
+	  points = { "Every raider's best, per board, from the RATS site.",
+		"A raider's rank on their tooltip.",
+		"Kept in sync across the guild." },
+	  where = "GUILD > Ranking" },
+	{ key = "__guild", title = "Raid snapshots",
+	  what = "Who was in each raid, saved quietly.",
+	  points = { "Attendance for the loot priority, without anyone taking notes.",
+		"Lockouts saved when a raid is done.",
+		"Officers export it for the website." },
+	  where = "GUILD (officers)" },
+	{ key = "Okanvil-Recruit", title = "Recruit",
+	  what = "Recruitment ads, on a timer.",
+	  points = { "Your ad in the right channels, every few minutes.",
+		"Whoever answers can be invited in one click.",
+		"Officers share one ad." },
+	  where = "GUILD > Recruit" },
+	{ key = "Okanvil-Logs", title = "Combat Logs",
+	  what = "Combat logging that starts and stops by itself.",
+	  points = { "On when you enter a raid, off when you leave.",
+		"Each raid's boss kills kept as a session.",
+		"Nothing to remember before the pull." },
+	  where = "TOOLS > Logs" },
+	{ key = "Okanvil-IDs", title = "ID Finder",
+	  what = "Spell and item IDs, for WeakAuras.",
+	  points = { "Search any spell or item by name.",
+		"The ID on every spell, buff, debuff and item tooltip.",
+		"/okids tips turns the tooltip line off." },
+	  where = "TOOLS > ID Finder" },
+	{ key = "Okanvil-Farm", title = "Farm",
+	  what = "Gold per hour while you farm.",
+	  points = { "Loot and gold counted as you go.",
+		"Per hour, per session.",
+		"Start and stop when you like." },
+	  where = "TOOLS > Farm" },
+}
+
+local tourF
+function Okanvil:ShowTour()
+	if tourF then tourF:Hide() end
+	local C = self.Colors
+	local self_ = self
+	local items = self:ModuleItems()
+	local byKey = {}
+	for _, it in ipairs(items) do byKey[it.key] = it end
+	-- only what this character has on
+	local pages = {}
+	for _, t in ipairs(TOUR) do
+		if byKey[t.key] and self:IsModuleEnabled(t.key) then pages[#pages + 1] = t end
+	end
+	if #pages == 0 then self:Print("nothing to show: every module is off."); return end
+
+	local f = CreateFrame("Frame", "Okanvil_Tour", UIParent)
+	f:SetFrameStrata("DIALOG"); f:SetToplevel(true); f:SetClampedToScreen(true)
+	f:EnableMouse(true); f:SetMovable(true); f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving); f:SetScript("OnDragStop", f.StopMovingOrSizing)
+	f:SetPoint("CENTER"); f:SetSize(WIN_W, 400)
+	self:Skin(f)
+	f:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.97)
+	tourF = f
+	local wall = f:CreateTexture(nil, "BORDER")
+	wall:SetPoint("TOPLEFT", 1, -1); wall:SetPoint("BOTTOMRIGHT", -1, 1)
+	wall:SetTexture(WALLPAPER)
+	local span = 400 / WIN_W
+	wall:SetTexCoord(0, 1, 0.5 - span / 2, 0.5 + span / 2)
+	wall:SetAlpha(0.35)
+
+	local ic = icon(f, nil, 30); ic:SetPoint("TOPLEFT", X, -16)
+	local title = W.Text(f, "", "title", "accent"); title:SetPoint("TOPLEFT", ic, "TOPRIGHT", 10, 0)
+	local step = W.Text(f, "", "head"); step:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+	local close = W.Button(f, "X"); close:SetSize(24, 22); close:SetPoint("TOPRIGHT", -10, -10)
+	close:SetScript("OnClick", function() f:Hide() end)
+	local rule = f:CreateTexture(nil, "ARTWORK")
+	rule:SetTexture("Interface\\Buttons\\WHITE8x8"); rule:SetHeight(1)
+	rule:SetVertexColor(C.border[1], C.border[2], C.border[3], 1)
+	rule:SetPoint("TOPLEFT", X, -60); rule:SetPoint("TOPRIGHT", -X, -60)
+
+	local CW = WIN_W - X * 2
+	local body = CreateFrame("Frame", nil, f)
+	body:SetPoint("TOPLEFT", X, CONTENT_TOP); body:SetPoint("BOTTOMRIGHT", -X, 50)
+	local what = W.Text(body, "", "head"); what:SetPoint("TOPLEFT", 0, 0); what:SetWidth(CW); what:SetJustifyH("LEFT")
+	local lines, dots = {}, {}
+	for i = 1, 3 do
+		dots[i] = body:CreateTexture(nil, "ARTWORK")
+		dots[i]:SetTexture("Interface\\Buttons\\WHITE8x8"); dots[i]:SetSize(6, 6)
+		dots[i]:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 1)
+		lines[i] = W.Text(body, "", "body"); lines[i]:SetWidth(CW - 18); lines[i]:SetJustifyH("LEFT")
+	end
+	local where = W.Text(body, "", "note", "dim"); where:SetWidth(CW); where:SetJustifyH("LEFT")
+
+	local prev = W.Button(f, "< Back"); prev:SetSize(90, 24); prev:SetPoint("BOTTOMLEFT", X, 14)
+	local nxt = W.Button(f, "Next >", "primary"); nxt:SetSize(90, 24); nxt:SetPoint("BOTTOMRIGHT", -X, 14)
+
+	local cur = 1
+	local function show(n)
+		cur = n
+		local t = pages[n]
+		ic:SetTexture(byKey[t.key].icon); ic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		title:SetText(t.title)
+		step:SetText(("Tour  %d of %d"):format(n, #pages))
+		what:SetText(t.what)
+		local below = what
+		for i = 1, 3 do
+			lines[i]:ClearAllPoints()
+			lines[i]:SetPoint("TOPLEFT", below, "BOTTOMLEFT", i == 1 and 18 or 0, i == 1 and -14 or -9)
+			lines[i]:SetText(t.points[i] or "")
+			dots[i]:ClearAllPoints(); dots[i]:SetPoint("TOPRIGHT", lines[i], "TOPLEFT", -8, -4)
+			below = lines[i]
+		end
+		where:ClearAllPoints(); where:SetPoint("TOPLEFT", below, "BOTTOMLEFT", -18, -16)
+		where:SetText("|cffe0b860Open it:|r " .. t.where)
+		if n == 1 then prev:Hide() else prev:Show() end
+		nxt.text:SetText(n == #pages and "Done" or "Next >")
+	end
+	prev:SetScript("OnClick", function() if cur > 1 then show(cur - 1) end end)
+	nxt:SetScript("OnClick", function() if cur < #pages then show(cur + 1) else f:Hide() end end)
 	f:Show()
 	show(1)
 end

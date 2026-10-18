@@ -857,9 +857,20 @@ core:SetScript("OnEvent", function(_, event, arg1)
 
 		-- A few seconds in, so it lands after the login spam and the loading
 		-- screen rather than under them.
-		if Okanvil.db.setupPending and Okanvil.ShowSetup and Okanvil.Comms and Okanvil.Comms.After then
+		if Okanvil.ShowSetup and Okanvil.Comms and Okanvil.Comms.After then
 			Okanvil.Comms.After(4, function()
-				if Okanvil.db.setupPending and not InCombatLockdown() then Okanvil:ShowSetup() end
+				if InCombatLockdown() then return end
+				local d = Okanvil.db
+				if d.setupPending then
+					Okanvil:ShowSetup()
+				elseif d.tourPending then
+					-- the setup reloaded the UI on its way to the tour
+					d.tourPending = nil
+					if Okanvil.ShowTour then Okanvil:ShowTour() end
+				elseif (d.setupVersion or 1) < (Okanvil.SETUP_VERSION or 1) then
+					-- an update added setup steps: once, opened on the first new one
+					Okanvil:ShowSetup(d.setupVersion or 1)
+				end
 			end)
 		end
 	end
@@ -874,6 +885,10 @@ SlashCmdList["Okanvil"] = function(arg)
 	-- own spelling of its name); only the command word is matched lowercased
 	local raw = (arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	arg = raw:lower()
+	if arg == "tour" then
+		if Okanvil.ShowTour then Okanvil:ShowTour() end
+		return
+	end
 	if arg == "setup" then
 		if Okanvil.ShowSetup then
 			Okanvil:ShowSetup()
@@ -959,6 +974,10 @@ Okanvil.HELP = {
 		{ "/okup audit", "check every drop of every open raid for your spec (saved for review)" },
 		{ "/okup sound", "the toast, rat sound and chat line when an upgrade drops: on / off" },
 		{ "/okup toast", "show the upgrade toast once, to see it and drag it into place" },
+		{ "/okup bis", "BiS list lines on item tooltips (every spec): on / off" },
+		{ "/okup fits", "the stars (who an item fits) on item tooltips: on / off" },
+		{ "/okup drops", "the boss and instance lines on item tooltips: on / off" },
+		{ "/okids tips", "spell and item IDs on tooltips (ID Finder module): on / off" },
 		{ "/oktrade [clear]", "loot you still owe by trade, and to whom" },
 		{ "/okrc [list | say | aura]", "raid check: the popup, a list, announce, your buffs" },
 		{ "/oknotes [send | unlock | watch]", "boss notes: status, send, unlock editing, watch the timers" },
