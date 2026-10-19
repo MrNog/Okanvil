@@ -267,8 +267,7 @@ function Okanvil:ApplyFonts()
 			if fs._okSize then
 				sz = fs._okFixed and fs._okSize or math.floor(fs._okSize * self:TextScale() + 0.5)
 			end
-			-- _okFlag: text drawn straight on art keeps its own outline
-			fs:SetFont(font, sz, fs._okFlag or flag)
+			fs:SetFont(font, sz, flag)
 		end
 	end
 end

@@ -22,9 +22,9 @@ local PAD, GAP = 12, 8
 local CHIP_H, ROW_H, AROUND_H, BOSS_STEP = 24, 26, 28, 19
 local AROUND = 4                 -- the one above you, you, and two below
 local RANK_SIZE, NAME_SIZE, NUM_SIZE = 46, 32, 18
-local NUM_W, LEFT_MAX, BOSS_NAME_W = 96, 420, 110
+local NUM_W, LEFT_MAX, BOSS_NAME_W, VAL_W = 96, 420, 110, 64
 local INK = { 0.035, 0.037, 0.043 }   -- the near-black of shade and veil
-local SHADE, VEIL = 0.55, 0.72    -- the page's left edge; under the boss list
+local SHADE, VEIL = 0.82, 0.80    -- the page's left edge; under the boss list
 local DOT = "  |cff4a4d55·|r  "
 
 local function classIcon(tex, token)
@@ -205,14 +205,11 @@ local function showImport()
 	f:Show()
 end
 
--- Text straight on the art: outlined, so it reads on any picture, and it
--- keeps the outline when Settings changes the font (Okanvil:ApplyFonts).
+-- Text straight on the art: a hard 1px black shadow, so it reads on any
+-- picture. No OUTLINE: on this font it smears the letters.
 local function onArt(parent, size, role)
 	local fs = W.Text(parent, "", size, role)
-	fs._okFlag = "OUTLINE"
-	local f, sz = fs:GetFont()
-	fs:SetFont(f, sz, "OUTLINE")
-	fs:SetShadowColor(0, 0, 0, 0.9); fs:SetShadowOffset(1, -1)
+	fs:SetShadowColor(0, 0, 0, 1); fs:SetShadowOffset(1, -1)
 	return fs
 end
 
@@ -370,6 +367,10 @@ function Okanvil:BuildRanking(host)
 	-- who is around you, one line across the foot of the page
 	local around = CreateFrame("Frame", nil, toon)
 	around:SetPoint("BOTTOMLEFT"); around:SetPoint("BOTTOMRIGHT"); around:SetHeight(AROUND_H)
+	-- the foot of the art is often bright (snow, light): a band of veil under the line
+	local aVeil = around:CreateTexture(nil, "BACKGROUND"); aVeil:SetTexture(FLAT)
+	aVeil:SetGradientAlpha("VERTICAL", INK[1], INK[2], INK[3], VEIL, INK[1], INK[2], INK[3], 0)
+	aVeil:SetPoint("BOTTOMLEFT", -PAD, -PAD); aVeil:SetPoint("TOPRIGHT", PAD, 8)
 	local aRule = fill(around, "ARTWORK", 1, 1, 1, 0.16)
 	aRule:SetHeight(1); aRule:SetPoint("TOPLEFT"); aRule:SetPoint("TOPRIGHT")
 	local aLbl = onArt(around, "note", "dim"); aLbl:SetText("AROUND YOU"); aLbl:SetPoint("LEFT", 0, -2)
@@ -405,7 +406,8 @@ function Okanvil:BuildRanking(host)
 		b.name = onArt(b, "body"); b.name:SetPoint("LEFT", 0, 0); b.name:SetWidth(BOSS_NAME_W)
 		b.name:SetJustifyH("LEFT")
 		if b.name.SetWordWrap then b.name:SetWordWrap(false) end
-		b.val = onArt(b, "body"); b.val:SetPoint("RIGHT", 0, 0); b.val:SetWidth(52); b.val:SetJustifyH("RIGHT")
+		b.val = onArt(b, "body"); b.val:SetPoint("RIGHT", 0, 0); b.val:SetWidth(VAL_W); b.val:SetJustifyH("RIGHT")
+		if b.val.SetWordWrap then b.val:SetWordWrap(false) end
 		b.track = fill(b, "BORDER", 0, 0, 0, 0.5); b.track:SetHeight(4)
 		b.track:SetPoint("LEFT", b.name, "RIGHT", 6, 0); b.track:SetPoint("RIGHT", b.val, "LEFT", -8, 0)
 		b.bar = fill(b, "ARTWORK", 1, 1, 1, 1); b.bar:SetHeight(4)
@@ -598,7 +600,7 @@ function Okanvil:BuildRanking(host)
 				b.name:SetTextColor(0.95, 0.95, 0.96)
 				b.val:SetText(("%d"):format(math.floor(c.pct))); b.val:SetTextColor(r, g, bl)
 				b.bar:SetVertexColor(r, g, bl, 1)
-				local tw = math.max(10, (bsf:GetWidth() or 200) - BOSS_NAME_W - 6 - 52 - 8)
+				local tw = math.max(10, (bsf:GetWidth() or 200) - BOSS_NAME_W - 6 - VAL_W - 8)
 				b.bar:SetWidth(math.max(2, tw * math.min(c.pct, 100) / 100)); b.bar:Show()
 			else
 				b.name:SetTextColor(0.55, 0.56, 0.60)
