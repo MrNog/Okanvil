@@ -32,6 +32,8 @@ K,<boss 1>,<boss 2>,...
 B,<size 25|10>,<board d|h|t>,<period week|month|all>
 P,<name>,<CLASS>,<spec>,<rate>,<pts>,<server %>,<fights>,<total>,<heroic 0|1>
 S,<size>,<toon>,<boss idx>:<pct>[h] <boss idx>:<pct>[h] ...
+X,<size>,<period>,<toon>,<best>,<d|h>,<boss idx>,<heroic 0|1>,<deaths>,<interrupts>,<potions>,<pre-pot %>
+G,<size>,<period>,<deaths>,<interrupts>,<potions>,<pre-pot %>
 ```
 
 - `OKR1` must be the first record, and `H` must have a time, or the paste is refused.
@@ -41,6 +43,9 @@ S,<size>,<toon>,<boss idx>:<pct>[h] <boss idx>:<pct>[h] ...
   damage taken per fight), and `pts` is your own score.
 - `S` lists one toon's best parse per boss. `boss idx` counts from 0 in the `K` line, and a trailing `h`
   marks heroic.
+- `X` (optional) is one toon's best single parse (`d` = DPS, `h` = HPS, on the boss at `boss idx`) and its
+  deaths, interrupts and potions per kill, plus how often it pre-potted. `G` is the guild's average of
+  the same four. An empty field means no data. Without them the toon page shows `--` there.
 - Names are matched in lower case with letters and digits only, so `Kobée` and `kobee` are the same toon.
 
 On RATS this comes from *Rankings → Export to Okanvil*. The full reference is the header of
@@ -80,19 +85,15 @@ These are what a guild site would import. The addon doesn't care whether anythin
 
 The Ranking card shows a portrait for each raider:
 
-1. `Okanvil/Media/Ranking/<name>.blp` when there is one. `<name>` is the toon name in lower case, with
-   letters and digits only.
-2. Otherwise the class art, `Okanvil/Media/Ranking/_<class>.blp` (`_druid.blp`, …).
+1. `Okanvil-Art/Ranking/<name>.blp` when the optional **Okanvil-Art** addon has one. `<name>` is the toon
+   name in lower case, with letters and digits only.
+2. Otherwise the class art that ships in Okanvil, `Okanvil/Media/Ranking/_<class>.blp` (`_druid.blp`, …).
 
-**The personal portraits are RATS raiders.** They ship in the addon, so in another guild a raider who
-happens to share a RATS name would show a RATS rat. Every other raider shows the class art, which works
-for any guild.
+Okanvil itself carries only the class art, so it works for any guild. The RATS raiders' portraits live
+in Okanvil-Art, a separate addon: a new portrait means a new Okanvil-Art, never a new Okanvil.
 
-To add your own portraits:
+To make your own art pack:
 
 - Use a 2:1 crop, saved as **BLP2 DXT5 at 512×256**, with `scripts/png2blp_dxt5.py`. It needs
   Pillow 11.2 or newer, because older Pillow writes uncompressed data the client can't load.
-- Drop the file into `Media/Ranking/` and fully restart the game.
-
-> **Planned:** a generic build that keeps only the class art, with guild portraits moved to an optional
-> art pack. Until then, delete the non-`_` files in `Media/Ranking/` if you want class art only.
+- Put the files in `Okanvil-Art/Ranking/` and fully restart the game.
