@@ -13,6 +13,7 @@
 --   Okanvil.U.guildRankOf(n)    -> that member's rankIndex (nil if not in guild)
 --   Okanvil.U.isOfficer(n)      -> rankIndex <= 1 (guild master or officer)
 --   Okanvil.U.mainOf(n)         -> the main an alt belongs to (from guild notes)
+--   Okanvil.U.toonsOf(n)        -> that person's main and alts, main first
 --   Okanvil.U.isOfficerAlt(n)   -> an alt whose main is an officer
 --   Okanvil.U.canSeePrio(n)     -> may see the loot priority list
 -- ============================================================
@@ -332,6 +333,29 @@ function U.mainOf(name)
 		end
 	end
 	return nil
+end
+
+-- One person's toons: their main, then every alt whose notes name that main.
+-- Outside a guild (or with no notes), just the name given.
+function U.toonsOf(name)
+	name = name and (name:gsub("%-.*$", ""))
+	if not (name and name ~= "") then return {} end
+	local main = U.mainOf(name) or name
+	local out = { main }
+	if IsInGuild and IsInGuild() then
+		local alts = {}
+		for n in pairs(roster()) do
+			if n ~= main and U.mainOf(n) == main then alts[#alts + 1] = n end
+		end
+		table.sort(alts)
+		for _, n in ipairs(alts) do out[#out + 1] = n end
+	end
+	if name ~= main then
+		local found = false
+		for _, n in ipairs(out) do if n == name then found = true end end
+		if not found then out[#out + 1] = name end
+	end
+	return out
 end
 
 -- An officer's alt is ranked as an alt, so rank alone would lock the owner of the

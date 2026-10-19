@@ -14,6 +14,9 @@
 --   B,<size>,<d|h|t>,<period: week|month|all>
 --   P,<name>,<CLASS>,<spec>,<rate>,<pts>,<srv %>,<fights>,<total>,<hc 0|1>
 --   S,<size>,<toon>,<boss idx>:<pct>[h] ...
+--   X,<size>,<period>,<toon>,<best>,<d|h>,<boss idx>,<hc 0|1>,<deaths>,<int>,<pots>,<prepot %>
+--   G,<size>,<period>,<deaths>,<int>,<pots>,<prepot %>   (the guild's averages)
+-- X/G are per kill; an empty field = no data. Exports from before them have none.
 -- On the wire it gains a first line "BY,<officer>" -- who imported it.
 --
 -- Sync (all tiny messages, then ONE whispered transfer):
@@ -68,7 +71,7 @@ end
 -- ------------------------------------------------------------
 function R.Parse(text)
 	text = tostring(text or "")
-	local d = { boards = {}, parses = {}, bosses = {}, periods = {}, count = 0 }
+	local d = { boards = {}, parses = {}, bosses = {}, periods = {}, extras = {}, guild = {}, count = 0 }
 	local seenPeriod = {}
 	local board
 	local seenHead = false
@@ -109,6 +112,17 @@ function R.Parse(text)
 			end
 			table.sort(cells, function(a, b) return a.pct > b.pct end)
 			bySize[f[3]] = cells
+		elseif kind == "X" and f[2] and f[3] and f[4] and f[4] ~= "" then
+			local bi = tonumber(f[7])
+			d.extras[f[3] .. "|" .. f[2] .. "|" .. R.Norm(f[4])] = {
+				best = tonumber(f[5]), bestKind = f[6], hc = f[8] == "1",
+				bestBoss = bi and d.bosses[bi + 1],
+				dth = tonumber(f[9]), int = tonumber(f[10]), pots = tonumber(f[11]), pre = tonumber(f[12]),
+			}
+		elseif kind == "G" and f[2] and f[3] then
+			d.guild[f[3] .. "|" .. f[2]] = {
+				dth = tonumber(f[4]), int = tonumber(f[5]), pots = tonumber(f[6]), pre = tonumber(f[7]),
+			}
 		end
 	end
 	if not seenHead or not d.t then return nil, "That is not an Okanvil ranking export." end
@@ -187,6 +201,32 @@ end
 function R.Parses(size, name)
 	local d = R.Data()
 	return d and d.parses[size] and d.parses[size][R.Norm(name)] or nil
+end
+
+-- A toon's best parse and per-kill extras, and the guild's averages to hold
+-- them against. nil when the export has none.
+function R.Extras(size, name, period)
+	local d = R.Data()
+	return d and d.extras[(period or R.DefaultPeriod()) .. "|" .. size .. "|" .. R.Norm(name)] or nil
+end
+
+function R.GuildAvg(size, period)
+	local d = R.Data()
+	return d and d.guild[(period or R.DefaultPeriod()) .. "|" .. size] or nil
+end
+
+-- Is this toon anywhere in the export: a board, a boss parse or the extras?
+function R.Has(name)
+	for _, sz in ipairs(R.SIZES) do
+		if R.Parses(sz, name) then return true end
+		for _, pd in ipairs(R.PERIODS) do
+			if R.Extras(sz, name, pd) then return true end
+			for _, k in ipairs(R.BOARDS) do
+				if R.Find(sz, k, name, pd, true) then return true end
+			end
+		end
+	end
+	return false
 end
 
 -- ------------------------------------------------------------

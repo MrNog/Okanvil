@@ -1,0 +1,5 @@
+## Interface: 30300
+## Title: Okanvil-Art
+## Notes: Raider portraits for the Okanvil Ranking page. Optional: without it the page shows class art.
+## Author: Okanor
+## Version: 2026.10.19
