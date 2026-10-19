@@ -189,6 +189,23 @@ function R.Parses(size, name)
 	return d and d.parses[size] and d.parses[size][R.Norm(name)] or nil
 end
 
+-- Does the server rank this boss (index in the K line, from 0)? It does when
+-- anyone in the export has a parse on it: wow-logs gives none for Gunship,
+-- Blood Queen or Dreamwalker.
+function R.Ranked(idx)
+	local d = R.Data()
+	if not d then return false end
+	if d.ranked == nil then
+		d.ranked = {}
+		for _, bySize in pairs(d.parses) do
+			for _, cells in pairs(bySize) do
+				for _, c in ipairs(cells) do if c.i then d.ranked[c.i] = true end end
+			end
+		end
+	end
+	return d.ranked[idx] or false
+end
+
 -- Is this toon anywhere in the export: a board or a boss parse?
 function R.Has(name)
 	for _, sz in ipairs(R.SIZES) do
