@@ -25,7 +25,7 @@ local AROUND = 4                 -- the one above you, you, and two below
 local RANK_SIZE, NAME_SIZE, NUM_SIZE = 44, 30, 18
 local BOSS_NAME_W, VAL_W = 110, 64
 local CARD_SHARE, INFO_GAP = 0.50, 14   -- the portrait card's share of the width; the gap after it
-local FOOT_H = 170               -- the darkened foot of the card, under the rank and name
+local FOOT_H, FOOT_FADE = 118, 40  -- the card's solid foot under the rank and name; its melt into the art
 local TILE_H, TILE_GAP, NEAR_H = 44, 6, 22
 local INK = { 0.035, 0.037, 0.043 }   -- the near-black the card sits on
 local DOT = "  |cff4a4d55·|r  "
@@ -349,8 +349,12 @@ function Okanvil:BuildRanking(host)
 	card:SetPoint("TOPLEFT"); card:SetPoint("BOTTOMLEFT")
 	local cArt = card:CreateTexture(nil, "BORDER")
 	cArt:SetPoint("TOPLEFT", 1, -1); cArt:SetPoint("BOTTOMRIGHT", -1, 1)
-	local cFoot = inkFade(card, "VERTICAL", 0.95, 0)
+	-- the rank and name sit on a SOLID foot, never on the art (snow and light
+	-- under them made them unreadable); only a short melt joins it to the picture
+	local cFoot = fill(card, "ARTWORK", INK[1], INK[2], INK[3], 0.94)
 	cFoot:SetPoint("BOTTOMLEFT", 1, 1); cFoot:SetPoint("BOTTOMRIGHT", -1, 1); cFoot:SetHeight(FOOT_H)
+	local cMelt = inkFade(card, "VERTICAL", 0.94, 0)
+	cMelt:SetPoint("BOTTOMLEFT", cFoot, "TOPLEFT"); cMelt:SetPoint("BOTTOMRIGHT", cFoot, "TOPRIGHT"); cMelt:SetHeight(FOOT_FADE)
 	local cBar = fill(card, "ARTWORK", 1, 1, 1, 1)
 	cBar:SetHeight(2); cBar:SetPoint("TOPLEFT", 1, -1); cBar:SetPoint("TOPRIGHT", -1, -1)
 	local hSpec = W.Text(card, "", "body", "dim"); hSpec:SetPoint("BOTTOMLEFT", 16, 14)
