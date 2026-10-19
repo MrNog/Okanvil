@@ -1550,11 +1550,25 @@ local function ensureBoard()
 		if not L then return end
 		GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
 		GameTooltip:AddLine("Who answered what", 0.88, 0.72, 0.38)
+		-- class-coloured, one class together (all paladins, then all priests...), A-Z inside
+		local LT = Okanvil.Loot
 		local function block(label, list, r, g, b)
 			if #list == 0 then return end
+			local rows = {}
+			for i, nm in ipairs(list) do
+				rows[i] = { nm = nm, cls = (LT and LT.ClassOf and LT.ClassOf(nm)) or "~" }
+			end
+			table.sort(rows, function(x, y)
+				if x.cls ~= y.cls then return x.cls < y.cls end
+				return x.nm < y.nm
+			end)
+			local names = {}
+			for i, e in ipairs(rows) do
+				names[i] = (LT and LT.ClassColorName and LT.ClassColorName(e.nm)) or e.nm
+			end
 			GameTooltip:AddLine(" ")
 			GameTooltip:AddLine(label .. " (" .. #list .. ")", r, g, b)
-			GameTooltip:AddLine(table.concat(list, ", "), 1, 1, 1, true)
+			GameTooltip:AddLine(table.concat(names, ", "), 1, 1, 1, true)
 		end
 		block("Deciding", L.wait, 0.95, 0.85, 0.25)
 		block("Passed", L.pass, 0.55, 0.57, 0.60)
