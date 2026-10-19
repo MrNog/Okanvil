@@ -24,7 +24,7 @@ local AROUND = 4                 -- the one above you, you, and two below
 local RANK_SIZE, NAME_SIZE, NUM_SIZE = 46, 32, 18
 local NUM_W, BOSS_NAME_W, VAL_W = 96, 110, 64
 local INK = { 0.035, 0.037, 0.043 }   -- the panel's near-black
-local SPLIT, MELT_W = 0.44, 110    -- the panel's share of the page; where panel melts into art
+local SPLIT, MELT_W = 0.44, 70     -- the panel's share of the page; where panel melts into art
 local BAND_H = PAD + AROUND_H + 8  -- the solid band at the foot, under the art
 local DOT = "  |cff4a4d55·|r  "
 
