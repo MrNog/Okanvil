@@ -89,6 +89,6 @@ in Okanvil-Art, a separate addon: a new portrait means a new Okanvil-Art, never 
 
 To make your own art pack:
 
-- Use a 2:1 crop, saved as **BLP2 DXT5 at 512×256**, with `scripts/png2blp_dxt5.py`. It needs
+- Use a 2:1 crop, saved as **BLP2 DXT5 at 1024×512**, with `scripts/png2blp_dxt5.py`. It needs
   Pillow 11.2 or newer, because older Pillow writes uncompressed data the client can't load.
 - Put the files in `Okanvil-Art/Ranking/` and fully restart the game.
