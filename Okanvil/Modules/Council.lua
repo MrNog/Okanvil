@@ -1264,6 +1264,7 @@ if C then
 		if not isML(sender) or isML(UnitName("player")) then return end
 		C_.remoteNight = (v == "1") and sender:gsub("%-.*", "") or nil
 		if C_._repaintHeader then pcall(C_._repaintHeader) end
+		if C_._paintRun then pcall(C_._paintRun) end
 	end)
 	C.On("CNQ", function()
 		if isML(UnitName("player")) then C.Send("CNIGHT", C_.active and "1" or "0") end
@@ -2811,6 +2812,9 @@ function C_.BuildRunTab(body)
 		elseif C_.active then
 			state:SetText("|cff7cfc8aCouncil night|r -- no round open")
 			hint:SetText("Open the mini roll and press |cffe0b860Ask this one|r on an item.")
+		elseif C_.remoteNight then
+			state:SetText("|cff7cfc8aCouncil night|r -- run by |cffe0b860" .. C_.remoteNight .. "|r")
+			hint:SetText("The board opens on your screen when they put an item to the raid.")
 		else
 			state:SetText("|cff8a8d93Council night is off|r")
 			hint:SetText("Only the master looter turns it on: pick Council.")
@@ -2837,6 +2841,8 @@ function C_.BuildRunTab(body)
 	nightB:Tooltip("Council night puts the Council row in the mini roll.\nOnly the master looter switches it.")
 	paintNight()
 	body:HookScript("OnShow", function() paintNight(); paintState() end)
+	-- the master looter's CNIGHT answer lands after the page has drawn
+	C_._paintRun = function() if body:IsVisible() then paintNight(); paintState() end end
 
 	-- ---- options ------------------------------------------------------
 	-- One button tall now, not two. The gap above the heading matches the one

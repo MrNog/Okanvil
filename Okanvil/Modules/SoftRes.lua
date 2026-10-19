@@ -350,6 +350,17 @@ local function sendMode()
 	if C and C.Send and inGroup() and SR.CanSetMode() then C.Send("LOOTMODE", ownMode()) end
 end
 
+-- Council IS council night, and every other mode ends it. Only the one who may
+-- run the council switches it; anyone else just changes their own view. Also
+-- run when the master looter changes: Council picked before becoming ML could
+-- not start the night then, and must start it now.
+local function syncNight()
+	local CC = Okanvil.Council
+	if not (CC and CC.SetActive and CC.Enabled and CC.Enabled() and CC.MayRun and CC.MayRun()) then return end
+	local want = (SR.Mode() == "council")
+	if (CC.active and true or false) ~= want then CC.SetActive(want) end
+end
+
 function SR.SetMode(m)
 	if m ~= nil and not MODES[m] then return false end
 	if not SR.CanSetMode() then
@@ -362,13 +373,7 @@ function SR.SetMode(m)
 	-- A mode change leaves reserve whispers locked: they open with Open or
 	-- Post rules, never by themselves.
 	if was ~= m and SR.SetIntake and SR.IntakeOpen() then SR.SetIntake(false) end
-	-- Council IS council night, and every other mode ends it. Only the one who
-	-- may run the council switches it; anyone else just changes their own view.
-	local CC = Okanvil.Council
-	if CC and CC.SetActive and CC.Enabled and CC.Enabled() and CC.MayRun and CC.MayRun() then
-		local want = (m == "council")
-		if (CC.active and true or false) ~= want then CC.SetActive(want) end
-	end
+	syncNight()
 	sendMode()
 	if SR.onChange then SR.onChange() end
 	if SR.onPanel then SR.onPanel() end
@@ -410,7 +415,9 @@ do
 		if who == lastSetter and now == wasIn then return end
 		lastSetter, wasIn = who, now
 		if not now then remote = nil; repaint(); return end
-		if SR.CanSetMode() then sendMode()
+		if SR.CanSetMode() then
+			syncNight()
+			sendMode()
 		elseif C and C.Send then C.Send("LOOTMODEQ") end
 		repaint()
 	end)
