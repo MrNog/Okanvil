@@ -1,8 +1,7 @@
 -- ============================================================
 -- Okanvil -- Ranking page (GUILD > Ranking).
--- One toon at a time: your rank on its main board, its numbers, its best parse
--- and per-kill extras against the guild's average, its server % per boss, and
--- the players just above and below it. The whole board is one click away.
+-- One toon at a time: your rank on its main board, its numbers, its server %
+-- per boss, and the players just above and below it. The whole board is one click away.
 -- Normal and Heroic already merged by the site.
 -- ============================================================
 
@@ -20,7 +19,8 @@ local CLASS_TEX = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes
 local ART_RAIDER = "Interface\\AddOns\\Okanvil-Art\\Ranking\\"
 local ART_CLASS = "Interface\\AddOns\\Okanvil\\Media\\Ranking\\_"
 local PAD, GAP = 12, 8
-local CHIP_H, HERO_H, STAT_H, UTIL_H = 24, 140, 44, 54
+local CHIP_H, HERO_H, STAT_H = 24, 170, 44
+local ART_FADE = 90              -- the art's left edge melting into the card
 local ROW_H, AROUND_H, BOSS_STEP = 26, 24, 20
 local AROUND = 2                 -- players shown above and below you
 local INK = { 0.035, 0.037, 0.043 }   -- the near-black the cards sit on
@@ -230,27 +230,22 @@ local function vline(parent, x)
 	return t
 end
 
--- a row of cells across a card, each a dim label over a value (and a note under it)
-local function cellRow(parent, n, weights)
+-- a row of equal cells across a card, each a dim label over a value
+local function cellRow(parent, n)
 	local cells, lines = {}, {}
 	for i = 1, n do
 		local c = CreateFrame("Frame", nil, parent)
 		c.k = W.Text(c, "", "note", "dim"); c.k:SetPoint("TOPLEFT", 10, -7)
 		c.v = W.Text(c, "", "head"); c.v:SetPoint("TOPLEFT", c.k, "BOTTOMLEFT", 0, -3)
-		c.g = W.Text(c, "", "note", "dim"); c.g:SetPoint("TOPLEFT", c.v, "BOTTOMLEFT", 0, -2)
-		c.g:SetPoint("RIGHT", c, "RIGHT", -6, 0); c.g:SetJustifyH("LEFT")
-		if c.g.SetWordWrap then c.g:SetWordWrap(false) end
 		cells[i] = c
 		if i > 1 then lines[i] = vline(parent, 0) end
 	end
-	local total = 0
-	for i = 1, n do total = total + (weights and weights[i] or 1) end
 	local function layout()
 		local w = (parent:GetWidth() or 0) - 2
 		if w < 40 then return end
 		local x = 1
 		for i, c in ipairs(cells) do
-			local cw = math.floor(w * (weights and weights[i] or 1) / total)
+			local cw = math.floor(w / n)
 			c:ClearAllPoints()
 			c:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -1)
 			c:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", x, 1)
@@ -375,33 +370,36 @@ function Okanvil:BuildRanking(host)
 	toon:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -GAP)
 	toon:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT")
 
-	-- the hero: the art across the card, the name left, the rank right
+	-- the hero: the whole picture on the right at its own 2:1 shape, in full
+	-- colour; the rank and the name on the dark to its left
 	local hero = darkCard(toon)
 	hero:SetPoint("TOPLEFT"); hero:SetPoint("TOPRIGHT"); hero:SetHeight(HERO_H)
 	local hArt = hero:CreateTexture(nil, "BORDER")
-	hArt:SetPoint("TOPLEFT", 1, -1); hArt:SetPoint("BOTTOMRIGHT", -1, 1)
+	hArt:SetPoint("TOPRIGHT", -1, -1); hArt:SetPoint("BOTTOMRIGHT", -1, 1)
 	local hFade = inkFade(hero, "HORIZONTAL", 1, 0)
-	hFade:SetPoint("TOPLEFT", 1, -1); hFade:SetPoint("BOTTOMLEFT", 1, 1)
-	local hFoot = inkFade(hero, "VERTICAL", 0.85, 0)
-	hFoot:SetPoint("BOTTOMLEFT", 1, 1); hFoot:SetPoint("BOTTOMRIGHT", -1, 1); hFoot:SetHeight(70)
+	hFade:SetPoint("TOPLEFT", hArt, "TOPLEFT"); hFade:SetPoint("BOTTOMLEFT", hArt, "BOTTOMLEFT")
+	hFade:SetWidth(ART_FADE)
 	local hBar = fill(hero, "ARTWORK", 1, 1, 1, 1)
 	hBar:SetHeight(2); hBar:SetPoint("TOPLEFT", 1, -1); hBar:SetPoint("TOPRIGHT", -1, -1)
+	local hBoard = W.Text(hero, "", "note", "dim"); hBoard:SetPoint("TOPLEFT", 18, -18)
+	local hRank = W.Text(hero, "", "huge", "accent"); hRank:SetPoint("TOPLEFT", hBoard, "BOTTOMLEFT", 0, -8)
+	local hOf = W.Text(hero, "", "label", "dim"); hOf:SetPoint("BOTTOMLEFT", hRank, "BOTTOMRIGHT", 8, 3)
+	local hMove = W.Text(hero, "", "label"); hMove:SetPoint("LEFT", hOf, "RIGHT", 22, 0)
+	hMove:SetJustifyH("LEFT")
 	local hIcon = hero:CreateTexture(nil, "OVERLAY"); hIcon:SetSize(22, 22)
-	hIcon:SetPoint("BOTTOMLEFT", 16, 40)
+	hIcon:SetPoint("BOTTOMLEFT", 18, 40)
 	local hName = W.Text(hero, "", "huge"); hName:SetPoint("LEFT", hIcon, "RIGHT", 8, 0)
 	local hSpec = W.Text(hero, "", "label", "dim"); hSpec:SetPoint("TOPLEFT", hIcon, "BOTTOMLEFT", 0, -6)
-	local hBoard = W.Text(hero, "", "note", "dim"); hBoard:SetPoint("TOPRIGHT", -16, -16)
-	local hRank = W.Text(hero, "", "huge", "accent"); hRank:SetPoint("TOPRIGHT", hBoard, "BOTTOMRIGHT", 0, -6)
-	hRank:SetJustifyH("RIGHT")
-	local hOf = W.Text(hero, "", "label", "dim"); hOf:SetPoint("TOPRIGHT", hRank, "BOTTOMRIGHT", 0, -4)
-	hOf:SetJustifyH("RIGHT")
-	local hMove = W.Text(hero, "", "label"); hMove:SetPoint("TOPRIGHT", hOf, "BOTTOMRIGHT", 0, -6)
-	hMove:SetJustifyH("RIGHT")
-	local hNone = W.Text(hero, "", "label", "dim"); hNone:SetPoint("BOTTOMRIGHT", -16, 18)
+	local hNone = W.Text(hero, "", "label", "dim"); hNone:SetPoint("TOPLEFT", 18, -18)
+	-- the art keeps its 2:1 shape; a card narrower than that cuts its left side
+	local function artWidth()
+		return math.min((hero:GetWidth() or 0) - 2, (HERO_H - 2) * 2)
+	end
 	hero:HookScript("OnSizeChanged", function()
-		local w = hero:GetWidth() or 0
-		hFade:SetWidth(math.max(1, w * 0.6))
-		if hero._name then setArt(hArt, hero._name, hero._class, (w - 2) / (HERO_H - 2)) end
+		local w = artWidth()
+		if w < 10 then return end
+		hArt:SetWidth(w)
+		if hero._name then setArt(hArt, hero._name, hero._class, w / (HERO_H - 2)) end
 	end)
 
 	-- your four numbers on the main board
@@ -410,15 +408,9 @@ function Okanvil:BuildRanking(host)
 	stats:SetHeight(STAT_H)
 	local statCells, statLayout = cellRow(stats, 4)
 
-	-- best parse and the per-kill extras, each against the guild's average
-	local util = darkCard(toon)
-	util:SetPoint("TOPLEFT", stats, "BOTTOMLEFT", 0, -GAP); util:SetPoint("TOPRIGHT", stats, "BOTTOMRIGHT", 0, -GAP)
-	util:SetHeight(UTIL_H)
-	local utilCells, utilLayout = cellRow(util, 5, { 1.4, 1, 1, 1, 1 })
-
 	-- left: server % per boss, in the raid's order
 	local bossCard = darkCard(toon)
-	bossCard:SetPoint("TOPLEFT", util, "BOTTOMLEFT", 0, -GAP)
+	bossCard:SetPoint("TOPLEFT", stats, "BOTTOMLEFT", 0, -GAP)
 	bossCard:SetPoint("BOTTOM", toon, "BOTTOM", 0, 0)
 	local bossHead = W.Text(bossCard, "PER BOSS  |cff6f7176SERVER %|r", "note", "dim")
 	bossHead:SetPoint("TOPLEFT", 10, -8)
@@ -601,7 +593,10 @@ function Okanvil:BuildRanking(host)
 		local cls, spec = classOf(name)
 		local cr, cg, cb = classRGB(cls)
 		hero._name, hero._class = name, cls
-		setArt(hArt, name, cls, ((hero:GetWidth() or 600) - 2) / (HERO_H - 2))
+		local aw = artWidth()
+		if aw < 10 then aw = (HERO_H - 2) * 2 end
+		hArt:SetWidth(aw)
+		setArt(hArt, name, cls, aw / (HERO_H - 2))
 		classIcon(hIcon, cls)
 		hBar:SetVertexColor(cr, cg, cb, 0.9)
 		hName:SetText(name); hName:SetTextColor(cr, cg, cb)
@@ -620,47 +615,14 @@ function Okanvil:BuildRanking(host)
 				{ "SERVER", pctText(p.srv) },
 				{ "FIGHTS", tostring(p.fights) .. (p.hc and "  |cffff8000H|r" or "") },
 			}
-			for i, v in ipairs(vals) do statCells[i].k:SetText(v[1]); statCells[i].v:SetText(v[2]); statCells[i].g:SetText("") end
+			for i, v in ipairs(vals) do statCells[i].k:SetText(v[1]); statCells[i].v:SetText(v[2]) end
 		else
 			hBoard:Hide(); hRank:Hide(); hOf:Hide(); paintMove(hMove, nil); hMove:Hide()
 			hNone:Show(); hNone:SetText("Not on a board " .. (state.period == "week" and "this week" or "yet"))
-			for i = 1, 4 do statCells[i].k:SetText(""); statCells[i].v:SetText(""); statCells[i].g:SetText("") end
+			for i = 1, 4 do statCells[i].k:SetText(""); statCells[i].v:SetText("") end
 			statCells[1].k:SetText("NO BOARD"); statCells[1].v:SetText("|cff6f7176--|r")
 		end
 		statLayout()
-
-		-- best parse + per kill, against the guild
-		local ex, avg = R.Extras(size, name, state.period), R.GuildAvg(size, state.period) or {}
-		local c1 = utilCells[1]
-		c1.k:SetText("BEST PARSE")
-		if ex and ex.best then
-			c1.v:SetText(("|cffffd25a%s|r |cff8a8d93%s|r"):format(fmtRate(ex.best), ex.bestKind == "h" and "HPS" or "DPS"))
-			c1.g:SetText((ex.bestBoss or "") .. (ex.hc and "  |cffff8000H|r" or ""))
-		else
-			c1.v:SetText("|cff6f7176--|r"); c1.g:SetText("")
-		end
-		-- label, field, fewer is better, decimals, suffix
-		local UTIL = {
-			{ "DEATHS / KILL", "dth", true, 2, "" },
-			{ "INTERRUPTS / KILL", "int", false, 1, "" },
-			{ "POTIONS / KILL", "pots", false, 1, "" },
-			{ "PRE-POT", "pre", false, 0, "%" },
-		}
-		for i, u in ipairs(UTIL) do
-			local c = utilCells[i + 1]
-			c.k:SetText(u[1])
-			local mine, guild = ex and ex[u[2]], avg[u[2]]
-			if mine then
-				local fmt = "%." .. u[4] .. "f" .. (u[5] == "%" and "%%" or "")
-				local good = not guild or (u[3] and mine <= guild) or (not u[3] and mine >= guild)
-				c.v:SetText((good and "|cff7dfc8a" or "|cffff6b5e") .. fmt:format(mine) .. "|r")
-				c.g:SetText(guild and ("guild " .. fmt:format(guild)) or "")
-			else
-				c.v:SetText("|cff6f7176--|r")
-				c.g:SetText(guild and ("guild " .. ("%." .. u[4] .. "f"):format(guild) .. u[5]) or "")
-			end
-		end
-		utilLayout()
 
 		-- every boss of the raid, in order; the ones with no parse dimmed
 		local d = R.Data()
@@ -715,7 +677,6 @@ function Okanvil:BuildRanking(host)
 			local q, qr, qo = R.Find(size, k, name, state.period, true)
 			c.k:SetText(R.BOARD_LABEL[k]:upper())
 			c.v:SetText(q and ("#" .. qr .. " |cff8a8d93/ " .. qo .. "|r") or "|cff6f7176not ranked|r")
-			c.g:SetText("")
 		end
 		boardLayout()
 	end

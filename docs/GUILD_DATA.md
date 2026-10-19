@@ -32,8 +32,6 @@ K,<boss 1>,<boss 2>,...
 B,<size 25|10>,<board d|h|t>,<period week|month|all>
 P,<name>,<CLASS>,<spec>,<rate>,<pts>,<server %>,<fights>,<total>,<heroic 0|1>
 S,<size>,<toon>,<boss idx>:<pct>[h] <boss idx>:<pct>[h] ...
-X,<size>,<period>,<toon>,<best>,<d|h>,<boss idx>,<heroic 0|1>,<deaths>,<interrupts>,<potions>,<pre-pot %>
-G,<size>,<period>,<deaths>,<interrupts>,<potions>,<pre-pot %>
 ```
 
 - `OKR1` must be the first record, and `H` must have a time, or the paste is refused.
@@ -43,9 +41,6 @@ G,<size>,<period>,<deaths>,<interrupts>,<potions>,<pre-pot %>
   damage taken per fight), and `pts` is your own score.
 - `S` lists one toon's best parse per boss. `boss idx` counts from 0 in the `K` line, and a trailing `h`
   marks heroic.
-- `X` (optional) is one toon's best single parse (`d` = DPS, `h` = HPS, on the boss at `boss idx`) and its
-  deaths, interrupts and potions per kill, plus how often it pre-potted. `G` is the guild's average of
-  the same four. An empty field means no data. Without them the toon page shows `--` there.
 - Names are matched in lower case with letters and digits only, so `Kobée` and `kobee` are the same toon.
 
 On RATS this comes from *Rankings → Export to Okanvil*. The full reference is the header of
