@@ -99,7 +99,8 @@ local NIGHT_TTL = 3 * 3600
 
 function C_.SetActive(on)
 	if on and not C_.MayRun() then
-		Okanvil:Print("|cffff5555Loot council:|r only the master looter can start council night.")
+		Okanvil:Print("|cffff5555Loot council:|r only the master looter, or a raid lead / assist "
+			.. "who is an officer, can start council night.")
 		return
 	end
 	C_.active = on and true or false
@@ -156,17 +157,21 @@ end
 C_.CanSeeBoard = canSeeBoard
 
 -- Who may RUN the council: switch council night on and put items to the raid.
--- In a group, only the master looter -- other officers see the board and vote.
--- Any officer could start a round before, and a second officer pressing things
--- mid-raid (a test, a round on the ML's items) is what made the night a mess.
+-- In a group: the master looter, and the raid leader or an assist who is an
+-- officer, so one of them can ask while the master looter is busy handing out.
+-- Only the master looter gives (the board's Give and auto-ask stay with them).
 -- Solo there is nobody to disturb, so solo is always allowed.
 local function mayRunCouncil()
-	local inGroup = (GetNumRaidMembers and GetNumRaidMembers() > 0)
-		or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+	local inRaid = GetNumRaidMembers and GetNumRaidMembers() > 0
+	local inGroup = inRaid or (GetNumPartyMembers and GetNumPartyMembers() > 0)
 	if not inGroup then return true end
 	local L = Okanvil.Loot
 	local me = UnitName and UnitName("player")
-	return (L and L.MasterLooterName and me and L.MasterLooterName() == me) and true or false
+	if L and L.MasterLooterName and me and L.MasterLooterName() == me then return true end
+	local lead
+	if inRaid then lead = (IsRaidLeader and IsRaidLeader()) or (IsRaidOfficer and IsRaidOfficer())
+	else lead = IsPartyLeader and IsPartyLeader() end
+	return (lead and canSeeBoard()) and true or false
 end
 C_.MayRun = mayRunCouncil
 
@@ -1381,8 +1386,8 @@ function C_.Ask(links, boss)
 		return false
 	end
 	if not mayRunCouncil() then
-		Okanvil:Print("|cffff5555Loot council:|r only the master looter puts items to the raid "
-			.. "-- you see the board and vote when they do.")
+		Okanvil:Print("|cffff5555Loot council:|r only the master looter or a raid lead / assist "
+			.. "puts items to the raid -- you see the board and vote when they do.")
 		return false
 	end
 
@@ -2817,7 +2822,7 @@ function C_.BuildRunTab(body)
 			hint:SetText("The board opens on your screen when they put an item to the raid.")
 		else
 			state:SetText("|cff8a8d93Council night is off|r")
-			hint:SetText("Only the master looter turns it on: pick Council.")
+			hint:SetText("The master looter turns it on by picking Council.")
 		end
 	end
 	paintState()
@@ -3269,6 +3274,12 @@ function C_.AutoAsk()
 	if not (enabled() and C_.active) then return end
 	if not db().autoAsk then return end
 	if not canSeeBoard() then return end
+	-- Only the corpse the master looter opens: an assist who can run the council
+	-- opening one too would put the same items to the raid twice.
+	local inGroup = (GetNumRaidMembers and GetNumRaidMembers() > 0)
+		or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+	local ML = Okanvil.Loot
+	if inGroup and not (ML and ML.MasterLooterName and ML.MasterLooterName() == UnitName("player")) then return end
 	-- Never on top of an open round: the raid is already answering something.
 	if C_.current and not C_.current.closed then return end
 	-- NEVER auto-ask from a test. A test round exists to exercise the UI, not to
@@ -3346,9 +3357,12 @@ do
 		do
 			local d = db()
 			local at = tonumber(d.activeAt or 0) or 0
-			-- the loot mode decides: council night only comes back with Council picked
+			-- the loot mode decides: council night only comes back with Council picked.
+			-- Someone else's mode has not arrived yet at login, so a helper in their
+			-- group keeps the night they switched on.
 			local SRM = Okanvil.SoftRes
 			local councilMode = not (SRM and SRM.Mode) or SRM.Mode() == "council"
+				or (SRM.CanSetMode and not SRM.CanSetMode())
 			if at > 0 and (time() - at) < NIGHT_TTL and councilMode then
 				C_.active = true
 				Okanvil:Print("|cffe0b860Loot council:|r council night restored.")

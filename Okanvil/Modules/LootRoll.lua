@@ -862,6 +862,25 @@ function RM.Rebuild()
 		end
 		y = y - 4
 	end
+	-- A raid lead or assist who runs the council with the master looter asks too.
+	-- Ask only: giving and calling rolls need the master looter.
+	if not ml then
+		local CC = Okanvil.Council
+		local SRM = Okanvil.SoftRes
+		if CC and CC.active and CC.MayRun and CC.MayRun() and CC.Enabled and CC.Enabled()
+			and not (SRM and SRM.CouncilAllowed and not SRM.CouncilAllowed()) then
+			local bh = 22
+			local askB = keep(W.Button(body, "Ask council", "primary"))
+			askB:SetSize(INNER, bh); askB:SetPoint("TOPLEFT", M, y)
+			askB:SetScript("OnClick", function()
+				if not (selected and selected.item) then Okanvil:Print("Pick an item first."); return end
+				CC.Ask({ selected.item }, selected.boss or "")
+				RM.Refresh()
+			end)
+			f.askB = askB
+			y = y - (bh + 10)
+		end
+	end
 
 	-- Your roll: everyone, the master looter included, but ONLY while a roll is
 	-- open. Before the call there is nothing to roll on, and buttons that were
