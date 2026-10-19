@@ -1,6 +1,6 @@
 -- ============================================================
 -- Okanvil -- Ranking page (GUILD > Ranking).
--- One toon at a time: your rank on its main board, its numbers, its server %
+-- Your main only: your rank on its main board, its numbers, its server %
 -- per boss, and the players just above and below it. The whole board is one click away.
 -- Normal and Heroic already merged by the site.
 -- ============================================================
@@ -24,7 +24,8 @@ local AROUND = 4                 -- the one above you, you, and two below
 local RANK_SIZE, NAME_SIZE, NUM_SIZE = 46, 32, 18
 local NUM_W, LEFT_MAX, BOSS_NAME_W, VAL_W = 96, 420, 110, 64
 local INK = { 0.035, 0.037, 0.043 }   -- the near-black of shade and veil
-local SHADE, VEIL = 0.82, 0.80    -- the page's left edge; under the boss list
+local SHADE, VEIL = 0.82, 0.86    -- the page's left edge; under the left column
+local COL_FADE = 90               -- the column veil melting into the art
 local DOT = "  |cff4a4d55·|r  "
 
 local function classIcon(tex, token)
@@ -264,7 +265,7 @@ function Okanvil:BuildRanking(host)
 
 	local dash = W.Dashboard(host, {
 		title = "Ranking",
-		subtitle = "Your toons on the guild's boards from the RATS site",
+		subtitle = "Your main on the guild's boards from the RATS site",
 		icon = Okanvil.ICONS.ranking,
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -304,20 +305,9 @@ function Okanvil:BuildRanking(host)
 	page:SetPoint("TOPLEFT", PAD, -PAD)
 	page:SetPoint("BOTTOMRIGHT", -PAD, PAD)
 
-	-- ---- top line: your toons (or "< My toon" on the board), then size and period ----
+	-- ---- top line: "< My toon" on the board, then size and period ----
 	local top = CreateFrame("Frame", nil, page)
 	top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT"); top:SetHeight(CHIP_H)
-	local chips = {}
-	local function chipAt(i)
-		local c = chips[i]
-		if c then return c end
-		c = W.Button(top, "", "tab")
-		c:SetHeight(CHIP_H)
-		c.dot = fill(c, "OVERLAY", 1, 1, 1, 1); c.dot:SetSize(7, 7); c.dot:SetPoint("LEFT", 8, 0)
-		c:SetScript("OnClick", function() state.toon = c._name; refresh() end)
-		chips[i] = c
-		return c
-	end
 	local back = W.Button(top, "< My toon", "tab")
 	back:SetSize(84, CHIP_H); back:SetPoint("LEFT", 0, 0)
 	back:SetScript("OnClick", function() state.view = "toon"; refresh() end)
@@ -337,9 +327,19 @@ function Okanvil:BuildRanking(host)
 	end
 
 	-- ==== TOON VIEW: straight on the art, no boxes ====
+	-- it starts on the filters' line: they sit on the right, the rank on the left
 	local toon = CreateFrame("Frame", nil, page)
-	toon:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -GAP)
+	toon:SetPoint("TOPLEFT", page, "TOPLEFT")
 	toon:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT")
+
+	-- ONE even veil behind the whole left column, fading out past its right
+	-- edge: every name and number sits on calm dark, whatever the art does
+	local colVeil = fill(toon, "BACKGROUND", INK[1], INK[2], INK[3], VEIL)
+	colVeil:SetPoint("TOPLEFT", -PAD, PAD)
+	local colFade = toon:CreateTexture(nil, "BACKGROUND"); colFade:SetTexture(FLAT)
+	colFade:SetGradientAlpha("HORIZONTAL", INK[1], INK[2], INK[3], VEIL, INK[1], INK[2], INK[3], 0)
+	colFade:SetPoint("TOPLEFT", colVeil, "TOPRIGHT"); colFade:SetPoint("BOTTOMLEFT", colVeil, "BOTTOMRIGHT")
+	colFade:SetWidth(COL_FADE)
 
 	local hBoard = onArt(toon, "note", "dim"); hBoard:SetPoint("TOPLEFT", 0, -6)
 	local hRank = onArt(toon, RANK_SIZE, "accent"); hRank:SetPoint("TOPLEFT", hBoard, "BOTTOMLEFT", 0, -4)
@@ -367,10 +367,13 @@ function Okanvil:BuildRanking(host)
 	-- who is around you, one line across the foot of the page
 	local around = CreateFrame("Frame", nil, toon)
 	around:SetPoint("BOTTOMLEFT"); around:SetPoint("BOTTOMRIGHT"); around:SetHeight(AROUND_H)
-	-- the foot of the art is often bright (snow, light): a band of veil under the line
-	local aVeil = around:CreateTexture(nil, "BACKGROUND"); aVeil:SetTexture(FLAT)
-	aVeil:SetGradientAlpha("VERTICAL", INK[1], INK[2], INK[3], VEIL, INK[1], INK[2], INK[3], 0)
-	aVeil:SetPoint("BOTTOMLEFT", -PAD, -PAD); aVeil:SetPoint("TOPRIGHT", PAD, 8)
+	-- the foot of the art is often bright (snow, light): a solid band under the
+	-- line, fading out above it, so the names read on any picture
+	local aVeil = fill(around, "BACKGROUND", INK[1], INK[2], INK[3], 0.92)
+	aVeil:SetPoint("BOTTOMLEFT", -PAD, -PAD); aVeil:SetPoint("TOPRIGHT", PAD, 0)
+	local aFade = around:CreateTexture(nil, "BACKGROUND"); aFade:SetTexture(FLAT)
+	aFade:SetGradientAlpha("VERTICAL", INK[1], INK[2], INK[3], 0.92, INK[1], INK[2], INK[3], 0)
+	aFade:SetPoint("BOTTOMLEFT", aVeil, "TOPLEFT"); aFade:SetPoint("BOTTOMRIGHT", aVeil, "TOPRIGHT"); aFade:SetHeight(18)
 	local aRule = fill(around, "ARTWORK", 1, 1, 1, 0.16)
 	aRule:SetHeight(1); aRule:SetPoint("TOPLEFT"); aRule:SetPoint("TOPRIGHT")
 	local aLbl = onArt(around, "note", "dim"); aLbl:SetText("AROUND YOU"); aLbl:SetPoint("LEFT", 0, -2)
@@ -384,15 +387,11 @@ function Okanvil:BuildRanking(host)
 		near[i] = t
 	end
 
-	-- server % per boss, on a soft dark veil that fades out to the right
+	-- server % per boss
 	local bossBox = CreateFrame("Frame", nil, toon)
 	bossBox:SetPoint("TOPLEFT", nums, "BOTTOMLEFT", -14, -10)
 	bossBox:SetPoint("BOTTOM", around, "TOP", 0, 10)
-	local vSolid = fill(bossBox, "BACKGROUND", INK[1], INK[2], INK[3], VEIL)
-	vSolid:SetPoint("TOPLEFT"); vSolid:SetPoint("BOTTOMLEFT")
-	local vFade = bossBox:CreateTexture(nil, "BACKGROUND"); vFade:SetTexture(FLAT)
-	vFade:SetGradientAlpha("HORIZONTAL", INK[1], INK[2], INK[3], VEIL, INK[1], INK[2], INK[3], 0)
-	vFade:SetPoint("TOPLEFT", vSolid, "TOPRIGHT"); vFade:SetPoint("BOTTOMRIGHT")
+	colVeil:SetPoint("BOTTOM", around, "TOP", 0, 0)
 	local bsf, bchild, bsb, brange = scrollList(bossBox, nil, BOSS_STEP)
 	bsf:SetPoint("TOPLEFT", 14, -10); bsf:SetPoint("BOTTOMRIGHT", -24, 10)
 	bsb:SetPoint("TOPLEFT", bsf, "TOPRIGHT", 6, 0); bsb:SetPoint("BOTTOMLEFT", bsf, "BOTTOMRIGHT", 6, 0)
@@ -423,7 +422,7 @@ function Okanvil:BuildRanking(host)
 		local lw = math.min(math.floor(w * 0.46), LEFT_MAX)
 		nums:SetWidth(lw)
 		bossBox:SetWidth(lw + 14 + 40)
-		vSolid:SetWidth(math.floor((lw + 54) * 0.7))
+		colVeil:SetWidth(PAD + lw + 40)
 	end
 	toon:HookScript("OnSizeChanged", sizeLeft)
 
@@ -513,34 +512,11 @@ function Okanvil:BuildRanking(host)
 	empty:SetPoint("RIGHT", page, "RIGHT", -4, 0)
 	empty:SetJustifyH("LEFT")
 
-	-- ---- paint: the toon chips ----
-	local function paintChips()
-		local mine = Okanvil.U and Okanvil.U.toonsOf and Okanvil.U.toonsOf(UnitName("player")) or { UnitName("player") }
-		local list = {}
-		for _, n in ipairs(mine) do
-			if n == UnitName("player") or R.Has(n) then list[#list + 1] = n end
-		end
-		local ok = false
-		for _, n in ipairs(list) do if n == state.toon then ok = true end end
-		if not ok then state.toon = UnitName("player") end
-		local xx = 0
-		for i, n in ipairs(list) do
-			local c = chipAt(i)
-			c._name = n
-			local cls, spec = classOf(n)
-			local r, g, b = classRGB(cls)
-			c.dot:SetVertexColor(r, g, b, cls and 1 or 0.3)
-			c.text:SetText("   " .. n .. (spec and spec ~= "" and ("  |cff8a8d93" .. spec .. "|r") or ""))
-			local w = (c.text and c.text:GetStringWidth() or 60) + 18
-			c:SetWidth(math.max(70, w))
-			c:SetKind(n == state.toon and "tabOn" or "tab")
-			c:ClearAllPoints(); c:SetPoint("LEFT", top, "LEFT", xx, 0)
-			xx = xx + c:GetWidth() + 6
-			c:Show()
-		end
-		for i = #list + 1, #chips do chips[i]:Hide() end
-		-- one toon alone needs no picker
-		if #list < 2 then for _, c in ipairs(chips) do c:Hide() end end
+	-- ---- the toon shown: your main (alts would crowd the page), else this toon ----
+	local function pickToon()
+		local me = UnitName("player")
+		local main = Okanvil.U and Okanvil.U.mainOf and Okanvil.U.mainOf(me)
+		state.toon = (main and R.Has(main)) and main or me
 	end
 
 	-- ---- paint: the toon view ----
@@ -694,12 +670,11 @@ function Okanvil:BuildRanking(host)
 			end
 		end
 		if state.view == "board" then
-			for _, c in ipairs(chips) do c:Hide() end
 			back:Show(); toon:Hide(); boardView:Show()
 			paintBoard()
 		else
 			back:Hide(); boardView:Hide(); toon:Show()
-			paintChips()
+			pickToon()
 			paintToon()
 		end
 	end
@@ -715,7 +690,7 @@ end
 Okanvil_Plugins = Okanvil_Plugins or {}
 Okanvil_Plugins[ADDON] = {
 	title = "Ranking",
-	desc  = "Your toons on the guild's DPS / Healing / Tanking boards from the RATS site, plus each "
+	desc  = "Your main on the guild's DPS / Healing / Tanking boards from the RATS site, plus each "
 		.. "raider's best bosses on their tooltip. An officer imports it; everyone online gets it.",
 	icon  = Okanvil.ICONS and Okanvil.ICONS.ranking,
 	build = function(panel) Okanvil:BuildRanking(panel) end,
