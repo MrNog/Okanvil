@@ -956,7 +956,9 @@ end
 function RM.SyncCouncilButton()
 	if not (win and win.cnBtn) then return end
 	local CC = Okanvil.Council
-	if CC and CC.HasOpenRound and CC.HasOpenRound() then win.cnBtn:Show() else win.cnBtn:Hide() end
+	-- only on a council night (yours or the master looter's) or in a test
+	local night = CC and (CC.active or CC.remoteNight or CC.testMode)
+	if night and CC.HasOpenRound and CC.HasOpenRound() then win.cnBtn:Show() else win.cnBtn:Hide() end
 	local left = (win.clrBtn and win.clrBtn:IsShown() and win.clrBtn)
 		or (win.srBtn:IsShown() and win.srBtn) or win.closeBtn
 	win.cnBtn:ClearAllPoints()

@@ -825,33 +825,29 @@ local function alreadyOwned(link)
 	return false
 end
 
--- Is this item one to ask me about? Armour I can wear (or lighter armour that
--- suits my spec and beats mine, or that a BiS list of my class names), and rings, trinkets, necks and weapons only if
--- they suit a spec of my class -- a spell-power neck is not a death knight's, an
--- attack-power sword not a mage's. Any spec of the class, not just my two:
--- talents change between raids. The same BiS lists and stat rules as the item
--- tooltip's stars. An item not cached yet passes: its stats are unknown, so
--- recheckUncached judges it again once they arrive.
+-- Is this item one to ask me about? Anything my class can put on -- its own
+-- armour or lighter (plate > mail > leather > cloth), weapons it holds, its tier
+-- tokens -- whose stats suit a spec of my class: no Intellect plate for a
+-- warrior, no caster cloth for a death knight, no spell-power neck for a rogue.
+-- Any spec of the class, not just my two: talents change between raids. The
+-- same BiS lists and stat rules as the item tooltip's stars. An item not cached
+-- yet passes: its stats are unknown, so recheckUncached judges it again once
+-- they arrive.
 local function fitsMe(link)
 	local P = Okanvil.Prof
 	if not P then return true end
+	local cls = select(2, UnitClass("player"))
 	local can = true
-	if P.CanIUse then can = P.CanIUse(link) end
-	if not can and P.LighterWorthAsking and P.LighterWorthAsking(link) then can = true end
-	local U = Okanvil.Upgrades
-	-- lighter armour a BiS list of my class names: asked whatever its item level
-	if not can and P.LighterCasterGear and U and U.OnClassList then
-		local cls = select(2, UnitClass("player"))
-		if P.LighterCasterGear(link, cls) and U.OnClassList(link, cls) then can = true end
-	end
+	if P.CanEquip then can = P.CanEquip(link, cls) elseif P.CanIUse then can = P.CanIUse(link) end
 	if can then
+		local U = Okanvil.Upgrades
 		if U and U.FitsAnySpec then
-			can = U.FitsAnySpec(link, (select(2, UnitClass("player"))))
+			can = U.FitsAnySpec(link, cls)
 		elseif P.FitsEitherSpec then
 			can = P.FitsEitherSpec(link)
 		end
 	end
-	return can
+	return can and true or false
 end
 
 -- The round's uncached items, once the server has sent them: the ones that do
@@ -1357,13 +1353,10 @@ function C_.MirrorRound(asker, payload, round)
 	}
 	C_.rounds[round] = rec
 	C_.current = rec
-	C_.ScheduleSummary(rec)
 	C.Adopt(TOPIC, round, {
 		timeout = 1800,
 		onReply = function(sender, body)
-			local prev = C_.KeysOf(rec.replies[sender])
 			rec.replies[sender] = mergeReply(rec.replies[sender], parseReply(body))
-			C_.ReplyToChat(rec, sender, prev)
 			if rec == C_.current then C_.RepaintBoard() end
 			C_.SaveAsk()
 		end,
@@ -1452,9 +1445,7 @@ function C_.Ask(links, boss)
 		-- more, so this is only a backstop against a round nobody ever closes.
 		timeout = 1800,
 		onReply = function(sender, body)
-			local prev = C_.KeysOf(rec.replies[sender])
 			rec.replies[sender] = mergeReply(rec.replies[sender], parseReply(body))
-			C_.ReplyToChat(rec, sender, prev)
 			if C_.onReply then C_.onReply(rec) end
 			-- Repaint rather than print: the board IS the status, and a chat line
 			-- per click is unreadable once a real raid is answering.
@@ -1477,7 +1468,6 @@ function C_.Ask(links, boss)
 	rec.payload = payload
 	C_.rounds[round] = rec
 	C_.current = rec
-	C_.ScheduleSummary(rec)
 	-- The ASKER's round is persisted too. Only the raider's side was, so a leader
 	-- who reloaded mid-council came back to an empty board and no way to award --
 	-- the round was still live on every other client, answering into nothing.
@@ -2675,15 +2665,7 @@ function C_.PrintStatus(rec, final)
 	end
 end
 
--- ------------------------------------------------------------
--- THE ROUND IN CHAT, on every client that holds the board. One line per item
--- once the raid has answered (or SUMMARY_WAIT later): every answer, Pass
--- included, who is still deciding, and who never answered at all -- without
--- that last list there is no telling whether the popup reached someone. An
--- answer that comes in after the line gets a line of its own.
--- ------------------------------------------------------------
-local SUMMARY_WAIT = 40
-
+-- The group's names: the count's tooltip lists who never answered.
 function C_.GroupNames()
 	local out = {}
 	local n = GetNumRaidMembers and GetNumRaidMembers() or 0
@@ -2700,94 +2682,6 @@ function C_.GroupNames()
 		out[#out + 1] = UnitName("player")
 	end
 	return out
-end
-
-local function answerText(key)
-	local info = RESP_BY_KEY[key]
-	local c = info and info.color
-	local hex = c and ("|cff%02x%02x%02x"):format(c[1] * 255, c[2] * 255, c[3] * 255) or "|cffffffff"
-	return hex .. ((info and info.label) or key) .. "|r"
-end
-
-local function anyDeciding(rec)
-	for _, answers in pairs(rec.replies) do
-		for idx, a in pairs(answers) do
-			if type(idx) == "number" and a.key == "wait" then return true end
-		end
-	end
-	return false
-end
-
-function C_.ChatSummary(rec)
-	if not rec or rec.summarized or rec.closed then return end
-	rec.summarized = true
-	local replied = {}
-	for name in pairs(rec.replies) do replied[name:gsub("%-.*", ""):lower()] = true end
-	-- not me: on a mirrored board my own "na" went to the asker, not to me
-	local silent, me = {}, (UnitName("player") or ""):lower()
-	for _, nm in ipairs(C_.GroupNames()) do
-		if not replied[nm:lower()] and nm:lower() ~= me then silent[#silent + 1] = nm end
-	end
-	table.sort(silent)
-	for i, link in ipairs(rec.items) do
-		local by, na, waiting = {}, 0, {}
-		for name, answers in pairs(rec.replies) do
-			local a = answers[i]
-			local who = name:gsub("%-.*", "")
-			if a and a.key == "na" then na = na + 1
-			elseif a and a.key == "wait" then waiting[#waiting + 1] = who
-			elseif a and a.key then
-				by[a.key] = by[a.key] or {}
-				table.insert(by[a.key], who)
-			end
-		end
-		local parts = {}
-		for _, r in ipairs(C_.RESPONSES) do
-			if by[r.key] then
-				table.sort(by[r.key])
-				parts[#parts + 1] = answerText(r.key) .. ": " .. table.concat(by[r.key], ", ")
-			end
-		end
-		if #waiting > 0 then
-			table.sort(waiting)
-			parts[#parts + 1] = answerText("wait") .. " " .. table.concat(waiting, ", ")
-		end
-		parts[#parts + 1] = ("|cff8a8d93%d not for them|r"):format(na)
-		Okanvil:Print(link .. "  " .. table.concat(parts, "  |cff8a8d93·|r  "))
-	end
-	-- the same people for every item: no addon, offline, or the question never came
-	if #silent > 0 then
-		Okanvil:Print("|cffff5555No answer|r |cff8a8d93(no Okanvil or not reached)|r: " .. table.concat(silent, ", "))
-	end
-end
-
--- After a reply has been merged: the summary once nobody is deciding (a moment
--- after the question, so the automatic replies are all in), then each later
--- decision on its own line. prev = that sender's answer keys before the merge.
-function C_.ReplyToChat(rec, sender, prev)
-	if rec.closed then return end
-	if not rec.summarized then
-		if GetTime() - (rec.at or 0) >= 3 and not anyDeciding(rec) then C_.ChatSummary(rec) end
-		return
-	end
-	for i, a in pairs(rec.replies[sender] or {}) do
-		if type(i) == "number" and a.key and a.key ~= "wait" and a.key ~= "na" and prev[i] ~= a.key then
-			Okanvil:Print(("%s: %s  %s"):format(sender:gsub("%-.*", ""), answerText(a.key), rec.items[i] or ""))
-		end
-	end
-end
-
-function C_.KeysOf(answers)
-	local out = {}
-	for i, a in pairs(answers or {}) do if type(i) == "number" then out[i] = a.key end end
-	return out
-end
-
--- Called once a round exists: the two moments the summary may print by itself.
-function C_.ScheduleSummary(rec)
-	if not (C and C.After) then return end
-	C.After(3, function() if not anyDeciding(rec) then C_.ChatSummary(rec) end end)
-	C.After(SUMMARY_WAIT, function() C_.ChatSummary(rec) end)
 end
 
 -- ============================================================
@@ -3710,7 +3604,12 @@ end
 
 -- The mini roll's Council button: opens the board, or closes it when it is open.
 function C_.OpenBoard()
-	if board and board:IsShown() then board:Hide(); return end
+	if board and board:IsShown() then
+		-- closed by hand: the next answer must not pop it open again
+		if C_.current then C_.current.dismissed = true; C_.SaveAsk() end
+		board:Hide()
+		return
+	end
 	if C_.current then C_.RepaintBoard(true) end
 end
 

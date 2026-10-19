@@ -746,3 +746,37 @@ function SR.TestRaider()
 	local post = db().post
 	P.Open(post.raid, post.size, post.hc, post.limit, post.lockKey, me(), post.gen)
 end
+
+-- ---- Picks live as long as the group ----------------------------------------
+-- A soft reserve belongs to the group it was made in: out of a group for GRACE
+-- seconds (left, disbanded, or logged in alone) and this character's reserves
+-- are gone, so the next PuG starts clean. Wishes stay: they are per raid ID for
+-- the guild's own nights. The grace keeps them through a roster blink while
+-- zoning or a relog mid-raid.
+do
+	local GRACE = 120
+	local function inGroup()
+		return (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0
+	end
+	local pending = false
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("PLAYER_ENTERING_WORLD")
+	f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+	f:RegisterEvent("RAID_ROSTER_UPDATE")
+	f:SetScript("OnEvent", function()
+		if inGroup() or pending or not (Okanvil.Comms and Okanvil.Comms.After) then return end
+		pending = true
+		Okanvil.Comms.After(GRACE, function()
+			pending = false
+			if inGroup() then return end
+			local d, mine = db(), ":" .. (me() or "")
+			local any = false
+			for k in pairs(d.myPicks or {}) do
+				if k:sub(-#mine) == mine and not k:find("^wish:") then d.myPicks[k] = nil; any = true end
+			end
+			if not any then return end
+			wipe(picks)
+			if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
+		end)
+	end)
+end
