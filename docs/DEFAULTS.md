@@ -70,7 +70,7 @@ no events, no UI.
 
 | Setting | Default | Notes |
 |---|---|---|
-| Loot mode | **Roll** | Council / SR / Roll. Set by the master looter and synced to the group; a pick lasts one raid night (3 h), then it is Roll again. |
+| Loot mode | **Roll** | Council / SR / Roll. Set by the master looter and synced to the group; a pick lasts until the group disbands, then it is Roll again. |
 | Ask the council automatically when a corpse opens | **Off** | Council mode only. Existing installs were switched off once. |
 | Wishlist | **Off** | Council mode only; any officer turns it on. |
 | Soft reserves | Closed | Opens with SR mode, locks itself at the first pull. |

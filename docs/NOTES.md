@@ -151,7 +151,7 @@ Export contract → the web hub's `docs/LOOT_EXPORT.md`.
 - **Three loot modes**, set by the master looter and synced to the group:
   **Council** (officers decide on the board; optional wishlist), **SR** (soft
   reserves: `sr [item]` whispers, or the pick window for raiders with Okanvil),
-  **Roll** (plain MS/OS, the default). A pick lasts one raid night (3 h).
+  **Roll** (plain MS/OS, the default). A pick lasts until the group disbands.
 - **A session = one instance run.** Bosses are *pages within it* (the `<>` pager),
   not separate sessions.
 - **Loot is per-character**, config is account-wide. Wiping the account file does

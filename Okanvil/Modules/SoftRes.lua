@@ -295,12 +295,14 @@ end
 --   "sr"       soft reserves: a softres.it CSV, "sr [item]" whispers, or the
 --              pick window for raiders who run Okanvil; no council
 --   "roll"     plain MS / OS rolls; no soft reserves, no council -- the default
--- A pick lasts one raid night (MODE_TTL); after that it is Roll again, so last
--- week's council night never comes back on its own. RatRoll (LITE) has no tiles
+-- A pick lasts while the group does and ends when it disbands (DISBAND_GRACE
+-- later); picked solo, it waits MODE_TTL for a group. Then it is Roll again, so
+-- last week's council night never comes back on its own. RatRoll (LITE) has no tiles
 -- and is all about soft reserves, so its default is SR.
 -- Hard reserves and reserved loot kinds (PuG page) apply in every mode.
 local MODES = { council = true, sr = true, roll = true }
 local MODE_TTL = 3 * 3600
+local DISBAND_GRACE = 120   -- seconds a pick outlives its group
 
 -- Who sets the mode for the group: the master looter, or with no master loot
 -- the group leader. Solo, you. Everyone else sees theirs, read-only.
@@ -333,7 +335,11 @@ end
 local remote            -- { mode, from } as the setter sent it
 local function ownMode()
 	local d = db()
-	if d.mode and d.modeAt and time() - d.modeAt < MODE_TTL then return d.mode end
+	if d.mode and d.modeAt and time() - d.modeAt < MODE_TTL then
+		-- in a group: the pick lasts as long as the group, however long the night
+		if inGroup() then d.modeAt = time() end
+		return d.mode
+	end
 	return Okanvil.LITE and "sr" or "roll"
 end
 
@@ -413,8 +419,15 @@ do
 	f:SetScript("OnEvent", function()
 		local who, now = setterName(), inGroup()
 		if who == lastSetter and now == wasIn then return end
+		local left = wasIn and not now
 		lastSetter, wasIn = who, now
-		if not now then remote = nil; repaint(); return end
+		if not now then
+			-- the group is gone: the pick ends with it, after a short grace so a
+			-- roster blink while zoning does not reset the night
+			local d = db()
+			if left and d.mode and d.modeAt then d.modeAt = math.min(d.modeAt, time() - MODE_TTL + DISBAND_GRACE) end
+			remote = nil; repaint(); return
+		end
 		if SR.CanSetMode() then
 			syncNight()
 			sendMode()

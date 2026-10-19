@@ -826,7 +826,7 @@ local function alreadyOwned(link)
 end
 
 -- Is this item one to ask me about? Armour I can wear (or lighter armour that
--- suits my spec and beats mine), and rings, trinkets, necks and weapons only if
+-- suits my spec and beats mine, or that a BiS list of my class names), and rings, trinkets, necks and weapons only if
 -- they suit a spec of my class -- a spell-power neck is not a death knight's, an
 -- attack-power sword not a mage's. Any spec of the class, not just my two:
 -- talents change between raids. The same BiS lists and stat rules as the item
@@ -838,8 +838,13 @@ local function fitsMe(link)
 	local can = true
 	if P.CanIUse then can = P.CanIUse(link) end
 	if not can and P.LighterWorthAsking and P.LighterWorthAsking(link) then can = true end
+	local U = Okanvil.Upgrades
+	-- lighter armour a BiS list of my class names: asked whatever its item level
+	if not can and P.LighterCasterGear and U and U.OnClassList then
+		local cls = select(2, UnitClass("player"))
+		if P.LighterCasterGear(link, cls) and U.OnClassList(link, cls) then can = true end
+	end
 	if can then
-		local U = Okanvil.Upgrades
 		if U and U.FitsAnySpec then
 			can = U.FitsAnySpec(link, (select(2, UnitClass("player"))))
 		elseif P.FitsEitherSpec then
@@ -1352,10 +1357,13 @@ function C_.MirrorRound(asker, payload, round)
 	}
 	C_.rounds[round] = rec
 	C_.current = rec
+	C_.ScheduleSummary(rec)
 	C.Adopt(TOPIC, round, {
 		timeout = 1800,
 		onReply = function(sender, body)
+			local prev = C_.KeysOf(rec.replies[sender])
 			rec.replies[sender] = mergeReply(rec.replies[sender], parseReply(body))
+			C_.ReplyToChat(rec, sender, prev)
 			if rec == C_.current then C_.RepaintBoard() end
 			C_.SaveAsk()
 		end,
@@ -1378,6 +1386,16 @@ function C_.Ask(links, boss)
 		return false
 	end
 	if type(links) ~= "table" or #links == 0 then return false end
+	-- shards, saronite, orbs and patterns are never a council question
+	do
+		local keep = {}
+		for _, l in ipairs(links) do
+			if C_.IsCouncilItem(l) then keep[#keep + 1] = l
+			else Okanvil:Print("|cffe0b860Loot council:|r " .. tostring(l) .. " is not gear -- roll it or give it to its collector.") end
+		end
+		links = keep
+		if #links == 0 then return false end
+	end
 	-- Only an officer may put an item to the raid. Without this any raider could
 	-- open a round and pop a frame on twenty-five clients -- and a raider who
 	-- could ask would then be shown the board, which is where the prio lives.
@@ -1434,7 +1452,9 @@ function C_.Ask(links, boss)
 		-- more, so this is only a backstop against a round nobody ever closes.
 		timeout = 1800,
 		onReply = function(sender, body)
+			local prev = C_.KeysOf(rec.replies[sender])
 			rec.replies[sender] = mergeReply(rec.replies[sender], parseReply(body))
+			C_.ReplyToChat(rec, sender, prev)
 			if C_.onReply then C_.onReply(rec) end
 			-- Repaint rather than print: the board IS the status, and a chat line
 			-- per click is unreadable once a real raid is answering.
@@ -1457,6 +1477,7 @@ function C_.Ask(links, boss)
 	rec.payload = payload
 	C_.rounds[round] = rec
 	C_.current = rec
+	C_.ScheduleSummary(rec)
 	-- The ASKER's round is persisted too. Only the raider's side was, so a leader
 	-- who reloaded mid-council came back to an empty board and no way to award --
 	-- the round was still live on every other client, answering into nothing.
@@ -1528,6 +1549,30 @@ local function ensureBoard()
 	local count = W.Text(f, "", nil, "accent")
 	count:SetPoint("TOPRIGHT", -12, -(TAB_TOP + TAB_S + 8))
 	f.count = count
+
+	-- Hover the count for the names behind it: who is deciding, who passed, who
+	-- cannot use the item (no popup), and who never answered at all.
+	local countHit = CreateFrame("Frame", nil, f)
+	countHit:SetAllPoints(count)
+	countHit:EnableMouse(true)
+	countHit:SetScript("OnEnter", function(self)
+		local L = f._names
+		if not L then return end
+		GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+		GameTooltip:AddLine("Who answered what", 0.88, 0.72, 0.38)
+		local function block(label, list, r, g, b)
+			if #list == 0 then return end
+			GameTooltip:AddLine(" ")
+			GameTooltip:AddLine(label .. " (" .. #list .. ")", r, g, b)
+			GameTooltip:AddLine(table.concat(list, ", "), 1, 1, 1, true)
+		end
+		block("Deciding", L.wait, 0.95, 0.85, 0.25)
+		block("Passed", L.pass, 0.55, 0.57, 0.60)
+		block("Can't use it (no popup)", L.na, 0.54, 0.55, 0.58)
+		block("No answer (no Okanvil, or not reached)", L.silent, 1, 0.33, 0.33)
+		GameTooltip:Show()
+	end)
+	countHit:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 	-- ITEM TABS. One icon per item of the round, along the top: the whole window
 	-- is then ONE item's responses and the table gets the full width, instead of
@@ -1976,23 +2021,48 @@ function C_.RepaintBoard(open)
 	-- is still deciding, and needs the count to say how many have actually made a
 	-- decision. Conflating the two is what let a name show Pass before it had
 	-- chosen anything.
-	-- A Pass is an answer but gets no row: it only says who is out, and on a full
-	-- raid those rows were most of the window. They are named in f.passLine.
+	-- A Pass gets its row too, sorted after the real claims: the council has to
+	-- see that the popup reached someone and they turned it down.
 	local rows, answered, naCount, waiting, passed = {}, 0, 0, 0, {}
+	local waitNames, naNames = {}, {}
 	for name, answers in pairs(rec.replies) do
 		local a = answers[boardItem]
 		if a and a.key == "pass" then
 			answered = answered + 1
 			passed[#passed + 1] = name
+			rows[#rows + 1] = {
+				name = name, key = a.key, eq = a.eq, eq2 = a.eq2, diff = a.diff, tier = a.tier,
+				prio = prioPos[name],
+			}
 		elseif a and a.key and a.key ~= "na" then
-			if a.key == "wait" then waiting = waiting + 1 else answered = answered + 1 end
+			if a.key == "wait" then
+				waiting = waiting + 1
+				waitNames[#waitNames + 1] = name
+			else
+				answered = answered + 1
+			end
 			rows[#rows + 1] = {
 				name = name, key = a.key, eq = a.eq, eq2 = a.eq2, diff = a.diff, tier = a.tier,
 				prio = prioPos[name],
 			}
 		elseif a and a.key == "na" then
 			naCount = naCount + 1
+			naNames[#naNames + 1] = name
 		end
+	end
+	-- the names behind the count, for its tooltip
+	do
+		local replied, silent = {}, {}
+		for name in pairs(rec.replies) do replied[name:gsub("%-.*", ""):lower()] = true end
+		local me = (UnitName("player") or ""):lower()
+		for _, nm in ipairs(C_.GroupNames()) do
+			if not replied[nm:lower()] and nm:lower() ~= me then silent[#silent + 1] = nm end
+		end
+		for _, l in ipairs({ waitNames, naNames, silent }) do table.sort(l) end
+		local pass = {}
+		for i, nm in ipairs(passed) do pass[i] = nm end
+		table.sort(pass)
+		f._names = { wait = waitNames, pass = pass, na = naNames, silent = silent }
 	end
 
 	-- Sorted by WHAT THEY ANSWERED -- every BIS together, then Upgrade, down to
@@ -2047,15 +2117,8 @@ function C_.RepaintBoard(open)
 		naCount > 0 and ("  ·  " .. naCount .. " can't use") or "",
 		votedN, #members))
 
-	table.sort(passed)
-	if #passed > 0 then
-		local shown = {}
-		for k = 1, math.min(6, #passed) do shown[k] = passed[k] end
-		f.passLine:SetText("Passed: " .. table.concat(shown, ", ")
-			.. (#passed > 6 and ("  +" .. (#passed - 6)) or ""))
-	else
-		f.passLine:SetText("")
-	end
+	-- passes have their own rows now
+	f.passLine:SetText("")
 
 	-- Only BOARD_MAX_ROWS are drawn; the wheel moves the window. `rows` stays the
 	-- full list so the default Give pick is still the top claim.
@@ -2512,7 +2575,11 @@ function C_.RepaintBoard(open)
 			break
 		end
 	end
-	if not valid then f._pick = rows[1] and rows[1].name or nil end
+	-- never defaults to someone who passed or is still deciding: those are picked by hand
+	if not valid then
+		local top = rows[1]
+		f._pick = (top and top.key ~= "pass" and top.key ~= "wait") and top.name or nil
+	end
 
 	for i = 1, math.min(#vis, #f.rows) do
 		local r = f.rows[i]
@@ -2608,6 +2675,121 @@ function C_.PrintStatus(rec, final)
 	end
 end
 
+-- ------------------------------------------------------------
+-- THE ROUND IN CHAT, on every client that holds the board. One line per item
+-- once the raid has answered (or SUMMARY_WAIT later): every answer, Pass
+-- included, who is still deciding, and who never answered at all -- without
+-- that last list there is no telling whether the popup reached someone. An
+-- answer that comes in after the line gets a line of its own.
+-- ------------------------------------------------------------
+local SUMMARY_WAIT = 40
+
+function C_.GroupNames()
+	local out = {}
+	local n = GetNumRaidMembers and GetNumRaidMembers() or 0
+	if n > 0 then
+		for i = 1, n do
+			local nm = GetRaidRosterInfo(i)
+			if nm then out[#out + 1] = (nm:gsub("%-.*", "")) end
+		end
+	else
+		for i = 1, (GetNumPartyMembers and GetNumPartyMembers() or 0) do
+			local nm = UnitName("party" .. i)
+			if nm then out[#out + 1] = nm end
+		end
+		out[#out + 1] = UnitName("player")
+	end
+	return out
+end
+
+local function answerText(key)
+	local info = RESP_BY_KEY[key]
+	local c = info and info.color
+	local hex = c and ("|cff%02x%02x%02x"):format(c[1] * 255, c[2] * 255, c[3] * 255) or "|cffffffff"
+	return hex .. ((info and info.label) or key) .. "|r"
+end
+
+local function anyDeciding(rec)
+	for _, answers in pairs(rec.replies) do
+		for idx, a in pairs(answers) do
+			if type(idx) == "number" and a.key == "wait" then return true end
+		end
+	end
+	return false
+end
+
+function C_.ChatSummary(rec)
+	if not rec or rec.summarized or rec.closed then return end
+	rec.summarized = true
+	local replied = {}
+	for name in pairs(rec.replies) do replied[name:gsub("%-.*", ""):lower()] = true end
+	-- not me: on a mirrored board my own "na" went to the asker, not to me
+	local silent, me = {}, (UnitName("player") or ""):lower()
+	for _, nm in ipairs(C_.GroupNames()) do
+		if not replied[nm:lower()] and nm:lower() ~= me then silent[#silent + 1] = nm end
+	end
+	table.sort(silent)
+	for i, link in ipairs(rec.items) do
+		local by, na, waiting = {}, 0, {}
+		for name, answers in pairs(rec.replies) do
+			local a = answers[i]
+			local who = name:gsub("%-.*", "")
+			if a and a.key == "na" then na = na + 1
+			elseif a and a.key == "wait" then waiting[#waiting + 1] = who
+			elseif a and a.key then
+				by[a.key] = by[a.key] or {}
+				table.insert(by[a.key], who)
+			end
+		end
+		local parts = {}
+		for _, r in ipairs(C_.RESPONSES) do
+			if by[r.key] then
+				table.sort(by[r.key])
+				parts[#parts + 1] = answerText(r.key) .. ": " .. table.concat(by[r.key], ", ")
+			end
+		end
+		if #waiting > 0 then
+			table.sort(waiting)
+			parts[#parts + 1] = answerText("wait") .. " " .. table.concat(waiting, ", ")
+		end
+		parts[#parts + 1] = ("|cff8a8d93%d not for them|r"):format(na)
+		Okanvil:Print(link .. "  " .. table.concat(parts, "  |cff8a8d93·|r  "))
+	end
+	-- the same people for every item: no addon, offline, or the question never came
+	if #silent > 0 then
+		Okanvil:Print("|cffff5555No answer|r |cff8a8d93(no Okanvil or not reached)|r: " .. table.concat(silent, ", "))
+	end
+end
+
+-- After a reply has been merged: the summary once nobody is deciding (a moment
+-- after the question, so the automatic replies are all in), then each later
+-- decision on its own line. prev = that sender's answer keys before the merge.
+function C_.ReplyToChat(rec, sender, prev)
+	if rec.closed then return end
+	if not rec.summarized then
+		if GetTime() - (rec.at or 0) >= 3 and not anyDeciding(rec) then C_.ChatSummary(rec) end
+		return
+	end
+	for i, a in pairs(rec.replies[sender] or {}) do
+		if type(i) == "number" and a.key and a.key ~= "wait" and a.key ~= "na" and prev[i] ~= a.key then
+			Okanvil:Print(("%s: %s  %s"):format(sender:gsub("%-.*", ""), answerText(a.key), rec.items[i] or ""))
+		end
+	end
+end
+
+function C_.KeysOf(answers)
+	local out = {}
+	for i, a in pairs(answers or {}) do if type(i) == "number" then out[i] = a.key end end
+	return out
+end
+
+-- Called once a round exists: the two moments the summary may print by itself.
+function C_.ScheduleSummary(rec)
+	if not (C and C.After) then return end
+	C.After(3, function() if not anyDeciding(rec) then C_.ChatSummary(rec) end end)
+	C.After(SUMMARY_WAIT, function() C_.ChatSummary(rec) end)
+end
+
 -- ============================================================
 -- THE PICKER -- tick items from THIS RUN's loot and ask about them together.
 --
@@ -2658,7 +2840,7 @@ function C_.OpenPicker()
 	-- `items`, not `drops`.
 	for _, grp in ipairs(L.DropsByBoss() or {}) do
 		for _, dp in ipairs(grp.items or {}) do
-			if undecided(dp) then
+			if undecided(dp) and C_.IsCouncilItem(dp.item or dp.id) then
 				local wn = L.RollWinner and L.RollWinner(dp)
 				rows[#rows + 1] = { dp = dp, boss = grp.boss or dp.boss or "", rolled = wn and wn.player }
 			end
@@ -3270,6 +3452,20 @@ end
 -- auto-ask must be on in the settings. A guild that calls each item by hand
 -- should not have a round fire on every kill.
 -- ============================================================
+-- Gear and tier tokens go to the council; a Shadowfrost Shard, Primordial
+-- Saronite, an orb or a pattern does not -- those go to their collector or a
+-- roll. Not equippable and not a token = not a council item. An item the client
+-- has not cached yet counts as one, so nothing real is dropped by a cold cache.
+function C_.IsCouncilItem(item)
+	local id = tonumber(item) or tonumber(tostring(item or ""):match("item:(%d+)"))
+	if not id then return false end
+	local P = Okanvil.Prof
+	if P and P.TokenUsable and P.TokenUsable(id, "WARRIOR") ~= nil then return true end
+	local name, _, _, _, _, _, _, _, equip = GetItemInfo(id)
+	if not name then return true end
+	return equip ~= nil and equip ~= ""
+end
+
 function C_.AutoAsk()
 	if not (enabled() and C_.active) then return end
 	if not db().autoAsk then return end
@@ -3299,7 +3495,7 @@ function C_.AutoAsk()
 			local link = GetLootSlotLink and GetLootSlotLink(slot)
 			if link then
 				local rarity = select(3, GetItemInfo(link)) or 0
-				if rarity >= thr then links[#links + 1] = link end
+				if rarity >= thr and C_.IsCouncilItem(link) then links[#links + 1] = link end
 			end
 		end
 	end

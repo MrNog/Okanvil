@@ -316,6 +316,17 @@ function P.LighterArmor(link, class)
 	return nil
 end
 
+-- Lighter caster armour on a hybrid: a Resto druid's or Holy paladin's BiS can
+-- be cloth. Only the classes whose healers and casters really wear it, and only
+-- Intellect / spell power pieces -- the BiS lists also name leather on a death
+-- knight, and that must stay out.
+local HYBRID = { PALADIN = true, DRUID = true, SHAMAN = true }
+function P.LighterCasterGear(link, class)
+	if not (HYBRID[class] and P.LighterArmor(link, class) and GetItemStats) then return false end
+	local st = GetItemStats(link) or {}
+	return (st.ITEM_MOD_INTELLECT_SHORT or st.ITEM_MOD_SPELL_POWER_SHORT) and true or false
+end
+
 -- What each spec looks for on gear: `want` lists the stats that make an item
 -- theirs (any one is enough), `never` the stats that make it someone else's.
 -- Keyed by class, then talent tree (1-3). Physical specs take any physical

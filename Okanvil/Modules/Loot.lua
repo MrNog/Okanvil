@@ -1331,6 +1331,12 @@ if Okanvil.Comms then
 		local name = link ~= "" and (GetItemInfo(link)) or (GetItemInfo(id))
 		if (not rarity or rarity == 0) and id ~= 0 then rarity = select(3, GetItemInfo(id)) or rarity end
 		if not acceptItem(id, rarity, name) then return end
+		-- the upgrade toast the moment the master looter opens the corpse, not
+		-- minutes later when the item is linked in raid warning
+		local Up = Okanvil.Upgrades
+		if Up and Up.AlertDrop then
+			pcall(Up.AlertDrop, (id and select(2, GetItemInfo(id))) or ("item:" .. id))
+		end
 		-- The sender may not have known the boss either (nobody on the raid opened the
 		-- corpse -- the master looter did, and he has no Okanvil). Rather than filing it
 		-- under Trash, inherit the boss from this run's most recent real drop: that is
@@ -1759,6 +1765,7 @@ do
 		["Vault of Archavon"] = "voa", ["Onyxia's Lair"] = "ony", ["The Ruby Sanctum"] = "rs",
 	}
 	local DIFF_MODE = { "10n", "25n", "10h", "25h" }
+	local DYNAMIC = { icc = true, rs = true }
 	local ANY_BOSS = { [49908] = true }   -- Primordial Saronite: any boss, any size
 	local dropsIn   -- id -> { ["icc:25n"] = true, ... }, built on first use
 	function canDropHere(s, id)
@@ -1779,7 +1786,11 @@ do
 		if not set then return true end
 		local raid, mode = RAID_KEY[s.zone or ""], DIFF_MODE[s.difficulty or 0]
 		if not (raid and mode) then return true end
-		return set[raid .. ":" .. mode] and true or false
+		if set[raid .. ":" .. mode] then return true end
+		-- ICC and the Ruby Sanctum turn heroic boss by boss, under the session's
+		-- normal difficulty: either version of the size drops there
+		if DYNAMIC[raid] then return set[raid .. ":" .. mode:gsub("n$", "h")] and true or false end
+		return false
 	end
 end
 

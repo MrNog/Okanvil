@@ -793,12 +793,17 @@ end
 local function judge(link, raid, spec)
 	local id = tonumber(link:match("item:(%d+)"))
 	if not id or GetItemCount(id, true) > 0 then return nil end
-	-- your class's own armour and weapons only: the BiS lists name leather on a death knight
+	-- your class's own armour and weapons only: the BiS lists name leather on a death knight.
+	-- Lighter caster armour on a hybrid passes when the spec has a list: then only a
+	-- listed item can show (a Resto druid's cloth robe), and the list is what lets it.
 	local P = Okanvil.Prof
-	if P and P.CanIUse and not P.CanIUse(link) then return nil end
+	local rows, phase = Rows(spec, raid)
+	if P and P.CanIUse and not P.CanIUse(link) then
+		local ok = rows and P.LighterCasterGear and P.LighterCasterGear(link, (select(2, UnitClass("player"))))
+		if not ok then return nil end
+	end
 	-- the spec's own weapon hands and stats: the lists name a one-hander for a Blood DK.
 	-- With a list only listed items show, so only the hard rules apply to them.
-	local rows, phase = Rows(spec, raid)
 	if P and P.StatsFitMe and not P.StatsFitMe(link, rows ~= nil) then return nil end
 	if rows then
 		-- The current list first (T10, else RS): a ToC trinket or Anub'arak's
@@ -912,7 +917,7 @@ function U.Here()
 	local SR = Okanvil.SoftRes
 	local r = SR and SR.RaidHere and SR.RaidHere()
 	if not r then return nil end
-	hereKey, hereMode, hereR = r.key, U.MODES[GetInstanceDifficulty and GetInstanceDifficulty() or 1] or "10n", r
+	hereKey, hereMode, hereR = r.key, (Okanvil.U.raidMode and Okanvil.U.raidMode()) or "10n", r
 	return hereKey, hereMode, hereR
 end
 
@@ -1128,9 +1133,9 @@ ev:SetScript("OnEvent", function(_, event, ...)
 end)
 
 -- ------------------------------------------------------------
--- Drop alert: an upgrade for you drops (a corpse you loot, a roll, the master
--- looter linking it in raid warning) -> a toast, the rat sound and one line in
--- your own chat. Nothing anyone else sees. /okup sound turns it off.
+-- Drop alert: an upgrade for you drops (a corpse you loot, the master looter's
+-- Okanvil seeing it, a roll, the master looter linking it in raid warning) -> a
+-- toast, the rat sound and one line in your own chat. Nothing anyone else sees. /okup sound turns it off.
 -- ------------------------------------------------------------
 local RAT_SOUND = [[Interface\AddOns\Okanvil\Media\rat.wav]]
 local alerted, lastSound = {}, 0
@@ -1236,6 +1241,9 @@ local function alertDrop(link, retry)
 		PlaySoundFile(RAT_SOUND)
 	end
 end
+
+-- A drop another Okanvil saw (the master looter's corpse), from Loot.lua's comms
+U.AlertDrop = function(link) alertDrop(link) end
 
 local function alertText(msg)
 	for link in (msg or ""):gmatch("|c%x+|Hitem:[^|]+|h%[[^%]]+%]|h|r") do alertDrop(link) end
@@ -1478,6 +1486,19 @@ function U.FitsAnySpec(link, class)
 				return true
 			end
 		end
+	end
+	return false
+end
+
+-- Is the item on the BiS list of any spec of this class (either copy)? Lighter
+-- armour a list names (a Resto druid's cloth robe) is asked about on that alone.
+function U.OnClassList(link, class)
+	if not (OkanvilFitSpecs and link and class) then return false end
+	local id = tonumber(link:match("item:(%d+)"))
+	local name = GetItemInfo(link)
+	for _, sp in ipairs(OkanvilFitSpecs) do
+		local b = sp.class == class and FIT_TO_BIS[sp.key]
+		if b and id and onList(id, name, b[1], b[2]) then return true end
 	end
 	return false
 end

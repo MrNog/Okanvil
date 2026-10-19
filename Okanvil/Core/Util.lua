@@ -16,6 +16,7 @@
 --   Okanvil.U.toonsOf(n)        -> that person's main and alts, main first
 --   Okanvil.U.isOfficerAlt(n)   -> an alt whose main is an officer
 --   Okanvil.U.canSeePrio(n)     -> may see the loot priority list
+--   Okanvil.U.raidMode()        -> "10n" / "25n" / "10h" / "25h" in a raid, else nil
 -- ============================================================
 
 local Okanvil = Okanvil
@@ -405,4 +406,22 @@ end
 function U.canSeePrio(name)
 	name = name or UnitName("player") or ""
 	return U.isOfficer(name) or U.isOfficerAlt(name)
+end
+
+-- The raid difficulty we are in, as the loot tables write it ("25h"), or nil
+-- outside a raid. ICC and the Ruby Sanctum switch to heroic inside the instance:
+-- there GetInstanceInfo gives the size in `difficulty` (1 = 10, 2 = 25) and the
+-- heroic switch apart (dynamicDifficulty 1), as DBM reads it. The raid difficulty
+-- set on the portrait counts as well, so heroic shows as soon as it is set.
+function U.raidMode()
+	if not GetInstanceInfo then return nil end
+	local _, itype, diff, _, maxPlayers, dyn, isDyn = GetInstanceInfo()
+	if itype ~= "raid" then return nil end
+	local size = (maxPlayers == 25 or diff == 2 or diff == 4) and 25 or 10
+	local hc = diff == 3 or diff == 4
+	if isDyn then
+		local set = GetRaidDifficulty and GetRaidDifficulty()
+		hc = dyn == 1 or set == 3 or set == 4
+	end
+	return size .. (hc and "h" or "n")
 end

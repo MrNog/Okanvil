@@ -74,10 +74,7 @@ end
 -- ---- Finding the item ------------------------------------------------------
 -- The difficulty we are in, as RaidLoot-Data writes it ("25h"), or nil outside.
 local function difficultyTag()
-	if not GetInstanceInfo then return nil end
-	local _, itype, diff = GetInstanceInfo()
-	if itype ~= "raid" then return nil end
-	return ({ "10n", "25n", "10h", "25h" })[diff or 0]
+	return Okanvil.U and Okanvil.U.raidMode and Okanvil.U.raidMode() or nil
 end
 
 -- An item by name: the client cache first, then every raid's loot table. One
