@@ -13,7 +13,8 @@
 --   K,<boss 1>,<boss 2>,...
 --   B,<size>,<d|h|t>,<period: week|month|all>
 --   P,<name>,<CLASS>,<spec>,<rate>,<pts>,<srv %>,<fights>,<total>,<hc 0|1>
---   S,<size>,<toon>,<boss idx>:<pct>[h] ...
+--   S,<size>,<toon>,<boss idx>:<pct>[h][g] ...   (g = the guild's own parse, for a
+--     boss the server does not rank: a percentile of the best kills in our logs)
 -- On the wire it gains a first line "BY,<officer>" -- who imported it.
 --
 -- Sync (all tiny messages, then ONE whispered transfer):
@@ -103,9 +104,9 @@ function R.Parse(text)
 			local bySize = d.parses[f[2]] or {}
 			d.parses[f[2]] = bySize
 			local cells = {}
-			for idx, pct, h in (f[4] or ""):gmatch("(%d+):([%d%.]+)(h?)") do
+			for idx, pct, h, g in (f[4] or ""):gmatch("(%d+):([%d%.]+)(h?)(g?)") do
 				local boss = d.bosses[(tonumber(idx) or -1) + 1]
-				if boss then cells[#cells + 1] = { boss = boss, i = tonumber(idx), pct = tonumber(pct) or 0, hc = h == "h" } end
+				if boss then cells[#cells + 1] = { boss = boss, i = tonumber(idx), pct = tonumber(pct) or 0, hc = h == "h", guild = g == "g" } end
 			end
 			table.sort(cells, function(a, b) return a.pct > b.pct end)
 			bySize[f[3]] = cells
@@ -187,23 +188,6 @@ end
 function R.Parses(size, name)
 	local d = R.Data()
 	return d and d.parses[size] and d.parses[size][R.Norm(name)] or nil
-end
-
--- Does the server rank this boss (index in the K line, from 0)? It does when
--- anyone in the export has a parse on it: wow-logs gives none for Gunship,
--- Blood Queen or Dreamwalker.
-function R.Ranked(idx)
-	local d = R.Data()
-	if not d then return false end
-	if d.ranked == nil then
-		d.ranked = {}
-		for _, bySize in pairs(d.parses) do
-			for _, cells in pairs(bySize) do
-				for _, c in ipairs(cells) do if c.i then d.ranked[c.i] = true end end
-			end
-		end
-	end
-	return d.ranked[idx] or false
 end
 
 -- Is this toon anywhere in the export: a board or a boss parse?
@@ -425,7 +409,7 @@ local function addTooltip(tip, name)
 		for i = 1, math.min(TIP_BOSSES, #parses) do
 			local c = parses[i]
 			local rr, gg, bb = R.PctColor(c.pct)
-			tip:AddDoubleLine(shortBoss(c.boss) .. (c.hc and " |cffff8000H|r" or ""),
+			tip:AddDoubleLine(shortBoss(c.boss) .. (c.hc and " |cffff8000H|r" or "") .. (c.guild and " |cff8a8d93G|r" or ""),
 				("%d"):format(math.floor(c.pct)), 0.9, 0.9, 0.9, rr, gg, bb)
 		end
 	end

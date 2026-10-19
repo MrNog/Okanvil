@@ -624,32 +624,30 @@ function Okanvil:BuildRanking(host)
 		end
 		statLayout()
 
-		-- every boss the server ranks, in the raid's order; the ones this toon has
-		-- no parse on dimmed. A boss nobody has a parse on is one the server does
-		-- not rank (Gunship, Blood Queen, Dreamwalker) and is left out.
+		-- every boss of the raid, in order; the ones this toon has no parse on
+		-- dimmed. G = our own parse, for a boss the server does not rank.
 		local d = R.Data()
 		local byIdx = {}
 		for _, c in ipairs(R.Parses(size, name) or {}) do if c.i then byIdx[c.i] = c end end
 		local n = 0
 		for i, boss in ipairs(d and d.bosses or {}) do
-			if R.Ranked(i - 1) then
-				n = n + 1
-				local b, c = bossAt(n), byIdx[i - 1]
-				b.name:SetText(R.ShortBoss(boss) .. (c and c.hc and " |cffff8000H|r" or ""))
-				if c then
-					local r, g, bl = R.PctColor(c.pct)
-					b.name:SetTextColor(0.80, 0.81, 0.83)
-					b.val:SetText(("%d"):format(math.floor(c.pct))); b.val:SetTextColor(r, g, bl)
-					b.bar:SetVertexColor(r, g, bl, 1)
-					local tw = math.max(10, (bsf:GetWidth() or 200) - 96 - 6 - 44 - 8)
-					b.bar:SetWidth(math.max(2, tw * math.min(c.pct, 100) / 100)); b.bar:Show()
-				else
-					b.name:SetTextColor(0.37, 0.38, 0.41)
-					b.val:SetText("no parse"); b.val:SetTextColor(0.37, 0.38, 0.41)
-					b.bar:Hide()
-				end
-				b:Show()
+			n = n + 1
+			local b, c = bossAt(n), byIdx[i - 1]
+			b.name:SetText(R.ShortBoss(boss) .. (c and c.hc and " |cffff8000H|r" or "")
+				.. (c and c.guild and " |cff8a8d93G|r" or ""))
+			if c then
+				local r, g, bl = R.PctColor(c.pct)
+				b.name:SetTextColor(0.80, 0.81, 0.83)
+				b.val:SetText(("%d"):format(math.floor(c.pct))); b.val:SetTextColor(r, g, bl)
+				b.bar:SetVertexColor(r, g, bl, 1)
+				local tw = math.max(10, (bsf:GetWidth() or 200) - 96 - 6 - 44 - 8)
+				b.bar:SetWidth(math.max(2, tw * math.min(c.pct, 100) / 100)); b.bar:Show()
+			else
+				b.name:SetTextColor(0.37, 0.38, 0.41)
+				b.val:SetText("no parse"); b.val:SetTextColor(0.37, 0.38, 0.41)
+				b.bar:Hide()
 			end
+			b:Show()
 		end
 		for i = n + 1, #bossRows do bossRows[i]:Hide() end
 		bchild:SetHeight(math.max(1, n * BOSS_STEP))
