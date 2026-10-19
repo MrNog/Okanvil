@@ -702,35 +702,18 @@ local function my_gs()
 	return detected_gs()
 end
 
--- Talents only a tanking DK takes: they say "tank" whatever presence is up.
-local DK_TANK_TALENTS = { ["Anticipation"] = true, ["Frigid Dreadplate"] = true,
-	["Will of the Necropolis"] = true }
-local function dk_tank_talents()
-	local group = GetActiveTalentGroup and GetActiveTalentGroup(false) or 1
-	for tab = 1, 2 do
-		for i = 1, (GetNumTalents and GetNumTalents(tab, false, false) or 0) do
-			local name, _, _, _, rank = GetTalentInfo(tab, i, false, false, group)
-			if name and DK_TANK_TALENTS[name] and (rank or 0) > 0 then return true end
-		end
-	end
-	return false
-end
-
--- A Blood DK tanks or dps's on the same tree: the tank talents decide, else
--- the presence (Frost = tank). nil when neither says (zoning, dead).
-local function blood_role()
-	if dk_tank_talents() then return "Tank" end
-	local frost, blood, unholy = GetSpellInfo(48263), GetSpellInfo(48266), GetSpellInfo(48265)
-	-- a presence is a stance: the active one is the most reliable read
-	local form = GetShapeshiftForm and GetShapeshiftForm() or 0
-	if form > 0 and GetShapeshiftFormInfo then
-		local _, name = GetShapeshiftFormInfo(form)
-		if name and name == frost then return "Tank" end
-		if name and (name == blood or name == unholy) then return "DPS" end
-	end
-	if frost and UnitBuff("player", frost) then return "Tank" end
-	if (blood and UnitBuff("player", blood)) or (unholy and UnitBuff("player", unholy)) then return "DPS" end
-	return nil
+-- A Blood DK tanks or dps's on the same tree; the rest of the points tell
+-- them apart: a tank spends them in Frost (43/23/5), a dps in Unholy (51/0/20).
+-- The presence says nothing -- a dps can stand in Frost Presence. nil while
+-- talents are not loaded. group defaults to the active spec.
+local function blood_role(group)
+	if not GetTalentTabInfo then return nil end
+	group = group or (GetActiveTalentGroup and GetActiveTalentGroup(false)) or 1
+	local _, _, blood = GetTalentTabInfo(1, false, false, group)
+	local _, _, frost = GetTalentTabInfo(2, false, false, group)
+	local _, _, unholy = GetTalentTabInfo(3, false, false, group)
+	if (blood or 0) == 0 then return nil end
+	return (frost or 0) > (unholy or 0) and "Tank" or "DPS"
 end
 
 local lastBloodRole

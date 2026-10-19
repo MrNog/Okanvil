@@ -91,15 +91,15 @@ local function readSpec(group)
 	if not best then return nil end
 	local t = TREES[class][best]
 	local label, list = t[1], t[2]
-	-- tank or not is read off your presence or form now: only for the spec you are in
-	if group == active then
-		if class == "DEATHKNIGHT" and best == 1 then
-			local role = Okanvil.RaidFinder_BloodRole and Okanvil.RaidFinder_BloodRole()
-			if role == "Tank" then label, list = "Blood Tank", "Blood tank" end
-		elseif class == "DRUID" and best == 2
-			and ((Okanvil.Prof and Okanvil.Prof.Tanking and Okanvil.Prof.Tanking()) or inBear()) then
-			label, list = "Feral Tank", "Feral tank"
-		end
+	-- a Blood DK by its talents; a feral druid by its bear talents, or bear form
+	-- in the spec you are in
+	if class == "DEATHKNIGHT" and best == 1 then
+		local role = Okanvil.RaidFinder_BloodRole and Okanvil.RaidFinder_BloodRole(group)
+		if role == "Tank" then label, list = "Blood Tank", "Blood tank" end
+	elseif class == "DRUID" and best == 2
+		and ((Okanvil.Prof and Okanvil.Prof.Tanking and Okanvil.Prof.Tanking(group))
+			or (group == active and inBear())) then
+		label, list = "Feral Tank", "Feral tank"
 	end
 	return { class = class, label = label, list = list }
 end
@@ -1460,6 +1460,26 @@ local function allowedClasses(link, id)
 	scan:Hide()
 	classOnly[id] = found
 	return found or nil
+end
+
+-- Does the item suit ANY spec of this class -- on its BiS list, or its stats and
+-- weapon fit (the tooltip's stars)? Talents change between raids, so the
+-- council asks a raider about what their class could play, not only today's
+-- two specs.
+function U.FitsAnySpec(link, class)
+	local P = Okanvil.Prof
+	if not (P and P.FitsSpec and OkanvilFitSpecs and link) then return true end
+	local id = tonumber(link:match("item:(%d+)"))
+	local name = GetItemInfo(link)
+	for _, sp in ipairs(OkanvilFitSpecs) do
+		if sp.class == class then
+			local b = FIT_TO_BIS[sp.key]
+			if (b and id and onList(id, name, b[1], b[2])) or P.FitsSpec(link, sp.key, true) then
+				return true
+			end
+		end
+	end
+	return false
 end
 
 local function starRows(link, name, id, rows)

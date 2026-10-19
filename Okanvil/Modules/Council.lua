@@ -820,6 +820,61 @@ local function alreadyOwned(link)
 	return false
 end
 
+-- Is this item one to ask me about? Armour I can wear (or lighter armour that
+-- suits my spec and beats mine), and rings, trinkets, necks and weapons only if
+-- they suit a spec of my class -- a spell-power neck is not a death knight's, an
+-- attack-power sword not a mage's. Any spec of the class, not just my two:
+-- talents change between raids. The same BiS lists and stat rules as the item
+-- tooltip's stars. An item not cached yet passes: its stats are unknown, so
+-- recheckUncached judges it again once they arrive.
+local function fitsMe(link)
+	local P = Okanvil.Prof
+	if not P then return true end
+	local can = true
+	if P.CanIUse then can = P.CanIUse(link) end
+	if not can and P.LighterWorthAsking and P.LighterWorthAsking(link) then can = true end
+	if can then
+		local U = Okanvil.Upgrades
+		if U and U.FitsAnySpec then
+			can = U.FitsAnySpec(link, (select(2, UnitClass("player"))))
+		elseif P.FitsEitherSpec then
+			can = P.FitsEitherSpec(link)
+		end
+	end
+	return can
+end
+
+-- The round's uncached items, once the server has sent them: the ones that do
+-- not suit me leave the frame and go to the council as "na". Tries a few times
+-- while an item is still not cached.
+local function recheckUncached(round, try)
+	if not (round and current == round) then return end
+	local waiting, dropped = false, false
+	for k = #round.items, 1, -1 do
+		local it = round.items[k]
+		if it.uncached then
+			local full = it.id and (select(2, GetItemInfo(it.id))) or nil
+			if full then
+				it.uncached, it.link = nil, full
+				if not fitsMe(full) then
+					table.remove(round.items, k)
+					round.na[#round.na + 1] = it.idx .. "=na"
+					dropped = true
+				end
+			else
+				waiting = true
+			end
+		end
+	end
+	if dropped then
+		if #round.items == 0 then ensureFrame():Hide() else C_.Repaint() end
+		sendReply()
+	end
+	if waiting and try < 4 then
+		C.After(1.5, function() recheckUncached(round, try + 1) end)
+	end
+end
+
 -- ------------------------------------------------------------
 -- A question arrived -> decide, per item, whether to show it, and reply.
 -- The filter runs HERE, on the raider's own client: the leader would otherwise
@@ -853,19 +908,14 @@ local function onAsked(sender, payload)
 			Okanvil:WarmItem(id or link)
 			local full = id and (select(2, GetItemInfo(id))) or nil
 			link = full or link
-			local can = true
-			if P and P.CanIUse then can = P.CanIUse(link) end
-			-- lighter armour, only when it suits your spec and beats what you wear
-			if not can and P and P.LighterWorthAsking and P.LighterWorthAsking(link) then can = true end
-			-- rings, trinkets, necks, weapons: only if they suit one of your specs
-			-- (a spell-power neck is not a death knight's to ask for)
-			if can and P and P.FitsEitherSpec and not P.FitsEitherSpec(link) then can = false end
-			if can then
+			if fitsMe(link) then
 				local equip = select(9, GetItemInfo(link))
 				items[#items + 1] = {
 					idx = i, link = link, id = id,
 					slotText = equip and _G[equip] or "",
 					owned = alreadyOwned(link),
+					-- not cached: the filter let it through unread; judged again below
+					uncached = not full or nil,
 				}
 			else
 				naParts[#naParts + 1] = i .. "=na"
@@ -902,6 +952,9 @@ local function onAsked(sender, payload)
 	-- returns, and sendReply needs it.
 	C.After(0, function() sendReply() end)
 	if PlaySound then PlaySound("igMainMenuOpen") end
+	for _, it in ipairs(items) do
+		if it.uncached then local r = current; C.After(1.5, function() recheckUncached(r, 1) end); break end
+	end
 
 	-- Nothing is returned here: the frame answers as the raider clicks. Returning
 	-- a reply now would tell the council "passed on everything" the instant the

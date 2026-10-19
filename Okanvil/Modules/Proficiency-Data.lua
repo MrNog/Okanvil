@@ -421,14 +421,9 @@ local function tankingNow(class, tree)
 	if class == "PALADIN" then return tree == 2 end
 	if class == "WARRIOR" then return tree == 3 end
 	if class == "DEATHKNIGHT" then
-		-- the other dual spec has no presence up: its talents alone decide
-		if specGroup() ~= activeGroup() then
-			return hasTalent(1, DK_TANK_TALENTS) or hasTalent(2, DK_TANK_TALENTS)
-		end
-		-- tank talents or Frost Presence (RaidFinder reads both)
-		if Okanvil.RaidFinder_BloodRole then return Okanvil.RaidFinder_BloodRole() == "Tank" end
-		local frost = GetSpellInfo(48263)
-		return frost ~= nil and UnitBuff("player", frost) ~= nil
+		-- Frost points over Unholy points (RaidFinder reads them), either dual spec
+		if Okanvil.RaidFinder_BloodRole then return Okanvil.RaidFinder_BloodRole(specGroup()) == "Tank" end
+		return hasTalent(1, DK_TANK_TALENTS) or hasTalent(2, DK_TANK_TALENTS)
 	end
 	if class == "DRUID" and tree == 2 then
 		if hasTalent(2, BEAR_TALENTS) then return true end
@@ -513,10 +508,14 @@ local function mySpecKey()
 	return key
 end
 P.MySpecKey = mySpecKey
--- Tanking right now (tree, talents, presence or bear form)?
-function P.Tanking()
+-- Tanking (tree, talents, bear form)? group: a talent group other than the
+-- active one, read off its talents alone.
+function P.Tanking(group)
 	local _, class = UnitClass("player")
-	return tankingNow(class, myTree() or 0)
+	if group and group ~= activeGroup() then readGroup = group end
+	local ok, t = pcall(tankingNow, class, myTree() or 0)
+	readGroup = nil
+	return ok and t
 end
 
 local fitByKey
@@ -671,7 +670,13 @@ end
 -- (a crit trinket, a tier token) passes, and so does one the client has not
 -- cached yet -- that is decided once it is.
 function P.StatsFitMe(link, listed)
-	return P.FitsSpec(link, mySpecKey(), nil, listed)
+	local key = mySpecKey()
+	-- one Feral tree tanks and dps's: cat and bear gear are both a feral's
+	if key == "DruidFeralDps" or key == "DruidFeralTank" then
+		return P.FitsSpec(link, "DruidFeralDps", nil, listed)
+			or P.FitsSpec(link, "DruidFeralTank", nil, listed)
+	end
+	return P.FitsSpec(link, key, nil, listed)
 end
 
 -- every spec key with its class, for /okup audit
