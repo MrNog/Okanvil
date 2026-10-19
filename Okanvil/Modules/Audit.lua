@@ -217,6 +217,8 @@ end
 --   noBuckle    = the belt has no extra socket in use
 --   lowGems     = rare-or-worse gems on EPIC_GEMS_FROM_ILVL+ items
 --   meta        = true active / false inactive / nil no meta or unreadable
+--   gemsUnread  = no gem anywhere: the gems had not arrived (empty sockets cleared)
+--   enchUnread  = no enchant anywhere: the inspect data was missing (noEnchant cleared)
 --   partial     = some item was not in the client's cache, so a check was skipped
 function M.Gear(unit)
 	local _, class = UnitClass(unit)
@@ -226,11 +228,14 @@ function M.Gear(unit)
 	local coloursKnown = true
 	local metaLink
 
+	local slotsSeen, enchSeen = 0, 0
 	for _, e in ipairs(ENCHANT_SLOTS) do
 		local link = GetInventoryItemLink(unit, e[1])
 		if link then
 			local ench = link:match("item:%d+:(%-?%d+)")
 			local equipLoc = select(9, GetItemInfo(link))
+			slotsSeen = slotsSeen + 1
+			if ench and ench ~= "0" then enchSeen = enchSeen + 1 end
 			if (e[1] == 17 or e[1] == 18) and not equipLoc then
 				a.partial = true
 			elseif ench == "0" and enchantable(e[1], equipLoc, class) then
@@ -239,6 +244,13 @@ function M.Gear(unit)
 				a.budget[#a.budget + 1] = e[2]
 			end
 		end
+	end
+
+	-- Not one enchant on a full set of gear: the client is showing the bare items
+	-- (the inspect data was dropped or never came), not a naked raider. Unread.
+	if enchSeen == 0 and slotsSeen >= 6 then
+		a.enchUnread, a.partial = true, true
+		a.noEnchant, a.budget = {}, {}
 	end
 
 	local socketsSeen, gemsSeen = 0, 0
@@ -322,9 +334,11 @@ function M.Counts(a)
 	return hard, (a.lowGems or 0) + #(a.budget or {})
 end
 
--- One friendly whisper listing what to fix, or nil when there is nothing.
+-- One friendly whisper listing what to fix, or nil when there is nothing. Only
+-- from a complete read: a half-arrived inspect would whisper someone about
+-- sockets and enchants they do have.
 function M.WhisperText(a)
-	if not a then return nil end
+	if not a or a.partial or a.gemsUnread or a.enchUnread then return nil end
 	local bits = {}
 	local ne = a.noEnchant or {}
 	if #ne > 0 then bits[#bits + 1] = table.concat(ne, " + ") .. " unenchanted" end

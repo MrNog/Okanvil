@@ -19,6 +19,13 @@ Every tool also opens from the **minimap button** and the window's nav.
 | `/okroll [stop]` | the mini roll window; `stop` ends the open roll |
 | `/okup [item link]` | the Upgrades page, or whether one item is an upgrade for your spec |
 | `/okup phase [T7 \| T8 \| T9 \| T10 \| RS \| auto]` | the server's content phase, read from the game (raid achievements, lockouts, gear worn, inspected players); BiS is that phase's list and later raids are hidden. Set it by hand, or `auto` to go back |
+| `/okup audit` | check every drop of every open raid for your spec, with the verdict and why (saved for review) |
+| `/okup sound` | the toast, rat sound and chat line when an upgrade drops: on / off |
+| `/okup toast` | show the upgrade toast once, to see it and drag it into place |
+| `/okup bis` | BiS list lines on item tooltips (every spec): on / off |
+| `/okup fits` | the stars (who an item fits) on item tooltips: on / off |
+| `/okup drops` | the boss and instance lines on item tooltips: on / off |
+| `/okids tips` | spell and item IDs on tooltips (ID Finder module): on / off |
 | `/oktrade [clear]` | loot you still owe by trade, and to whom; `clear` forgets it |
 | `/okrc [list \| say \| aura]` | raid check: the popup, a list in your chat, announce missing buffs, your own buffs |
 | `/oknotes [send \| unlock \| watch]` | boss notes: status, send now, unlock editing on this character, watch the timers |

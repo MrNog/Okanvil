@@ -1,7 +1,7 @@
 -- ============================================================
 -- Okanvil -- Loot (native core module).
 --
--- Implements the plan in docs/LOOT_PLAN.md, combining:
+-- Capture paths are mapped in docs/LOOT_CAPTURE.md; this combines:
 --   * DROP capture, RaidRoll-style  (docs/RAIDROLL_HOW_IT_WORKS.md)
 --   * WHO-RECEIVED attribution, MRT-style via CHAT_MSG_LOOT  (docs/MRT_LOOT_MODEL.md)
 --   * MS/OS rolls + confirm-before-award + GiveMasterLoot

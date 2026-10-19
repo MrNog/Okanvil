@@ -374,7 +374,7 @@ end
 -- again a few seconds later, when the server has sent the rest. Twice at most.
 local gemRetries = {}
 local function recheckGems(name, audit)
-	if not (audit and audit.gemsUnread) then gemRetries[name] = nil; return end
+	if not (audit and (audit.gemsUnread or audit.enchUnread)) then gemRetries[name] = nil; return end
 	local n = gemRetries[name] or 0
 	if n >= 2 or not (Okanvil.Comms and Okanvil.Comms.After) then return end
 	gemRetries[name] = n + 1
@@ -409,7 +409,7 @@ local function gemsLater(unit, name, after)
 			gs, avg, pvp, pvpSlots, audit = readGear(unit)
 			if audit then
 				store(name, { gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
-				Okanvil:Trace("INSPECT", "gems " .. (audit.gemsUnread and "still missing" or "read") .. " for " .. name)
+				Okanvil:Trace("INSPECT", "gems " .. (audit.gemsUnread and "still missing" or "read") .. ", enchants " .. (audit.enchUnread and "still missing" or "read") .. " for " .. name)
 			end
 		end
 		after(audit)
@@ -448,7 +448,7 @@ local function readManual()
 	store(name, { spec = spec, class = class, role = role, icon = icon, pts = pts,
 		gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
 	Okanvil:Trace("INSPECT", "manual read " .. name)
-	if audit and audit.gemsUnread and Okanvil.Comms and Okanvil.Comms.After then
+	if audit and (audit.gemsUnread or audit.enchUnread) and Okanvil.Comms and Okanvil.Comms.After then
 		gemsLater(unit, name, function(a2)
 			if active then return end      -- our own scan owns the cache now
 			if M.onWatchRead then pcall(M.onWatchRead, name) end
@@ -500,7 +500,7 @@ ev:SetScript("OnEvent", function()
 		if (spec and class) or gs or avg then
 			store(curName, { spec = spec, class = class, role = role, icon = icon, pts = pts,
 				gs = gs, ilvl = avg, pvp = pvp, pvpSlots = pvpSlots, audit = audit })
-			if audit and audit.gemsUnread and Okanvil.Comms and Okanvil.Comms.After then
+			if audit and (audit.gemsUnread or audit.enchUnread) and Okanvil.Comms and Okanvil.Comms.After then
 				-- hold the cache (and the queue) until the gems are in
 				holding = true
 				local name = curName

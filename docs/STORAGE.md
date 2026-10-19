@@ -9,7 +9,8 @@ debugging saved data — otherwise you hunt in the wrong file.
 Declared in `Okanvil.toc`:
 
 ```
-## SavedVariables:             Okanvil_DB, RecruitDB, OkanvilIDsDB
+## SavedVariables:             Okanvil_DB, RecruitDB, OkanvilIDsDB, OkanvilRaidFinderDB,
+                               OkanvilBugDB, OkanvilPuGDB, OkanvilNotesDB
 ## SavedVariablesPerCharacter: OkanvilLogsDB, Okanvil_CharDB
 ```
 
@@ -23,9 +24,13 @@ Declared in `Okanvil.toc`:
 
 | Global | Code alias | Holds |
 |:--|:--|:--|
-| `Okanvil_DB` | `Okanvil.db` | brand/skin, loot **config** (collectors, roll messages, thresholds), invite settings, roll window position |
+| `Okanvil_DB` | `Okanvil.db` | brand/skin, loot **config** (collectors, roll messages, thresholds), invite settings, window positions; one sub-table per module: `council`, `lootPrio`, `softres`, `wish`, `upgrades`, `marksbar`, `ranking`, `attendance` |
 | `RecruitDB` | Recruit module | recruit keyword / config |
 | `OkanvilIDsDB` | IDs module | ID Finder data |
+| `OkanvilRaidFinderDB` | Raid Finder | scanner settings and filters |
+| `OkanvilPuGDB` | PuG module | the LFM builder, spam state, applicants, the enchant scan |
+| `OkanvilNotesDB` | Notes module | your own notes and role slots (the shipped pack is in `Notes-Data.lua`) |
+| `OkanvilBugDB` | Core | the always-on trace and error log, per session: what to ask a raider for when they hit a bug |
 
 > Loot **config** is account-wide on purpose — an officer sets collectors once for all
 > their toons.

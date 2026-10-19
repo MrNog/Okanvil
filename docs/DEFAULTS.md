@@ -37,6 +37,9 @@ no events, no UI.
 | Raid Finder | On | |
 | Recruit | On | Advertising is off (see below). |
 | Notes | On | |
+| Upgrades | On | Tooltip lines on; drop toast and sound on (see below). |
+| Ranking | On | Empty until an officer imports the boards. |
+| Attendance | On | The page shows for officers only. |
 | Farm | On | |
 | Invite | **Always on, no switch** | Not in the Modules list or the welcome window. Its only behaviour a user would notice — keyword auto-invite — has its own switch and is off. |
 
@@ -63,17 +66,25 @@ no events, no UI.
 | Whisper the collector's winner | Off | |
 | Recording outside instances (world test) | Off | |
 
-## Loot Council
+## Loot mode (Loot page, master looter)
 
 | Setting | Default | Notes |
 |---|---|---|
-| Council night | **Off** | Per session, never saved as "on" for next week. |
-| Ask when I become master looter | **On** | A popup asking whether tonight is a council night. Nothing is sent to the raid by it. |
-| Ask the raid automatically when a corpse opens | **Off** | Only matters on a council night. |
-| Hide the priority ladder on the board | Off | Only offered to officers / officers' alts — the only people who ever see the ladder. |
+| Loot mode | **Roll** | Council / SR / Roll. Set by the master looter and synced to the group; a pick lasts one raid night (3 h), then it is Roll again. |
+| Ask the council automatically when a corpse opens | **Off** | Council mode only. Existing installs were switched off once. |
+| Wishlist | **Off** | Council mode only; any officer turns it on. |
+| Soft reserves | Closed | Opens with SR mode, locks itself at the first pull. |
 | Priority ladder + PRIO column on the board | Officers / officers' alts only | A non-officer master looter sees the board without them. |
-| Whisper the winner when the item can't be given | On | Only fires after the master looter awards an item. |
+| Whisper the winner when the item can't be given | Always | Only fires after the master looter awards an item. |
 | Who sees the board | Officers, officers' alts, the master looter | Raid assist does **not** count. |
+
+## Upgrades
+
+| Setting | Default |
+|---|---|
+| Server phase | Auto (read from the game) |
+| Toast, rat sound and chat line when an upgrade drops | On |
+| BiS lines / fit stars / drop lines on item tooltips | On / On / On |
 
 ## Guild / Snapshots
 

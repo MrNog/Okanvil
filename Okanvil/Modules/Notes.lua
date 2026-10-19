@@ -6,7 +6,7 @@
 --
 -- The timer syntax ({time:...}, role slots, the WeakAuras bridge) is parsed in
 -- later phases; this file treats a note as text and never rewrites it. Format
--- reference: docs/MRT_NOTE_FORMAT.md, plan: docs/NOTES_MODULE.md.
+-- reference: docs/MRT_NOTE_FORMAT.md, plan: docs/archive/NOTES_MODULE.md.
 -- ============================================================
 
 local ADDON = "Okanvil-Notes"

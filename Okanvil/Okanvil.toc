@@ -74,7 +74,3 @@ Modules\NotesWindow.lua
 Modules\NotesSync.lua
 Modules\Farm.lua
 Modules\Farm-UI.lua
-
-# Council foundation test harness -- TEMPORARY, remove with the file once the
-# council module ships. Provides /okask and /okprof only.
-Modules\CouncilTest.lua

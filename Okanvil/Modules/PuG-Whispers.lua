@@ -355,8 +355,9 @@ local function auditOf(name)
 	return info and info.audit, info
 end
 
--- A joined player whose audit still shows something to fix is read again once
--- it is two minutes old: they may have gemmed or enchanted since the whisper.
+-- A joined player whose audit still shows something to fix, or was only half
+-- read, is read again once it is two minutes old: they may have gemmed or
+-- enchanted since the whisper, or the server may send the rest this time.
 -- Marked OK or a clean audit = left alone.
 local AUDIT_RECHECK = 120
 function M.RecheckAudits()
@@ -368,7 +369,7 @@ function M.RecheckAudits()
 		local info = a and not a.auditOk and not (mock and mock[name]) and I.Info(name)
 		if info and info.audit and info.age >= AUDIT_RECHECK
 			and not (I.Watching and I.Watching(name))
-			and Okanvil.Audit.WhisperText(info.audit) then
+			and (info.audit.partial or Okanvil.Audit.WhisperText(info.audit)) then
 			I.Watch({ name })
 		end
 	end
@@ -398,7 +399,7 @@ function M.AuditBadge(name)
 	local function with(mark) return (gs and (gs .. " ") or "") .. mark end
 	if a.auditOk then return { text = with("OK"), tone = "ok" } end
 	if not audit then return { text = gs or "...", tone = "off" } end
-	if audit.gemsUnread then return { text = with("..."), tone = "off" } end
+	if audit.gemsUnread or audit.enchUnread then return { text = with("..."), tone = "off" } end
 	local hard, soft = Okanvil.Audit.Counts(audit)
 	if hard > 0 then return { text = with("x" .. hard), tone = "bad" } end
 	if soft > 0 then return { text = with("!" .. soft), tone = "warn" } end
@@ -466,8 +467,12 @@ function M.AuditDetail(name)
 		local e = {}
 		if #ne > 0 then e[#e + 1] = table.concat(ne, ", ") .. " missing" end
 		if #cheap > 0 then e[#e + 1] = table.concat(cheap, ", ") .. " budget" end
-		d.checks[#d.checks + 1] = { #ne > 0 and "bad" or (#cheap > 0 and "warn" or "ok"), "Enchants",
-			#e > 0 and table.concat(e, " - ") or "All done" }
+		if audit.enchUnread then
+			d.checks[#d.checks + 1] = { "off", "Enchants", "Not sent yet -- read again shortly" }
+		else
+			d.checks[#d.checks + 1] = { #ne > 0 and "bad" or (#cheap > 0 and "warn" or "ok"), "Enchants",
+				#e > 0 and table.concat(e, " - ") or "All done" }
+		end
 
 		local g = {}
 		if (audit.empty or 0) > 0 then g[#g + 1] = audit.empty .. " empty (" .. table.concat(audit.emptySlots, ", ") .. ")" end
@@ -483,7 +488,9 @@ function M.AuditDetail(name)
 		if audit.meta ~= nil then
 			d.checks[#d.checks + 1] = { audit.meta and "ok" or "bad", "Meta", audit.meta and "Active" or "Not active" }
 		end
-		if audit.partial and not audit.gemsUnread then notes[#notes + 1] = "Some items were not cached; reopen later." end
+		if audit.partial and not (audit.gemsUnread or audit.enchUnread) then
+			notes[#notes + 1] = "Some items were not cached -- no whisper until a full read."
+		end
 	end
 
 	local chips, unread, tone, short = progressChips(info)

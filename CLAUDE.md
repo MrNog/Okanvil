@@ -1,7 +1,7 @@
 # Okanvil — working rules
 
-WoW 3.3.5a (Interface 30300) addon. Repo root **is** the addon: `Okanvil/Core/` is the
-shell, `Okanvil/Modules/` are the tools. UI work is governed by the `okanvil-ui` skill —
+WoW 3.3.5a (Interface 30300) addon. The addon is the `Okanvil/` folder: `Okanvil/Core/`
+is the shell, `Okanvil/Modules/` are the tools; the repo root holds dev files. UI work is governed by the `okanvil-ui` skill —
 load it before touching any frame code.
 
 ## Commit messages control the release — read this before committing
@@ -72,11 +72,18 @@ make local builds lie about their version.
 
 Edit the source in **this repo**, never the installed copy under
 `<WoW>\Interface\AddOns\Okanvil\` (a separate copy). After editing, copy the changed
-files into each WoW client's AddOns folder or the fix "won't take" after `/reload`.
+files into the WoW client's AddOns folder or the fix "won't take" after `/reload`; a
+new file in the `.toc` needs a full game restart. The install path is
+machine-specific, so keep it in a local (git-ignored) note, not here.
 
-This machine runs **two** clients, so a fix must be synced to **both** — the exact
-install paths are machine-specific, so keep them in a local (git-ignored) note or your
-shell history, not here.
+`Okanvil-Art\` at the repo root is a second, optional addon (raider portraits). It is
+**not** in `Okanvil.zip` on purpose. `.github/workflows/art.yml` zips it into the `art`
+pre-release whenever it changes on main (fixed link:
+`releases/download/art/Okanvil-Art.zip`). An art-only commit takes `[skip]`, so no
+Okanvil release is cut while the art still updates.
+
+Working notes, the file map and the 3.3.5a traps → `docs/NOTES.md`. Finished plans
+live in `docs/archive/`; new plans go in `docs/` and move there when shipped.
 
 ## Validating Lua
 

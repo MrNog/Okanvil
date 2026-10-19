@@ -1,0 +1,53 @@
+name: Package Okanvil-Art
+
+# The optional raider-portrait addon (Okanvil-Art/) has its own download, kept
+# apart from Okanvil's versioned releases so new art never forces an Okanvil
+# release. A push to main that touches Okanvil-Art/ rebuilds Okanvil-Art.zip and
+# swaps it into the `art` release, so the link below never changes:
+#
+#   https://github.com/MrNog/Okanvil/releases/download/art/Okanvil-Art.zip
+#
+# Art-only push: put [skip] in the commit message. Package addon then cuts no
+# Okanvil release, and this workflow still runs ([skip] is not one of GitHub's
+# own skip keywords, so only Package addon honours it).
+#
+# The `art` release is a PRE-release on purpose: GitHub never makes a pre-release
+# the "latest" one, so releases/latest/download/Okanvil.zip keeps working.
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'Okanvil-Art/**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  art:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Okanvil-Art.zip
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          zip -r out/Okanvil-Art.zip Okanvil-Art -x '*desktop.ini' '*Thumbs.db'
+          unzip -l out/Okanvil-Art.zip | tail -n 1
+
+      - name: Publish to the art release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view art >/dev/null 2>&1; then
+            gh release upload art out/Okanvil-Art.zip --clobber
+            echo "Replaced Okanvil-Art.zip on the art release."
+          else
+            gh release create art --prerelease --target "$GITHUB_SHA" \
+              --title "Okanvil Art (raider portraits)" \
+              --notes "Optional portraits for Okanvil's Ranking page (RATS raiders). Unzip into World of Warcraft\\Interface\\AddOns\\ next to Okanvil, then restart WoW. Without it the page shows class art." \
+              out/Okanvil-Art.zip
+            echo "Created the art release."
+          fi

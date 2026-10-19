@@ -7,7 +7,7 @@
 ### *"OK... Anvil."* — where all the tools are forged.
 
 **The RATS raid & guild toolkit for WoW 3.3.5a / Warmane — one addon.**
-Loot council, raid notes, loot tracking, a PuG builder, recruitment and more — all forged on one anvil. 🔨
+Loot council and soft reserves, raid notes, loot tracking, upgrades, a PuG builder and more — all forged on one anvil. 🔨
 
 <br>
 
@@ -56,24 +56,26 @@ guild's rank counts, and the last raids you were in.
 
 | | Module | What it hammers out |
 |:--:|:--|:--|
-| 🏆 | **Loot Council** | When an officer puts items up, you get a popup: **BIS · Upgrade · Small · OS · Pass**. Officers see every answer on one board, next to the guild's loot priority, and award from there. Without the addon the council can't see you. |
+| 🏆 | **Loot night** | The master looter picks tonight's mode and your Okanvil follows it. **Council:** a popup asks **BIS · Upgrade · Small · OS · Pass** and officers award from one board. **Soft reserve:** a window to pick your reserve (or whisper `sr [item]`). **Roll:** the Mini Roll window for MS/OS. Without the addon the council can't see you. |
 | 📜 | **Notes** | Boss notes in MRT format that switch on as you walk into each room. Officers send them to the raid; guild WeakAuras read your assignment straight from them. |
 
 ### Extras — switch on what you use
 
 | | Module | What it hammers out |
 |:--:|:--|:--|
+| ⬆️ | **Upgrades** | Raid drops that beat your gear for the spec you're in: by BiS rank, or item level when your spec has no list. Upgrade lines on boss and item tooltips, and a toast when one drops. |
+| 🏅 | **Ranking** | Your toon on the guild's DPS / Healing / Tanking boards from the web hub: rank, best parses, the players around you. Raiders' best bosses show on their tooltip. |
 | 🎁 | **Loot history** | Every drop per boss and who got it, plus the **Mini Roll Manager** for MS/OS roll-offs and a speed-run master-loot sweep. |
 | 📸 | **Raid snapshots** | Who was in each raid, one click to re-invite the lot. Feeds attendance on the guild website. |
 | 🔍 | **Raid Finder** | Reads the LFM spam in chat and decodes it — reserved-loot lingo (`B`/`O`/`P`/`Frags`), roles, gear score — so you spot the run you want. |
-| 👥 | **PuG** | Build a raid: pick the instance, set the roles, ask each role for the classes or specs you want, and spam a line that builds itself as people join. |
+| 👥 | **PuG** | Build a raid: pick the instance, set the roles, ask each role for the classes or specs you want, and spam a line that builds itself as people join. A **gear check** on everyone who joins (gearscore, missing enchants and gems, raid achievements), with a ready whisper once the read is complete. |
 | 📣 | **Recruit** | Recruitment ads with auto-reply and auto-invite. |
 | 📼 | **Combat Logs** | Starts combat logging at the first pull, with a REC timer so you know it's running. |
 | 🔎 | **ID Finder** | Find a spell or item **ID by name** for WeakAuras. |
 | 💰 | **Farm** | Gold per hour while you farm, and a log of past runs. |
 
-**Officer tools show up on their own** for officers: the Loot Council setup, the website exports,
-and the master-loot tools. Raiders never see them.
+**Officer tools show up on their own** for officers: the Loot Council board and priority, the
+Attendance page, the website exports and the master-loot tools. Raiders never see them.
 
 <br>
 
@@ -97,6 +99,8 @@ and the master-loot tools. Raiders never see them.
 2. Unzip it into `World of Warcraft\Interface\AddOns\` (you should end up with an `Okanvil` folder).
 3. **Fully restart the game** — a brand-new addon won't show after just `/reload`.
 4. A short setup opens on first login. After that, type **`/okanvil`** or click the anvil on your minimap.
+5. *Optional, RATS:* raider portraits for the Ranking page are a separate download,
+   **[`Okanvil-Art.zip`](../../releases/download/art/Okanvil-Art.zip)**. Unzip it next to Okanvil and restart.
 
 <br>
 
@@ -110,7 +114,8 @@ whatever you make it. 🧀
 
 **Not RATS?** Most of Okanvil needs nothing but the game. A few officer tools paste data in from the
 RATS web hub or export it back, mainly the **Ranking** boards and the **Loot priority** list. The
-Ranking portraits are RATS raiders, and any other raider gets their class art instead. Skip those
+Ranking portraits come in a separate, optional addon, **[Okanvil-Art](../../releases/download/art/Okanvil-Art.zip)**
+(RATS raiders); without it everyone gets their class art. Skip those
 tools, or feed them the same text from your own site. The formats are in
 **[`docs/GUILD_DATA.md`](docs/GUILD_DATA.md)**.
 
@@ -144,7 +149,9 @@ Custom art has to be **BLP2 DXT5** (square or power-of-two, up to 1024) to load 
 - Working notes — conventions, 3.3.5a traps, the map to everything → **[`docs/NOTES.md`](docs/NOTES.md)**
 - Slash commands → **[`docs/SLASH_COMMANDS.md`](docs/SLASH_COMMANDS.md)**
 - SavedVariables layout (account-wide vs per-character — read before wiping/debugging saved data) → **[`docs/STORAGE.md`](docs/STORAGE.md)**
-- How the loot council works → **[`docs/LOOT_COUNCIL.md`](docs/LOOT_COUNCIL.md)**
+- What a fresh install ships with → **[`docs/DEFAULTS.md`](docs/DEFAULTS.md)**
+- How loot gets recorded → **[`docs/LOOT_CAPTURE.md`](docs/LOOT_CAPTURE.md)**
+- Finished plans, kept for the why → **[`docs/archive/`](docs/archive/)**
 - Imports/exports and Ranking art for another guild → **[`docs/GUILD_DATA.md`](docs/GUILD_DATA.md)**
 
 <br>
