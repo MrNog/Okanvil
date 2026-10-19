@@ -324,6 +324,7 @@ ev:SetScript("OnUpdate", function(_, e)
 	if tick < 3 then return end
 	tick = 0
 	if M.db then M.CheckJoinersFillAsks() end
+	if M.RecheckAudits then M.RecheckAudits() end
 end)
 
 -- ------------------------------------------------------------
@@ -352,6 +353,25 @@ local function auditOf(name)
 	local I = Okanvil.Inspect
 	local info = I and I.Info and I.Info(name)
 	return info and info.audit, info
+end
+
+-- A joined player whose audit still shows something to fix is read again once
+-- it is two minutes old: they may have gemmed or enchanted since the whisper.
+-- Marked OK or a clean audit = left alone.
+local AUDIT_RECHECK = 120
+function M.RecheckAudits()
+	local I = Okanvil.Inspect
+	if not (I and I.Watch and I.Info and Okanvil.Audit and Okanvil.Audit.WhisperText) then return end
+	for _, p in ipairs(M.RosterList()) do
+		local name = p.name
+		local a = name and joinedState(name)
+		local info = a and not a.auditOk and not (mock and mock[name]) and I.Info(name)
+		if info and info.audit and info.age >= AUDIT_RECHECK
+			and not (I.Watching and I.Watching(name))
+			and Okanvil.Audit.WhisperText(info.audit) then
+			I.Watch({ name })
+		end
+	end
 end
 
 -- An item level in the colour of the gear it means: green, blue, epic, ICC-heroic orange.
