@@ -23,7 +23,7 @@ local CHIP_H, ROW_H, AROUND_H, BOSS_STEP = 24, 26, 28, 19
 local AROUND = 4                 -- the one above you, you, and two below
 local RANK_SIZE, NAME_SIZE, NUM_SIZE = 46, 32, 18
 local NUM_W, BOSS_NAME_W, VAL_W = 96, 110, 64
-local INK = { 0.035, 0.037, 0.043 }   -- the panel's near-black
+local PANEL_A = 0.82              -- the poster panel: Okanvil's panel grey, the wallpaper faint behind
 local SPLIT, MELT_W = 0.44, 70     -- the panel's share of the page; where panel melts into art
 local BAND_H = PAD + AROUND_H + 8  -- the solid band at the foot, under the art
 local DOT = "  |cff4a4d55·|r  "
@@ -276,12 +276,13 @@ function Okanvil:BuildRanking(host)
 	-- A poster: a solid panel on the left holds everything you read; the
 	-- raider's art fills the right above the foot band, nothing on top of it,
 	-- with a short melt where the two meet.
-	local ground = fill(host, "BACKGROUND", INK[1], INK[2], INK[3], 1)
+	local P = C.panel
+	local ground = fill(host, "BACKGROUND", P[1], P[2], P[3], PANEL_A)
 	ground:SetAllPoints(host)
 	local art = host:CreateTexture(nil, "BORDER")
 	art:SetPoint("TOPRIGHT"); art:SetPoint("BOTTOMRIGHT", 0, BAND_H)
 	local melt = host:CreateTexture(nil, "ARTWORK"); melt:SetTexture(FLAT)
-	melt:SetGradientAlpha("HORIZONTAL", INK[1], INK[2], INK[3], 1, INK[1], INK[2], INK[3], 0)
+	melt:SetGradientAlpha("HORIZONTAL", P[1], P[2], P[3], PANEL_A, P[1], P[2], P[3], 0)
 	melt:SetPoint("TOPLEFT", art, "TOPLEFT"); melt:SetPoint("BOTTOMLEFT", art, "BOTTOMLEFT")
 	melt:SetWidth(MELT_W)
 	local function split() return math.floor((host:GetWidth() or 0) * SPLIT) end
@@ -309,18 +310,45 @@ function Okanvil:BuildRanking(host)
 	back:SetSize(84, CHIP_H); back:SetPoint("LEFT", 0, 0)
 	back:SetScript("OnClick", function() state.view = "toon"; refresh() end)
 
-	local prevTab
-	for i = #R.SIZES, 1, -1 do
-		local sz = R.SIZES[i]
-		local b = tab(top, sz .. "-man", 58, function() state.size = sz end)
-		if prevTab then b:SetPoint("RIGHT", prevTab, "LEFT", -4, 0)
-		else b:SetPoint("RIGHT", top, "RIGHT", 0, 0) end
-		sizeTabs[sz] = b
-		prevTab = b
+	for _, sz in ipairs(R.SIZES) do
+		sizeTabs[sz] = tab(top, sz .. "-man", 58, function() state.size = sz end)
 	end
-	for i = #R.PERIODS, 1, -1 do
-		local pd = R.PERIODS[i]
+	for _, pd in ipairs(R.PERIODS) do
 		periodTabs[pd] = tab(top, R.PERIOD_LABEL[pd], pd == "all" and 62 or 74, function() state.period = pd end)
+	end
+	-- periods, then sizes, a wider gap between the two groups. On the poster
+	-- they start at the panel's left edge, under the title; on the board they
+	-- sit on the right, "< My toon" on the left.
+	local function layoutTabs(fromLeft)
+		local row, firstSize = {}, 0
+		for _, pd in ipairs(R.PERIODS) do
+			local b = periodTabs[pd]
+			b:ClearAllPoints()
+			if R.HasPeriod(pd) then
+				b:SetKind(pd == state.period and "tabOn" or "tab"); b:Show()
+				row[#row + 1] = b
+			else
+				b:Hide()
+			end
+		end
+		firstSize = #row + 1
+		for _, sz in ipairs(R.SIZES) do
+			sizeTabs[sz]:ClearAllPoints()
+			row[#row + 1] = sizeTabs[sz]
+		end
+		local function gap(i) return i == firstSize and 18 or 4 end
+		if fromLeft then
+			for i, b in ipairs(row) do
+				if i == 1 then b:SetPoint("LEFT", top, "LEFT", 0, 0)
+				else b:SetPoint("LEFT", row[i - 1], "RIGHT", gap(i), 0) end
+			end
+		else
+			for i = #row, 1, -1 do
+				local b = row[i]
+				if i == #row then b:SetPoint("RIGHT", top, "RIGHT", 0, 0)
+				else b:SetPoint("RIGHT", row[i + 1], "LEFT", -gap(i + 1), 0) end
+			end
+		end
 	end
 
 	-- ==== TOON VIEW: the panel on the left ====
@@ -632,26 +660,15 @@ function Okanvil:BuildRanking(host)
 		end
 		empty:Hide(); top:Show()
 		if not (state.period and R.HasPeriod(state.period)) then state.period = R.DefaultPeriod() end
-		local anchor = sizeTabs[R.SIZES[1]]
-		for i = #R.PERIODS, 1, -1 do
-			local pd = R.PERIODS[i]
-			local b = periodTabs[pd]
-			b:ClearAllPoints()
-			if R.HasPeriod(pd) then
-				b:SetPoint("RIGHT", anchor, "LEFT", anchor == sizeTabs[R.SIZES[1]] and -18 or -4, 0)
-				b:SetKind(pd == state.period and "tabOn" or "tab")
-				b:Show()
-				anchor = b
-			else
-				b:Hide()
-			end
-		end
 		if state.view == "board" then
-			back:Show(); toon:Hide(); boardView:Show(); art:Hide(); melt:Hide()
+			-- the board is a page like the others: the window's wallpaper behind it
+			back:Show(); toon:Hide(); boardView:Show(); art:Hide(); melt:Hide(); ground:Hide()
 			top:ClearAllPoints(); top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT")
+			layoutTabs(false)
 			paintBoard()
 		else
-			back:Hide(); boardView:Hide(); toon:Show(); art:Show(); melt:Show()
+			back:Hide(); boardView:Hide(); toon:Show(); art:Show(); melt:Show(); ground:Show()
+			layoutTabs(true)
 			pickToon()
 			paintToon()
 		end
