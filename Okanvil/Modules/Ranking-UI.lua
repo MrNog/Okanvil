@@ -1,6 +1,6 @@
 -- ============================================================
 -- Okanvil -- Ranking page (GUILD > Ranking).
--- Your main only: your rank on its main board, its numbers, its server %
+-- The toon you play: its rank on its main board, its numbers, its server %
 -- per boss, and the players just above and below it. The whole board is one click away.
 -- Normal and Heroic already merged by the site.
 -- ============================================================
@@ -278,7 +278,7 @@ function Okanvil:BuildRanking(host)
 
 	local dash = W.Dashboard(host, {
 		title = "Ranking",
-		subtitle = "Your main on the guild's boards from the RATS site",
+		subtitle = "This toon on the guild's boards from the RATS site",
 		icon = Okanvil.ICONS.ranking,
 		drawerWidth = 0,
 		footerHeight = 0,
@@ -553,11 +553,11 @@ function Okanvil:BuildRanking(host)
 	empty:SetPoint("RIGHT", page, "RIGHT", -4, 0)
 	empty:SetJustifyH("LEFT")
 
-	-- ---- the toon shown: your main (alts would crowd the page), else this toon ----
+	-- ---- the toon shown: the one you are playing; its main when it is on no board ----
 	local function pickToon()
 		local me = UnitName("player")
 		local main = Okanvil.U and Okanvil.U.mainOf and Okanvil.U.mainOf(me)
-		state.toon = (main and R.Has(main)) and main or me
+		state.toon = (R.Has(me) or not (main and R.Has(main))) and me or main
 	end
 
 	-- ---- paint: the toon view ----
@@ -730,7 +730,7 @@ end
 Okanvil_Plugins = Okanvil_Plugins or {}
 Okanvil_Plugins[ADDON] = {
 	title = "Ranking",
-	desc  = "Your main on the guild's DPS / Healing / Tanking boards from the RATS site, plus each "
+	desc  = "The toon you play on the guild's DPS / Healing / Tanking boards from the RATS site, plus each "
 		.. "raider's best bosses on their tooltip. An officer imports it; everyone online gets it.",
 	icon  = Okanvil.ICONS and Okanvil.ICONS.ranking,
 	build = function(panel) Okanvil:BuildRanking(panel) end,
