@@ -19,13 +19,14 @@ local CLASS_TEX = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes
 local ART_RAIDER = "Interface\\AddOns\\Okanvil-Art\\Ranking\\"
 local ART_CLASS = "Interface\\AddOns\\Okanvil\\Media\\Ranking\\_"
 local PAD, GAP = 12, 8
-local CHIP_H, ROW_H, AROUND_H, BOSS_STEP = 24, 26, 28, 19
+local CHIP_H, ROW_H, BOSS_STEP = 24, 26, 19
 local AROUND = 4                 -- the one above you, you, and two below
-local RANK_SIZE, NAME_SIZE, NUM_SIZE = 46, 32, 18
-local NUM_W, BOSS_NAME_W, VAL_W = 96, 110, 64
-local PANEL_A = 0.82              -- the poster panel: Okanvil's panel grey, the wallpaper faint behind
-local SPLIT, MELT_W = 0.44, 70     -- the panel's share of the page; where panel melts into art
-local BAND_H = PAD + AROUND_H + 8  -- the solid band at the foot, under the art
+local RANK_SIZE, NAME_SIZE, NUM_SIZE = 44, 30, 18
+local BOSS_NAME_W, VAL_W = 110, 64
+local CARD_SHARE, INFO_GAP = 0.40, 14   -- the portrait card's share of the width; the gap after it
+local FOOT_H = 170               -- the darkened foot of the card, under the rank and name
+local TILE_H, TILE_GAP, NEAR_H = 44, 6, 22
+local INK = { 0.035, 0.037, 0.043 }   -- the near-black the card sits on
 local DOT = "  |cff4a4d55·|r  "
 
 local function classIcon(tex, token)
@@ -206,6 +207,23 @@ local function showImport()
 	f:Show()
 end
 
+-- A card on near-black, not the grey raised panel: the art carries the colour.
+local function darkCard(parent)
+	local f = CreateFrame("Frame", nil, parent)
+	f:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+	f:SetBackdropColor(INK[1], INK[2], INK[3], 0.94)
+	f:SetBackdropBorderColor(C.borderHi[1], C.borderHi[2], C.borderHi[3], 1)
+	return f
+end
+
+-- ink fading over a picture, so text on it sits on dark and the picture keeps its colours
+local function inkFade(parent, dir, a1, a2)
+	local t = parent:CreateTexture(nil, "ARTWORK")
+	t:SetTexture(FLAT)
+	t:SetGradientAlpha(dir, INK[1], INK[2], INK[3], a1, INK[1], INK[2], INK[3], a2)
+	return t
+end
+
 local function isOfficer()
 	return Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() and true or false
 end
@@ -273,32 +291,6 @@ function Okanvil:BuildRanking(host)
 	})
 	if dash.cta2 then dash.cta2:Tooltip("Paste the RATS site's \"Export to Okanvil\". It goes to everyone in the guild online.") end
 
-	-- A poster: a solid panel on the left holds everything you read; the
-	-- raider's art fills the right above the foot band, nothing on top of it,
-	-- with a short melt where the two meet.
-	local P = C.panel
-	local ground = fill(host, "BACKGROUND", P[1], P[2], P[3], PANEL_A)
-	ground:SetAllPoints(host)
-	local art = host:CreateTexture(nil, "BORDER")
-	art:SetPoint("TOPRIGHT"); art:SetPoint("BOTTOMRIGHT", 0, BAND_H)
-	local melt = host:CreateTexture(nil, "ARTWORK"); melt:SetTexture(FLAT)
-	melt:SetGradientAlpha("HORIZONTAL", P[1], P[2], P[3], PANEL_A, P[1], P[2], P[3], 0)
-	melt:SetPoint("TOPLEFT", art, "TOPLEFT"); melt:SetPoint("BOTTOMLEFT", art, "BOTTOMLEFT")
-	melt:SetWidth(MELT_W)
-	local function split() return math.floor((host:GetWidth() or 0) * SPLIT) end
-	local artFor = {}
-	local function paintArt(name, cls)
-		artFor.name, artFor.cls = name, cls
-		local w, h = host:GetWidth() or 0, host:GetHeight() or 0
-		if w < 10 or h < BAND_H + 10 then return end
-		local aw = w - split()
-		art:SetWidth(aw)
-		setArt(art, name, cls, aw / (h - BAND_H))
-	end
-	host:HookScript("OnSizeChanged", function()
-		if artFor.name then paintArt(artFor.name, artFor.cls) end
-	end)
-
 	local page = CreateFrame("Frame", nil, dash.main)
 	page:SetPoint("TOPLEFT", PAD, -PAD)
 	page:SetPoint("BOTTOMRIGHT", -PAD, PAD)
@@ -316,10 +308,9 @@ function Okanvil:BuildRanking(host)
 	for _, pd in ipairs(R.PERIODS) do
 		periodTabs[pd] = tab(top, R.PERIOD_LABEL[pd], pd == "all" and 62 or 74, function() state.period = pd end)
 	end
-	-- periods, then sizes, a wider gap between the two groups. On the poster
-	-- they start at the panel's left edge, under the title; on the board they
-	-- sit on the right, "< My toon" on the left.
-	local function layoutTabs(fromLeft)
+	-- on the right of the line under the header: periods, then sizes, a wider
+	-- gap between the two groups ("< My toon" on the left, on the board)
+	local function layoutTabs()
 		local row, firstSize = {}, 0
 		for _, pd in ipairs(R.PERIODS) do
 			local b = periodTabs[pd]
@@ -337,71 +328,105 @@ function Okanvil:BuildRanking(host)
 			row[#row + 1] = sizeTabs[sz]
 		end
 		local function gap(i) return i == firstSize and 18 or 4 end
-		if fromLeft then
-			for i, b in ipairs(row) do
-				if i == 1 then b:SetPoint("LEFT", top, "LEFT", 0, 0)
-				else b:SetPoint("LEFT", row[i - 1], "RIGHT", gap(i), 0) end
-			end
-		else
-			for i = #row, 1, -1 do
-				local b = row[i]
-				if i == #row then b:SetPoint("RIGHT", top, "RIGHT", 0, 0)
-				else b:SetPoint("RIGHT", row[i + 1], "LEFT", -gap(i + 1), 0) end
-			end
+		for i = #row, 1, -1 do
+			local b = row[i]
+			if i == #row then b:SetPoint("RIGHT", top, "RIGHT", 0, 0)
+			else b:SetPoint("RIGHT", row[i + 1], "LEFT", -gap(i + 1), 0) end
 		end
 	end
 
-	-- ==== TOON VIEW: the panel on the left ====
+	-- ==== TOON VIEW: a portrait card on the left, the numbers on the page ====
 	local toon = CreateFrame("Frame", nil, page)
 	toon:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -GAP)
 	toon:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT")
 
-	local hBoard = W.Text(toon, "", "note", "dim"); hBoard:SetPoint("TOPLEFT", 0, -6)
-	local hRank = W.Text(toon, "", RANK_SIZE, "accent"); hRank:SetPoint("TOPLEFT", hBoard, "BOTTOMLEFT", 0, -4)
-	local hOf = W.Text(toon, "", "head", "dim"); hOf:SetPoint("BOTTOMLEFT", hRank, "BOTTOMRIGHT", 8, 6)
-	local hMove = W.Text(toon, "", "label"); hMove:SetPoint("LEFT", hOf, "RIGHT", 22, 0)
+	-- the card: the art whole, the class colour along its top, the rank and the
+	-- name on its darkened foot
+	local card = darkCard(toon)
+	card:SetPoint("TOPLEFT"); card:SetPoint("BOTTOMLEFT")
+	local cArt = card:CreateTexture(nil, "BORDER")
+	cArt:SetPoint("TOPLEFT", 1, -1); cArt:SetPoint("BOTTOMRIGHT", -1, 1)
+	local cFoot = inkFade(card, "VERTICAL", 0.95, 0)
+	cFoot:SetPoint("BOTTOMLEFT", 1, 1); cFoot:SetPoint("BOTTOMRIGHT", -1, 1); cFoot:SetHeight(FOOT_H)
+	local cBar = fill(card, "ARTWORK", 1, 1, 1, 1)
+	cBar:SetHeight(2); cBar:SetPoint("TOPLEFT", 1, -1); cBar:SetPoint("TOPRIGHT", -1, -1)
+	local hSpec = W.Text(card, "", "body", "dim"); hSpec:SetPoint("BOTTOMLEFT", 16, 14)
+	local hName = W.Text(card, "", NAME_SIZE); hName:SetPoint("BOTTOMLEFT", hSpec, "TOPLEFT", 0, 4)
+	local hRank = W.Text(card, "", RANK_SIZE, "accent"); hRank:SetPoint("BOTTOMLEFT", hName, "TOPLEFT", 0, 6)
+	local hOf = W.Text(card, "", "head", "dim"); hOf:SetPoint("BOTTOMLEFT", hRank, "BOTTOMRIGHT", 8, 6)
+	local hMove = W.Text(card, "", "label"); hMove:SetPoint("LEFT", hOf, "RIGHT", 22, 0)
 	hMove:SetJustifyH("LEFT")
-	local hName = W.Text(toon, "", NAME_SIZE); hName:SetPoint("TOPLEFT", hRank, "BOTTOMLEFT", 0, -10)
-	local hSpec = W.Text(toon, "", "body", "dim"); hSpec:SetPoint("TOPLEFT", hName, "BOTTOMLEFT", 0, -4)
-	local hNone = W.Text(toon, "", "label", "dim"); hNone:SetPoint("TOPLEFT", 0, -6)
-
-	-- your four numbers on the main board, under a hairline
-	local nums = CreateFrame("Frame", nil, toon)
-	nums:SetPoint("TOPLEFT", hSpec, "BOTTOMLEFT", 0, -12); nums:SetHeight(40)
-	local nRule = fill(nums, "ARTWORK", 1, 1, 1, 0.16)
-	nRule:SetHeight(1); nRule:SetPoint("TOPLEFT"); nRule:SetPoint("TOPRIGHT")
-	local stat = {}
-	for i = 1, 4 do
-		local k = W.Text(nums, "", "note", "dim")
-		k:SetPoint("TOPLEFT", (i - 1) * NUM_W, -7)
-		local v = W.Text(nums, "", NUM_SIZE)
-		v:SetPoint("TOPLEFT", k, "BOTTOMLEFT", 0, -2)
-		stat[i] = { k = k, v = v }
+	local hBoard = W.Text(card, "", "note", "dim"); hBoard:SetPoint("BOTTOMLEFT", hRank, "TOPLEFT", 0, 4)
+	local hNone = W.Text(card, "", "label", "dim"); hNone:SetPoint("BOTTOMLEFT", hName, "TOPLEFT", 0, 8)
+	local cardFor = {}
+	local function paintCard(name, cls)
+		cardFor.name, cardFor.cls = name, cls
+		local w, h = card:GetWidth() or 0, card:GetHeight() or 0
+		if w < 10 or h < 10 then return end
+		setArt(cArt, name, cls, (w - 2) / (h - 2))
 	end
 
-	-- who is around you, one line across the foot of the page
-	local around = CreateFrame("Frame", nil, toon)
-	around:SetPoint("BOTTOMLEFT"); around:SetPoint("BOTTOMRIGHT"); around:SetHeight(AROUND_H)
-	local aRule = fill(around, "ARTWORK", 1, 1, 1, 0.16)
-	aRule:SetHeight(1); aRule:SetPoint("TOPLEFT"); aRule:SetPoint("TOPRIGHT")
-	local aLbl = W.Text(around, "", "note", "dim"); aLbl:SetText("AROUND YOU"); aLbl:SetPoint("LEFT", 0, -2)
-	local full = W.Button(around, "Full board >", "tab")
-	full:SetSize(92, 20); full:SetPoint("RIGHT", 0, -2)
+	-- the page beside the card
+	local info = CreateFrame("Frame", nil, toon)
+	info:SetPoint("TOPLEFT", card, "TOPRIGHT", INFO_GAP, 0)
+	info:SetPoint("BOTTOMRIGHT", toon, "BOTTOMRIGHT")
+
+	-- your four numbers, one light tile each
+	local stat = {}
+	for i = 1, 4 do
+		local t = CreateFrame("Frame", nil, info)
+		t:SetHeight(TILE_H)
+		local bg = fill(t, "BACKGROUND", 1, 1, 1, 0.04); bg:SetAllPoints()
+		t.k = W.Text(t, "", "note", "dim"); t.k:SetPoint("TOPLEFT", 9, -6)
+		t.v = W.Text(t, "", NUM_SIZE); t.v:SetPoint("BOTTOMLEFT", 9, 6)
+		stat[i] = t
+	end
+
+	-- a section label over a hairline
+	local function section(text)
+		local f = CreateFrame("Frame", nil, info)
+		f:SetHeight(18)
+		local rule = fill(f, "BORDER", C.border[1], C.border[2], C.border[3], 1)
+		rule:SetHeight(1); rule:SetPoint("BOTTOMLEFT"); rule:SetPoint("BOTTOMRIGHT")
+		f.label = W.Text(f, text, "note", "dim"); f.label:SetPoint("BOTTOMLEFT", 0, 5)
+		return f
+	end
+
+	-- who is around you, at the foot of the page: label and "Full board" on one line
+	local nearHead = section("AROUND YOU")
+	local full = W.Button(nearHead, "Full board >", "tab")
+	full:SetSize(92, 18); full:SetPoint("BOTTOMRIGHT", 0, 2)
 	full:SetScript("OnClick", function() state.view = "board"; refresh() end)
 	local near = {}
 	for i = 1, AROUND do
-		local t = W.Text(around, "", "label")
-		if i == 1 then t:SetPoint("LEFT", aLbl, "RIGHT", 16, 0) else t:SetPoint("LEFT", near[i - 1], "RIGHT", 18, 0) end
-		near[i] = t
+		local r = CreateFrame("Frame", nil, info)
+		r:SetHeight(NEAR_H)
+		r:SetPoint("BOTTOMLEFT", info, "BOTTOMLEFT", 0, (AROUND - i) * NEAR_H)
+		r:SetPoint("RIGHT", info, "RIGHT", 0, 0)
+		r.me = fill(r, "BACKGROUND", C.accent[1], C.accent[2], C.accent[3], 0.12); r.me:SetAllPoints()
+		r.mark = fill(r, "BORDER", C.accent[1], C.accent[2], C.accent[3], 1); r.mark:SetWidth(2)
+		r.mark:SetPoint("TOPLEFT"); r.mark:SetPoint("BOTTOMLEFT")
+		r.n = W.Text(r, "", "label", "dim"); r.n:SetPoint("LEFT", 8, 0); r.n:SetWidth(30); r.n:SetJustifyH("LEFT")
+		r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(16, 16); r.icon:SetPoint("LEFT", 40, 0)
+		r.v = W.Text(r, "", "label", "dim"); r.v:SetPoint("RIGHT", -8, 0); r.v:SetJustifyH("RIGHT")
+		r.name = W.Text(r, "", "body"); r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+		r.name:SetPoint("RIGHT", r.v, "LEFT", -6, 0); r.name:SetJustifyH("LEFT")
+		if r.name.SetWordWrap then r.name:SetWordWrap(false) end
+		near[i] = r
 	end
+	nearHead:SetPoint("BOTTOMLEFT", near[1], "TOPLEFT", 0, 4)
+	nearHead:SetPoint("RIGHT", info, "RIGHT", 0, 0)
 
-	-- server % per boss
-	local bossBox = CreateFrame("Frame", nil, toon)
-	bossBox:SetPoint("TOPLEFT", nums, "BOTTOMLEFT", -14, -10)
-	bossBox:SetPoint("BOTTOM", around, "TOP", 0, 10)
+	-- server % per boss, filling the space between the numbers and "around you"
+	local bossHead = section("PER BOSS  ·  SERVER %")
+	bossHead:SetPoint("TOPLEFT", info, "TOPLEFT", 0, -(TILE_H + 10))
+	bossHead:SetPoint("RIGHT", info, "RIGHT", 0, 0)
+	local bossBox = CreateFrame("Frame", nil, info)
+	bossBox:SetPoint("TOPLEFT", bossHead, "BOTTOMLEFT", 0, -6)
+	bossBox:SetPoint("BOTTOMRIGHT", nearHead, "TOPRIGHT", 0, 10)
 	local bsf, bchild, bsb, brange = scrollList(bossBox, nil, BOSS_STEP)
-	bsf:SetPoint("TOPLEFT", 14, -10); bsf:SetPoint("BOTTOMRIGHT", -24, 10)
-	bsb:SetPoint("TOPLEFT", bsf, "TOPRIGHT", 6, 0); bsb:SetPoint("BOTTOMLEFT", bsf, "BOTTOMRIGHT", 6, 0)
+	bsf:SetPoint("TOPLEFT"); bsf:SetPoint("BOTTOMRIGHT", -10, 0)
+	bsb:SetPoint("TOPLEFT", bsf, "TOPRIGHT", 5, 0); bsb:SetPoint("BOTTOMLEFT", bsf, "BOTTOMRIGHT", 5, 0)
 	local bossRows = {}
 	local function bossAt(i)
 		local b = bossRows[i]
@@ -414,7 +439,7 @@ function Okanvil:BuildRanking(host)
 		if b.name.SetWordWrap then b.name:SetWordWrap(false) end
 		b.val = W.Text(b, "", "body"); b.val:SetPoint("RIGHT", 0, 0); b.val:SetWidth(VAL_W); b.val:SetJustifyH("RIGHT")
 		if b.val.SetWordWrap then b.val:SetWordWrap(false) end
-		b.track = fill(b, "BORDER", 0, 0, 0, 0.5); b.track:SetHeight(4)
+		b.track = fill(b, "BORDER", 0, 0, 0, 0.45); b.track:SetHeight(4)
 		b.track:SetPoint("LEFT", b.name, "RIGHT", 6, 0); b.track:SetPoint("RIGHT", b.val, "LEFT", -8, 0)
 		b.bar = fill(b, "ARTWORK", 1, 1, 1, 1); b.bar:SetHeight(4)
 		b.bar:SetPoint("LEFT", b.track, "LEFT", 0, 0)
@@ -422,17 +447,20 @@ function Okanvil:BuildRanking(host)
 		return b
 	end
 
-	-- the left column fills the panel; the filters above it share its width
-	local function sizeLeft()
-		local lw = split() - PAD - 24
-		if lw < 40 then return end
-		nums:SetWidth(lw)
-		bossBox:SetWidth(lw + 14 + 10)
-		if state.view ~= "board" then
-			top:ClearAllPoints(); top:SetPoint("TOPLEFT"); top:SetWidth(lw)
+	-- the card takes CARD_SHARE of the width; the tiles share what is left
+	local function sizeCard()
+		local w = toon:GetWidth() or 0
+		if w < 40 then return end
+		card:SetWidth(math.floor(w * CARD_SHARE))
+		local iw = w - math.floor(w * CARD_SHARE) - INFO_GAP
+		local tw = math.floor((iw - 3 * TILE_GAP) / 4)
+		for i, t in ipairs(stat) do
+			t:ClearAllPoints(); t:SetWidth(tw)
+			t:SetPoint("TOPLEFT", info, "TOPLEFT", (i - 1) * (tw + TILE_GAP), 0)
 		end
+		if cardFor.name then paintCard(cardFor.name, cardFor.cls) end
 	end
-	toon:HookScript("OnSizeChanged", sizeLeft)
+	toon:HookScript("OnSizeChanged", sizeCard)
 
 	-- ==== BOARD VIEW: one whole board ====
 	local boardView = CreateFrame("Frame", nil, page)
@@ -531,10 +559,11 @@ function Okanvil:BuildRanking(host)
 		size = size or state.size
 		local cls, spec = classOf(name)
 		local cr, cg, cb = classRGB(cls)
-		paintArt(name, cls)
+		sizeCard()
+		paintCard(name, cls)
+		cBar:SetVertexColor(cr, cg, cb, 0.9)
 		hName:SetText(name); hName:SetTextColor(cr, cg, cb)
 		hSpec:SetText(spec and spec ~= "" and spec or "")
-		sizeLeft()
 
 		if p then
 			hNone:Hide(); hBoard:Show(); hRank:Show(); hOf:Show(); hMove:Show()
@@ -550,20 +579,12 @@ function Okanvil:BuildRanking(host)
 				{ "FIGHTS", tostring(p.fights) .. (p.hc and "  |cffff8000H|r" or "") },
 			}
 			for i, v in ipairs(vals) do stat[i].k:SetText(v[1]); stat[i].v:SetText(v[2]) end
-			nums:Show()
 		else
 			hBoard:Hide(); hRank:Hide(); hOf:Hide(); paintMove(hMove, nil); hMove:Hide()
 			hNone:Show(); hNone:SetText("Not on a board " .. (state.period == "week" and "this week" or "yet"))
-			nums:Hide()
+			for i = 1, 4 do stat[i].k:SetText(""); stat[i].v:SetText("") end
+			stat[1].k:SetText("NO BOARD"); stat[1].v:SetText("|cff6f7176--|r")
 		end
-		-- with no rank line, the name moves up to where it was
-		hName:ClearAllPoints()
-		if p then hName:SetPoint("TOPLEFT", hRank, "BOTTOMLEFT", 0, -10)
-		else hName:SetPoint("TOPLEFT", hNone, "BOTTOMLEFT", 0, -10) end
-		bossBox:ClearAllPoints()
-		bossBox:SetPoint("TOPLEFT", p and nums or hSpec, "BOTTOMLEFT", -14, -10)
-		bossBox:SetPoint("BOTTOM", around, "TOP", 0, 10)
-		sizeLeft()
 
 		-- every boss of the raid, in order; the ones this toon has no parse on
 		-- dimmed. G = our own parse, for a boss the server does not rank.
@@ -575,17 +596,17 @@ function Okanvil:BuildRanking(host)
 			n = n + 1
 			local b, c = bossAt(n), byIdx[i - 1]
 			b.name:SetText(R.ShortBoss(boss) .. (c and c.hc and " |cffff8000H|r" or "")
-				.. (c and c.guild and " |cffb4b6bbG|r" or ""))
+				.. (c and c.guild and " |cff8a8d93G|r" or ""))
 			if c then
 				local r, g, bl = R.PctColor(c.pct)
-				b.name:SetTextColor(0.95, 0.95, 0.96)
+				b.name:SetTextColor(C.text[1], C.text[2], C.text[3])
 				b.val:SetText(("%d"):format(math.floor(c.pct))); b.val:SetTextColor(r, g, bl)
 				b.bar:SetVertexColor(r, g, bl, 1)
 				local tw = math.max(10, (bsf:GetWidth() or 200) - BOSS_NAME_W - 6 - VAL_W - 8)
 				b.bar:SetWidth(math.max(2, tw * math.min(c.pct, 100) / 100)); b.bar:Show()
 			else
-				b.name:SetTextColor(0.55, 0.56, 0.60)
-				b.val:SetText("no parse"); b.val:SetTextColor(0.55, 0.56, 0.60)
+				b.name:SetTextColor(0.45, 0.46, 0.50)
+				b.val:SetText("no parse"); b.val:SetTextColor(0.45, 0.46, 0.50)
 				b.bar:Hide()
 			end
 			b:Show()
@@ -597,18 +618,26 @@ function Okanvil:BuildRanking(host)
 		-- the one above you, you, and the two below, on your main board
 		local list = p and R.Board(size, kind, state.period) or {}
 		local from = rank and math.max(1, math.min(rank - 1, #list - AROUND + 1)) or 1
-		for i, t in ipairs(near) do
+		for i, r in ipairs(near) do
 			local at = from + i - 1
 			local q = p and list[at]
 			if q then
-				local hex = at == rank and "ffffd25a" or hexOf(classRGB(q.class))
-				t:SetText(("|cffb4b6bb#%d|r  |c%s%s|r  %s"):format(at, hex, q.name, fmtRate(q.rate, kind)))
-				t:Show()
+				local qr, qg, qb = classRGB(q.class)
+				r.n:SetText("#" .. at)
+				classIcon(r.icon, q.class)
+				r.name:SetText(q.name); r.name:SetTextColor(qr, qg, qb)
+				r.v:SetText(fmtRate(q.rate, kind))
+				if at == rank then
+					r.me:Show(); r.mark:Show(); r.n:SetTextColor(C.accentHi[1], C.accentHi[2], C.accentHi[3])
+				else
+					r.me:Hide(); r.mark:Hide(); r.n:SetTextColor(C.textDim[1], C.textDim[2], C.textDim[3])
+				end
+				r:Show()
 			else
-				t:Hide()
+				r:Hide()
 			end
 		end
-		if p then around:Show() else around:Hide() end
+		if p then nearHead:Show() else nearHead:Hide() end
 	end
 
 	-- ---- paint: the whole board ----
@@ -660,15 +689,12 @@ function Okanvil:BuildRanking(host)
 		end
 		empty:Hide(); top:Show()
 		if not (state.period and R.HasPeriod(state.period)) then state.period = R.DefaultPeriod() end
+		layoutTabs()
 		if state.view == "board" then
-			-- the board is a page like the others: the window's wallpaper behind it
-			back:Show(); toon:Hide(); boardView:Show(); art:Hide(); melt:Hide(); ground:Hide()
-			top:ClearAllPoints(); top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT")
-			layoutTabs(false)
+			back:Show(); toon:Hide(); boardView:Show()
 			paintBoard()
 		else
-			back:Hide(); boardView:Hide(); toon:Show(); art:Show(); melt:Show(); ground:Show()
-			layoutTabs(true)
+			back:Hide(); boardView:Hide(); toon:Show()
 			pickToon()
 			paintToon()
 		end
