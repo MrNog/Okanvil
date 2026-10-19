@@ -22,10 +22,10 @@ local PAD, GAP = 12, 8
 local CHIP_H, ROW_H, AROUND_H, BOSS_STEP = 24, 26, 28, 19
 local AROUND = 4                 -- the one above you, you, and two below
 local RANK_SIZE, NAME_SIZE, NUM_SIZE = 46, 32, 18
-local NUM_W, LEFT_MAX, BOSS_NAME_W, VAL_W = 96, 420, 110, 64
-local INK = { 0.035, 0.037, 0.043 }   -- the near-black of shade and veil
-local SHADE, VEIL = 0.82, 0.86    -- the page's left edge; under the left column
-local COL_FADE = 90               -- the column veil melting into the art
+local NUM_W, BOSS_NAME_W, VAL_W = 96, 110, 64
+local INK = { 0.035, 0.037, 0.043 }   -- the panel's near-black
+local SPLIT, MELT_W = 0.44, 110    -- the panel's share of the page; where panel melts into art
+local BAND_H = PAD + AROUND_H + 8  -- the solid band at the foot, under the art
 local DOT = "  |cff4a4d55·|r  "
 
 local function classIcon(tex, token)
@@ -206,14 +206,6 @@ local function showImport()
 	f:Show()
 end
 
--- Text straight on the art: a hard 1px black shadow, so it reads on any
--- picture. No OUTLINE: on this font it smears the letters.
-local function onArt(parent, size, role)
-	local fs = W.Text(parent, "", size, role)
-	fs:SetShadowColor(0, 0, 0, 1); fs:SetShadowOffset(1, -1)
-	return fs
-end
-
 local function isOfficer()
 	return Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() and true or false
 end
@@ -281,21 +273,26 @@ function Okanvil:BuildRanking(host)
 	})
 	if dash.cta2 then dash.cta2:Tooltip("Paste the RATS site's \"Export to Okanvil\". It goes to everyone in the guild online.") end
 
-	-- The raider's art is the whole page, under the header too: cut to the
-	-- page's shape, the rat on the right. Only the left edge, where the text
-	-- runs, gets a soft shade.
+	-- A poster: a solid panel on the left holds everything you read; the
+	-- raider's art fills the right above the foot band, nothing on top of it,
+	-- with a short melt where the two meet.
+	local ground = fill(host, "BACKGROUND", INK[1], INK[2], INK[3], 1)
+	ground:SetAllPoints(host)
 	local art = host:CreateTexture(nil, "BORDER")
-	art:SetAllPoints(host)
-	local shade = host:CreateTexture(nil, "ARTWORK"); shade:SetTexture(FLAT)
-	shade:SetGradientAlpha("HORIZONTAL", INK[1], INK[2], INK[3], SHADE, INK[1], INK[2], INK[3], 0)
-	shade:SetPoint("TOPLEFT"); shade:SetPoint("BOTTOMLEFT")
+	art:SetPoint("TOPRIGHT"); art:SetPoint("BOTTOMRIGHT", 0, BAND_H)
+	local melt = host:CreateTexture(nil, "ARTWORK"); melt:SetTexture(FLAT)
+	melt:SetGradientAlpha("HORIZONTAL", INK[1], INK[2], INK[3], 1, INK[1], INK[2], INK[3], 0)
+	melt:SetPoint("TOPLEFT", art, "TOPLEFT"); melt:SetPoint("BOTTOMLEFT", art, "BOTTOMLEFT")
+	melt:SetWidth(MELT_W)
+	local function split() return math.floor((host:GetWidth() or 0) * SPLIT) end
 	local artFor = {}
 	local function paintArt(name, cls)
 		artFor.name, artFor.cls = name, cls
 		local w, h = host:GetWidth() or 0, host:GetHeight() or 0
-		if w < 10 or h < 10 then return end
-		shade:SetWidth(math.floor(w * 0.55))
-		setArt(art, name, cls, w / h)
+		if w < 10 or h < BAND_H + 10 then return end
+		local aw = w - split()
+		art:SetWidth(aw)
+		setArt(art, name, cls, aw / (h - BAND_H))
 	end
 	host:HookScript("OnSizeChanged", function()
 		if artFor.name then paintArt(artFor.name, artFor.cls) end
@@ -326,29 +323,19 @@ function Okanvil:BuildRanking(host)
 		periodTabs[pd] = tab(top, R.PERIOD_LABEL[pd], pd == "all" and 62 or 74, function() state.period = pd end)
 	end
 
-	-- ==== TOON VIEW: straight on the art, no boxes ====
-	-- it starts on the filters' line: they sit on the right, the rank on the left
+	-- ==== TOON VIEW: the panel on the left ====
 	local toon = CreateFrame("Frame", nil, page)
-	toon:SetPoint("TOPLEFT", page, "TOPLEFT")
+	toon:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -GAP)
 	toon:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT")
 
-	-- ONE even veil behind the whole left column, fading out past its right
-	-- edge: every name and number sits on calm dark, whatever the art does
-	local colVeil = fill(toon, "BACKGROUND", INK[1], INK[2], INK[3], VEIL)
-	colVeil:SetPoint("TOPLEFT", -PAD, PAD)
-	local colFade = toon:CreateTexture(nil, "BACKGROUND"); colFade:SetTexture(FLAT)
-	colFade:SetGradientAlpha("HORIZONTAL", INK[1], INK[2], INK[3], VEIL, INK[1], INK[2], INK[3], 0)
-	colFade:SetPoint("TOPLEFT", colVeil, "TOPRIGHT"); colFade:SetPoint("BOTTOMLEFT", colVeil, "BOTTOMRIGHT")
-	colFade:SetWidth(COL_FADE)
-
-	local hBoard = onArt(toon, "note", "dim"); hBoard:SetPoint("TOPLEFT", 0, -6)
-	local hRank = onArt(toon, RANK_SIZE, "accent"); hRank:SetPoint("TOPLEFT", hBoard, "BOTTOMLEFT", 0, -4)
-	local hOf = onArt(toon, "head", "dim"); hOf:SetPoint("BOTTOMLEFT", hRank, "BOTTOMRIGHT", 8, 6)
-	local hMove = onArt(toon, "label"); hMove:SetPoint("LEFT", hOf, "RIGHT", 22, 0)
+	local hBoard = W.Text(toon, "", "note", "dim"); hBoard:SetPoint("TOPLEFT", 0, -6)
+	local hRank = W.Text(toon, "", RANK_SIZE, "accent"); hRank:SetPoint("TOPLEFT", hBoard, "BOTTOMLEFT", 0, -4)
+	local hOf = W.Text(toon, "", "head", "dim"); hOf:SetPoint("BOTTOMLEFT", hRank, "BOTTOMRIGHT", 8, 6)
+	local hMove = W.Text(toon, "", "label"); hMove:SetPoint("LEFT", hOf, "RIGHT", 22, 0)
 	hMove:SetJustifyH("LEFT")
-	local hName = onArt(toon, NAME_SIZE); hName:SetPoint("TOPLEFT", hRank, "BOTTOMLEFT", 0, -10)
-	local hSpec = onArt(toon, "body", "dim"); hSpec:SetPoint("TOPLEFT", hName, "BOTTOMLEFT", 0, -4)
-	local hNone = onArt(toon, "label", "dim"); hNone:SetPoint("TOPLEFT", 0, -6)
+	local hName = W.Text(toon, "", NAME_SIZE); hName:SetPoint("TOPLEFT", hRank, "BOTTOMLEFT", 0, -10)
+	local hSpec = W.Text(toon, "", "body", "dim"); hSpec:SetPoint("TOPLEFT", hName, "BOTTOMLEFT", 0, -4)
+	local hNone = W.Text(toon, "", "label", "dim"); hNone:SetPoint("TOPLEFT", 0, -6)
 
 	-- your four numbers on the main board, under a hairline
 	local nums = CreateFrame("Frame", nil, toon)
@@ -357,9 +344,9 @@ function Okanvil:BuildRanking(host)
 	nRule:SetHeight(1); nRule:SetPoint("TOPLEFT"); nRule:SetPoint("TOPRIGHT")
 	local stat = {}
 	for i = 1, 4 do
-		local k = onArt(nums, "note", "dim")
+		local k = W.Text(nums, "", "note", "dim")
 		k:SetPoint("TOPLEFT", (i - 1) * NUM_W, -7)
-		local v = onArt(nums, NUM_SIZE)
+		local v = W.Text(nums, "", NUM_SIZE)
 		v:SetPoint("TOPLEFT", k, "BOTTOMLEFT", 0, -2)
 		stat[i] = { k = k, v = v }
 	end
@@ -367,22 +354,15 @@ function Okanvil:BuildRanking(host)
 	-- who is around you, one line across the foot of the page
 	local around = CreateFrame("Frame", nil, toon)
 	around:SetPoint("BOTTOMLEFT"); around:SetPoint("BOTTOMRIGHT"); around:SetHeight(AROUND_H)
-	-- the foot of the art is often bright (snow, light): a solid band under the
-	-- line, fading out above it, so the names read on any picture
-	local aVeil = fill(around, "BACKGROUND", INK[1], INK[2], INK[3], 0.92)
-	aVeil:SetPoint("BOTTOMLEFT", -PAD, -PAD); aVeil:SetPoint("TOPRIGHT", PAD, 0)
-	local aFade = around:CreateTexture(nil, "BACKGROUND"); aFade:SetTexture(FLAT)
-	aFade:SetGradientAlpha("VERTICAL", INK[1], INK[2], INK[3], 0.92, INK[1], INK[2], INK[3], 0)
-	aFade:SetPoint("BOTTOMLEFT", aVeil, "TOPLEFT"); aFade:SetPoint("BOTTOMRIGHT", aVeil, "TOPRIGHT"); aFade:SetHeight(18)
 	local aRule = fill(around, "ARTWORK", 1, 1, 1, 0.16)
 	aRule:SetHeight(1); aRule:SetPoint("TOPLEFT"); aRule:SetPoint("TOPRIGHT")
-	local aLbl = onArt(around, "note", "dim"); aLbl:SetText("AROUND YOU"); aLbl:SetPoint("LEFT", 0, -2)
+	local aLbl = W.Text(around, "", "note", "dim"); aLbl:SetText("AROUND YOU"); aLbl:SetPoint("LEFT", 0, -2)
 	local full = W.Button(around, "Full board >", "tab")
 	full:SetSize(92, 20); full:SetPoint("RIGHT", 0, -2)
 	full:SetScript("OnClick", function() state.view = "board"; refresh() end)
 	local near = {}
 	for i = 1, AROUND do
-		local t = onArt(around, "label")
+		local t = W.Text(around, "", "label")
 		if i == 1 then t:SetPoint("LEFT", aLbl, "RIGHT", 16, 0) else t:SetPoint("LEFT", near[i - 1], "RIGHT", 18, 0) end
 		near[i] = t
 	end
@@ -391,7 +371,6 @@ function Okanvil:BuildRanking(host)
 	local bossBox = CreateFrame("Frame", nil, toon)
 	bossBox:SetPoint("TOPLEFT", nums, "BOTTOMLEFT", -14, -10)
 	bossBox:SetPoint("BOTTOM", around, "TOP", 0, 10)
-	colVeil:SetPoint("BOTTOM", around, "TOP", 0, 0)
 	local bsf, bchild, bsb, brange = scrollList(bossBox, nil, BOSS_STEP)
 	bsf:SetPoint("TOPLEFT", 14, -10); bsf:SetPoint("BOTTOMRIGHT", -24, 10)
 	bsb:SetPoint("TOPLEFT", bsf, "TOPRIGHT", 6, 0); bsb:SetPoint("BOTTOMLEFT", bsf, "BOTTOMRIGHT", 6, 0)
@@ -402,10 +381,10 @@ function Okanvil:BuildRanking(host)
 		b = CreateFrame("Frame", nil, bchild)
 		b:SetHeight(16)
 		b:SetPoint("TOPLEFT", 0, -(i - 1) * BOSS_STEP); b:SetPoint("RIGHT", bchild, "RIGHT", -2, 0)
-		b.name = onArt(b, "body"); b.name:SetPoint("LEFT", 0, 0); b.name:SetWidth(BOSS_NAME_W)
+		b.name = W.Text(b, "", "body"); b.name:SetPoint("LEFT", 0, 0); b.name:SetWidth(BOSS_NAME_W)
 		b.name:SetJustifyH("LEFT")
 		if b.name.SetWordWrap then b.name:SetWordWrap(false) end
-		b.val = onArt(b, "body"); b.val:SetPoint("RIGHT", 0, 0); b.val:SetWidth(VAL_W); b.val:SetJustifyH("RIGHT")
+		b.val = W.Text(b, "", "body"); b.val:SetPoint("RIGHT", 0, 0); b.val:SetWidth(VAL_W); b.val:SetJustifyH("RIGHT")
 		if b.val.SetWordWrap then b.val:SetWordWrap(false) end
 		b.track = fill(b, "BORDER", 0, 0, 0, 0.5); b.track:SetHeight(4)
 		b.track:SetPoint("LEFT", b.name, "RIGHT", 6, 0); b.track:SetPoint("RIGHT", b.val, "LEFT", -8, 0)
@@ -415,14 +394,15 @@ function Okanvil:BuildRanking(host)
 		return b
 	end
 
-	-- the left column's width: under half the page, so the raider stays in view
+	-- the left column fills the panel; the filters above it share its width
 	local function sizeLeft()
-		local w = toon:GetWidth() or 0
-		if w < 40 then return end
-		local lw = math.min(math.floor(w * 0.46), LEFT_MAX)
+		local lw = split() - PAD - 24
+		if lw < 40 then return end
 		nums:SetWidth(lw)
-		bossBox:SetWidth(lw + 14 + 40)
-		colVeil:SetWidth(PAD + lw + 40)
+		bossBox:SetWidth(lw + 14 + 10)
+		if state.view ~= "board" then
+			top:ClearAllPoints(); top:SetPoint("TOPLEFT"); top:SetWidth(lw)
+		end
 	end
 	toon:HookScript("OnSizeChanged", sizeLeft)
 
@@ -430,9 +410,6 @@ function Okanvil:BuildRanking(host)
 	local boardView = CreateFrame("Frame", nil, page)
 	boardView:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -GAP)
 	boardView:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT")
-	-- a long list over the art: one even veil behind it all
-	local bVeil = fill(boardView, "BACKGROUND", INK[1], INK[2], INK[3], VEIL)
-	bVeil:SetPoint("TOPLEFT", -6, 4); bVeil:SetPoint("BOTTOMRIGHT", 6, -4)
 	local x = 0
 	for _, k in ipairs(R.BOARDS) do
 		local b = tab(boardView, R.BOARD_LABEL[k], k == "d" and 46 or 68, function() state.kind = k end)
@@ -670,10 +647,11 @@ function Okanvil:BuildRanking(host)
 			end
 		end
 		if state.view == "board" then
-			back:Show(); toon:Hide(); boardView:Show()
+			back:Show(); toon:Hide(); boardView:Show(); art:Hide(); melt:Hide()
+			top:ClearAllPoints(); top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT")
 			paintBoard()
 		else
-			back:Hide(); boardView:Hide(); toon:Show()
+			back:Hide(); boardView:Hide(); toon:Show(); art:Show(); melt:Show()
 			pickToon()
 			paintToon()
 		end
