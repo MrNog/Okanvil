@@ -19,11 +19,12 @@ local CLASS_TEX = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes
 local ART_RAIDER = "Interface\\AddOns\\Okanvil-Art\\Ranking\\"
 local ART_CLASS = "Interface\\AddOns\\Okanvil\\Media\\Ranking\\_"
 local PAD, GAP = 12, 8
-local CHIP_H, HERO_H, STAT_H = 24, 170, 44
-local ART_FADE = 90              -- the art's left edge melting into the card
-local ROW_H, AROUND_H, BOSS_STEP = 26, 24, 20
-local AROUND = 2                 -- players shown above and below you
-local INK = { 0.035, 0.037, 0.043 }   -- the near-black the cards sit on
+local CHIP_H, ROW_H, AROUND_H, BOSS_STEP = 24, 26, 28, 19
+local AROUND = 4                 -- the one above you, you, and two below
+local RANK_SIZE, NAME_SIZE, NUM_SIZE = 46, 32, 18
+local NUM_W, LEFT_MAX, BOSS_NAME_W = 96, 420, 110
+local INK = { 0.035, 0.037, 0.043 }   -- the near-black of shade and veil
+local SHADE, VEIL = 0.55, 0.72    -- the page's left edge; under the boss list
 local DOT = "  |cff4a4d55·|r  "
 
 local function classIcon(tex, token)
@@ -204,62 +205,15 @@ local function showImport()
 	f:Show()
 end
 
--- A card on near-black, not the grey raised panel: the art carries the colour.
-local function darkCard(parent)
-	local f = CreateFrame("Frame", nil, parent)
-	f:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
-	f:SetBackdropColor(INK[1], INK[2], INK[3], 0.94)
-	f:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
-	return f
-end
-
--- ink fading over a picture, so text beside it sits on dark and the picture keeps its colours
-local function inkFade(parent, dir, a1, a2)
-	local t = parent:CreateTexture(nil, "ARTWORK")
-	t:SetTexture(FLAT)
-	t:SetGradientAlpha(dir, INK[1], INK[2], INK[3], a1, INK[1], INK[2], INK[3], a2)
-	return t
-end
-
--- a hairline inside a card, between two of its cells
-local function vline(parent, x)
-	local t = fill(parent, "BORDER", C.border[1], C.border[2], C.border[3], 1)
-	t:SetWidth(1)
-	t:SetPoint("TOP", parent, "TOPLEFT", x, -1)
-	t:SetPoint("BOTTOM", parent, "BOTTOMLEFT", x, 1)
-	return t
-end
-
--- a row of equal cells across a card, each a dim label over a value
-local function cellRow(parent, n)
-	local cells, lines = {}, {}
-	for i = 1, n do
-		local c = CreateFrame("Frame", nil, parent)
-		c.k = W.Text(c, "", "note", "dim"); c.k:SetPoint("TOPLEFT", 10, -7)
-		c.v = W.Text(c, "", "head"); c.v:SetPoint("TOPLEFT", c.k, "BOTTOMLEFT", 0, -3)
-		cells[i] = c
-		if i > 1 then lines[i] = vline(parent, 0) end
-	end
-	local function layout()
-		local w = (parent:GetWidth() or 0) - 2
-		if w < 40 then return end
-		local x = 1
-		for i, c in ipairs(cells) do
-			local cw = math.floor(w / n)
-			c:ClearAllPoints()
-			c:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -1)
-			c:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", x, 1)
-			c:SetWidth(cw)
-			if lines[i] then
-				lines[i]:ClearAllPoints()
-				lines[i]:SetPoint("TOP", parent, "TOPLEFT", x, -1)
-				lines[i]:SetPoint("BOTTOM", parent, "BOTTOMLEFT", x, 1)
-			end
-			x = x + cw
-		end
-	end
-	parent:HookScript("OnSizeChanged", layout)
-	return cells, layout
+-- Text straight on the art: outlined, so it reads on any picture, and it
+-- keeps the outline when Settings changes the font (Okanvil:ApplyFonts).
+local function onArt(parent, size, role)
+	local fs = W.Text(parent, "", size, role)
+	fs._okFlag = "OUTLINE"
+	local f, sz = fs:GetFont()
+	fs:SetFont(f, sz, "OUTLINE")
+	fs:SetShadowColor(0, 0, 0, 0.9); fs:SetShadowOffset(1, -1)
+	return fs
 end
 
 local function isOfficer()
@@ -329,6 +283,26 @@ function Okanvil:BuildRanking(host)
 	})
 	if dash.cta2 then dash.cta2:Tooltip("Paste the RATS site's \"Export to Okanvil\". It goes to everyone in the guild online.") end
 
+	-- The raider's art is the whole page, under the header too: cut to the
+	-- page's shape, the rat on the right. Only the left edge, where the text
+	-- runs, gets a soft shade.
+	local art = host:CreateTexture(nil, "BORDER")
+	art:SetAllPoints(host)
+	local shade = host:CreateTexture(nil, "ARTWORK"); shade:SetTexture(FLAT)
+	shade:SetGradientAlpha("HORIZONTAL", INK[1], INK[2], INK[3], SHADE, INK[1], INK[2], INK[3], 0)
+	shade:SetPoint("TOPLEFT"); shade:SetPoint("BOTTOMLEFT")
+	local artFor = {}
+	local function paintArt(name, cls)
+		artFor.name, artFor.cls = name, cls
+		local w, h = host:GetWidth() or 0, host:GetHeight() or 0
+		if w < 10 or h < 10 then return end
+		shade:SetWidth(math.floor(w * 0.55))
+		setArt(art, name, cls, w / h)
+	end
+	host:HookScript("OnSizeChanged", function()
+		if artFor.name then paintArt(artFor.name, artFor.cls) end
+	end)
+
 	local page = CreateFrame("Frame", nil, dash.main)
 	page:SetPoint("TOPLEFT", PAD, -PAD)
 	page:SetPoint("BOTTOMRIGHT", -PAD, PAD)
@@ -365,58 +339,62 @@ function Okanvil:BuildRanking(host)
 		periodTabs[pd] = tab(top, R.PERIOD_LABEL[pd], pd == "all" and 62 or 74, function() state.period = pd end)
 	end
 
-	-- ==== TOON VIEW ====
+	-- ==== TOON VIEW: straight on the art, no boxes ====
 	local toon = CreateFrame("Frame", nil, page)
 	toon:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -GAP)
 	toon:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT")
 
-	-- the hero: the whole picture on the right at its own 2:1 shape, in full
-	-- colour; the rank and the name on the dark to its left
-	local hero = darkCard(toon)
-	hero:SetPoint("TOPLEFT"); hero:SetPoint("TOPRIGHT"); hero:SetHeight(HERO_H)
-	local hArt = hero:CreateTexture(nil, "BORDER")
-	hArt:SetPoint("TOPRIGHT", -1, -1); hArt:SetPoint("BOTTOMRIGHT", -1, 1)
-	local hFade = inkFade(hero, "HORIZONTAL", 1, 0)
-	hFade:SetPoint("TOPLEFT", hArt, "TOPLEFT"); hFade:SetPoint("BOTTOMLEFT", hArt, "BOTTOMLEFT")
-	hFade:SetWidth(ART_FADE)
-	local hBar = fill(hero, "ARTWORK", 1, 1, 1, 1)
-	hBar:SetHeight(2); hBar:SetPoint("TOPLEFT", 1, -1); hBar:SetPoint("TOPRIGHT", -1, -1)
-	local hBoard = W.Text(hero, "", "note", "dim"); hBoard:SetPoint("TOPLEFT", 18, -18)
-	local hRank = W.Text(hero, "", "huge", "accent"); hRank:SetPoint("TOPLEFT", hBoard, "BOTTOMLEFT", 0, -8)
-	local hOf = W.Text(hero, "", "label", "dim"); hOf:SetPoint("BOTTOMLEFT", hRank, "BOTTOMRIGHT", 8, 3)
-	local hMove = W.Text(hero, "", "label"); hMove:SetPoint("LEFT", hOf, "RIGHT", 22, 0)
+	local hBoard = onArt(toon, "note", "dim"); hBoard:SetPoint("TOPLEFT", 0, -6)
+	local hRank = onArt(toon, RANK_SIZE, "accent"); hRank:SetPoint("TOPLEFT", hBoard, "BOTTOMLEFT", 0, -4)
+	local hOf = onArt(toon, "head", "dim"); hOf:SetPoint("BOTTOMLEFT", hRank, "BOTTOMRIGHT", 8, 6)
+	local hMove = onArt(toon, "label"); hMove:SetPoint("LEFT", hOf, "RIGHT", 22, 0)
 	hMove:SetJustifyH("LEFT")
-	local hIcon = hero:CreateTexture(nil, "OVERLAY"); hIcon:SetSize(22, 22)
-	hIcon:SetPoint("BOTTOMLEFT", 18, 40)
-	local hName = W.Text(hero, "", "huge"); hName:SetPoint("LEFT", hIcon, "RIGHT", 8, 0)
-	local hSpec = W.Text(hero, "", "label", "dim"); hSpec:SetPoint("TOPLEFT", hIcon, "BOTTOMLEFT", 0, -6)
-	local hNone = W.Text(hero, "", "label", "dim"); hNone:SetPoint("TOPLEFT", 18, -18)
-	-- the art keeps its 2:1 shape; a card narrower than that cuts its left side
-	local function artWidth()
-		return math.min((hero:GetWidth() or 0) - 2, (HERO_H - 2) * 2)
+	local hName = onArt(toon, NAME_SIZE); hName:SetPoint("TOPLEFT", hRank, "BOTTOMLEFT", 0, -10)
+	local hSpec = onArt(toon, "body", "dim"); hSpec:SetPoint("TOPLEFT", hName, "BOTTOMLEFT", 0, -4)
+	local hNone = onArt(toon, "label", "dim"); hNone:SetPoint("TOPLEFT", 0, -6)
+
+	-- your four numbers on the main board, under a hairline
+	local nums = CreateFrame("Frame", nil, toon)
+	nums:SetPoint("TOPLEFT", hSpec, "BOTTOMLEFT", 0, -12); nums:SetHeight(40)
+	local nRule = fill(nums, "ARTWORK", 1, 1, 1, 0.16)
+	nRule:SetHeight(1); nRule:SetPoint("TOPLEFT"); nRule:SetPoint("TOPRIGHT")
+	local stat = {}
+	for i = 1, 4 do
+		local k = onArt(nums, "note", "dim")
+		k:SetPoint("TOPLEFT", (i - 1) * NUM_W, -7)
+		local v = onArt(nums, NUM_SIZE)
+		v:SetPoint("TOPLEFT", k, "BOTTOMLEFT", 0, -2)
+		stat[i] = { k = k, v = v }
 	end
-	hero:HookScript("OnSizeChanged", function()
-		local w = artWidth()
-		if w < 10 then return end
-		hArt:SetWidth(w)
-		if hero._name then setArt(hArt, hero._name, hero._class, w / (HERO_H - 2)) end
-	end)
 
-	-- your four numbers on the main board
-	local stats = darkCard(toon)
-	stats:SetPoint("TOPLEFT", hero, "BOTTOMLEFT", 0, -GAP); stats:SetPoint("TOPRIGHT", hero, "BOTTOMRIGHT", 0, -GAP)
-	stats:SetHeight(STAT_H)
-	local statCells, statLayout = cellRow(stats, 4)
+	-- who is around you, one line across the foot of the page
+	local around = CreateFrame("Frame", nil, toon)
+	around:SetPoint("BOTTOMLEFT"); around:SetPoint("BOTTOMRIGHT"); around:SetHeight(AROUND_H)
+	local aRule = fill(around, "ARTWORK", 1, 1, 1, 0.16)
+	aRule:SetHeight(1); aRule:SetPoint("TOPLEFT"); aRule:SetPoint("TOPRIGHT")
+	local aLbl = onArt(around, "note", "dim"); aLbl:SetText("AROUND YOU"); aLbl:SetPoint("LEFT", 0, -2)
+	local full = W.Button(around, "Full board >", "tab")
+	full:SetSize(92, 20); full:SetPoint("RIGHT", 0, -2)
+	full:SetScript("OnClick", function() state.view = "board"; refresh() end)
+	local near = {}
+	for i = 1, AROUND do
+		local t = onArt(around, "label")
+		if i == 1 then t:SetPoint("LEFT", aLbl, "RIGHT", 16, 0) else t:SetPoint("LEFT", near[i - 1], "RIGHT", 18, 0) end
+		near[i] = t
+	end
 
-	-- left: server % per boss, in the raid's order
-	local bossCard = darkCard(toon)
-	bossCard:SetPoint("TOPLEFT", stats, "BOTTOMLEFT", 0, -GAP)
-	bossCard:SetPoint("BOTTOM", toon, "BOTTOM", 0, 0)
-	local bossHead = W.Text(bossCard, "PER BOSS  |cff6f7176SERVER %|r", "note", "dim")
-	bossHead:SetPoint("TOPLEFT", 10, -8)
-	local bsf, bchild, bsb, brange = scrollList(bossCard, nil, BOSS_STEP)
-	bsf:SetPoint("TOPLEFT", 10, -26); bsf:SetPoint("BOTTOMRIGHT", -14, 8)
-	bsb:SetPoint("TOPLEFT", bsf, "TOPRIGHT", 5, 0); bsb:SetPoint("BOTTOMLEFT", bsf, "BOTTOMRIGHT", 5, 0)
+	-- server % per boss, on a soft dark veil that fades out to the right
+	local bossBox = CreateFrame("Frame", nil, toon)
+	bossBox:SetPoint("TOPLEFT", nums, "BOTTOMLEFT", -14, -10)
+	bossBox:SetPoint("BOTTOM", around, "TOP", 0, 10)
+	local vSolid = fill(bossBox, "BACKGROUND", INK[1], INK[2], INK[3], VEIL)
+	vSolid:SetPoint("TOPLEFT"); vSolid:SetPoint("BOTTOMLEFT")
+	local vFade = bossBox:CreateTexture(nil, "BACKGROUND"); vFade:SetTexture(FLAT)
+	vFade:SetGradientAlpha("HORIZONTAL", INK[1], INK[2], INK[3], VEIL, INK[1], INK[2], INK[3], 0)
+	vFade:SetPoint("TOPLEFT", vSolid, "TOPRIGHT"); vFade:SetPoint("BOTTOMRIGHT")
+	local bsf, bchild, bsb, brange = scrollList(bossBox, nil, BOSS_STEP)
+	bsf:SetPoint("TOPLEFT", 14, -10); bsf:SetPoint("BOTTOMRIGHT", -24, 10)
+	bsb:SetPoint("TOPLEFT", bsf, "TOPRIGHT", 6, 0); bsb:SetPoint("BOTTOMLEFT", bsf, "BOTTOMRIGHT", 6, 0)
 	local bossRows = {}
 	local function bossAt(i)
 		local b = bossRows[i]
@@ -424,58 +402,36 @@ function Okanvil:BuildRanking(host)
 		b = CreateFrame("Frame", nil, bchild)
 		b:SetHeight(16)
 		b:SetPoint("TOPLEFT", 0, -(i - 1) * BOSS_STEP); b:SetPoint("RIGHT", bchild, "RIGHT", -2, 0)
-		b.name = W.Text(b, "", "note"); b.name:SetPoint("LEFT", 0, 0); b.name:SetWidth(96)
+		b.name = onArt(b, "body"); b.name:SetPoint("LEFT", 0, 0); b.name:SetWidth(BOSS_NAME_W)
 		b.name:SetJustifyH("LEFT")
 		if b.name.SetWordWrap then b.name:SetWordWrap(false) end
-		b.val = W.Text(b, "", "note"); b.val:SetPoint("RIGHT", 0, 0); b.val:SetWidth(44); b.val:SetJustifyH("RIGHT")
-		b.track = fill(b, "BACKGROUND", 0, 0, 0, 0.45); b.track:SetHeight(5)
-		b.track:SetPoint("LEFT", b.name, "RIGHT", 6, 0); b.track:SetPoint("RIGHT", b.val, "LEFT", -6, 0)
-		b.bar = fill(b, "ARTWORK", 1, 1, 1, 1); b.bar:SetHeight(5)
+		b.val = onArt(b, "body"); b.val:SetPoint("RIGHT", 0, 0); b.val:SetWidth(52); b.val:SetJustifyH("RIGHT")
+		b.track = fill(b, "BORDER", 0, 0, 0, 0.5); b.track:SetHeight(4)
+		b.track:SetPoint("LEFT", b.name, "RIGHT", 6, 0); b.track:SetPoint("RIGHT", b.val, "LEFT", -8, 0)
+		b.bar = fill(b, "ARTWORK", 1, 1, 1, 1); b.bar:SetHeight(4)
 		b.bar:SetPoint("LEFT", b.track, "LEFT", 0, 0)
 		bossRows[i] = b
 		return b
 	end
 
-	-- right: the players around you, your rank on each board, the whole board
-	local nearCard = darkCard(toon)
-	nearCard:SetPoint("TOPLEFT", bossCard, "TOPRIGHT", GAP, 0)
-	nearCard:SetPoint("BOTTOMRIGHT", toon, "BOTTOMRIGHT", 0, 0)
-	local function splitCols()
+	-- the left column's width: under half the page, so the raider stays in view
+	local function sizeLeft()
 		local w = toon:GetWidth() or 0
-		if w > 40 then bossCard:SetWidth(math.floor((w - GAP) * 0.55)) end
+		if w < 40 then return end
+		local lw = math.min(math.floor(w * 0.46), LEFT_MAX)
+		nums:SetWidth(lw)
+		bossBox:SetWidth(lw + 14 + 40)
+		vSolid:SetWidth(math.floor((lw + 54) * 0.7))
 	end
-	toon:HookScript("OnSizeChanged", splitCols)
-	local nearHead = W.Text(nearCard, "AROUND YOU", "note", "dim"); nearHead:SetPoint("TOPLEFT", 10, -8)
-	local full = W.Button(nearCard, "Full board >", "tab")
-	full:SetSize(92, 20); full:SetPoint("TOPRIGHT", -6, -4)
-	full:SetScript("OnClick", function() state.view = "board"; refresh() end)
-	local near = {}
-	for i = 1, AROUND * 2 + 1 do
-		local r = CreateFrame("Frame", nil, nearCard)
-		r:SetHeight(AROUND_H)
-		r:SetPoint("TOPLEFT", 1, -26 - (i - 1) * AROUND_H); r:SetPoint("RIGHT", nearCard, "RIGHT", -1, 0)
-		r.me = fill(r, "BACKGROUND", C.accent[1], C.accent[2], C.accent[3], 0.14); r.me:SetAllPoints()
-		r.mark = fill(r, "BORDER", C.accent[1], C.accent[2], C.accent[3], 1); r.mark:SetWidth(2)
-		r.mark:SetPoint("TOPLEFT"); r.mark:SetPoint("BOTTOMLEFT")
-		r.n = W.Text(r, "", "label", "dim"); r.n:SetPoint("LEFT", 10, 0); r.n:SetWidth(30); r.n:SetJustifyH("LEFT")
-		r.icon = r:CreateTexture(nil, "ARTWORK"); r.icon:SetSize(16, 16); r.icon:SetPoint("LEFT", 42, 0)
-		r.v = W.Text(r, "", "label", "dim"); r.v:SetPoint("RIGHT", -10, 0); r.v:SetJustifyH("RIGHT")
-		r.name = W.Text(r, "", "label"); r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
-		r.name:SetPoint("RIGHT", r.v, "LEFT", -6, 0); r.name:SetJustifyH("LEFT")
-		if r.name.SetWordWrap then r.name:SetWordWrap(false) end
-		near[i] = r
-	end
-	local boards = CreateFrame("Frame", nil, nearCard)
-	boards:SetPoint("BOTTOMLEFT", 0, 0); boards:SetPoint("BOTTOMRIGHT", 0, 0); boards:SetHeight(44)
-	local bRule = fill(boards, "BORDER", C.border[1], C.border[2], C.border[3], 1)
-	bRule:SetHeight(1); bRule:SetPoint("TOPLEFT", 1, 0); bRule:SetPoint("TOPRIGHT", -1, 0)
-	local boardCells, boardLayout = cellRow(boards, 3)
-	local nearNone = W.Text(nearCard, "", "label", "dim"); nearNone:SetPoint("TOPLEFT", 10, -32)
+	toon:HookScript("OnSizeChanged", sizeLeft)
 
 	-- ==== BOARD VIEW: one whole board ====
 	local boardView = CreateFrame("Frame", nil, page)
 	boardView:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -GAP)
 	boardView:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT")
+	-- a long list over the art: one even veil behind it all
+	local bVeil = fill(boardView, "BACKGROUND", INK[1], INK[2], INK[3], VEIL)
+	bVeil:SetPoint("TOPLEFT", -6, 4); bVeil:SetPoint("BOTTOMRIGHT", 6, -4)
 	local x = 0
 	for _, k in ipairs(R.BOARDS) do
 		local b = tab(boardView, R.BOARD_LABEL[k], k == "d" and 46 or 68, function() state.kind = k end)
@@ -592,15 +548,10 @@ function Okanvil:BuildRanking(host)
 		size = size or state.size
 		local cls, spec = classOf(name)
 		local cr, cg, cb = classRGB(cls)
-		hero._name, hero._class = name, cls
-		local aw = artWidth()
-		if aw < 10 then aw = (HERO_H - 2) * 2 end
-		hArt:SetWidth(aw)
-		setArt(hArt, name, cls, aw / (HERO_H - 2))
-		classIcon(hIcon, cls)
-		hBar:SetVertexColor(cr, cg, cb, 0.9)
+		paintArt(name, cls)
 		hName:SetText(name); hName:SetTextColor(cr, cg, cb)
 		hSpec:SetText(spec and spec ~= "" and spec or "")
+		sizeLeft()
 
 		if p then
 			hNone:Hide(); hBoard:Show(); hRank:Show(); hOf:Show(); hMove:Show()
@@ -611,18 +562,25 @@ function Okanvil:BuildRanking(host)
 			paintMove(hMove, R.Move(size, kind, p.key, rank, state.period))
 			local vals = {
 				{ R.BOARD_UNIT[kind], fmtRate(p.rate, kind) },
-				{ "PTS", ("|cffe0b860%.1f|r"):format(p.pts) },
+				{ "PTS", ("|cffffd25a%.1f|r"):format(p.pts) },
 				{ "SERVER", pctText(p.srv) },
 				{ "FIGHTS", tostring(p.fights) .. (p.hc and "  |cffff8000H|r" or "") },
 			}
-			for i, v in ipairs(vals) do statCells[i].k:SetText(v[1]); statCells[i].v:SetText(v[2]) end
+			for i, v in ipairs(vals) do stat[i].k:SetText(v[1]); stat[i].v:SetText(v[2]) end
+			nums:Show()
 		else
 			hBoard:Hide(); hRank:Hide(); hOf:Hide(); paintMove(hMove, nil); hMove:Hide()
 			hNone:Show(); hNone:SetText("Not on a board " .. (state.period == "week" and "this week" or "yet"))
-			for i = 1, 4 do statCells[i].k:SetText(""); statCells[i].v:SetText("") end
-			statCells[1].k:SetText("NO BOARD"); statCells[1].v:SetText("|cff6f7176--|r")
+			nums:Hide()
 		end
-		statLayout()
+		-- with no rank line, the name moves up to where it was
+		hName:ClearAllPoints()
+		if p then hName:SetPoint("TOPLEFT", hRank, "BOTTOMLEFT", 0, -10)
+		else hName:SetPoint("TOPLEFT", hNone, "BOTTOMLEFT", 0, -10) end
+		bossBox:ClearAllPoints()
+		bossBox:SetPoint("TOPLEFT", p and nums or hSpec, "BOTTOMLEFT", -14, -10)
+		bossBox:SetPoint("BOTTOM", around, "TOP", 0, 10)
+		sizeLeft()
 
 		-- every boss of the raid, in order; the ones this toon has no parse on
 		-- dimmed. G = our own parse, for a boss the server does not rank.
@@ -634,17 +592,17 @@ function Okanvil:BuildRanking(host)
 			n = n + 1
 			local b, c = bossAt(n), byIdx[i - 1]
 			b.name:SetText(R.ShortBoss(boss) .. (c and c.hc and " |cffff8000H|r" or "")
-				.. (c and c.guild and " |cff8a8d93G|r" or ""))
+				.. (c and c.guild and " |cffb4b6bbG|r" or ""))
 			if c then
 				local r, g, bl = R.PctColor(c.pct)
-				b.name:SetTextColor(0.80, 0.81, 0.83)
+				b.name:SetTextColor(0.95, 0.95, 0.96)
 				b.val:SetText(("%d"):format(math.floor(c.pct))); b.val:SetTextColor(r, g, bl)
 				b.bar:SetVertexColor(r, g, bl, 1)
-				local tw = math.max(10, (bsf:GetWidth() or 200) - 96 - 6 - 44 - 8)
+				local tw = math.max(10, (bsf:GetWidth() or 200) - BOSS_NAME_W - 6 - 52 - 8)
 				b.bar:SetWidth(math.max(2, tw * math.min(c.pct, 100) / 100)); b.bar:Show()
 			else
-				b.name:SetTextColor(0.37, 0.38, 0.41)
-				b.val:SetText("no parse"); b.val:SetTextColor(0.37, 0.38, 0.41)
+				b.name:SetTextColor(0.55, 0.56, 0.60)
+				b.val:SetText("no parse"); b.val:SetTextColor(0.55, 0.56, 0.60)
 				b.bar:Hide()
 			end
 			b:Show()
@@ -653,34 +611,21 @@ function Okanvil:BuildRanking(host)
 		bchild:SetHeight(math.max(1, n * BOSS_STEP))
 		brange()
 
-		-- the players around you on your main board
+		-- the one above you, you, and the two below, on your main board
 		local list = p and R.Board(size, kind, state.period) or {}
-		local from = rank and math.max(1, math.min(rank - AROUND, #list - AROUND * 2)) or 1
-		for i, r in ipairs(near) do
-			local q = p and list[from + i - 1]
+		local from = rank and math.max(1, math.min(rank - 1, #list - AROUND + 1)) or 1
+		for i, t in ipairs(near) do
+			local at = from + i - 1
+			local q = p and list[at]
 			if q then
-				local qr, qg, qb = classRGB(q.class)
-				local isMe = (from + i - 1) == rank
-				r.n:SetText("#" .. (from + i - 1))
-				classIcon(r.icon, q.class)
-				r.name:SetText(q.name); r.name:SetTextColor(qr, qg, qb)
-				r.v:SetText(fmtRate(q.rate, kind))
-				if isMe then r.me:Show(); r.mark:Show(); r.n:SetTextColor(C.accentHi[1], C.accentHi[2], C.accentHi[3])
-				else r.me:Hide(); r.mark:Hide(); r.n:SetTextColor(0.54, 0.55, 0.58) end
-				r:Show()
+				local hex = at == rank and "ffffd25a" or hexOf(classRGB(q.class))
+				t:SetText(("|cffb4b6bb#%d|r  |c%s%s|r  %s"):format(at, hex, q.name, fmtRate(q.rate, kind)))
+				t:Show()
 			else
-				r:Hide()
+				t:Hide()
 			end
 		end
-		if p then nearNone:Hide() else nearNone:Show(); nearNone:SetText("Not on a board.") end
-
-		for i, k in ipairs(R.BOARDS) do
-			local c = boardCells[i]
-			local q, qr, qo = R.Find(size, k, name, state.period, true)
-			c.k:SetText(R.BOARD_LABEL[k]:upper())
-			c.v:SetText(q and ("#" .. qr .. " |cff8a8d93/ " .. qo .. "|r") or "|cff6f7176not ranked|r")
-		end
-		boardLayout()
+		if p then around:Show() else around:Hide() end
 	end
 
 	-- ---- paint: the whole board ----
@@ -746,7 +691,6 @@ function Okanvil:BuildRanking(host)
 				b:Hide()
 			end
 		end
-		splitCols()
 		if state.view == "board" then
 			for _, c in ipairs(chips) do c:Hide() end
 			back:Show(); toon:Hide(); boardView:Show()
