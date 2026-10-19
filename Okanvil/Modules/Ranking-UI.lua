@@ -18,12 +18,13 @@ local CLASS_TEX = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes
 -- Okanvil update. Without it, or for a raider with no art, the class's own.
 local ART_RAIDER = "Interface\\AddOns\\Okanvil-Art\\Ranking\\"
 local ART_CLASS = "Interface\\AddOns\\Okanvil\\Media\\Ranking\\_"
+local ART_FOCUS = 0.62           -- where the raider stands across the 2:1 art
 local PAD, GAP = 12, 8
-local CHIP_H, ROW_H, BOSS_STEP = 24, 26, 19
+local CHIP_H, ROW_H, BOSS_STEP, BOSS_STEP_MAX = 24, 26, 19, 28
 local AROUND = 4                 -- the one above you, you, and two below
 local RANK_SIZE, NAME_SIZE, NUM_SIZE = 44, 30, 18
 local BOSS_NAME_W, VAL_W = 110, 64
-local CARD_SHARE, INFO_GAP = 0.40, 14   -- the portrait card's share of the width; the gap after it
+local CARD_SHARE, INFO_GAP = 0.50, 14   -- the portrait card's share of the width; the gap after it
 local FOOT_H = 170               -- the darkened foot of the card, under the rank and name
 local TILE_H, TILE_GAP, NEAR_H = 44, 6, 22
 local INK = { 0.035, 0.037, 0.043 }   -- the near-black the card sits on
@@ -42,14 +43,16 @@ end
 
 -- The raider's art, else their class's; then cut to the frame's shape. The
 -- texture is 2:1, so a frame of aspect `a` (width / height) shows the whole
--- height and the right a/2 of the width when a < 2, or the full width and a
--- band 2/a tall around the head when a > 2 (a banner).
+-- height and a/2 of the width when a < 2, centred on the raider (ART_FOCUS),
+-- or the full width and a band 2/a tall around the head when a > 2 (a banner).
 local function setArt(tex, name, token, aspect)
 	if not (name and tex:SetTexture(ART_RAIDER .. R.Norm(name))) then
 		if not tex:SetTexture(ART_CLASS .. (token or ""):lower()) then tex:SetTexture(nil); return end
 	end
 	if aspect < 2 then
-		tex:SetTexCoord(1 - aspect / 2, 1, 0, 1)
+		local span = aspect / 2
+		local left = math.min(math.max(ART_FOCUS - span / 2, 0), 1 - span)
+		tex:SetTexCoord(left, left + span, 0, 1)
 	else
 		local h = 2 / aspect
 		local top = math.max(0, 0.36 - h / 2)
@@ -246,7 +249,6 @@ end
 
 -- A toon's class token: from any board it is on, else your own if it is you.
 local function classOf(name)
-	if name == UnitName("player") then return (select(2, UnitClass("player"))) end
 	for _, s in ipairs(R.SIZES) do
 		for _, pd in ipairs(R.PERIODS) do
 			for _, k in ipairs(R.BOARDS) do
@@ -255,6 +257,7 @@ local function classOf(name)
 			end
 		end
 	end
+	if name == UnitName("player") then return (select(2, UnitClass("player"))) end
 	return nil
 end
 
@@ -337,7 +340,7 @@ function Okanvil:BuildRanking(host)
 
 	-- ==== TOON VIEW: a portrait card on the left, the numbers on the page ====
 	local toon = CreateFrame("Frame", nil, page)
-	toon:SetPoint("TOPLEFT", top, "BOTTOMLEFT", 0, -GAP)
+	toon:SetPoint("TOPLEFT", page, "TOPLEFT")
 	toon:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT")
 
 	-- the card: the art whole, the class colour along its top, the rank and the
@@ -419,7 +422,7 @@ function Okanvil:BuildRanking(host)
 
 	-- server % per boss, filling the space between the numbers and "around you"
 	local bossHead = section("PER BOSS  ·  SERVER %")
-	bossHead:SetPoint("TOPLEFT", info, "TOPLEFT", 0, -(TILE_H + 10))
+	bossHead:SetPoint("TOPLEFT", info, "TOPLEFT", 0, -(CHIP_H + GAP + TILE_H + 10))
 	bossHead:SetPoint("RIGHT", info, "RIGHT", 0, 0)
 	local bossBox = CreateFrame("Frame", nil, info)
 	bossBox:SetPoint("TOPLEFT", bossHead, "BOTTOMLEFT", 0, -6)
@@ -456,11 +459,12 @@ function Okanvil:BuildRanking(host)
 		local tw = math.floor((iw - 3 * TILE_GAP) / 4)
 		for i, t in ipairs(stat) do
 			t:ClearAllPoints(); t:SetWidth(tw)
-			t:SetPoint("TOPLEFT", info, "TOPLEFT", (i - 1) * (tw + TILE_GAP), 0)
+			t:SetPoint("TOPLEFT", info, "TOPLEFT", (i - 1) * (tw + TILE_GAP), -(CHIP_H + GAP))
 		end
 		if cardFor.name then paintCard(cardFor.name, cardFor.cls) end
 	end
 	toon:HookScript("OnSizeChanged", sizeCard)
+	bsf:HookScript("OnSizeChanged", function() if state.view ~= "board" and refresh then refresh() end end)
 
 	-- ==== BOARD VIEW: one whole board ====
 	local boardView = CreateFrame("Frame", nil, page)
@@ -612,7 +616,15 @@ function Okanvil:BuildRanking(host)
 			b:Show()
 		end
 		for i = n + 1, #bossRows do bossRows[i]:Hide() end
-		bchild:SetHeight(math.max(1, n * BOSS_STEP))
+		-- spread the rows over the height there is, so no gap opens under the list
+		local room = bsf:GetHeight() or 0
+		local step = BOSS_STEP
+		if n > 0 and room > 0 then step = math.max(BOSS_STEP, math.min(BOSS_STEP_MAX, math.floor(room / n))) end
+		for i = 1, n do
+			bossRows[i]:ClearAllPoints()
+			bossRows[i]:SetPoint("TOPLEFT", 0, -(i - 1) * step); bossRows[i]:SetPoint("RIGHT", bchild, "RIGHT", -2, 0)
+		end
+		bchild:SetHeight(math.max(1, n * step))
 		brange()
 
 		-- the one above you, you, and the two below, on your main board
@@ -690,10 +702,13 @@ function Okanvil:BuildRanking(host)
 		empty:Hide(); top:Show()
 		if not (state.period and R.HasPeriod(state.period)) then state.period = R.DefaultPeriod() end
 		layoutTabs()
+		top:ClearAllPoints()
 		if state.view == "board" then
+			top:SetPoint("TOPLEFT", page, "TOPLEFT"); top:SetPoint("TOPRIGHT", page, "TOPRIGHT")
 			back:Show(); toon:Hide(); boardView:Show()
 			paintBoard()
 		else
+			top:SetPoint("TOPLEFT", info, "TOPLEFT"); top:SetPoint("TOPRIGHT", info, "TOPRIGHT")
 			back:Hide(); boardView:Hide(); toon:Show()
 			pickToon()
 			paintToon()
