@@ -1049,6 +1049,9 @@ end
 
 local function unowned(dp)
 	if not dp then return false end
+	-- A confirmed award is taken, even one the ML gave to themself: a later
+	-- roll winner of the same item must claim another copy, not this one.
+	if dp.awarded then return false end
 	-- Sitting in the ML's bags waiting to be handed out: still open.
 	if dp.heldBy and dp.heldBy ~= "" and (not dp.receivedBy or dp.receivedBy == "") then
 		return true
