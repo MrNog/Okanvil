@@ -862,13 +862,14 @@ function RM.Rebuild()
 		end
 		y = y - 4
 	end
-	-- A raid lead or assist who runs the council with the master looter asks too.
+	-- An officer running the council with /okcouncil force (or solo) asks too.
 	-- Ask only: giving and calling rolls need the master looter.
 	if not ml then
 		local CC = Okanvil.Council
 		local SRM = Okanvil.SoftRes
+		-- /okcouncil force runs it whatever mode the master looter's client says
 		if CC and CC.active and CC.MayRun and CC.MayRun() and CC.Enabled and CC.Enabled()
-			and not (SRM and SRM.CouncilAllowed and not SRM.CouncilAllowed()) then
+			and (CC.forceRun or not (SRM and SRM.CouncilAllowed and not SRM.CouncilAllowed())) then
 			local bh = 22
 			local askB = keep(W.Button(body, "Ask council", "primary"))
 			askB:SetSize(INNER, bh); askB:SetPoint("TOPLEFT", M, y)

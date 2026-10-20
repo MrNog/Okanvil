@@ -99,8 +99,7 @@ local NIGHT_TTL = 3 * 3600
 
 function C_.SetActive(on)
 	if on and not C_.MayRun() then
-		Okanvil:Print("|cffff5555Loot council:|r only the master looter, or a raid lead / assist "
-			.. "who is an officer, can start council night.")
+		Okanvil:Print("|cffff5555Loot council:|r only the master looter can start council night.")
 		return
 	end
 	C_.active = on and true or false
@@ -157,21 +156,18 @@ end
 C_.CanSeeBoard = canSeeBoard
 
 -- Who may RUN the council: switch council night on and put items to the raid.
--- In a group: the master looter, and the raid leader or an assist who is an
--- officer, so one of them can ask while the master looter is busy handing out.
--- Only the master looter gives (the board's Give and auto-ask stay with them).
--- Solo there is nobody to disturb, so solo is always allowed.
+-- In a group, only the master looter -- other officers see the board and vote.
+-- Two people asking at once replace each other's popup on every raider.
+-- Solo there is nobody to disturb, so solo is always allowed. /okcouncil force
+-- lets an officer run it for this session when the master looter cannot.
 local function mayRunCouncil()
-	local inRaid = GetNumRaidMembers and GetNumRaidMembers() > 0
-	local inGroup = inRaid or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+	local inGroup = (GetNumRaidMembers and GetNumRaidMembers() > 0)
+		or (GetNumPartyMembers and GetNumPartyMembers() > 0)
 	if not inGroup then return true end
+	if C_.forceRun and canSeeBoard() then return true end
 	local L = Okanvil.Loot
 	local me = UnitName and UnitName("player")
-	if L and L.MasterLooterName and me and L.MasterLooterName() == me then return true end
-	local lead
-	if inRaid then lead = (IsRaidLeader and IsRaidLeader()) or (IsRaidOfficer and IsRaidOfficer())
-	else lead = IsPartyLeader and IsPartyLeader() end
-	return (lead and canSeeBoard()) and true or false
+	return (L and L.MasterLooterName and me and L.MasterLooterName() == me) and true or false
 end
 C_.MayRun = mayRunCouncil
 
@@ -1397,8 +1393,8 @@ function C_.Ask(links, boss)
 		return false
 	end
 	if not mayRunCouncil() then
-		Okanvil:Print("|cffff5555Loot council:|r only the master looter or a raid lead / assist "
-			.. "puts items to the raid -- you see the board and vote when they do.")
+		Okanvil:Print("|cffff5555Loot council:|r only the master looter puts items to the raid "
+			.. "-- you see the board and vote when they do.")
 		return false
 	end
 
@@ -3803,6 +3799,21 @@ _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 		else d.autoAsk = not d.autoAsk end
 		Okanvil:Print("Loot council: auto-ask is "
 			.. (d.autoAsk and "|cff7cfc8aON|r" or "|cffff5555OFF|r") .. ".")
+		return
+	end
+	-- /okcouncil force -- an officer runs the council for this session when the
+	-- master looter cannot (no Okanvil, wrong version). Not saved: a /reload ends it.
+	if verb == "force" then
+		if not canSeeBoard() then
+			Okanvil:Print("|cffff5555Loot council:|r officers only.")
+			return
+		end
+		C_.forceRun = not C_.forceRun or nil
+		Okanvil:Print("Loot council: force is " .. (C_.forceRun and "|cff7cfc8aON|r -- you can start council night and ask."
+			or "|cffff5555OFF|r -- the master looter runs it again."))
+		if not C_.forceRun and C_.active and not C_.MayRun() then C_.SetActive(false) end
+		if Okanvil.RollMgr and Okanvil.RollMgr.Rebuild then pcall(Okanvil.RollMgr.Rebuild) end
+		if C_._paintRun then pcall(C_._paintRun) end
 		return
 	end
 	-- /okcouncil night [on|off] -- council night, the switch that shows the mini
