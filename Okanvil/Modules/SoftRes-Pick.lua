@@ -520,7 +520,7 @@ paint = function()
 	end
 
 	if state.locked then
-		win.status:SetText("|cff7cfc8aSent|r |cff8a8d93-- it can no longer be changed|r")
+		win.status:SetText("|cffffd200Sent|r |cff8a8d93-- it can no longer be changed|r")
 		win.send:Disable(); win.send:SetAlpha(0.4)
 	else
 		win.status:SetText(#picks .. " / " .. state.limit)
@@ -729,7 +729,7 @@ do
 			if tostring(n):match("^x:") then
 				Okanvil:Print("|cffff5555Soft reserve not saved:|r " .. tostring(n):sub(3))
 			else
-				Okanvil:Print("|cff7cfc8aSoft reserve received by " .. stripRealm(sender) .. ".|r")
+				Okanvil:Print("|cffffd200Soft reserve received by " .. stripRealm(sender) .. ".|r")
 			end
 		end)
 	end

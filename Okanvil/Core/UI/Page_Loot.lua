@@ -208,11 +208,11 @@ function Okanvil:BuildLoot()
 
 	-- Loot (tonight's setup) and History for everyone; Priority for officers.
 	local tabs = {
-		{ key = "loot", label = "Loot", height = 400, build = buildBody },
-		{ key = "history", label = "History", height = 400, fill = true, build = buildHistory },
+		{ key = "loot", label = "Loot mode", icon = "Interface\\Icons\\INV_Misc_Bag_08", height = 400, build = buildBody },
+		{ key = "history", label = "History", icon = "Interface\\Icons\\INV_Scroll_03", height = 400, fill = true, build = buildHistory },
 	}
 	if officer then
-		tabs[#tabs + 1] = { key = "prio", label = "Priority", height = 400, fill = true,
+		tabs[#tabs + 1] = { key = "prio", label = "Priority", icon = "Interface\\Icons\\INV_Misc_Book_09", height = 400, fill = true,
 			build = function(pg) Okanvil:Loot_BuildPrio(pg) end }
 	end
 
@@ -227,7 +227,7 @@ function Okanvil:BuildLoot()
 			elseif r == "noapi" then
 				Okanvil:Print("|cffff5555SetLootMethod unavailable.|r")
 			else
-				Okanvil:Print("Loot method set to |cff7cfc8amaster|r -- you are the Master Looter.")
+				Okanvil:Print("Loot method set to |cffffd200master|r -- you are the Master Looter.")
 			end
 			if fill and fill.refreshAll then fill.refreshAll() end
 		end
@@ -246,6 +246,7 @@ function Okanvil:BuildLoot()
 	-- no footer -- so a page gets the window's full width.
 	local dash = W.Dashboard(host, {
 		title = "Loot",
+		settingsTab = "loot",
 		subtitle = "Set up before the raid. During it, use the mini roll.",
 		icon = Okanvil.ICONS.loot,
 		drawerWidth = 0,
@@ -264,7 +265,7 @@ function Okanvil:BuildLoot()
 		onTertiary = takeML,
 		statusText = function()
 			if L and L.IsMasterLooter and L.IsMasterLooter() then
-				return "|cff7cfc8aMaster Looter|r"
+				return "|cffffd200Master Looter|r"
 			end
 			-- name WHO the ML is, instead of only saying it isn't you -- that's the
 			-- useful half of the answer when loot won't auto-give.
@@ -408,7 +409,7 @@ function Okanvil:Loot_BuildCollectors(p)
 		eb.edit:HookScript("OnEditFocusGained", paintPH)
 		eb.edit:HookScript("OnEditFocusLost", paintPH)
 
-		if sf.text then sf.text:SetText("|cff7cfc8aSelf|r") end
+		if sf.text then sf.text:SetText("|cffffd200Self|r") end
 		sf:SetScript("OnClick", function() setName(UnitName("player")) end)
 		tg:SetScript("OnClick", function()
 			local n = UnitName("target")
@@ -435,7 +436,7 @@ local MODE_TILES = {
 	{ mode = "sr",      title = "SR",      sub = "Soft reserves" },
 	{ mode = "roll",    title = "Roll",    sub = "MS / OS" },
 }
-local MODE_TILE_H, MODE_TILE_GAP = 46, 6
+local MODE_TILE_H, MODE_TILE_GAP = 54, 8
 
 function Okanvil:Loot_BuildModes(p)
 	local SR = Okanvil.SoftRes
@@ -455,14 +456,15 @@ function Okanvil:Loot_BuildModes(p)
 			t:EnableMouse(can)
 			t:SetAlpha((can or t._mode == cur) and 1 or 0.55)
 			local on = t._mode == cur
+			-- the picked tile: a gold edge all the way round and a warm fill
 			if on then
-				t.bg:SetVertexColor(C.accentD[1], C.accentD[2], C.accentD[3], 0.55)
-				t.edge:Show()
+				t:SetBackdropColor(C.accentD[1], C.accentD[2], C.accentD[3], 0.55)
+				t:SetBackdropBorderColor(1, 0.82, 0, 0.9)
 				t.title:SetTextColor(C.accentText[1], C.accentText[2], C.accentText[3])
 				t.sub:SetTextColor(C.text[1], C.text[2], C.text[3])
 			else
-				t.bg:SetVertexColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.85)
-				t.edge:Hide()
+				t:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.85)
+				t:SetBackdropBorderColor(C.edge[1], C.edge[2], C.edge[3], 1)
 				t.title:SetTextColor(C.text[1], C.text[2], C.text[3])
 				t.sub:SetTextColor(C.textDim[1], C.textDim[2], C.textDim[3])
 			end
@@ -474,15 +476,8 @@ function Okanvil:Loot_BuildModes(p)
 		t._mode, t._sub = def.mode, def.sub
 		t:SetHeight(MODE_TILE_H)
 		Okanvil:Skin(t, "dark")
-		t.bg = t:CreateTexture(nil, "BACKGROUND", nil, 1)
-		t.bg:SetTexture(FLAT); t.bg:SetPoint("TOPLEFT", 1, -1); t.bg:SetPoint("BOTTOMRIGHT", -1, 1)
-		t.edge = t:CreateTexture(nil, "ARTWORK")
-		t.edge:SetTexture(FLAT); t.edge:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 1)
-		t.edge:SetHeight(2); t.edge:SetPoint("TOPLEFT", 1, -1); t.edge:SetPoint("TOPRIGHT", -1, -1)
-		t.hover = t:CreateTexture(nil, "HIGHLIGHT")
-		t.hover:SetTexture(FLAT); t.hover:SetVertexColor(1, 1, 1, 0.04); t.hover:SetAllPoints()
 		t.title = W.Text(t, def.title, "head")
-		t.title:SetPoint("TOPLEFT", 10, -9)
+		t.title:SetPoint("TOPLEFT", 16, -11)
 		t.sub = W.Text(t, def.sub, "note")
 		t.sub:SetPoint("TOPLEFT", t.title, "BOTTOMLEFT", 0, -4)
 		t:SetScript("OnClick", function(s) SR.SetMode(s._mode) end)
@@ -671,7 +666,7 @@ function Okanvil:Loot_BuildSoftRes(p)
 		local ni, np = SR.Summary()
 		nItems:SetText(tostring(ni or 0)); nRaid:SetText(tostring(np or 0))
 		local open = SR.IntakeOpen()
-		wState:SetText(open and "|cff7cfc8aWhispers open|r" or "|cff8a8d93Whispers locked|r")
+		wState:SetText(open and "|cffffd200Whispers open|r" or "|cff8a8d93Whispers locked|r")
 		lockB.text:SetText(open and "|cffff5555Lock|r" or "Open")
 		for n, b in ipairs(seg) do b:SetKind(n == SR.Limit() and "primary" or nil) end
 		srRaidB.Sync()
@@ -709,106 +704,6 @@ function Okanvil:Loot_BuildSoftRes(p)
 	end
 	p:SetScript("OnShow", paint)
 	paint()
-end
-
--- ---- Announce templates: MS/OS/Free/Whisper ([item] placeholder) ----
--- Drawn as part of Settings > Loot (below), not a page of its own: four text
--- boxes you fill in once were never worth a tab in front of the loot history.
-local function buildMessages(p, y0)
-	local L = Okanvil.Loot
-	local X = 8
-	if not (L and L.RollMsg) then return y0 end
-	local hd = W.Text(p, "ANNOUNCE TEMPLATES", "note", "dim")
-	hd:SetPoint("TOPLEFT", X, y0)
-	local sub = W.Text(p, "|cffffd200[item]|r = the itemlink.", "note", "dim")
-	sub:SetPoint("TOPLEFT", X, y0 - 16)
-
-	local function row(label, y, getFn, setFn)
-		local lb = W.Text(p, label, "label"); lb:SetPoint("TOPLEFT", X, y - 4); lb:SetWidth(58); lb:SetJustifyH("LEFT")
-		if lb.SetWordWrap then lb:SetWordWrap(false) end
-		local eb = W.EditBox(p, function(t) setFn(t) end)
-		eb:SetSize(360, 24); eb:SetPoint("LEFT", lb, "RIGHT", 8, 0); eb.edit:SetText(getFn())
-		return eb
-	end
-	-- MS and OS only. The Free button is gone from the mini roll (four buttons in
-	-- a 270px row were unreadable), so a box to word a message nothing sends was
-	-- a setting for a feature that no longer exists. The "free" mode itself stays
-	-- as StartRoll's fallback, and its default wording with it.
-	row("MS",      y0 - 40, function() return L.RollMsg("ms") end,   function(t) L.SetRollMsg("ms", t) end)
-	local osBox = row("OS", y0 - 70, function() return L.RollMsg("os") end, function(t) L.SetRollMsg("os", t) end)
-	-- the MS call for a soft-reserved item; [names] = who reserved it
-	local SRM = Okanvil.SoftRes
-	if SRM and SRM.Msg then
-		local srBox = row("SR", y0 - 100, function() return SRM.Msg() end, function(t) SRM.SetMsg(t) end)
-		local srh = W.Text(p, "|cffffd200[names]|r = who reserved it", "note", "dim")
-		srh:SetPoint("LEFT", srBox, "RIGHT", 14, 0)
-	end
-	-- ROLL TIMER: seconds before an MS/OS roll ends itself. Beside the templates
-	-- it applies to; the loot council has no clock and is not affected.
-	if L.RollTimer then
-		local tl = W.Text(p, "Timer", "label")
-		tl:SetPoint("LEFT", osBox, "RIGHT", 14, 0)
-		local tb = W.EditBox(p, function(t)
-			L.SetRollTimer(t)
-			if p._timerBox then p._timerBox.edit:SetText(tostring(L.RollTimer())) end
-		end)
-		tb:SetSize(40, 24); tb:SetPoint("LEFT", tl, "RIGHT", 6, 0)
-		tb.edit:SetText(tostring(L.RollTimer()))
-		p._timerBox = tb
-		local tn = W.Text(p, "s  (0 = off)", "note", "dim")
-		tn:SetPoint("LEFT", tb, "RIGHT", 6, 0)
-	end
-	-- ON AWARD: the switch and the message it sends, as one control. They used to
-	-- be on separate pages -- the toggle under Collectors, the text here -- so
-	-- neither half said anything about the other, and the box sat empty with the
-	-- switch on and nothing to explain why nothing was sent.
-	local wy = y0 - 148
-	local wh = W.Text(p, "ON AWARD", "note", "dim"); wh:SetPoint("TOPLEFT", X, wy)
-	wy = wy - 24
-
-	local wc = W.Check(p, "Whisper the winner",
-		function() return L.WhisperWinner() end,
-		function(v) L.SetWhisperWinner(v); if p._paintWhisper then p._paintWhisper() end end)
-	wc:SetPoint("TOPLEFT", X, wy)
-	wy = wy - 26
-
-	-- Same width as the three announce templates above it, rather than stretched
-	-- to the panel's right edge. A box twice the length of anything anyone types
-	-- into it reads as asking for a paragraph.
-	local web = W.EditBox(p, function(t) L.SetWhisperMsg(t) end)
-	web:SetHeight(24)
-	web:SetPoint("TOPLEFT", X + 21, wy)
-	-- Ends where the announce boxes above it end (they start at X+66 and run 360),
-	-- so the right edges of every text field on this page line up.
-	web:SetWidth(405)
-	web.edit:SetText(L.WhisperMsg() or "")
-
-	-- The "nothing to send" warning sits BESIDE the box, not over it. Printed
-	-- inside the edit area it looked like text already typed in -- red characters
-	-- sharing the line with the cursor, which reads as a bad value rather than an
-	-- empty one.
-	local wph = W.Text(p, "", "note", "dim")
-	wph:SetPoint("LEFT", web, "RIGHT", 10, 0)
-	p._paintWhisper = function()
-		local on = L.WhisperWinner()
-		local txt = web.edit:GetText() or ""
-		web:SetAlpha(on and 1 or 0.4)
-		if on and txt == "" then
-			wph:SetText("|cffff5555nothing to send|r")
-		else
-			wph:SetText("")
-		end
-	end
-	web.edit:HookScript("OnTextChanged", function() p._paintWhisper() end)
-	p._paintWhisper()
-
-	-- Room between the box and its note: at 22 they touched, and the hint read as
-	-- part of the field.
-	wy = wy - 32
-	local whh = W.Text(p, "|cff6f7176sent when the boss loot window has already closed|r", "note", "dim")
-	whh:SetPoint("TOPLEFT", X + 21, wy)
-
-	return wy - 30
 end
 
 -- ---- History (landing/main): one row per session; clicking it opens it in place
@@ -1114,84 +1009,6 @@ function Okanvil:Loot_BuildHistory(main)
 
 	if fill then fill._rebuildHistory = rebuild end
 	rebuild()
-end
-
--- ------------------------------------------------------------
--- Invite (native) -- form a raid/party fast: mass-invite, by rank, saved lists
--- with comp-group import + auto-assign, keyword whisper invite, on-login invite.
--- ------------------------------------------------------------
-
-function Okanvil:Loot_BuildSettings(p)
-	local db = self.db
-	-- Section headings on this page are dim all-caps notes, the same as
-	-- ANNOUNCE TEMPLATES and ON AWARD below. Three of them were normal-case
-	-- "label" text, so half the page's headings looked like control labels.
-	-- Section headings on this page are dim all-caps notes, the same as
-	-- ANNOUNCE TEMPLATES and ON AWARD below. This block's headings were
-	-- normal-case "label" text, so half the page's headings looked like the
-	-- label of a control rather than the name of a group.
-	--
-	-- One row per instance type: capture on/off, the lowest quality logged, and
-	-- whether the run stays in the history once the next one starts.
-	local ll = W.Text(p, "CAPTURE", "note", "dim"); ll:SetPoint("TOPLEFT", 8, -8)
-
-	local hQ = W.Text(p, "Log items of quality", "label", "dim"); hQ:SetPoint("TOPLEFT", 130, -32)
-
-	local RARITY = {
-		{ text = "|cff9d9d9dPoor+|r", value = 0 }, { text = "|cffffffffCommon+|r", value = 1 },
-		{ text = "|cff1eff00Uncommon+|r", value = 2 }, { text = "|cff0070ddRare+|r", value = 3 },
-		{ text = "|cffa335eeEpic|r", value = 4 },
-	}
-	local function captureRow(y, label, recKey, thrKey, thrDef, keepKey, keepDef)
-		local c = W.Check(p, label,
-			function() return db[recKey] ~= false end, function(v) db[recKey] = v end)
-		c:SetPoint("TOPLEFT", 8, y - 2)
-		local dd = W.DropDown(p, function() return RARITY end,
-			function() return db[thrKey] or thrDef end, function(v) db[thrKey] = v end)
-		dd:Size(140, 22):Point("TOPLEFT", 130, y)
-		dd.refreshText = function(self)
-			local cur = db[thrKey] or thrDef
-			for _, o in ipairs(RARITY) do
-				if o.value == cur then self.textFS:SetText(o.text); return end
-			end
-		end
-		dd:refreshText()
-		local k = W.Check(p, "Keep in history", function()
-			if db[keepKey] == nil then return keepDef end
-			return db[keepKey]
-		end, function(v) db[keepKey] = v end)
-		k:SetPoint("TOPLEFT", 290, y - 2)
-	end
-	captureRow(-50, "Dungeons", "recordDungeon", "lootThresholdDungeon", 3, "lootKeepDungeon", false)
-	captureRow(-80, "Raids", "recordRaid", "lootThresholdRaid", 4, "lootKeepRaid", true)
-
-	local hint = W.Text(p, "Orbs, Primordial Saronite and legendary fragments are always logged.\n"
-		.. "A run not kept stays in the mini roll only, until the next one starts.", "label", "dim")
-	hint:SetPoint("TOPLEFT", 8, -110)
-	hint:SetJustifyH("LEFT")
-
-	-- announce templates: everyone who awards loot needs these. It reports where
-	-- it ended, and the next block starts there -- a hard -330 below drifts the
-	-- moment anything above changes height, which is how the whisper box came to
-	-- sit on top of the priority toggle.
-	local y = buildMessages(p, -150)
-
-	-- Everything below is about the priority list, so it is only built for someone
-	-- who can see that list -- to anyone else these are controls for a thing they
-	-- cannot open.
-	if not (Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio()) then return end
-
-	-- ---- Priority list ----------------------------------------------------
-	-- Lived as a button on the Prio tab's toolbar, which put a choice nobody
-	-- revisits after the first time in front of the list every single visit.
-	local ph = W.Text(p, "Priority list", "label", "dim"); ph:SetPoint("TOPLEFT", 8, y)
-	local cMulti = W.Check(p, "Send each name on its own line",
-		function() return Okanvil.LootPrio and Okanvil.LootPrio.MultiLine() end,
-		function() if Okanvil.LootPrio then Okanvil.LootPrio.ToggleMultiLine() end end)
-	cMulti:SetPoint("TOPLEFT", 8, y - 20)
-	cMulti:Tooltip("Off: the item and its ladder go out as one line.\n"
-		.. "On: the item first, then its top names one per line.")
-
 end
 
 -- ---- Prio tab: the officer page's ladder, pasted in and readable in-game ----

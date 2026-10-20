@@ -1389,7 +1389,7 @@ M.Classify = classify
 -- column it belongs in are the same colour.
 local ROLE_TINT = {
 	tank   = "|cff4a90d9",
-	healer = "|cff7cfc8a",
+	healer = "|cffffd200",
 	melee  = "|cffe05555",
 	ranged = "|cffc77dd6",
 }

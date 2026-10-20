@@ -566,7 +566,7 @@ function Okanvil:SetDevMode(on)
 	self.db.devMode = on and true or false
 	if self.db.devMode then
 		local f = self:DevFrame(true)
-		self:Print("Dev mode |cff7cfc8aON|r"
+		self:Print("Dev mode |cffffd200ON|r"
 			.. (f and (" -- output goes to the |cffe0b860" .. DEV_TAB_NAME .. "|r chat tab.")
 			or " -- |cffff5555could not open a chat tab (all 10 in use); using default chat.|r"))
 	else
@@ -852,7 +852,7 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		end
 
 		if not Okanvil.LITE then
-			Okanvil:Print("loaded -- |cff00ff00/okanvil|r. " .. Okanvil:CountPlugins() .. " plugin(s).")
+			Okanvil:Print("loaded -- |cffffd200/okanvil|r. " .. Okanvil:CountPlugins() .. " plugin(s).")
 		end
 
 		-- A few seconds in, so it lands after the login spam and the loading
@@ -948,7 +948,7 @@ SlashCmdList["Okanvil"] = function(arg)
 	if arg == "dev" then
 		local on = not (Okanvil.db.devMode and true or false)
 		Okanvil:SetDevMode(on)
-		Okanvil:Print(on and "dev mode |cff7cfc8aON|r -- debug goes to the |cffe0b860Okanvil|r chat tab."
+		Okanvil:Print(on and "dev mode |cffffd200ON|r -- debug goes to the |cffe0b860Okanvil|r chat tab."
 			or "dev mode |cff8a8d93OFF|r.")
 		return
 	end
@@ -1073,7 +1073,7 @@ SlashCmdList["OKERR"] = function(arg)
 	end
 	local report = Okanvil:ErrorReport()
 	if not report then
-		Okanvil:Print("No errors recorded. |cff7cfc8aNice.|r")
+		Okanvil:Print("No errors recorded. |cffffd200Nice.|r")
 		return
 	end
 	if Okanvil.ShowExport then

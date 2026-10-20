@@ -388,7 +388,7 @@ function WIN.Refresh()
 				r.t:SetText("")
 				r:SetAlpha(0.4)
 			else
-				local col = left <= 5 and "|cffff5555" or (left <= 10 and "|cffe0b860" or "|cff7cfc8a")
+				local col = left <= 5 and "|cffff5555" or (left <= 10 and "|cffe0b860" or "|cffffd200")
 				r.t:SetText(col .. fmt(left) .. "|r")
 				r:SetAlpha(1)
 			end

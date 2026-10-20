@@ -24,7 +24,7 @@ local QMARK = "Interface\\Icons\\INV_Misc_QuestionMark"
 local MAX_SPELL_ID = 80000 -- WotLK 3.3.5a tops out well under this
 local MAX_ITEM_ID = 56000 -- upper bound for the optional full item scan
 local MAX_RESULTS = 300 -- cap matches per search (keeps the UI snappy)
-local ROW_H = 28 -- room for an 18px icon plus air; names are clamped to one line
+local ROW_H = 40 -- room for a 32px framed icon; names are clamped to one line
 
 local defaults = {
 	items = {}, -- [itemID] = name   (harvested; account-wide)
@@ -440,6 +440,7 @@ local function buildUI(host)
 	local W = Okanvil.W
 	local dash = W.Dashboard(host, {
 		title = "ID Finder",
+		settingsTab = "general",
 		subtitle = "Spell and item IDs for WeakAuras",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.ids) or "Interface\\Icons\\INV_Misc_Spyglass_02",
 		drawerWidth = 0,
@@ -496,7 +497,7 @@ local function buildUI(host)
 	-- and the row count follows from that.
 	-- BOTTOM_Y used to leave 34px for an "advanced" footer row. That row is gone,
 	-- so the lists get the space instead.
-	local COL_GAP, TOP_Y, BOTTOM_Y = 10, -78, 10
+	local COL_GAP, TOP_Y, BOTTOM_Y = 10, -44, 10
 	local function makeColumn(side, header, key)
 		local col = { results = {} }
 		local card = W.Frame(parent, "soft")
@@ -510,15 +511,15 @@ local function buildUI(host)
 			card:SetPoint("RIGHT", parent, "RIGHT", -X, 0)
 		end
 		-- gold header sits INSIDE the card top
-		local h = newText(card, "OVERLAY", 12)
-		h:SetPoint("TOPLEFT", 8, -7)
+		local h = newText(card, "OVERLAY", 15)
+		h:SetPoint("TOPLEFT", 10, -8)
 		h:SetTextColor(1.0, 0.82, 0.0)
 		h:SetText(header)
 		col.count = newText(card, "OVERLAY")
 		col.count:SetPoint("LEFT", h, "RIGHT", 6, 0)
 		col.count:SetTextColor(0.54, 0.55, 0.58)
 		local scroll = CreateFrame("ScrollFrame", "OkanvilIDs_Col" .. key, card, "FauxScrollFrameTemplate")
-		scroll:SetPoint("TOPLEFT", 4, -26)
+		scroll:SetPoint("TOPLEFT", 4, -30)
 		scroll:SetPoint("BOTTOMRIGHT", -26, 4)   -- leave the scrollbar its gutter
 
 		-- Blizzard's template ships an up/down arrow and a stone-textured thumb
@@ -536,12 +537,12 @@ local function buildUI(host)
 				sb:ClearAllPoints()
 				sb:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 4, 0)
 				sb:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 4, 0)
-				sb:SetWidth(12)
+				sb:SetWidth(4)
 				local thumb = sb:GetThumbTexture()
 				if thumb then
 					thumb:SetTexture("Interface\\ChatFrame\\ChatFrameBackground")
 					thumb:SetVertexColor(0.75, 0.58, 0.23, 0.8)
-					thumb:SetWidth(12)
+					thumb:SetWidth(4)
 				end
 			end
 		end
@@ -586,17 +587,17 @@ local function buildUI(host)
 				r:SetPoint("TOPLEFT", rows[i - 1], "BOTTOMLEFT", 0, 0)
 				r:SetPoint("TOPRIGHT", rows[i - 1], "BOTTOMRIGHT", 0, 0)
 			end
-			r.icon = r:CreateTexture(nil, "ARTWORK")
-			r.icon:SetSize(18, 18)
-			r.icon:SetPoint("LEFT", 4, 0)
-			r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+			-- the icon in the kit's octagon frame, like every icon in Okanvil
+			r.slot = Okanvil.W.FramedIcon(r, nil, 32, false)
+			r.slot:SetPoint("LEFT", 4, 0)
+			r.icon = r.slot.icon
 
-			r.id = newText(r, "OVERLAY", 13)
+			r.id = newText(r, "OVERLAY", 16)
 			r.id:SetPoint("RIGHT", -6, 0)
 			r.id:SetTextColor(1.0, 0.82, 0.0)
 
-			r.name = newText(r, "OVERLAY", 13)
-			r.name:SetPoint("LEFT", r.icon, "RIGHT", 6, 0)
+			r.name = newText(r, "OVERLAY", 16)
+			r.name:SetPoint("LEFT", r.slot, "RIGHT", 8, 0)
 			-- Anchored to the id rather than given a width: the card resizes, so a
 			-- fixed width either truncated early or ran under the id column.
 			r.name:SetPoint("RIGHT", r.id, "LEFT", -8, 0)
@@ -682,14 +683,10 @@ local function buildUI(host)
 	-- ---- header: hint + search + item-scan buttons ----
 	-- (the gold "ID Finder" title lives in the Dashboard header above; here we just
 	--  show the one-line usage hint, then the search box.)
-	local sub = newText(parent, "OVERLAY", 11)
-	sub:SetPoint("TOPLEFT", X, -8)
-	sub:SetTextColor(0.54, 0.55, 0.58)
-	sub:SetText("Type a name or id -> read the ID off the result. (Auras are spells -- same column.)")
 
 	searchBox = CreateFrame("EditBox", nil, parent)
 	searchBox:SetHeight(28)
-	searchBox:SetPoint("TOPLEFT", X, -32)
+	searchBox:SetPoint("TOPLEFT", X, -6)
 	-- Full width: this is the one control on the page, and it used to stop at
 	-- 380px with the Sweep button and a count beside it -- both of which the
 	-- Dashboard header already shows.
@@ -697,7 +694,6 @@ local function buildUI(host)
 	searchBox:SetAutoFocus(false)
 	searchBox:SetFontObject("GameFontHighlight")
 	searchBox:SetTextInsets(6, 6, 0, 0)
-	flat(searchBox, 1, true)
 	searchBox:SetScript("OnEnterPressed", doRun)
 	searchBox:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
 	-- SHIFT-CLICK an item (bags/AtlasLoot/chat) while the box is focused -> drop the
@@ -717,12 +713,14 @@ local function buildUI(host)
 	end
 	OkanvilIDs._searchBox, OkanvilIDs._doRun = searchBox, doRun
 	local ghost = newText(searchBox, "OVERLAY")
-	ghost:SetPoint("LEFT", 6, 0)
+	ghost:SetPoint("LEFT", 22, 0)
 	ghost:SetText("|cff777777type a name, or shift-click an item|r")
 	searchBox:SetScript("OnTextChanged", function(s)
 		if s:GetText() == "" then ghost:Show() else ghost:Hide() end
 	end)
 	searchBox:SetScript("OnEditFocusGained", function() ghost:Hide() end)
+	-- the kit's search field (edge, glass, clear), after the box's own scripts
+	Okanvil.W.DressSearch(searchBox)
 
 	-- No Sweep button and no item count here: the Dashboard header carries both,
 	-- and having them twice on one page made it look unfinished.
@@ -732,10 +730,8 @@ local function buildUI(host)
 
 	-- Under the search box, above the cards. It was pinned at -364, which put it
 	-- in the middle of the page once the columns grew to fill the height.
-	statusFS = newText(parent, "OVERLAY", 11)
-	statusFS:SetPoint("TOPLEFT", X, -66)
-	statusFS:SetPoint("RIGHT", parent, "RIGHT", -X, 0)
-	statusFS:SetJustifyH("LEFT")
+	-- no status line under the search: the counts are in each column's header
+	statusFS = nil
 
 	-- No "advanced" row. It held Full scan, Stop and Export DB -- three controls
 	-- for one job that is not the player's: building the seed that SHIPS with the

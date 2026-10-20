@@ -213,7 +213,8 @@ end
 -- A card on near-black, not the grey raised panel: the art carries the colour.
 local function darkCard(parent)
 	local f = CreateFrame("Frame", nil, parent)
-	f:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1, insets = { left = 1, right = 1, top = 1, bottom = 1 } })
+	f._okKeepCut = true
+	W.Chamfer(f, true)
 	f:SetBackdropColor(INK[1], INK[2], INK[3], 0.94)
 	f:SetBackdropBorderColor(C.borderHi[1], C.borderHi[2], C.borderHi[3], 1)
 	return f
@@ -348,15 +349,14 @@ function Okanvil:BuildRanking(host)
 	local card = darkCard(toon)
 	card:SetPoint("TOPLEFT"); card:SetPoint("BOTTOMLEFT")
 	local cArt = card:CreateTexture(nil, "BORDER")
-	cArt:SetPoint("TOPLEFT", 1, -1); cArt:SetPoint("BOTTOMRIGHT", -1, 1)
+	cArt:SetPoint("TOPLEFT", 6, -6); cArt:SetPoint("BOTTOMRIGHT", -6, 6)
+	W.CoverCorners(card, cArt, W.COVER, INK[1], INK[2], INK[3], 0.94)
 	-- the rank and name sit on a SOLID foot, never on the art (snow and light
 	-- under them made them unreadable); only a short melt joins it to the picture
 	local cFoot = fill(card, "ARTWORK", INK[1], INK[2], INK[3], 0.94)
-	cFoot:SetPoint("BOTTOMLEFT", 1, 1); cFoot:SetPoint("BOTTOMRIGHT", -1, 1); cFoot:SetHeight(FOOT_H)
+	cFoot:SetPoint("BOTTOMLEFT", 6, 6); cFoot:SetPoint("BOTTOMRIGHT", -6, 6); cFoot:SetHeight(FOOT_H)
 	local cMelt = inkFade(card, "VERTICAL", 0.94, 0)
 	cMelt:SetPoint("BOTTOMLEFT", cFoot, "TOPLEFT"); cMelt:SetPoint("BOTTOMRIGHT", cFoot, "TOPRIGHT"); cMelt:SetHeight(FOOT_FADE)
-	local cBar = fill(card, "ARTWORK", 1, 1, 1, 1)
-	cBar:SetHeight(2); cBar:SetPoint("TOPLEFT", 1, -1); cBar:SetPoint("TOPRIGHT", -1, -1)
 	local hSpec = W.Text(card, "", "body", "dim"); hSpec:SetPoint("BOTTOMLEFT", 16, 14)
 	local hName = W.Text(card, "", NAME_SIZE); hName:SetPoint("BOTTOMLEFT", hSpec, "TOPLEFT", 0, 4)
 	local hRank = W.Text(card, "", RANK_SIZE, "accent"); hRank:SetPoint("BOTTOMLEFT", hName, "TOPLEFT", 0, 6)
@@ -569,7 +569,6 @@ function Okanvil:BuildRanking(host)
 		local cr, cg, cb = classRGB(cls)
 		sizeCard()
 		paintCard(name, cls)
-		cBar:SetVertexColor(cr, cg, cb, 0.9)
 		hName:SetText(name); hName:SetTextColor(cr, cg, cb)
 		hSpec:SetText(spec and spec ~= "" and spec or "")
 

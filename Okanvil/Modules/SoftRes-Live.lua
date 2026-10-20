@@ -55,7 +55,7 @@ end
 function SR.SetIntake(open)
 	db().open = open and true or false
 	db().lockedAt = (not open) and time() or nil
-	Okanvil:Print(open and "|cff7cfc8aSR open|r -- whispers \"sr [item]\" are recorded."
+	Okanvil:Print(open and "|cffffd200SR open|r -- whispers \"sr [item]\" are recorded."
 		or "|cffff5555SR locked|r -- whispers are answered with \"SR is locked\".")
 	if SR.onPanel then SR.onPanel() end
 	if SR.onChange then SR.onChange() end

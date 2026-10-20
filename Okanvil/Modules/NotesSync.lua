@@ -496,10 +496,10 @@ function N.SendNow()
 			Okanvil:Print(("|cffff5555No reply from|r %s -- no aura, or it did not receive."):format(
 				table.concat(missing, ", ")))
 		elseif #missing == 0 then
-			Okanvil:Print(("|cff7cfc8aAll %d confirmed.|r"):format(got))
+			Okanvil:Print(("|cffffd200All %d confirmed.|r"):format(got))
 		else
 			table.sort(missing)
-			Okanvil:Print(("|cff7cfc8a%d confirmed|r, |cffff5555%d did not:|r %s"):format(
+			Okanvil:Print(("|cffffd200%d confirmed|r, |cffff5555%d did not:|r %s"):format(
 				got, #missing, table.concat(missing, ", ")))
 		end
 		if N.Refresh then N.Refresh() end
@@ -636,7 +636,7 @@ if Comms then
 				local got = 0
 				for _ in pairs(lastSend.got) do got = got + 1 end
 				if got == lastSend.expect then
-					Okanvil:Print(("|cff7cfc8aAll %d in sync.|r"):format(got))
+					Okanvil:Print(("|cffffd200All %d in sync.|r"):format(got))
 				else
 					Okanvil:Print(("|cff8a8d93%d/%d|r %s"):format(got, lastSend.expect, who))
 				end

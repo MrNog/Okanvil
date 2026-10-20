@@ -342,7 +342,7 @@ function RC:Announce()
 	local partyN = GetNumPartyMembers() or 0
 	local chan = (raidN > 0 and "RAID") or (partyN > 0 and "PARTY") or nil
 	if not chan then
-		Okanvil:Print("Raid Check: not in a group -- use |cff00ff00/okrc|r to check yourself.")
+		Okanvil:Print("Raid Check: not in a group -- use |cffffd200/okrc|r to check yourself.")
 		return
 	end
 
@@ -375,7 +375,7 @@ local function classHex(token)
 	return "|cffffd200"
 end
 
-local YES = "|cff7cfc8a+|r"     -- ok green
+local YES = "|cffffd200+|r"     -- ok green
 local NO  = "|cffff5555-|r"     -- missing
 
 -- Under 10 minutes a buff counts as "about to run out": one that dies mid-fight is
@@ -1013,10 +1013,10 @@ SlashCmdList["OKANVILRC"] = function(msg)
 			local aname, _, aicon, _, _, _, _, _, _, _, spellId = UnitAura("player", a, "HELPFUL")
 			if not aname then break end
 			local tag = ""
-			if spellId and FLASKS[spellId] then tag = "|cff7cfc8aFLASK|r"
-			elseif spellId and BATTLE_ELIXIRS[spellId] then tag = "|cff7cfc8aBATTLE ELIXIR|r"
-			elseif spellId and GUARDIAN_ELIXIRS[spellId] then tag = "|cff7cfc8aGUARDIAN ELIXIR|r"
-			elseif WellFed() and aname == WellFed() then tag = "|cff7cfc8aFOOD|r"
+			if spellId and FLASKS[spellId] then tag = "|cffffd200FLASK|r"
+			elseif spellId and BATTLE_ELIXIRS[spellId] then tag = "|cffffd200BATTLE ELIXIR|r"
+			elseif spellId and GUARDIAN_ELIXIRS[spellId] then tag = "|cffffd200GUARDIAN ELIXIR|r"
+			elseif WellFed() and aname == WellFed() then tag = "|cffffd200FOOD|r"
 			end
 			if tag ~= "" then
 				Okanvil:Print(("  |cffffd200%s|r  %s  -> %s  (icon: %s)")
@@ -1039,8 +1039,8 @@ SlashCmdList["OKANVILRC"] = function(msg)
 		Okanvil:Print(("Raid Check -- %s"):format(where))
 		for _, p in ipairs(list) do
 			local bits = {}
-			bits[#bits + 1] = p.flask and "|cff7cfc8aflask|r" or "|cffff5555NO FLASK|r"
-			bits[#bits + 1] = p.food  and "|cff7cfc8afood|r"  or "|cffff5555NO FOOD|r"
+			bits[#bits + 1] = p.flask and "|cffffd200flask|r" or "|cffff5555NO FLASK|r"
+			bits[#bits + 1] = p.food  and "|cffffd200food|r"  or "|cffff5555NO FOOD|r"
 			if #p.missing > 0 then
 				bits[#bits + 1] = "|cffffd200missing:|r " .. table.concat(p.missing, ",")
 			end

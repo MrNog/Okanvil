@@ -309,18 +309,22 @@ local function isTierPiece(link)
 	return inSet
 end
 
--- The equipped T10 pieces this mark would upgrade, as item ids.
+-- The equipped T10 pieces this mark would upgrade, as item ids, and the ones it
+-- already did (a tier piece above the mark's starting item level), so the council
+-- sees "3 done, 1 to go" rather than only the one left.
 local function tierToUpgrade(link)
 	local from = MARK_FROM[Okanvil.U.itemIDFromLink(link)]
 	if not from then return nil end
-	local out = {}
+	local out, done = {}, {}
 	for _, slot in ipairs(TIER_SLOTS) do
 		local have = linkInSlot(slot)
-		if have and select(4, GetItemInfo(have)) == from and isTierPiece(have) then
-			out[#out + 1] = Okanvil.U.itemIDFromLink(have)
+		local ilvl = have and select(4, GetItemInfo(have))
+		if ilvl and ilvl >= from and isTierPiece(have) then
+			local list = (ilvl == from) and out or done
+			list[#list + 1] = Okanvil.U.itemIDFromLink(have)
 		end
 	end
-	return out
+	return out, done
 end
 
 -- Our Enchanting skill, or nil. Asked ONCE, when the master looter starts council
@@ -346,13 +350,16 @@ local function buildReply()
 		local diff = (eqIlvl and newIlvl) and (newIlvl - eqIlvl) or ""
 		-- a mark sends the pieces it would upgrade as "T<id>+<id>" in the gear
 		-- field; an older board reads that as no item, which is what it showed anyway
-		local tier = tierToUpgrade(it.link)
+		local tier, done = tierToUpgrade(it.link)
 		if tier then
 			-- a bare "T" = checked, no tier; the board tells that apart from an
 			-- older client that sent nothing
 			eqID = "T" .. table.concat(tier, "+")
 			diff = ""
 			otherID = nil
+			-- pieces already sanctified ride in their own "D<idx>=<id>+<id>" part,
+			-- which an older board's parser skips
+			if #done > 0 then second[#second + 1] = ("D%d=%s"):format(it.idx, table.concat(done, "+")) end
 		end
 		-- The other ring/trinket rides in its own "S<idx>=<id>" part, which an
 		-- older board's parser skips, so the main field keeps its old meaning.
@@ -498,10 +505,10 @@ local BTN_W   = 96
 local BTN_H   = 26
 local BTN_GAP = 6
 local ROW_PAD = 12
-local ROW_H   = ICON_S + BTN_H + ROW_PAD * 2 + 8
+local ROW_H   = ICON_S + BTN_H + ROW_PAD * 2 + 14
 local FRAME_W = ROW_PAD * 4 + (BTN_W * 5) + (BTN_GAP * 4)
-local HEAD_H  = 52      -- header bar + the boss line
-local FOOT_H  = 40
+local HEAD_H  = 60      -- header bar + the boss line
+local FOOT_H  = 46
 
 local function ensureFrame()
 	if frame then return frame end
@@ -549,7 +556,7 @@ local function ensureFrame()
 	-- The boss line. The window title already says "Loot council", so this says
 	-- WHICH kill -- printing the same words twice told the raider nothing.
 	local sub = W.Text(f, "", nil, "dim")
-	sub:SetPoint("TOPLEFT", ROW_PAD + 2, -28)
+	sub:SetPoint("TOPLEFT", ROW_PAD + 2, -38)
 	f.sub = sub
 
 	f.rows = {}
@@ -563,10 +570,10 @@ local function ensureFrame()
 	-- than no control. A mis-click is corrected by the council, on voice.
 	local passAll = W.Button(f, "Pass all")
 	passAll:SetSize(84, 22)
-	passAll:SetPoint("BOTTOMRIGHT", -ROW_PAD, 8)
+	passAll:SetPoint("BOTTOMRIGHT", -ROW_PAD, 14)
 
 	local foot = W.Text(f, "Answer what you want; the council decides when it has heard enough.", "note", "dim")
-	foot:SetPoint("BOTTOMLEFT", ROW_PAD + 2, 13)
+	foot:SetPoint("BOTTOMLEFT", ROW_PAD + 2, 19)
 	foot:SetPoint("RIGHT", passAll, "LEFT", -8, 0)
 	foot:SetJustifyH("LEFT")
 	if foot.SetWordWrap then foot:SetWordWrap(false) end
@@ -601,19 +608,11 @@ local function ensureRow(i)
 	-- than one wall of text. "dark" is the palette's recessed fill (panelD).
 	Okanvil:Skin(row, "soft")
 
-	local icon = row:CreateTexture(nil, "ARTWORK")
-	icon:SetSize(ICON_S, ICON_S)
-	icon:SetPoint("TOPLEFT", ROW_PAD, -ROW_PAD)
-	icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+	-- the item in the gold octagon frame (the UI kit's framed icon)
+	local slot = W.FramedIcon(row, nil, ICON_S, true)
+	slot:SetPoint("TOPLEFT", ROW_PAD, -ROW_PAD)
+	local icon = slot.icon
 	row.icon = icon
-
-	-- A border around the icon: without one a dark item art bleeds into the
-	-- backdrop and the row loses its left edge.
-	local ib = CreateFrame("Frame", nil, row)
-	ib:SetPoint("TOPLEFT", icon, -1, 1)
-	ib:SetPoint("BOTTOMRIGHT", icon, 1, -1)
-	ib:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
-	ib:SetBackdropBorderColor(0.18, 0.19, 0.21, 1)
 
 	-- The item name is a real link: hover for the tooltip, shift-click to put it
 	-- in chat, exactly as anywhere else in the game.
@@ -665,8 +664,9 @@ local function ensureRow(i)
 	local x = ROW_PAD
 	for _, r in ipairs(C_.RESPONSES) do
 		local b = W.Button(row, r.label)
+		if r.key == "bis" then b:SetMain(true) end
 		b:SetSize(BTN_W, BTN_H)
-		b:SetPoint("TOPLEFT", x, -(ROW_PAD + ICON_S + 4))
+		b:SetPoint("TOPLEFT", x, -(ROW_PAD + ICON_S + 10))
 		b:SetScript("OnClick", function()
 			-- The row's CURRENT item, not items[i]: rows are reused and re-filled
 			-- as answered items drop out, so a fixed index would answer the wrong
@@ -1018,19 +1018,19 @@ C_.rounds = {}      -- round id -> { items = {link,...}, replies = {name -> {idx
 local board            -- the reused board frame
 local boardItem = 1    -- which item of the round is on screen
 local tabFirst  = 1    -- leftmost tab shown in the strip (paging window)
-local BR_H   = 28      -- board row height; compact so a full raid fits on screen
+local BR_H   = 42      -- board row height; a full raid still fits on screen
 local BOARD_MAX_ROWS = 12   -- rows drawn at once; the rest scroll
 local TAB_S  = 44      -- item tab icon size
-local TAB_TOP = 32     -- where the tab strip starts, under the title bar
+local TAB_TOP = 38     -- where the tab strip starts, under the title bar
 -- Board columns, as x offsets. One place to shift the table rather than four.
 -- Widened so the EQUIPPED column can show a full item name -- "Ramaladni's
 -- Blade..." truncated at 18 characters was the column being too narrow, not the
 -- name being too long.
-local COL_NAME = 0
-local COL_WANT = 215     -- room after the name for the "won tonight" icons
+local COL_NAME = 6       -- a little in from the row's edge
+local COL_WANT = 240     -- room after the name for the "won tonight" icons
 local COL_PRIO = 320
 local COL_GEAR = 370     -- equipped icon
-local COL_SPEC = 396     -- equipped item name, just right of its icon
+local COL_SPEC = 414     -- equipped item name, just right of its icon
 local COL_DIFF = 640     -- the ilvl gap
 local COL_VOTE = 700     -- council votes: count, two names, the Vote button
 local BOARD_W  = 980
@@ -1049,12 +1049,18 @@ end
 -- older client (or one that could not read its own slot) still parses. An
 -- "E=<skill>" part is the raider's Enchanting skill, kept as out.ench.
 local function parseReply(payload)
-	local out, second = {}, {}
+	local out, second, done = {}, {}, {}
 	for pair in tostring(payload or ""):gmatch("[^" .. SEP_ANS .. "]+") do
 		local ench = pair:match("^E=(%d+)$")
 		if ench then out.ench = tonumber(ench) end
 		local sIdx, sID = pair:match("^S(%d+)=(%d+)$")
 		if sIdx then second[tonumber(sIdx)] = tonumber(sID) end
+		local dIdx, dIDs = pair:match("^D(%d+)=([%d+]+)$")
+		if dIdx then
+			local list = {}
+			for id in dIDs:gmatch("%d+") do list[#list + 1] = { id = tonumber(id), done = true } end
+			done[tonumber(dIdx)] = list
+		end
 		local idx, body = pair:match("^(%d+)=(.+)$")
 		if idx then
 			local key, eq, diff = body:match("^([^/]+)/([^/]*)/([^/]*)$")
@@ -1074,6 +1080,11 @@ local function parseReply(payload)
 	end
 	for idx, id in pairs(second) do
 		if out[idx] then out[idx].eq2 = id end
+	end
+	-- the done pieces go after the ones still to upgrade, on the same tier list
+	for idx, list in pairs(done) do
+		local t = out[idx] and out[idx].tier
+		if t then for _, p in ipairs(list) do t[#t + 1] = p end end
 	end
 	return out
 end
@@ -1225,14 +1236,37 @@ function C_.RoundIsLive(round)
 	return (rec and not rec.closed and rec == C_.current) and true or false
 end
 
+-- A question you have not answered survives a reload or a relog, but its window
+-- never opens by itself (a pop-up after a login, in the middle of whatever you
+-- are doing, is the one thing the council must not do). One line in your own
+-- chat says it is waiting; /okcouncil answer opens it.
+local restoreWait
 function C_.ShowRestored(round)
 	if not (current and current.round == round) then return end
+	if InCombatLockdown and InCombatLockdown() then
+		restoreWait = restoreWait or CreateFrame("Frame")
+		restoreWait:RegisterEvent("PLAYER_REGEN_ENABLED")
+		restoreWait:SetScript("OnEvent", function(self)
+			self:UnregisterEvent("PLAYER_REGEN_ENABLED")
+			C_.ShowRestored(round)
+		end)
+		return
+	end
 	current.restored = nil
+	Okanvil:Print("|cffe0b860Loot council:|r an item from before the reload still needs your answer -- "
+		.. "|cffffd200/okcouncil answer|r")
+end
+
+-- /okcouncil answer: open the question waiting for your answer
+function C_.OpenAnswer()
+	if not current or current.restored then
+		Okanvil:Print("Loot council: nothing is waiting for your answer.")
+		return
+	end
 	local fr = ensureFrame()
 	fr._scrollTop = 1
 	C_.Repaint()
 	fr:Show()
-	Okanvil:Print("|cffe0b860Loot council:|r restored an open round from before the reload.")
 end
 
 -- The saved round was not confirmed in time: forget it without a word.
@@ -1627,7 +1661,7 @@ local function ensureBoard()
 	-- Who passed, in one dim line at the bottom right. Passes get no row: the
 	-- council only needs to know they are out, not read them.
 	local passLine = W.Text(f, "", "note", "dim")
-	passLine:SetPoint("BOTTOMRIGHT", -12, 16)
+	passLine:SetPoint("BOTTOMRIGHT", -12, 22)
 	passLine:SetJustifyH("RIGHT")
 	if passLine.SetWordWrap then passLine:SetWordWrap(false) end
 	f.passLine = passLine
@@ -1643,9 +1677,9 @@ local function ensureBoard()
 	-- The primary button NAMES the person it would give to. It is a suggestion in
 	-- a button, not a decision: clicking any row changes who it names, and the
 	-- council is still deciding on voice.
-	local give = W.Button(f, "Give", "primary")
+	local give = W.Button(f, "Give", "primary"):SetMain(true)
 	give:SetSize(260, 26)
-	give:SetPoint("BOTTOMLEFT", 12, 10)
+	give:SetPoint("BOTTOMLEFT", 12, 16)
 	give:SetScript("OnClick", function()
 		local rec = C_.current
 		if not rec or not f._pick then return end
@@ -1820,7 +1854,7 @@ local function ensureBoard()
 	-- In place of Give on a board that cannot hand the item out.
 	local giveNote = W.Text(f, "Only the master looter gives the item. Your vote is a suggestion.",
 		"body", "dim")
-	giveNote:SetPoint("BOTTOMLEFT", 12, 16)
+	giveNote:SetPoint("BOTTOMLEFT", 12, 22)
 	giveNote:Hide()
 	f.giveNote = giveNote
 
@@ -1911,17 +1945,9 @@ function C_.RepaintBoard(open)
 			if not tab then
 				tab = CreateFrame("Button", nil, f)
 				tab:SetSize(TAB_S, TAB_S)
-				local tx = tab:CreateTexture(nil, "ARTWORK")
-				tx:SetAllPoints()
-				tx:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-				tab.tex = tx
-				-- The border is the state. Its own frame so it can be recoloured
-				-- without touching the icon underneath.
-				local bd = CreateFrame("Frame", nil, tab)
-				bd:SetPoint("TOPLEFT", -1, 1)
-				bd:SetPoint("BOTTOMRIGHT", 1, -1)
-				bd:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 2 })
-				tab.bd = bd
+				-- the item in the kit's octagon frame; the frame is the state
+				W.DressFramedIcon(tab, nil, TAB_S)
+				tab.tex = tab.icon
 				tab:SetScript("OnClick", function()
 					boardItem = i
 					-- Picking an item by hand hands control back to the selection,
@@ -1962,19 +1988,13 @@ function C_.RepaintBoard(open)
 			tab._link = lnk
 			local tex = select(10, GetItemInfo(lnk)) or (GetItemIcon and GetItemIcon(lnk))
 			if tex then tab.tex:SetTexture(tex) end
-			-- Border = state, so a glance says how much is left without reading:
-			--   gold = on screen now   green = awarded   grey = still waiting
+			-- The frame is the state, so a glance says how much is left:
+			--   gold frame = on screen now   grey frame = the others
+			--   a grey icon = already given
 			local done = rec.awarded and rec.awarded[i]
-			if i == boardItem then
-				tab.bd:SetBackdropBorderColor(0.75, 0.58, 0.23, 1)
-				tab.tex:SetAlpha(1)
-			elseif done then
-				tab.bd:SetBackdropBorderColor(0.35, 0.80, 0.40, 1)
-				tab.tex:SetAlpha(0.8)
-			else
-				tab.bd:SetBackdropBorderColor(0.55, 0.57, 0.60, 1)
-				tab.tex:SetAlpha(0.55)
-			end
+			W.SetFramedIconGold(tab, i == boardItem)
+			tab.tex:SetDesaturated(done and i ~= boardItem and true or false)
+			tab.tex:SetAlpha((i == boardItem or not done) and 1 or 0.7)
 			tab:Show()
 		end
 	end
@@ -2164,22 +2184,32 @@ function C_.RepaintBoard(open)
 				-- a council scanning ten rows finds the healers by shape before it
 				-- reads a single word.
 				r.cls = r:CreateTexture(nil, "ARTWORK")
-				r.cls:SetSize(20, 20)
+				r.cls:SetSize(30, 30)
 				r.cls:SetPoint("LEFT", COL_NAME, 0)
 				r.cls:SetTexture("Interface\\WorldStateFrame\\Icons-Classes")
-				r.who  = W.Text(r, "", "head");      r.who:SetPoint("LEFT", COL_NAME + 26, 0)
+				r.who  = W.Text(r, "", "head");      r.who:SetPoint("LEFT", COL_NAME + 38, 0)
 				r.what = W.Text(r, "", "head");      r.what:SetPoint("LEFT", COL_WANT, 0)
 				r.prio = W.Text(r, "", "head", "accent"); r.prio:SetPoint("LEFT", COL_PRIO, 0)
 				-- What they have in that slot: icon, then the item's own name.
 				r.eqIcon = r:CreateTexture(nil, "ARTWORK")
-				r.eqIcon:SetSize(20, 20)
-				r.eqIcon:SetPoint("LEFT", COL_GEAR, 0)
+				r.eqIcon:SetSize(30, 30)
+				r.eqIcon:SetPoint("LEFT", COL_GEAR + 4, 0)
 				r.eqIcon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 				-- the other ring/trinket, when the slot comes in a pair
 				r.eqIcon2 = r:CreateTexture(nil, "ARTWORK")
-				r.eqIcon2:SetSize(20, 20)
+				r.eqIcon2:SetSize(30, 30)
 				r.eqIcon2:SetTexCoord(0.07, 0.93, 0.07, 0.93)
 				r.eqIcon2:Hide()
+				-- the gold octagon round each equipped icon, shown and hidden with it
+				for _, ic in ipairs({ r.eqIcon, r.eqIcon2 }) do
+					local fr = r:CreateTexture(nil, "OVERLAY")
+					fr:SetTexture("Interface\\AddOns\\Okanvil\\Media\\UI\\iconframes")
+					fr:SetTexCoord(0, 80 / 256, 0, 80 / 128)
+					fr:SetSize(38, 38); fr:SetPoint("CENTER", ic, "CENTER")
+					fr:Hide()
+					hooksecurefunc(ic, "Show", function() fr:Show() end)
+					hooksecurefunc(ic, "Hide", function() fr:Hide() end)
+				end
 				r.spec = W.Text(r, "", "head");      r.spec:SetPoint("LEFT", COL_SPEC, 0)
 				r.spec2 = W.Text(r, "", "head");     r.spec2:SetPoint("LEFT", r.eqIcon2, "RIGHT", 6, 0)
 				r.diff = W.Text(r, "", "head");      r.diff:SetPoint("LEFT", COL_DIFF, 0)
@@ -2291,7 +2321,7 @@ function C_.RepaintBoard(open)
 				r.vnames:SetJustifyH("LEFT")
 				if r.vnames.SetWordWrap then r.vnames:SetWordWrap(false) end
 
-				r.vbtn = W.Button(r, "Vote")
+				r.vbtn = W.Button(r, "Vote"):SetMain(true)
 				r.vbtn:SetSize(52, 20)
 				r.vbtn:SetPoint("RIGHT", -4, 0)
 				r.vbtn:SetFrameLevel(r:GetFrameLevel() + 5)
@@ -2395,8 +2425,8 @@ function C_.RepaintBoard(open)
 					local b = r.wonIcons[k]
 					if k <= nShow and not b then
 						b = CreateFrame("Button", nil, r)
-						b:SetSize(16, 16)
-						b:SetPoint("LEFT", k == 1 and r.wonN or r.wonIcons[k - 1], "RIGHT", k == 1 and 3 or 2, 0)
+						b:SetSize(22, 22)
+						b:SetPoint("LEFT", k == 1 and r.wonN or r.wonIcons[k - 1], "RIGHT", k == 1 and 4 or 3, 0)
 						b.tex = b:CreateTexture(nil, "ARTWORK")
 						b.tex:SetAllPoints()
 						b.tex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -2452,7 +2482,8 @@ function C_.RepaintBoard(open)
 			r._eqLink, r._eqLink2 = nil, nil
 			r.eqIcon2:Hide(); r.spec2:SetText("")
 			-- a mark shows the T10 pieces it would upgrade, one icon each, like the
-			-- equipped item on any other row; no tier = nothing shown
+			-- equipped item on any other row, then the ones already sanctified in a
+			-- gold frame; no tier = nothing shown
 			r.tierIcons = r.tierIcons or {}
 			local tier = isMark and d.tier or {}
 			for k = 1, math.max(#tier, #r.tierIcons) do
@@ -2460,11 +2491,12 @@ function C_.RepaintBoard(open)
 				local t = tier[k]
 				if t and not b then
 					b = CreateFrame("Button", nil, r)
-					b:SetSize(20, 20)
-					b:SetPoint("LEFT", COL_GEAR + (k - 1) * 24, 0)
-					b.tex = b:CreateTexture(nil, "ARTWORK")
-					b.tex:SetAllPoints()
-					b.tex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+					b:SetSize(38, 38)
+					b:SetPoint("LEFT", COL_GEAR + (k - 1) * 42, 0)
+					-- the octagon: grey = the mark would upgrade it, gold = already
+					-- sanctified, orange = already the heroic one
+					W.DressFramedIcon(b, nil, 38)
+					b.tex = b.icon
 					b:SetScript("OnEnter", function(self)
 						GameTooltip:SetOwner(self, "ANCHOR_NONE")
 						GameTooltip:ClearAllPoints()
@@ -2481,6 +2513,11 @@ function C_.RepaintBoard(open)
 						b.id = t.id
 						b.tex:SetTexture((GetItemIcon and GetItemIcon(t.id)) or select(10, GetItemInfo(t.id))
 							or "Interface\\Icons\\INV_Misc_QuestionMark")
+						-- gold = sanctified (264), orange = the heroic one too (277): nothing left to do
+						W.SetFramedIconGold(b, t.done and true or false)
+						local lvl = t.done and select(4, GetItemInfo(t.id))
+						if lvl and lvl >= 277 then b.frame:SetVertexColor(1, 0.55, 0.15)
+						else b.frame:SetVertexColor(1, 1, 1) end
 						b:Show()
 					else
 						b:Hide()
@@ -2524,7 +2561,7 @@ function C_.RepaintBoard(open)
 			end
 			if d.diff then
 				-- Green for an upgrade, red for a downgrade: the sign is the point.
-				local c = d.diff > 0 and "|cff7cfc8a+" or (d.diff < 0 and "|cffff5555" or "|cff8a8d93")
+				local c = d.diff > 0 and "|cffffd200+" or (d.diff < 0 and "|cffff5555" or "|cff8a8d93")
 				r.diff:SetText(("%s%d|r"):format(c, d.diff))
 			else
 				r.diff:SetText("")
@@ -2642,7 +2679,7 @@ function C_.RepaintBoard(open)
 		f.count:SetText("|cff8a8d93waiting...|r")
 	end
 	-- +46 at the bottom for the Give / Skip row.
-	f:SetHeight(TAB_TOP + TAB_S + 68 + math.max(#vis, 1) * BR_H + 46)
+	f:SetHeight(TAB_TOP + TAB_S + 68 + math.max(#vis, 1) * BR_H + 52)
 	f:Show()
 end
 
@@ -2767,7 +2804,7 @@ function C_.OpenPicker()
 
 		local ask = W.Button(picker, "Ask the raid", "primary")
 		ask:SetSize(140, 24)
-		ask:SetPoint("BOTTOMRIGHT", -12, 10)
+		ask:SetPoint("BOTTOMRIGHT", -12, 16)
 		ask:SetScript("OnClick", function()
 			local links, boss = {}, nil
 			for _, r in ipairs(picker.rows) do
@@ -2786,12 +2823,10 @@ function C_.OpenPicker()
 
 		local none = W.Button(picker, "Clear")
 		none:SetSize(80, 24)
-		none:SetPoint("BOTTOMLEFT", 12, 10)
+		none:SetPoint("BOTTOMLEFT", 12, 16)
 		none:SetScript("OnClick", function()
 			for _, r in ipairs(picker.rows) do
-				r._on = false
-				r.tick:SetKind("secondary")     -- fill follows the state, not just the label
-				r.tick.text:SetText("")
+				r.SetOn(false)
 			end
 		end)
 	end
@@ -2808,18 +2843,20 @@ function C_.OpenPicker()
 				r:SetPoint("TOPRIGHT", -12, -(34 + (i - 1) * PR_H))
 				r:SetHeight(PR_H - 2)
 
-				-- A plain two-state button, not W.Check: the check widget carries a
-				-- label and its own get/set, and here the row IS the label.
-				local tick = W.Button(r, "")
-				tick:SetSize(24, 20)
-				tick:SetPoint("LEFT", 0, 0)
-				-- Ticked state is the FILL, same rule as the Give button: gold box =
-				-- going to the council, plain box = not.
-				tick:SetScript("OnClick", function()
-					r._on = not r._on
-					tick:SetKind(r._on and "primary" or "secondary")
-					tick.text:SetText(r._on and "x" or "")
-				end)
+				-- the settings' checkbox, without W.Check's label and get/set: here
+				-- the row IS the label. Ticked = going to the council.
+				local tick = CreateFrame("Button", nil, r)
+				tick:SetSize(20, 20)
+				tick:SetPoint("LEFT", 2, 0)
+				local box, mark = W.CheckTextures(tick, 20)
+				box:SetPoint("CENTER")
+				function r.SetOn(v)
+					r._on = v and true or false
+					if r._on then mark:Show() else mark:Hide() end
+				end
+				tick:SetScript("OnClick", function() r.SetOn(not r._on) end)
+				tick:SetScript("OnEnter", function() box:SetVertexColor(1.25, 1.25, 1.25) end)
+				tick:SetScript("OnLeave", function() box:SetVertexColor(1, 1, 1) end)
 				r.tick = tick
 
 				r.icon = r:CreateTexture(nil, "ARTWORK")
@@ -2839,11 +2876,7 @@ function C_.OpenPicker()
 			-- what just dropped", and unticking two is less work than ticking six.
 			-- An item already rolled on starts unticked: it has a winner waiting
 			-- to be handed it, and asking again would be a second decision.
-			r._on = not row.rolled
-			-- Plain "x": SetKind("primary") already paints the label dark on gold,
-			-- and a |cff green on top of that is unreadable.
-			r.tick:SetKind(r._on and "primary" or "secondary")
-			r.tick.text:SetText(r._on and "x" or "")
+			r.SetOn(not row.rolled)
 
 			local link = dp.item or ""
 			local nm, _, q = GetItemInfo(link ~= "" and link or dp.id)
@@ -2859,7 +2892,7 @@ function C_.OpenPicker()
 		end
 	end
 
-	picker:SetHeight(34 + #rows * PR_H + 44)
+	picker:SetHeight(34 + #rows * PR_H + 50)
 	picker:Show()
 end
 
@@ -2896,15 +2929,15 @@ function C_.BuildRunTab(body)
 		elseif C_.current then
 			local n = 0
 			for _ in pairs(C_.current.replies) do n = n + 1 end
-			state:SetText(("|cff7cfc8aRound open|r -- %d item(s), %d repl%s")
+			state:SetText(("|cffffd200Round open|r -- %d item(s), %d repl%s")
 				:format(#C_.current.items, n, n == 1 and "y" or "ies"))
 			hint:SetText("|cff8a8d93/okcouncil board|r reopens the board, "
 				.. "|cff8a8d93/okcouncil close|r ends the round.")
 		elseif C_.active then
-			state:SetText("|cff7cfc8aCouncil night|r -- no round open")
+			state:SetText("|cffffd200Council night|r -- no round open")
 			hint:SetText("Open the mini roll and press |cffe0b860Ask this one|r on an item.")
 		elseif C_.remoteNight then
-			state:SetText("|cff7cfc8aCouncil night|r -- run by |cffe0b860" .. C_.remoteNight .. "|r")
+			state:SetText("|cffffd200Council night|r -- run by |cffe0b860" .. C_.remoteNight .. "|r")
 			hint:SetText("The board opens on your screen when they put an item to the raid.")
 		else
 			state:SetText("|cff8a8d93Council night is off|r")
@@ -2951,12 +2984,6 @@ function C_.BuildRunTab(body)
 		return c
 	end
 
-	opt("Ask automatically when a corpse opens",
-		"On a council night, every epic goes to the raid as one question",
-		"Only on a council night, and only for epics.",
-		function() return db().autoAsk end,
-		function(v) db().autoAsk = v end)
-
 	-- Any officer can switch it, not only the master looter (Wishlist.lua).
 	local Wi = Okanvil.Wish
 	if Wi and Wi.CanTrigger() then
@@ -2965,7 +2992,7 @@ function C_.BuildRunTab(body)
 			"Off by default. Turning it on opens the wish window for raiders with Okanvil.\n"
 				.. "Only tells the council what a raider is after -- it is not a reserve.",
 			function() return Wi.IsOn() end,
-			function(v) Wi.SetOn(v) end)
+			function(v) Wi.SetOn(v); if Wi._paintRow then Wi._paintRow() end end)
 		-- Clear beside the switch, the same as the WH panel's
 		local clr = W.Button(wrow, "Clear"); clr:SetSize(52, 22)
 		clr:SetPoint("RIGHT", wrow.btn, "LEFT", -6, 0)
@@ -2991,6 +3018,13 @@ function C_.BuildRunTab(body)
 		lock:SetScript("OnShow", paintLock)
 		paintLock()
 		Wi._paintLock = paintLock
+		-- Lock and Clear only mean something while the wishlist is on
+		local function paintRow()
+			if Wi.IsOn() then lock:Show(); clr:Show() else lock:Hide(); clr:Hide() end
+		end
+		wrow:HookScript("OnShow", paintRow)
+		paintRow()
+		Wi._paintRow = paintRow
 		if wrow.desc then wrow.desc:SetPoint("RIGHT", lock, "LEFT", -12, 0) end
 		wrow.text:SetPoint("RIGHT", lock, "LEFT", -12, 0)
 	end
@@ -3579,6 +3613,8 @@ do
 				end
 			end
 			if not pending then current = nil; d.openRound = nil; return end
+			-- the loot mode moved off Council (Roll or SR): nothing to answer any more
+			if not C_.CouncilMode() then current = nil; d.openRound = nil; return end
 
 			-- ASK THE ASKER FIRST. While we were gone the officer may have awarded
 			-- the item, moved on to another round or reloaded out of it; the saved
@@ -3654,6 +3690,15 @@ function C_.SaveAsk()
 	}
 end
 
+-- Is the raid's loot mode Council? A saved round from before a /reload only
+-- comes back while it is: after a switch to Roll or SR it would put a council
+-- board (or question) on screen for loot the council no longer decides.
+function C_.CouncilMode()
+	local SR = Okanvil.SoftRes
+	if not (SR and SR.Mode) then return true end
+	return SR.Mode() == "council"
+end
+
 function C_.RestoreAsk()
 	local d = db()
 	local s = d.askRound
@@ -3682,6 +3727,8 @@ function C_.RestoreAsk()
 	end
 	if not open then d.askRound = nil; return end
 	if s.test and not C_.testMode then d.askRound = nil; return end
+	-- the loot mode moved off Council (Roll or SR): the round is over
+	if not C_.CouncilMode() then d.askRound = nil; return end
 
 	local rec = {
 		test = s.test,
@@ -3718,13 +3765,12 @@ function C_.RestoreAsk()
 		})
 	end
 
-	if canSeeBoard() then
-		boardItem = 1
-		C_.RepaintBoard()
-		if not rec.dismissed then
-			Okanvil:Print("|cffe0b860Loot council:|r your open round was restored.")
-		end
-	end
+	-- Restored SILENTLY: a reload never puts the board back on screen by itself
+	-- (one officer reloading mid-fight, or after everyone passed, must not pop a
+	-- window). The round is kept; the mini roll's Council button or
+	-- /okcouncil board opens it.
+	rec.dismissed = true
+	if canSeeBoard() then boardItem = 1 end
 	syncRollButton()
 end
 
@@ -3772,6 +3818,11 @@ _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 	-- /okcouncil auto [on|off] -- the switch the auto-ask line points at.
 	-- /okcouncil board -- reopen the board on the open round (it closes by hand,
 	-- and losing it used to mean there was no way back to the award button).
+	-- /okcouncil answer -- open the question still waiting for your answer
+	if verb == "answer" then
+		C_.OpenAnswer()
+		return
+	end
 	if verb == "board" then
 		if not canSeeBoard() then
 			Okanvil:Print("|cffff5555Loot council:|r the board is officers only.")
@@ -3798,7 +3849,7 @@ _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 		elseif arg == "off" then d.autoAsk = false
 		else d.autoAsk = not d.autoAsk end
 		Okanvil:Print("Loot council: auto-ask is "
-			.. (d.autoAsk and "|cff7cfc8aON|r" or "|cffff5555OFF|r") .. ".")
+			.. (d.autoAsk and "|cffffd200ON|r" or "|cffff5555OFF|r") .. ".")
 		return
 	end
 	-- /okcouncil force -- an officer runs the council for this session when the
@@ -3809,7 +3860,7 @@ _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 			return
 		end
 		C_.forceRun = not C_.forceRun or nil
-		Okanvil:Print("Loot council: force is " .. (C_.forceRun and "|cff7cfc8aON|r -- you can start council night and ask."
+		Okanvil:Print("Loot council: force is " .. (C_.forceRun and "|cffffd200ON|r -- you can start council night and ask."
 			or "|cffff5555OFF|r -- the master looter runs it again."))
 		if not C_.forceRun and C_.active and not C_.MayRun() then C_.SetActive(false) end
 		if Okanvil.RollMgr and Okanvil.RollMgr.Rebuild then pcall(Okanvil.RollMgr.Rebuild) end

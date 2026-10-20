@@ -550,9 +550,11 @@ function A.ExportLine()
 	-- every letter still kept: small, and the site keeps each only once
 	local letters, nl = {}, 0
 	for _, l in pairs(A.Letters.Inbox()) do
-		letters[#letters + 1] = ('{"n":"%s","z":"%s","size":%d,"id":%s,"week":"%s"}')
-			:format(esc(l.n), esc(l.z), l.size or 0, tostring(l.id), l.week or "")
-		nl = nl + 1
+		if l.id ~= A.Letters.UNMARKED then
+			letters[#letters + 1] = ('{"n":"%s","z":"%s","size":%d,"id":%s,"week":"%s"}')
+				:format(esc(l.n), esc(l.z), l.size or 0, tostring(l.id), l.week or "")
+			nl = nl + 1
+		end
 	end
 	local clears = {}
 	for _, c in pairs(A.DB().cleared or {}) do
@@ -618,7 +620,7 @@ function A.OurId(week, ref)
 	local short, size = A.ParseRef(ref)
 	local votes, best, bestN = {}, nil, 0
 	for _, l in pairs(A.Letters.Inbox()) do
-		if l.week == week and l.z == short and l.size == size then
+		if l.week == week and l.z == short and l.size == size and (l.id or 0) > 0 then
 			votes[l.id] = (votes[l.id] or 0) + 1
 			if votes[l.id] > bestN then best, bestN = l.id, votes[l.id] end
 		end
@@ -673,7 +675,11 @@ function A.WeekView(week)
 		if R.run or R.ours then v.known = true end
 	end
 	for _, l in pairs(A.Letters.Inbox()) do
-		if l.week == week then
+		if l.week == week and l.id == A.Letters.MANUAL then
+			-- an officer's mark by hand, on the main's name
+			local R = byRef[(l.z or "") .. (l.size or "")]
+			if R then local main = mainKey(l.n); R.away[main] = l.id; v.letter[main] = l end
+		elseif l.week == week and l.id ~= A.Letters.UNMARKED then
 			local main = mainKey(l.n)
 			local onMain = main == l.n:lower()
 			local ref = (l.z or "") .. (l.size or "")
@@ -738,8 +744,8 @@ local CHIP = {
 	with  = { 0.75, 0.58, 0.23, "|cffdcddde" },   -- came
 	empty = { 0.24, 0.22, 0.19, "|cff5e6166" },   -- didn't come / not yet (open week)
 	away  = { 0.70, 0.24, 0.24, "|cffff6b6b" },   -- saved elsewhere
-	clear = { 0.24, 0.52, 0.30, "|cff7cfc8a" },   -- saved elsewhere, cleared by an officer
-	ten   = { 0.24, 0.52, 0.30, "|cff7cfc8a" },   -- 10-man on the main
+	clear = { 0.24, 0.52, 0.30, "|cffffd200" },   -- saved elsewhere, cleared by an officer
+	ten   = { 0.24, 0.52, 0.30, "|cffffd200" },   -- 10-man on the main
 }
 
 local CLEAR_REASONS = { "Told us before", "Real life", "Sick", "Other" }
@@ -900,6 +906,7 @@ local function newPage(page)
 		for _, t in pairs(self.texts) do t:Hide() end
 		for _, r in ipairs(self.ruleRows or {}) do r:Hide() end
 		if self.allRow then self.allRow:Hide() end
+		if self.addRow then self.addRow:Hide() end
 		for _, h in pairs(self.heads) do
 			for _, c in ipairs(h.cells) do c:Hide() end
 			h.last:Hide()
@@ -988,29 +995,39 @@ local function buildMainTab(P, width)
 	-- saved elsewhere, each with the officer's Clear
 	P:BoxStart("away", "|cffff6b6bSAVED ELSEWHERE|r", "bottom of loot prio unless an officer clears it")
 	if #away == 0 then
-		P:Para("awayE", "|cff7cfc8aNobody, as far as the letters say.|r", "body", nil, 6)
+		P:Para("awayE", "|cffffd200Nobody, as far as the letters say.|r", "body", nil, 6)
 	else
 		for _, m in ipairs(away) do
 			local k = m.name:lower()
 			local row = P:Row()
 			row.tag:SetText(rankTag(m)); row.nm:SetText(nameOf(m))
 			local cl = A.Clearance(cur.week, m.name)
+			local l = cur.letter and cur.letter[k]
+			local manual = l and l.id == A.Letters.MANUAL
 			if cl then
-				row.mid:SetText("|cff7cfc8aCleared|r |cff8a8d93· " .. (cl.reason or "") .. " · by " .. (cl.by or "?") .. "|r")
+				row.mid:SetText("|cffffd200Cleared|r |cff8a8d93· " .. (cl.reason or "") .. " · by " .. (cl.by or "?") .. "|r")
+			elseif manual then
+				row.mid:SetText("|cffdcdddesaved to another " .. (multi and (A.RefLabel(cur.awayRef[k]) .. " ") or "")
+					.. "ID|r |cff8a8d93· marked by hand|r")
 			else
 				row.mid:SetText("|cffdcdddelocked to " .. (multi and (A.RefLabel(cur.awayRef[k]) .. " ") or "")
 					.. "ID |r|cffff6b6b" .. tostring(cur.elsewhere[k]) .. "|r")
 			end
-			local l = cur.letter and cur.letter[k]
 			row.last:ClearAllPoints(); row.last:SetPoint("RIGHT", row.btn, "LEFT", -12, 0)
-			row.last:SetText(l and ("|cff8a8d93letter · " .. date("%a %d %b", l.t or time()) .. "|r") or "")
+			row.last:SetText(l and ("|cff8a8d93" .. (manual and ("marked" .. (l.by and (" by " .. l.by) or "")) or "letter")
+				.. " · " .. date("%a %d %b", l.t or time()) .. "|r") or "")
 			row.btn:SetText(cl and "Undo" or "Clear")
 			row.btn.listFn = function()
 				local items = {}
 				for _, r in ipairs(CLEAR_REASONS) do items[#items + 1] = { text = r, value = r } end
+				-- a hand mark can be taken back, for a mistake
+				if manual then items[#items + 1] = { text = "|cffff6b6bUnmark (a mistake)|r", value = "__unmark" } end
 				return items
 			end
-			row.btn.setFn = function(reason) A.SetClearance(cur.week, m.name, reason) end
+			row.btn.setFn = function(reason)
+				if reason == "__unmark" then A.Letters.MarkManual(l.n, l.z, l.size, false); return end
+				A.SetClearance(cur.week, m.name, reason)
+			end
 			row.btn:SetScript("OnClick", function(b)
 				if A.Clearance(cur.week, m.name) then A.SetClearance(cur.week, m.name, nil)
 				elseif W.OpenMenu then W.OpenMenu(b) end
@@ -1019,6 +1036,45 @@ local function buildMainTab(P, width)
 			row.btn:Show()
 		end
 	end
+	-- Mark by hand: someone saved to another ID that no letter reports (no Okanvil).
+	-- Built once, placed on every refresh like the Rules row.
+	local add = P.addRow
+	if not add then
+		add = CreateFrame("Frame", nil, P.page)
+		add:SetHeight(30)
+		add:SetFrameLevel(P.page:GetFrameLevel() + 2)
+		add.lbl = W.Text(add, "Mark saved elsewhere", "label", "dim"); add.lbl:SetPoint("LEFT", PAD, 0)
+		add.name = W.EditBox(add)
+		add.name:SetSize(150, 24); add.name:SetPoint("LEFT", add.lbl, "RIGHT", 12, 0)
+		add.raid = W.DropDown(add, function()
+				local items = {}
+				for _, ref in ipairs(A.Rules().must) do items[#items + 1] = { text = A.RefLabel(ref), value = ref } end
+				return items
+			end, function() return add._ref end, function(v) add._ref = v; add.raid:refreshText() end)
+		add.raid:SetSize(150, 26); add.raid:SetPoint("LEFT", add.name, "RIGHT", 10, 0)
+		add.raid.refreshText = function(self) self.textFS:SetText(add._ref and A.RefLabel(add._ref) or "") end
+		add.go = W.Button(add, "Mark"); add.go:SetSize(70, 24); add.go:SetPoint("LEFT", add.raid, "RIGHT", 10, 0)
+		add.go:SetScript("OnClick", function()
+			local n = add.name.edit:GetText() or ""
+			local short, size = A.ParseRef(add._ref or "")
+			if n:gsub("%s", "") == "" or not short then return end
+			add.name.edit:SetText(""); add.name.edit:ClearFocus()
+			A.Letters.MarkManual(n, short, size, true)
+		end)
+		add.name.edit:SetScript("OnEnterPressed", function() add.go:Click() end)
+		P.addRow = add
+	end
+	-- the raid choice defaults to the first mandatory raid, and follows the Rules
+	local must = A.Rules().must
+	local okRef = false
+	for _, ref in ipairs(must) do if ref == add._ref then okRef = true end end
+	if not okRef then add._ref = must[1] end
+	add.raid:refreshText()
+	add:ClearAllPoints()
+	add:SetPoint("TOPLEFT", P.page, "TOPLEFT", 0, -(P.y + 4))
+	add:SetPoint("RIGHT", P.page, "RIGHT", 0, 0)
+	add:Show()
+	P.y = P.y + 38
 	P:BoxEnd("away")
 
 	-- the grid: every main, once any week has data
@@ -1026,7 +1082,7 @@ local function buildMainTab(P, width)
 	for _, v in ipairs(views) do if v.known then anyData = true end end
 	local ch = multi and ("1/" .. #cur.raids) or mustChip(cur, "")
 	P:BoxStart("grid", "MAINS  ·  LAST " .. WEEKS .. " WEEKS",
-		"|cffdcddde" .. ch .. "|r came   |cff5e6166–|r didn't come   |cffff6b6b" .. ch .. "|r saved elsewhere   |cff7cfc8a"
+		"|cffdcddde" .. ch .. "|r came   |cff5e6166–|r didn't come   |cffff6b6b" .. ch .. "|r saved elsewhere   |cffffd200"
 		.. ch .. "|r cleared")
 	if not anyData then
 		P:Para("gridB", "|cff8a8d93No main run or letters in the last " .. WEEKS .. " weeks yet: "
@@ -1071,7 +1127,7 @@ local function buildMainTab(P, width)
 			end
 			local pct = pctOf(m)
 			row.last:SetText(not pct and "|cff5e6166--|r"
-				or ((pct >= 75 and "|cff7cfc8a" or pct >= 50 and "|cffe0b860" or "|cffff6b6b") .. pct .. "%|r"))
+				or ((pct >= 75 and "|cffffd200" or pct >= 50 and "|cffe0b860" or "|cffff6b6b") .. pct .. "%|r"))
 		end)
 	end
 	P:BoxEnd("grid")
@@ -1127,7 +1183,7 @@ local function buildTenTab(P, width)
 					if v.present[k] then setChip(cell.b, "ten", size) else setChip(cell.a, "ten", size) end
 				end
 			end
-			row.last:SetText(m._w10 > 0 and "|cff7cfc8aeffort|r"
+			row.last:SetText(m._w10 > 0 and "|cffffd200effort|r"
 				or m._w25 >= 2 and "|cffff6b6bours only|r" or "|cff8a8d93little data|r")
 		end)
 	end
@@ -1139,7 +1195,7 @@ end
 -- The Rules pill: one row per raid, a 10 and a 25 button each saying what that
 -- raid counts as (Our ID / Extra / -); a click opens the menu to change it. Then
 -- the "every mandatory raid" switch.
-local KIND_TEXT = { must = "|cffe0b860Our ID|r", extra = "|cff7cfc8aExtra|r" }
+local KIND_TEXT = { must = "|cffe0b860Our ID|r", extra = "|cffffd200Extra|r" }
 local RULE_MENU = {
 	{ text = "Not counted",        value = "none" },
 	{ text = "Our ID (mandatory)", value = "must" },
@@ -1192,7 +1248,7 @@ local function buildRulesTab(P, width)
 	local rules = A.Rules()
 	P:BoxStart("rules", "WHAT COUNTS", (rules.t or 0) > 0
 		and ("set by " .. (rules.by or "?") .. "  ·  " .. date("%d %b %H:%M", rules.t)) or "not set yet")
-	P:Para("rulesB", "|cffe0b860Our ID|r |cff8a8d93= mandatory.|r   |cff7cfc8aExtra|r |cff8a8d93= effort, "
+	P:Para("rulesB", "|cffe0b860Our ID|r |cff8a8d93= mandatory.|r   |cffffd200Extra|r |cff8a8d93= effort, "
 		.. "information only.|r", "note", nil, 8)
 	ruleRows(P)
 
@@ -1257,11 +1313,11 @@ function Okanvil:BuildAttendance(host)
 			return "|cff8a8d93" .. n .. " letter" .. (n == 1 and "" or "s") .. " this week|r"
 		end,
 		tabs = {
-			{ key = "main", label = "Main run", height = 400,
+			{ key = "main", label = "Main run", icon = "Interface\\Icons\\INV_Misc_GroupNeedMore", height = 400,
 			  build = function(page) pages.main = newPage(page) end },
-			{ key = "ten", label = "Extra raids", height = 400,
+			{ key = "ten", label = "Extra raids", icon = "Interface\\Icons\\Spell_Holy_SealOfWrath", height = 400,
 			  build = function(page) pages.ten = newPage(page) end },
-			{ key = "rules", label = "Rules", height = 400,
+			{ key = "rules", label = "Rules", icon = "Interface\\Icons\\INV_Misc_Note_02", height = 400,
 			  build = function(page) pages.rules = newPage(page) end },
 		},
 	})

@@ -109,7 +109,7 @@ end
 -- -- a dark fill with a 1px edge in the tone's colour.
 -- ------------------------------------------------------------
 local TONES = {
-	ok   = { text = { 0.486, 0.988, 0.541 }, edge = { 0.18, 0.35, 0.20 } },
+	ok   = { text = { 1.0, 0.82, 0.0 }, edge = { 0.32, 0.25, 0.11 } },
 	warn = { text = { 0.94, 0.75, 0.25 },    edge = { 0.35, 0.29, 0.11 } },
 	bad  = { text = { 0.85, 0.30, 0.32 },    edge = { 0.35, 0.14, 0.15 } },
 	gold = { text = { 1.0, 0.82, 0.0 },      edge = { 0.32, 0.25, 0.11 } },
@@ -409,16 +409,23 @@ function W.WhispersPanel(parent, cfg)
 
 	-- the window, docked outside the main one so the page keeps its full width
 	local side = CreateFrame("Frame", nil, parent)
+	-- a window of its own beside the main one: cut corners like every window
+	side._okKeepCut = true
 	Okanvil:Skin(side)
+	side:SetBackdropColor(C.body[1], C.body[2], C.body[3], (Okanvil.db and Okanvil.db.bgAlpha) or 0.95)
+	side:SetBackdropBorderColor(C.edge[1], C.edge[2], C.edge[3], 1)
 	-- The main window's wallpaper, drawn the same way: BORDER layer (above the
 	-- backdrop), its strength from Settings, a dark fade that eases off to the
 	-- right. The panel is tall and narrow, so it shows the right-hand slice of
 	-- the 2:1 picture, where the smith stands.
+	-- 6px inside the edge, its corners cut like the window's (see W.CoverCorners)
 	local art = side:CreateTexture(nil, "BORDER")
-	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
+	art:SetPoint("TOPLEFT", 6, -6); art:SetPoint("BOTTOMRIGHT", -6, 6)
 	art:SetTexture("Interface\\AddOns\\Okanvil\\Media\\window-bg")
 	local fade = side:CreateTexture(nil, "ARTWORK")
-	fade:SetPoint("TOPLEFT", 1, -1); fade:SetPoint("BOTTOMRIGHT", -1, 1)
+	fade:SetPoint("TOPLEFT", 6, -6); fade:SetPoint("BOTTOMRIGHT", -6, 6)
+	local covers = W.CoverCorners(side, art, W.COVER, C.body[1], C.body[2], C.body[3],
+		(Okanvil.db and Okanvil.db.bgAlpha) or 0.95)
 	fade:SetTexture(FLAT)
 	do
 		local d = C.panelD
@@ -426,13 +433,13 @@ function W.WhispersPanel(parent, cfg)
 	end
 	local function paintArt()
 		local db = Okanvil.db or {}
-		if (db.ratArt or "on") == "off" then art:Hide(); fade:Hide(); return end
+		if (db.ratArt or "on") == "off" then art:Hide(); fade:Hide(); covers:SetShown(false); return end
 		local w, h = side:GetWidth() or 0, side:GetHeight() or 0
 		if w > 0 and h > 0 then
 			local span = math.min(1, (w / h) / 2)
 			art:SetTexCoord(1 - span, 1, 0, 1)
 		end
-		art:SetAlpha(db.ratAlpha or 0.45); art:Show(); fade:Show()
+		art:SetAlpha(db.ratAlpha or 0.45); art:Show(); fade:Show(); covers:SetShown(true)
 	end
 	side:HookScript("OnSizeChanged", paintArt)
 	side:HookScript("OnShow", paintArt)
@@ -450,9 +457,11 @@ function W.WhispersPanel(parent, cfg)
 		side:ClearAllPoints()
 		local right = (win:GetRight() or 0) * win:GetEffectiveScale()
 		local room = UIParent:GetRight() * UIParent:GetEffectiveScale() - right
-		if room >= side:GetWidth() * win:GetEffectiveScale() then
-			side:SetPoint("TOPLEFT", win, "TOPRIGHT", 2, 0)
-			side:SetPoint("BOTTOMLEFT", win, "BOTTOMRIGHT", 2, 0)
+		-- clear of the side tabs when the page has them
+		local gap = parent._okSideTabs and 56 or 2
+		if room >= (side:GetWidth() + gap) * win:GetEffectiveScale() then
+			side:SetPoint("TOPLEFT", win, "TOPRIGHT", gap, 0)
+			side:SetPoint("BOTTOMLEFT", win, "BOTTOMRIGHT", gap, 0)
 		else
 			side:SetPoint("TOPRIGHT", win, "TOPLEFT", -2, 0)
 			side:SetPoint("BOTTOMRIGHT", win, "BOTTOMLEFT", -2, 0)

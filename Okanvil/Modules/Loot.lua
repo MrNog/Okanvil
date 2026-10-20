@@ -2568,12 +2568,17 @@ function L.StartRoll(link, mode)
 		mode = mode, opened = GetTime(), best = nil, list = {}, seen = {}, srOnly = srOnly }
 	-- This item is now open for rolls, so chat rolls land on it even after activeRoll's
 	-- own window closes -- a slow roll-off still belongs to the item that was called.
+	local secs = L.RollTimer()
+	local called
 	do
 		local s = activeBucket()
-		local dp = s and findOpenDrop(s, activeRoll.id)
-		if dp then L.OpenForRolls(dp) end
+		called = s and findOpenDrop(s, activeRoll.id)
+		if called then
+			L.OpenForRolls(called)
+			-- the roll's clock, on the item: the mini roll draws its loading bar from it
+			called.callAt, called.callSecs = GetTime(), secs
+		end
 	end
-	local secs = L.RollTimer()
 	local chan = announceChannel()
 	if chan or L.SoloTestML() then
 		local msg = srOnly and SRM.RollCall(link) or L.RollMsg(mode):gsub("%[item%]", link)
@@ -2583,9 +2588,13 @@ function L.StartRoll(link, mode)
 	if secs > 0 and Okanvil.Comms and Okanvil.Comms.After then
 		local roll = activeRoll
 		Okanvil.Comms.After(secs, function()
-			-- Only the roll this timer was started for: an award or a newer roll
-			-- has already replaced it, and closing that one would cut it short.
-			if activeRoll == roll then L.StopRoll() end
+			-- Only the roll this timer was started for: a newer roll has replaced
+			-- it, and closing that one would cut it short. With no roll of ours
+			-- left (an award cleared it), the item it opened still closes.
+			if activeRoll == roll
+				or (activeRoll == nil and called and handRollDrop == called) then
+				L.StopRoll()
+			end
 		end)
 	end
 	-- Tell the UI a roll just STARTED on this item id, so it can page to it and select
@@ -4067,7 +4076,7 @@ function L.RenderInline(s, rowFn, idx, y)
 			who = "  |cff5e6166with|r |cff8a8d93" .. d.heldBy .. "|r"
 		end
 		if d.rollValue then
-			who = who .. "  |cff7cfc8a[roll " .. tostring(d.rollValue)
+			who = who .. "  |cffffd200[roll " .. tostring(d.rollValue)
 				.. (d.rollSpec == "off" and " off" or "") .. "]|r"
 		end
 		-- d.item ja e o link colorido pela raridade; fallback para o nome.
@@ -4607,7 +4616,7 @@ SlashCmdList["OKLOOTTEST"] = function(msg)
 	if low == "world" then
 		OkanvilLootWorldTest = not OkanvilLootWorldTest or nil
 		Okanvil:Print("Loot test: recording outside instances is "
-			.. (OkanvilLootWorldTest and "|cff7cfc8aON|r" or "|cffff5555OFF|r")
+			.. (OkanvilLootWorldTest and "|cffffd200ON|r" or "|cffff5555OFF|r")
 			.. ". Turn it off before real play.")
 		return
 	end
@@ -4627,7 +4636,7 @@ SlashCmdList["OKLOOTTEST"] = function(msg)
 	if low == "ml" then
 		L._testML = not L._testML or nil
 		Okanvil:Print("Loot test: master looter view is "
-			.. (L._testML and "|cff7cfc8aON|r (solo only; nothing goes to chat)" or "|cffff5555OFF|r") .. ".")
+			.. (L._testML and "|cffffd200ON|r (solo only; nothing goes to chat)" or "|cffff5555OFF|r") .. ".")
 		local RM = Okanvil.RollMgr
 		if RM and RM.ApplyMode then
 			local ok, err = pcall(RM.ApplyMode)

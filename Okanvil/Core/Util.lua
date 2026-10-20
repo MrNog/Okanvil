@@ -11,7 +11,9 @@
 --   Okanvil.U.itemIDFromLink(l) -> numeric item id from a link (0 if none)
 --   Okanvil.U.shortLink(l)      -> the "item:1234:..." span of a link (nil if none)
 --   Okanvil.U.guildRankOf(n)    -> that member's rankIndex (nil if not in guild)
---   Okanvil.U.isOfficer(n)      -> rankIndex <= 1 (guild master or officer)
+--   Okanvil.U.isOfficer(n)      -> on a rank with officer chat (guild master included)
+--   Okanvil.U.isOfficerRank(i)  -> that rank index is an officer rank
+--   Okanvil.U.raiderRank()      -> the raider rank: first non-alt rank below the officers
 --   Okanvil.U.mainOf(n)         -> the main an alt belongs to (from guild notes)
 --   Okanvil.U.toonsOf(n)        -> that person's main and alts, main first
 --   Okanvil.U.isOfficerAlt(n)   -> an alt whose main is an officer
@@ -87,13 +89,33 @@ classWords("0070de", "sham shams shaman shamans shammy rsham esham ele enh enha"
 classWords("9482c9", "lock locks warlock warlocks wl demo affli")
 classWords("c79c6e", "warr warrs warrior warriors fwarr pwarr fury arms")
 
+-- One letter run. Spam glues a count and a spec letter on: "1xHpala" reaches here
+-- as "xHpala", "1xRshaman" as "xRshaman". So the run is tried as it is, then
+-- without a leading "x" (the count's), then -- only after such an "x", where it is
+-- surely spam -- without the spec's letter too (R-shaman, C-rog). A plain word
+-- is never cut down into a class ("warms" stays "warms").
+local function paintRun(run)
+	local low = run:lower()
+	local hex = CLASS_WORD_HEX[low]
+	local lead = ""
+	if not hex and low:sub(1, 1) == "x" and #low > 2 then
+		lead, low = run:sub(1, 1), low:sub(2)
+		hex = CLASS_WORD_HEX[low]
+	end
+	if not hex and lead ~= "" and #low >= 4 then
+		hex = CLASS_WORD_HEX[low:sub(2)]
+	end
+	if not hex then return run end
+	-- the count's "x" stays uncoloured; the spec letter is painted with its class
+	return lead .. "|cff" .. hex .. run:sub(#lead + 1) .. "|r"
+end
+
 function U.paintClasses(text)
 	text = tostring(text or "")
 	return (text:gsub("%S+", function(word)
 		if word:find("|", 1, true) then return word end
 		return (word:gsub("%a+", function(run)
-			local hex = CLASS_WORD_HEX[run:lower()]
-			return hex and ("|cff" .. hex .. run .. "|r") or run
+			return paintRun(run)
 		end))
 	end))
 end
@@ -221,16 +243,59 @@ end
 -- ------------------------------------------------------------
 -- Who is allowed to see officer-only material (the loot priority list).
 --
--- By rank INDEX, not rank name: 0 is the guild master and 1 the officer rank
--- below him, whatever the guild has called them this month. Matching on names
--- would break the day someone renames a rank.
+-- An officer rank is one the guild itself gave officer chat to, read from the
+-- rank's own permissions. Not by name and not by a fixed index: a guild can add,
+-- rename or reorder ranks in game and the answer follows with no code change.
+-- When the client cannot give the permissions, the top two ranks (guild master
+-- and the rank below) stand in.
 --
 -- This hides material from people who have no use for it, and stops a stale list
 -- overwriting a good one. It is NOT a security boundary: the roster comes from
 -- the player's own client and an addon on someone's disk can be edited. Anything
 -- that truly must not leak belongs behind the website's login, not in here.
 -- ------------------------------------------------------------
-local OFFICER_MAX_RANK = 1
+local FALLBACK_OFFICER_MAX_RANK = 1
+-- GuildControlGetRankFlags order: 1 guild chat listen, 3 officer chat listen
+local FLAG_GCHAT_LISTEN, FLAG_OCHAT_LISTEN = 1, 3
+
+-- { [rankIndex] = true } for every officer rank, or nil when the permissions
+-- could not be read. Ranks are numbered from 1 (guild master) in the
+-- guild-control calls and from 0 in the roster.
+local officerRanksCache
+local function officerRanks()
+	if officerRanksCache then return officerRanksCache end
+	if not (GuildControlGetNumRanks and GuildControlSetRank and GuildControlGetRankFlags) then return nil end
+	-- Selecting a rank moves the guild-control frame's own selection: leave it alone
+	-- while the guild master has it open.
+	if GuildControlPopupFrame and GuildControlPopupFrame:IsShown() then return nil end
+	local n = GuildControlGetNumRanks() or 0
+	if n <= 0 then return nil end
+	local set = {}
+	for order = 1, n do
+		GuildControlSetRank(order)
+		local flags = { GuildControlGetRankFlags() }
+		-- the guild master always hears guild chat; if not, nothing was read
+		if order == 1 and not flags[FLAG_GCHAT_LISTEN] then return nil end
+		if order == 1 or flags[FLAG_OCHAT_LISTEN] then set[order - 1] = true end
+	end
+	officerRanksCache = set
+	return set
+end
+do
+	local f = CreateFrame("Frame")
+	-- rank permissions arrive with the roster, so a change in game shows up here
+	f:RegisterEvent("GUILD_ROSTER_UPDATE")
+	f:RegisterEvent("PLAYER_GUILD_UPDATE")
+	f:SetScript("OnEvent", function() officerRanksCache = nil end)
+end
+
+-- Is this rank index an officer rank?
+function U.isOfficerRank(idx)
+	if idx == nil then return false end
+	local set = officerRanks()
+	if set then return set[idx] == true end
+	return idx <= FALLBACK_OFFICER_MAX_RANK
+end
 
 -- ------------------------------------------------------------
 -- Guild ranks, read from the guild -- never assumed.
@@ -317,7 +382,7 @@ end
 -- whether an incoming priority list may be trusted.
 function U.isOfficer(name)
 	local idx = U.guildRankOf(name)
-	return idx ~= nil and idx <= OFFICER_MAX_RANK
+	return U.isOfficerRank(idx)
 end
 
 -- The MAIN an alt belongs to, from its guild notes -- "<Main> alt" in the officer
@@ -400,6 +465,20 @@ end
 function U.lowestRankIndex()
 	local _, maxIdx = U.guildRanks()
 	return (maxIdx >= 0) and maxIdx or nil
+end
+
+-- The raider rank: the first rank below the officers that is not an alt rank
+-- ("alt" in its name), never the bottom rank. Members at or above it count as
+-- raiders. nil outside a guild.
+function U.raiderRank()
+	local names, maxIdx = U.guildRanks()
+	if maxIdx < 0 then return nil end
+	local top = 0
+	for i = 0, maxIdx do if U.isOfficerRank(i) then top = i end end
+	local r = top + 1
+	while r < maxIdx and names[r] and names[r]:lower():find("alt", 1, true) do r = r + 1 end
+	if maxIdx >= 2 and r >= maxIdx then r = maxIdx - 1 end
+	return math.min(r, maxIdx)
 end
 
 -- The gate the loot-priority UI asks: an officer, or an officer's alt.

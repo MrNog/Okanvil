@@ -750,7 +750,7 @@ local function startEncounter(at)
 	-- watch left on would otherwise log (and announce) every dungeon pack.
 	pullRec = (P.Debug() and catZone) and logPull() or nil
 	if pullRec then
-		Okanvil:Print("|cff7cfc8a[notes]|r recording this pull -- /reload when done.")
+		Okanvil:Print("|cffffd200[notes]|r recording this pull -- /reload when done.")
 	end
 end
 

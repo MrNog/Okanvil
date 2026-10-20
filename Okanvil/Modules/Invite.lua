@@ -517,7 +517,7 @@ function I.SetKeywordEnabled(on)
 			Rec_ToggleActive(false)
 			Print("Recruit advertising turned OFF (can't share the invite keyword).")
 		end
-		Print("keyword-invite |cff7cfc8aON|r.")
+		Print("keyword-invite |cffffd200ON|r.")
 	else
 		Print("keyword-invite |cffff5555OFF|r.")
 	end

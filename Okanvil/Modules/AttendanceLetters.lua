@@ -121,6 +121,26 @@ function L.Store(n, z, size, id, week)
 	if A.onChange then A.onChange() end
 end
 
+-- An officer's mark by hand: a main saved to another ID that no letter will ever
+-- report (no Okanvil on their side). Kept as a letter with id MANUAL ("another
+-- ID"); unmarking stores id UNMARKED, newer, so the officers' merge -- which only
+-- ever adds -- does not bring the mark back from someone who still had it.
+L.MANUAL, L.UNMARKED = 0, -1
+
+function L.MarkManual(n, z, size, on)
+	n = (n or ""):gsub("%s", "")
+	if n == "" then return end
+	n = n:sub(1, 1):upper() .. n:sub(2):lower()
+	local week = A.WeekOf(time())
+	L.Store(n, z, size, on and L.MANUAL or L.UNMARKED, week)
+	local l = L.Inbox()[n .. "|" .. z .. size .. "|" .. week]
+	if not l then return end
+	l.by = UnitName("player")
+	Okanvil:Trace("ATT", ("%s %s %s%d by hand"):format(on and "mark" or "unmark", n, z, size))
+	-- the officers online get it now, in the sync's own record format
+	Okanvil.Comms.SendBig("ATTR", table.concat({ l.n, l.z, l.size, tostring(l.id), l.week, l.t or 0 }, ","), "GUILD")
+end
+
 local function valid(z, size, id, week)
 	return z and A.RaidByShort(z) and (size == 10 or size == 25) and id
 		and type(week) == "string" and week:match("^%d%d%d%d%-%d%d%-%d%d$")

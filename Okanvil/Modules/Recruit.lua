@@ -537,7 +537,7 @@ core:SetScript("OnEvent", function(self, event, arg1, arg2)
 			recentInvites[clean] = ctx.now
 			GuildInvite(clean)
 			didInvite = true
-			Print("Guild-invited |cff00ff00" .. clean .. "|r.")
+			Print("Guild-invited |cffffd200" .. clean .. "|r.")
 		end
 		if decision.reply then
 			repliedTo[clean] = ctx.now
@@ -652,7 +652,7 @@ function Rec_ShareMessage()
 	end
 	local ok = C.SendGuild and C.SendGuild("RECMSG", msg)
 	if ok then
-		Okanvil:Print("|cff7cfc8aRecruit:|r message sent to the other officers.")
+		Okanvil:Print("|cffffd200Recruit:|r message sent to the other officers.")
 	else
 		Okanvil:Print("|cffff5555Recruit:|r could not send.")
 	end
@@ -717,7 +717,7 @@ function Rec_ToggleActive(state)
 		Rec_RefreshUI()
 	end
 	if db.active then
-		Print("advertising |cff00ff00ON|r.")
+		Print("advertising |cffffd200ON|r.")
 	else
 		Print("advertising |cffff5555OFF|r.")
 	end
@@ -919,10 +919,10 @@ function Rec_SetToastMove(on)
 	toast.unlocked = on
 	if on then
 		toast.top:SetText("|cffF1C40FToast preview|r")
-		toast.bottom:SetText("|cff00ff00drag me, untick to lock|r")
+		toast.bottom:SetText("|cffffd200drag me, untick to lock|r")
 		toast:SetAlpha(1)
 		toast:Show()
-		Print("Toast |cff00ff00unlocked|r -- drag it where you want, then untick to lock.")
+		Print("Toast |cffffd200unlocked|r -- drag it where you want, then untick to lock.")
 	else
 		toast:Hide()
 		Print("Toast position |cffffcc00locked|r.")
@@ -976,7 +976,7 @@ function Rec_BuildUI(parent)
 			for _, e in ipairs(db.log or {}) do
 				if e.blocked then blocked = blocked + 1 end
 			end
-			local state = db.active and "|cff7cfc8aAdvertising ON|r" or "|cffff5555Advertising OFF|r"
+			local state = db.active and "|cffffd200Advertising ON|r" or "|cffff5555Advertising OFF|r"
 			-- Unread whispers lead: they are the one number here that asks you to
 			-- do something, and missing them is how a recruit goes unanswered.
 			local unread = Rec_UnreadCount()
@@ -985,12 +985,12 @@ function Rec_BuildUI(parent)
 			end
 			-- Nothing happened yet: the row of zeroes says less than no row at all.
 			if invited + replied + blocked == 0 then return state end
-			return ("%s   |cff8a8d93|r |cff7cfc8a%d|r|cff8a8d93 inv|r  |cffe0b860%d|r|cff8a8d93 rep|r  |cffff5555%d|r|cff8a8d93 blk|r")
+			return ("%s   |cff8a8d93|r |cffffd200%d|r|cff8a8d93 inv|r  |cffe0b860%d|r|cff8a8d93 rep|r  |cffff5555%d|r|cff8a8d93 blk|r")
 				:format(state, invited, replied, blocked)
 		end,
 		tabs = {
-			{ key = "message",  label = "Message",  height = 400, build = function(p) Rec_BuildMessage(p) end },
-			{ key = "setup",    label = "Setup",    height = 800, build = function(p) Rec_BuildSetup(p) end },
+			{ key = "message",  label = "Message",  icon = "Interface\\Icons\\INV_Letter_15", height = 400, build = function(p) Rec_BuildMessage(p) end },
+			{ key = "setup",    label = "Setup",    icon = "Interface\\Icons\\INV_Misc_Wrench_01", height = 800, build = function(p) Rec_BuildSetup(p) end },
 		},
 	})
 	f.dash = dash
@@ -1299,7 +1299,7 @@ function Rec_RenderRules()
 			kwText = "|cffff5555never fires|r |cff8a8d93-- the reply above it answers first|r"
 		end
 		row.kw:SetText(kwText)
-		row.tog.text:SetText(on and "|cff7cfc8aON|r" or "|cff8a8d93OFF|r")
+		row.tog.text:SetText(on and "|cffffd200ON|r" or "|cff8a8d93OFF|r")
 		row:SetAlpha(on and 1 or 0.55)
 		row.tog:SetScript("OnClick", function()
 			rule.enabled = not on
@@ -1495,7 +1495,7 @@ function Rec_WhispersConfig()
 		status = {
 			new      = { "new",      "|cffe0b860" },
 			invited  = { "invited",  "|cff4a90d9" },
-			joined   = { "joined",   "|cff7cfc8a" },
+			joined   = { "joined",   "|cffffd200" },
 			declined = { "declined", "|cffe05555" },
 			offline  = { "offline",  "|cffe05555" },
 			blocked  = { "blocked",  "|cffe05555" },
@@ -1540,7 +1540,7 @@ function Rec_WhispersConfig()
 			db.session[name] = db.session[name] or {}
 			db.session[name].invited = true
 			db.session[name].state = "sent"
-			Print("Guild-invited |cff00ff00" .. name .. "|r.")
+			Print("Guild-invited |cffffd200" .. name .. "|r.")
 			Rec_RefreshWhispers()
 		end,
 		onDismiss = function(name)
@@ -1642,7 +1642,7 @@ function Rec_AddWatchFriend(name)
 	end
 	db.session[name] = db.session[name] or {}
 	db.session[name].watch = true
-	Print("Added |cff00ff00" .. name .. "|r to friends -- you'll get a toast when they come online.")
+	Print("Added |cffffd200" .. name .. "|r to friends -- you'll get a toast when they come online.")
 	Rec_RefreshWhispers()
 end
 

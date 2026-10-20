@@ -383,6 +383,7 @@ local function wbuild()
 	if W.ForgeArt then W.ForgeArt(f, 0.22) end
 
 	local hdr = W.Frame(f, "bare")
+	hdr._okTitleBar = true   -- its buttons are drawn like the X: the red plate
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(WP_HDR)
 	W.Hairline(hdr, "BOTTOM", 8)
 	local title = W.Text(hdr, "Wishes", "body", "accent")
@@ -575,7 +576,7 @@ function WP.Paint()
 		if s and #s.won > 0 then
 			local w = {}
 			for _, who in ipairs(s.won) do w[#w + 1] = (L and L.ClassColorName and L.ClassColorName(who)) or who end
-			r.status:SetText("|cff7cfc8awon|r " .. table.concat(w, ", "))
+			r.status:SetText("|cffffd200won|r " .. table.concat(w, ", "))
 		elseif s then
 			r.status:SetText("|cffffd200dropped" .. (s.n > 1 and (" x" .. s.n) or "") .. "|r")
 		else

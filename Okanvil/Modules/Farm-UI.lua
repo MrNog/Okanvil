@@ -60,6 +60,7 @@ local function build()
 	W.ForgeArt(f, 0.22)
 	-- ---- header: the setup's -- no raised strip, a hairline under it ----
 	local hdr = W.Frame(f, "bare")
+	hdr._okTitleBar = true   -- its buttons are drawn like the X: the red plate
 	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(22)
 	W.Hairline(hdr, "BOTTOM", 6)
 	local ico = hdr:CreateTexture(nil, "OVERLAY")
@@ -203,7 +204,7 @@ function M.RefreshWindow()
 	local gph = M.GoldPerHour()
 
 	win.rate:SetText(rateColor(gph) .. M.Money(gph, true) .. "|r")
-	win.clock:SetText((running and "|cff7cfc8a" or "|cff8a8d93") .. M.Clock(M.Duration()) .. "|r")
+	win.clock:SetText((running and "|cffffd200" or "|cff8a8d93") .. M.Clock(M.Duration()) .. "|r")
 	win.zone:SetText("|cff6f7176" .. (M.S.zone or "") .. "|r")
 	if win.startBtn.text then
 		win.startBtn.text:SetText(running and "Pause" or "Start")
@@ -305,6 +306,7 @@ function Okanvil:BuildFarm(host)
 	local fill = Okanvil.UI.newFillPanel()
 	local dash = W.Dashboard(host, {
 		title = "Farm",
+		settingsTab = "general",
 		subtitle = "Gold per hour while you farm",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.farm) or "Interface\\Icons\\INV_Misc_Bag_10",
 		drawerWidth = 0,
@@ -313,7 +315,7 @@ function Okanvil:BuildFarm(host)
 		onPrimary = function() Okanvil.Farm_Toggle() end,
 		statusText = function()
 			if M.IsRunning() then
-				return "|cff7cfc8arunning|r |cff8a8d93" .. M.Clock(M.Duration()) .. "|r"
+				return "|cffffd200running|r |cff8a8d93" .. M.Clock(M.Duration()) .. "|r"
 			end
 			return "|cff8a8d93idle|r"
 		end,
@@ -329,26 +331,19 @@ function Okanvil:BuildFarm(host)
 		.. "worth and quest gold, and divides by the time the timer was actually running.", "note", "dim")
 	hint:SetPoint("TOPLEFT", X, -6); hint:SetPoint("RIGHT", -X, 0); hint:SetJustifyH("LEFT")
 
-	local pv = W.Check(p, "Value loot at vendor price (off = use an auction addon)",
-		function() return M.DB().price == "vendor" end,
-		function(v) M.DB().price = v and "vendor" or "auto"; M.RefreshWindow() end)
-	pv:SetPoint("TOPLEFT", X + 2, -40)
-	pv:Tooltip("On: what a vendor pays -- matches what you get if you vendor everything.\n"
-		.. "Off: Auctionator / TSM price when installed, vendor price when not.")
-
 	-- What every run adds up to. The per-run rows answer "how did that one go";
 	-- this answers "is this spot worth farming at all", which is the reason to
 	-- keep a history in the first place.
 	local totals = W.Text(p, "", "body", "dim")
-	totals:SetPoint("TOPLEFT", X, -72)
+	totals:SetPoint("TOPLEFT", X, -40)
 	wrap.totals = totals
 
 	local hh = W.Text(p, "PAST RUNS", "label", "accent")
-	hh:SetPoint("TOPLEFT", X, -100)
+	hh:SetPoint("TOPLEFT", X, -68)
 	-- Clear sits at the far RIGHT of the heading row, away from the rows it wipes.
 	-- At X+90 it butted against the heading and read as part of it.
 	local clr = W.Button(p, "Clear"):Size(60, 18)
-	clr:SetPoint("TOPRIGHT", p, "TOPRIGHT", -X, -98)
+	clr:SetPoint("TOPRIGHT", p, "TOPRIGHT", -X, -66)
 	clr:SetScript("OnClick", function()
 		if #M.History() == 0 then return end
 		Okanvil:Confirm("Clear the farm history?\n\nAll saved runs go with it.", "Clear",
@@ -362,7 +357,7 @@ function Okanvil:BuildFarm(host)
 	-- heading reads as a broken feature, when usually the last run was simply too
 	-- short to bank.
 	local empty = W.Text(p, "", "label", "dim")
-	empty:SetPoint("TOPLEFT", X, -128)
+	empty:SetPoint("TOPLEFT", X, -96)
 	empty:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 	empty:SetJustifyH("LEFT")
 
@@ -392,7 +387,7 @@ function Okanvil:BuildFarm(host)
 					tKills, rateColor(avg), M.Money(avg, true)))
 		end
 
-		local y = 124
+		local y = 92
 		for i, e in ipairs(h) do
 			local r = wrap.rows[i]
 			if not r then

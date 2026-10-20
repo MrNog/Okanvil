@@ -13,7 +13,7 @@ local ADDON = U.ADDON
 local FLAT = "Interface\\Buttons\\WHITE8x8"
 local BOSS_H, ITEM_H, ICON, SMALL = 36, 42, 30, 20
 -- the page's controls read one size up and stand taller (as on PuG)
-local CTRL_FONT, CTRL_H, BAR_H = 15, 30, 48
+local CTRL_FONT, CTRL_H, BAR_H = 13, 24, 44
 local function big(b)
 	local t = b and (b.text or b.textFS)
 	if t then t._okSize = CTRL_FONT; t:SetFont(Okanvil:Font(), CTRL_FONT) end
@@ -60,29 +60,28 @@ function Okanvil:BuildUpgrades(host)
 
 	local dash = W.Dashboard(host, {
 		title = "Upgrades",
+		settingsTab = "general",
 		subtitle = "Raid drops that beat your gear, for the spec you are in",
 		icon = Okanvil.ICONS.upgrades,
 		drawerWidth = 0,
 		footerHeight = 0,
-		-- two views, one switch at the right of the header: the drops for you, or
-		-- any spec's BiS list; the spec you are in just before it
+		-- the spec you are in, at the right of the header; the two views (the
+		-- drops for you, any spec's BiS list) are side tabs on the window's edge
 		headerBuild = function(header)
-			local nextT
-			for _, v in ipairs({ { "bis", "BiS lists" }, { "me", "For me" } }) do
-				local b = W.HeaderFont(W.Button(header, v[2]))
-				b:SetSize(W.HEADER_BTN_W - 30, W.HEADER_BTN_H)
-				if nextT then b:SetPoint("RIGHT", nextT, "LEFT", 0, 0)
-				else b:SetPoint("RIGHT", header, "RIGHT", -10, 0) end
-				b:SetScript("OnClick", function()
-					state.view = v[1]; db().view = v[1]; refresh()
-				end)
-				viewTabs[v[1]] = b
-				nextT = b
-			end
 			specFS = W.Text(header, "", nil, "dim")
-			specFS:SetPoint("RIGHT", nextT, "LEFT", -14, 0)
+			specFS:SetPoint("RIGHT", header, "RIGHT", -10, 0)
 		end,
 	})
+
+	for i, v in ipairs({ { "me", "For me", "Interface\\Icons\\Spell_Holy_HolyBolt" },
+			{ "bis", "BiS lists", "Interface\\Icons\\INV_Misc_Note_02" } }) do
+		local b = W.SideTab(host, v[2], v[3], function()
+			state.view = v[1]; db().view = v[1]; refresh()
+		end)
+		b:Place(i - 1)
+		viewTabs[v[1]] = b
+	end
+	if dash.settingsTab then dash.settingsTab:Place(2, 12) end
 
 	-- raid and difficulty in a bar of their own at the top of the page: beside
 	-- the title they were small and crowded the subtitle
@@ -187,17 +186,17 @@ function Okanvil:BuildUpgrades(host)
 		r:SetHeight(ITEM_H)
 		local hl = r:CreateTexture(nil, "HIGHLIGHT")
 		hl:SetTexture(FLAT); hl:SetAllPoints(); hl:SetVertexColor(1, 1, 1, 0.05)
-		r.icon = r:CreateTexture(nil, "ARTWORK")
+		r.slot = W.FramedIcon(r, nil, ICON + 6, true)
+		r.slot:SetPoint("LEFT", 19, 0)
+		r.icon = r.slot.icon
 		-- a stripe in the verdict's colour
 		r.bar = r:CreateTexture(nil, "ARTWORK")
 		r.bar:SetTexture(FLAT); r.bar:SetWidth(3)
 		r.bar:SetPoint("TOPLEFT", 10, -4); r.bar:SetPoint("BOTTOMLEFT", 10, 4)
-		r.icon:SetSize(ICON, ICON); r.icon:SetPoint("LEFT", 22, 0)
-		r.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 		r.val = W.Text(r, "", "head"); r.val:SetPoint("RIGHT", -6, 0); r.val:SetWidth(78)
 		r.val:SetJustifyH("RIGHT")
 		-- left half: the drop; right half: what it replaces
-		r.name = W.Text(r, "", "head"); r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 8, 1)
+		r.name = W.Text(r, "", "head"); r.name:SetPoint("TOPLEFT", r.slot, "TOPRIGHT", 8, -2)
 		r.name:SetJustifyH("LEFT")
 		r.sub = W.Text(r, "", "note", "dim"); r.sub:SetPoint("TOPLEFT", r.name, "BOTTOMLEFT", 0, -3)
 		r.sub:SetJustifyH("LEFT")
@@ -313,8 +312,8 @@ function Okanvil:BuildUpgrades(host)
 		prevP = b
 	end
 	-- back to the spec you are in, today's phase
-	local mine = big(W.Button(bbar, "My spec"))
-	mine:SetSize(96, CTRL_H); mine:SetPoint("RIGHT", bbar, "RIGHT", -Okanvil.UI.PAD_X, 0)
+	local mine = W.Button(bbar, "My spec"):SetMain(true)
+	mine:SetSize(96, 24); mine:SetPoint("RIGHT", bbar, "RIGHT", -Okanvil.UI.PAD_X, 0)
 	mine:SetScript("OnClick", function()
 		local sp = U.Spec()
 		if sp then state.bClass, state.bList = U.CLASS_BIS[sp.class] or state.bClass, sp.list end
@@ -333,26 +332,16 @@ function Okanvil:BuildUpgrades(host)
 		if cells[i] then return cells[i] end
 		local b = CreateFrame("Button", nil, grid)
 		b:SetSize(BIS_ICON, BIS_ICON)
-		b.icon = b:CreateTexture(nil, "ARTWORK"); b.icon:SetAllPoints()
-		b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		-- the kit's octagon frame (grey; gold when you have the item)
+		W.DressFramedIcon(b, nil, b:GetWidth())
+		W.SetFramedIconGold(b, false)
 		-- you have it: a check mark in the corner
-		b.own = b:CreateTexture(nil, "OVERLAY")
+		-- on its own frame, so it draws above the octagon frame
+		local top = CreateFrame("Frame", nil, b)
+		top:SetAllPoints(b); top:SetFrameLevel(b:GetFrameLevel() + 2)
+		b.own = top:CreateTexture(nil, "OVERLAY")
 		b.own:SetSize(22, 22); b.own:SetPoint("BOTTOMRIGHT", 3, -3)
 		b.own:SetTexture("Interface\\RaidFrame\\ReadyCheck-Ready")
-		-- and a gold frame round it
-		b.edge = {}
-		for _, side in ipairs({ "TOP", "BOTTOM", "LEFT", "RIGHT" }) do
-			local t = b:CreateTexture(nil, "OVERLAY")
-			t:SetTexture(FLAT); t:SetVertexColor(1, 0.82, 0.25, 1)
-			if side == "TOP" or side == "BOTTOM" then
-				t:SetHeight(2); t:SetPoint(side .. "LEFT", -1, side == "TOP" and 1 or -1)
-				t:SetPoint(side .. "RIGHT", 1, side == "TOP" and 1 or -1)
-			else
-				t:SetWidth(2); t:SetPoint("TOP" .. side, side == "LEFT" and -1 or 1, 1)
-				t:SetPoint("BOTTOM" .. side, side == "LEFT" and -1 or 1, -1)
-			end
-			b.edge[#b.edge + 1] = t
-		end
 		local hl = b:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints()
 		hl:SetTexture(FLAT); hl:SetVertexColor(1, 1, 1, 0.15)
 		b:SetScript("OnEnter", function(s)
@@ -377,8 +366,9 @@ function Okanvil:BuildUpgrades(host)
 		if enhs[i] then return enhs[i] end
 		local b = CreateFrame("Button", nil, grid)
 		b:SetSize(ENH, ENH)
-		b.icon = b:CreateTexture(nil, "ARTWORK"); b.icon:SetAllPoints()
-		b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		-- the kit's octagon frame (grey; gold when you have the item)
+		W.DressFramedIcon(b, nil, b:GetWidth())
+		W.SetFramedIconGold(b, false)
 		local hl = b:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints()
 		hl:SetTexture(FLAT); hl:SetVertexColor(1, 1, 1, 0.15)
 		b:SetScript("OnEnter", function(s)
@@ -475,7 +465,7 @@ function Okanvil:BuildUpgrades(host)
 						c.icon:SetTexture((GetItemIcon and GetItemIcon(id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
 						local have = (GetItemCount(id, true) or 0) > 0
 						if have then c.own:Show() else c.own:Hide() end
-						for _, t in ipairs(c.edge) do if have then t:Show() else t:Hide() end end
+						W.SetFramedIconGold(c, have)
 						c:Show()
 					end
 				end
@@ -486,7 +476,7 @@ function Okanvil:BuildUpgrades(host)
 	refresh = function()
 		if not host:IsVisible() then return end
 		dash:Refresh()
-		for v, b in pairs(viewTabs) do b:SetKind(v == state.view and "primary" or nil) end
+		for v, b in pairs(viewTabs) do b:SetKind(v == state.view and "tabOn" or "tab") end
 		if specFS then specFS:SetText(specText()) end
 		if state.view == "bis" then
 			bar:Hide(); body:Hide(); bis:Show()
@@ -552,7 +542,7 @@ function Okanvil:BuildUpgrades(host)
 			local r = bossRow()
 			r.caret:SetText(open and "v" or ">")
 			r.caret:SetTextColor(u3(open and C.accentText or C.textDim))
-			r.name:SetText((isNext and "|cffe0b860> |r" or "") .. U.BossLabel(b.boss) .. (isDead and "  |cff7cfc8akilled|r" or ""))
+			r.name:SetText((isNext and "|cffe0b860> |r" or "") .. U.BossLabel(b.boss) .. (isDead and "  |cffffd200killed|r" or ""))
 			r.name:SetTextColor(u3(isDead and C.textDim or (isNext and C.accentText or C.text)))
 			local nBis = 0
 			for _, u in ipairs(ups) do if u.v.bis then nBis = nBis + 1 end end
@@ -573,7 +563,7 @@ function Okanvil:BuildUpgrades(host)
 				local place = u.v.rank and (u.v.bis and "|cffff8000BiS|r"
 					or ("|cffe0b860#" .. u.v.rank .. "|r on your list"
 						.. (u.v.as and (" |cff8a8d93(the|r |cffe0b860" .. u.v.as .. "|r |cff8a8d93copy)|r") or ""))) or nil
-				it.sub:SetText((u.slot or "") .. (u.v.ilvl and ("  ·  |cff7cfc8a" .. u.v.ilvl .. "|r") or "")
+				it.sub:SetText((u.slot or "") .. (u.v.ilvl and ("  ·  |cffffd200" .. u.v.ilvl .. "|r") or "")
 					.. (place and ("  ·  " .. place) or ""))
 				local cr, cg, cb = 0.49, 0.99, 0.54
 				if u.v.bis then cr, cg, cb = 1, 0.5, 0
@@ -589,12 +579,12 @@ function Okanvil:BuildUpgrades(host)
 					local wr, wg, wb = GetItemQualityColor(wq or 4)
 					local gain = (u.v.ilvl and wl) and (u.v.ilvl - wl) or 0
 					it.vs:SetText(("|cff%02x%02x%02x%s|r  |cffd06a6a%s|r%s"):format(wr * 255, wg * 255, wb * 255,
-						wn or "?", wl or "", gain > 0 and ("  |cff7cfc8a+" .. gain .. "|r") or ""))
+						wn or "?", wl or "", gain > 0 and ("  |cffffd200+" .. gain .. "|r") or ""))
 					it.vsK:SetText("replaces")
 				else
 					it.vsIcon:Hide()
 					it.vsK:SetText("")
-					it.vs:SetText("|cff7cfc8aempty slot|r")
+					it.vs:SetText("|cffffd200empty slot|r")
 				end
 				it.val:SetText(U.Label(u.v))
 				if u.v.bis then it.val:SetTextColor(1, 0.5, 0)

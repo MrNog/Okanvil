@@ -213,7 +213,7 @@ local function ping()
 	pingSeq = pingSeq + 1
 	SendAddonMessage(PREFIX, "PING:plain:" .. pingSeq, chan)
 	SendAddonMessage(PREFIX, "PING|pipe|" .. pingSeq, chan)
-	Okanvil:Print(("Ping %d sent on %s -- expect two lines back: |cff7cfc8aplain|r and |cff7cfc8apipe|r."):format(pingSeq, chan))
+	Okanvil:Print(("Ping %d sent on %s -- expect two lines back: |cffffd200plain|r and |cffffd200pipe|r."):format(pingSeq, chan))
 end
 
 do
@@ -222,7 +222,7 @@ do
 	raw:SetScript("OnEvent", function(_, _, prefix, message, channel, sender)
 		if prefix ~= PREFIX or type(message) ~= "string" or message:sub(1, 4) ~= "PING" then return end
 		local kind = message:sub(5, 5) == "|" and "pipe" or "plain"
-		Okanvil:Print(("|cff7cfc8aPing back:|r %s from %s [%s] %s"):format(
+		Okanvil:Print(("|cffffd200Ping back:|r %s from %s [%s] %s"):format(
 			kind, tostring(sender), tostring(channel), shown(message)))
 	end)
 end
@@ -230,7 +230,7 @@ end
 _G.SlashCmdList["OKCOMMS"] = function(msg)
 	if (msg or ""):lower():match("^%s*ping") then ping(); return end
 	C.debug = not C.debug
-	Okanvil:Print("Comms debug " .. (C.debug and "|cff7cfc8aON|r" or "|cffff5555OFF|r"))
+	Okanvil:Print("Comms debug " .. (C.debug and "|cffffd200ON|r" or "|cffff5555OFF|r"))
 end
 
 local function onMessage(prefix, message, channel, sender)

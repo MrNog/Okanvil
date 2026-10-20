@@ -548,14 +548,14 @@ local function mockPlayers()
 		all[c.id] = true
 	end
 	return {
-		{ name = "Lightwardh", class = "PALADIN", sub = "|cff7cfc8aholy|r",
+		{ name = "Lightwardh", class = "PALADIN", sub = "|cffffd200holy|r",
 			info = { gs = 5912, ilvl = 258, pvp = 0, ach = all,
 				audit = { noEnchant = {}, empty = 0, emptySlots = {}, lowGems = 0, meta = true } } },
 		{ name = "Frostgrip", class = "DEATHKNIGHT", sub = "|cffd94d52frost|r",
 			info = { gs = 5612, ilvl = 251, pvp = 2, ach = ach,
 				audit = { noEnchant = { "Cloak", "Boots" }, empty = 0, emptySlots = {}, noBuckle = true,
 					lowGems = 2, meta = true } } },
-		{ name = "Totemtoe", class = "SHAMAN", sub = "|cff7cfc8arestoration|r",
+		{ name = "Totemtoe", class = "SHAMAN", sub = "|cffffd200restoration|r",
 			info = { gs = 5203, ilvl = 245, pvp = 0,
 				audit = { noEnchant = {}, budget = { "Chest", "Gloves" }, empty = 0, emptySlots = {}, lowGems = 1,
 					meta = false, partial = true } } },

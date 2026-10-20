@@ -64,14 +64,13 @@ local function makeNavEntry(parent)
 	local hl = b:CreateTexture(nil, "BACKGROUND")
 	hl:SetAllPoints(); hl:SetTexture(FLAT); hl:SetVertexColor(0, 0, 0, 0)
 	b.hl = hl
-	local bar = b:CreateTexture(nil, "ARTWORK")   -- left accent bar when active
-	bar:SetPoint("TOPLEFT"); bar:SetPoint("BOTTOMLEFT"); bar:SetWidth(3)
-	bar:SetTexture(FLAT); bar:SetVertexColor(u3(C.accent)); bar:Hide()
-	b.bar = bar
-	b.icon = b:CreateTexture(nil, "ARTWORK")
-	b.icon:SetSize(navIcon(), navIcon()); b.icon:SetPoint("LEFT", 10, 0)
-	b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	b.text = W.Text(b, nil, navFont()); b.text:SetPoint("LEFT", b.icon, "RIGHT", 9, 0); b.text:SetJustifyH("LEFT")
+	-- the icon in the kit's octagon frame: gold on the page you are on, grey otherwise
+	b.slot = CreateFrame("Frame", nil, b)
+	b.slot:SetSize(navIcon(), navIcon()); b.slot:SetPoint("LEFT", 8, 0)
+	W.DressFramedIcon(b.slot, nil, navIcon())
+	W.SetFramedIconGold(b.slot, false)
+	b.icon = b.slot.icon
+	b.text = W.Text(b, nil, navFont()); b.text:SetPoint("LEFT", b.slot, "RIGHT", 9, 0); b.text:SetJustifyH("LEFT")
 	b:SetScript("OnEnter", function(s) if not s._active then s.hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.08) end end)
 	b:SetScript("OnLeave", function(s) if not s._active then s.hl:SetVertexColor(0, 0, 0, 0) end end)
 	return b
@@ -115,6 +114,10 @@ function Okanvil:BuildShell()
 	f:SetMovable(true)
 	f:SetResizable(false)            -- no drag-resize: it broke layouts. Scale instead.
 	self:Skin(f)
+	-- the kit's window: near-black body, bronze edge (the opacity slider still tints it)
+	if self._skinned and self._skinned[f] then self._skinned[f].fill = C.body end
+	f:SetBackdropColor(C.body[1], C.body[2], C.body[3], db.bgAlpha or 0.95)
+	f:SetBackdropBorderColor(u3(C.edge))
 	self.win = f
 	-- ESC closes the window: register it as a special frame (WoW hides frames in
 	-- UISpecialFrames when Escape is pressed). Uses the frame's global name.
@@ -129,11 +132,7 @@ function Okanvil:BuildShell()
 
 	-- header (drag)
 	-- Header, nav and content are text on the forge art: no fills, hairlines only.
-	local hdr = W.Frame(f, "bare")
-	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(HEADER_H)
-	local hdrRule = hdr:CreateTexture(nil, "ARTWORK")
-	hdrRule:SetTexture(FLAT); hdrRule:SetVertexColor(u3(C.border))
-	hdrRule:SetHeight(1); hdrRule:SetPoint("BOTTOMLEFT"); hdrRule:SetPoint("BOTTOMRIGHT")
+	local hdr = W.TitleBar(f, HEADER_H)
 	hdr:EnableMouse(true); hdr:RegisterForDrag("LeftButton")
 	hdr:SetScript("OnMouseDown", function() Okanvil:ClearAllFocus() end)  -- click header = stop typing
 	hdr:SetScript("OnDragStart", function() f:StartMoving() end)
@@ -147,36 +146,30 @@ function Okanvil:BuildShell()
 	-- The product name is FIXED (Okanvil, by Okanor); only the guild skin (db.brand)
 	-- is editable -- shown as a separate suffix, MRT-style. Title/version must be
 	-- children of the HEADER (not the window) so they draw ABOVE its raised backdrop.
-	local logo = hdr:CreateTexture(nil, "OVERLAY")
-	logo:SetSize(18, 18); logo:SetPoint("LEFT", 9, 0)
-	logo:SetTexture(Okanvil.BRAND_ICON)
-	logo:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-	local title = W.Text(hdr, "Okanvil", "title", "accent")
-	title:SetPoint("LEFT", logo, "RIGHT", 7, 0); title:Color(1, 0.82, 0)
-	local ver = W.Text(hdr, "v" .. (self.version or "1.0"), "note", "dim")
-	ver:SetPoint("LEFT", title, "RIGHT", 6, -1)
-	-- guild skin (editable) sits after the version as a dimmer suffix
-	local brandFS = W.Text(hdr, "", "body", "dim")
-	brandFS:SetPoint("LEFT", ver, "RIGHT", 8, 1)
+	-- the app's medallion over the window's corner, the title centred in the bar
+	self.medallion = W.Medallion(f, 60)
+	local title = hdr.title
 	local function paintBrand()
 		local b = db.brand or ""
+		local text = "Okanvil |cff8a8d93v" .. (self.version or "1.0")
 		-- NO GUILD, NO SKIN. The brand is stored account-wide but being in a guild
 		-- is a fact about THIS character, so an alt in no guild was wearing the
-		-- main's guild name in the title bar. Hidden rather than cleared: the
-		-- setting is still there for the characters it belongs to.
-		if IsInGuild and not IsInGuild() then brandFS:SetText(""); return end
-		if b == "" or b == "Okanvil" then brandFS:SetText("") -- no guild skin set
-		else brandFS:SetText("|cff8a8d93\194\183  " .. b .. "|r") end -- "· <guild>"
+		-- main's guild name in the title bar.
+		if not (IsInGuild and not IsInGuild()) and b ~= "" and b ~= "Okanvil" then
+			text = text .. "  \194\183  " .. b
+		end
+		title:SetText(text .. "|r")
 	end
+	local brandFS = title
 	paintBrand()
 	self.headerTitle = brandFS   -- so Settings can rebrand live
 	self.headerPaintBrand = paintBrand
 
-	local close = W.Button(hdr, "X"); close:SetSize(24, 20); close:SetPoint("RIGHT", -3, 0)
+	local close = W.CloseButton(hdr); close:SetPoint("RIGHT", -4, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 	-- collapse to a small anvil icon (WeakAuras-style): hides the big window and
 	-- shows a draggable puck so you can watch your game; click the puck to restore.
-	local collapse = W.Button(hdr, "_"); collapse:SetSize(24, 20); collapse:SetPoint("RIGHT", close, "LEFT", -3, 0)
+	local collapse = W.MinusButton(hdr); collapse:SetPoint("RIGHT", close, "LEFT", -4, 0)
 	collapse:SetScript("OnClick", function() Okanvil:Collapse(true) end)
 
 	-- ---- what is running, on every page ----
@@ -184,48 +177,34 @@ function Okanvil:BuildShell()
 	-- another page: recruit ads, PuG spam, council night, a farm timer, combat
 	-- logging. Click one to jump to where it is switched off.
 	local STATUS = {
-		{ label = "Recruit ads",   mod = "Okanvil-Recruit",
+		{ label = "Recruit ads",   mod = "Okanvil-Recruit", icon = "recruit",
 		  on = function() return RecruitDB and RecruitDB.active end,
 		  open = function() Okanvil:ShowPanel("Okanvil-Recruit") end },
-		{ label = "PuG spam",      mod = "Okanvil-PuG",
+		{ label = "PuG spam",      mod = "Okanvil-PuG", icon = "pug",
 		  on = function() return OkanvilPuGDB and OkanvilPuGDB.active end,
 		  open = function() Okanvil:ShowPanel("Okanvil-PuG") end },
-		{ label = "Council night", mod = "__council",
+		{ label = "Council night", mod = "__council", icon = "council",
 		  on = function() return Okanvil.Council and Okanvil.Council.active end,
 		  open = function() Okanvil:OpenLootTab("loot") end },
-		{ label = "Farming",       mod = "Okanvil-Farm",
+		{ label = "Farming",       mod = "Okanvil-Farm", icon = "farm",
 		  on = function() return Okanvil.Farm and Okanvil.Farm.IsRunning and Okanvil.Farm.IsRunning() end,
 		  open = function() Okanvil:ShowPanel("Okanvil-Farm") end },
-		{ label = "Logging",       mod = "Okanvil-Logs",
+		{ label = "Logging",       mod = "Okanvil-Logs", icon = "logs",
 		  on = function() return LoggingCombat and LoggingCombat() end,
 		  open = function() Okanvil:OpenSettingsTab("raid") end },
 	}
 	for _, st in ipairs(STATUS) do
 		local c = CreateFrame("Button", nil, hdr)
-		c:SetHeight(18)
-		c:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1,
-			insets = { left = 1, right = 1, top = 1, bottom = 1 } })
-		c:SetBackdropColor(C.ok[1], C.ok[2], C.ok[3], 0.10)
-		c:SetBackdropBorderColor(C.ok[1], C.ok[2], C.ok[3], 0.45)
-		local dot = c:CreateTexture(nil, "OVERLAY")
-		dot:SetTexture(FLAT); dot:SetVertexColor(u3(C.ok)); dot:SetSize(5, 5)
-		dot:SetPoint("LEFT", 7, 0)
-		c.text = W.FixedText(c, st.label, "note")
-		c.text:SetTextColor(u3(C.ok))
-		c.text:SetPoint("LEFT", dot, "RIGHT", 5, 0)
-		c:SetWidth((c.text:GetStringWidth() or 40) + 24)
+		c:SetHeight(24)
+		local ic = W.FramedIcon(c, Okanvil.ICONS[st.icon] or Okanvil.BRAND_ICON, 22, true)
+		ic:SetPoint("LEFT", 0, 0)
+		c.text = W.FixedText(c, st.label:upper(), 13)
+		c.text:SetTextColor(u3(C.accentText))
+		c.text:SetPoint("LEFT", ic, "RIGHT", 5, 0)
+		c:SetWidth((c.text:GetStringWidth() or 40) + 28)
 		c:SetScript("OnClick", st.open)
-		c:SetScript("OnEnter", function(self)
-			self:SetBackdropColor(C.ok[1], C.ok[2], C.ok[3], 0.20)
-			GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-			GameTooltip:AddLine(st.label .. " is ON", 1, 1, 1)
-			GameTooltip:AddLine("Click to open where it is switched off.", 0.6, 0.6, 0.6)
-			GameTooltip:Show()
-		end)
-		c:SetScript("OnLeave", function(self)
-			self:SetBackdropColor(C.ok[1], C.ok[2], C.ok[3], 0.10)
-			GameTooltip:Hide()
-		end)
+		c:SetScript("OnEnter", function() c.text:SetTextColor(1, 1, 1) end)
+		c:SetScript("OnLeave", function() c.text:SetTextColor(u3(C.accentText)) end)
 		c:Hide()
 		st.chip = c
 	end
@@ -236,7 +215,7 @@ function Okanvil:BuildShell()
 			local live = Okanvil:IsModuleEnabled(st.mod) and st.on() and true or false
 			if live then
 				st.chip:ClearAllPoints()
-				st.chip:SetPoint("RIGHT", anchor, "LEFT", -6, 0)
+				st.chip:SetPoint("RIGHT", anchor, "LEFT", anchor == collapse and -20 or -12, 0)
 				st.chip:Show()
 				anchor = st.chip
 			else
@@ -262,9 +241,8 @@ function Okanvil:BuildShell()
 	local navRule = nav:CreateTexture(nil, "ARTWORK")
 	navRule:SetTexture(FLAT); navRule:SetVertexColor(u3(C.border))
 	navRule:SetWidth(1); navRule:SetPoint("TOPRIGHT"); navRule:SetPoint("BOTTOMRIGHT")
-	local navHdr = W.Text(nav, "NAVIGATION", "note", "dim"); navHdr:SetPoint("TOPLEFT", 10, -8)
 	local navSF = CreateFrame("ScrollFrame", "Okanvil_NavSF", nav)
-	navSF:SetPoint("TOPLEFT", 4, -24); navSF:SetPoint("BOTTOMRIGHT", -6, 4)
+	navSF:SetPoint("TOPLEFT", 4, -14); navSF:SetPoint("BOTTOMRIGHT", -6, 4)
 	Okanvil.Clip(navSF)
 	local navChild = CreateFrame("Frame", nil, navSF)
 	navChild:SetSize(NAV_W - 12, 1); navSF:SetScrollChild(navChild)
@@ -290,7 +268,7 @@ function Okanvil:BuildShell()
 
 	-- footer: fixed author credit (Okanvil is by Okanor) + a flavor line
 	local footer = W.Text(f, "|cffe0b860Okanvil by Okanor|r  |cff55575b--  the void in your stack trace|r", "note", "dim")
-	footer:SetPoint("BOTTOMLEFT", 10, 6)
+	footer:SetPoint("BOTTOMLEFT", 18, 7)
 	-- web-hub link in the footer (WeakAuras-style): click -> copyable URL popup.
 	local hubBtn = CreateFrame("Button", nil, f)
 	hubBtn:SetHeight(14); hubBtn:SetPoint("BOTTOM", 0, 6)
@@ -318,7 +296,7 @@ function Okanvil:BuildShell()
 		if Okanvil.ShowExport then Okanvil:ShowExport(self.db.hubURL or "", "Web Hub -- Ctrl+C to copy") end
 	end)
 	self.footerCount = W.Text(f, "", "note", "dim")
-	self.footerCount:SetPoint("BOTTOMRIGHT", -20, 6)
+	self.footerCount:SetPoint("BOTTOMRIGHT", -20, 7)
 
 	-- (No resize grip: the window is fixed-size. Grow it with the Scale slider in
 	-- Settings -- proportional and layout-safe.)
@@ -344,16 +322,16 @@ function Okanvil:BuildPuck()
 	local db = self.db
 	db.puck = db.puck or { point = "CENTER", x = 0, y = 0 }
 	local p = CreateFrame("Button", "Okanvil_Puck", UIParent)
-	p:SetSize(48, 48)
+	p:SetSize(52, 52)
 	p:SetPoint(db.puck.point, UIParent, db.puck.point, db.puck.x, db.puck.y)
 	p:SetFrameStrata("FULLSCREEN_DIALOG"); p:SetFrameLevel(200); p:SetToplevel(true)
-	-- skin via SetBackdrop directly (safer on a Button than :Skin)
-	p:SetBackdrop({ bgFile = FLAT, edgeFile = FLAT, edgeSize = 1,
-		insets = { left = 1, right = 1, top = 1, bottom = 1 } })
-	p:SetBackdropColor(u3(C.panelHi)); p:SetBackdropBorderColor(u3(C.accent))
+	-- the medallion: the anvil cut round in its gold ring
 	local ic = p:CreateTexture(nil, "ARTWORK")
-	ic:SetPoint("TOPLEFT", 4, -4); ic:SetPoint("BOTTOMRIGHT", -4, 4)
-	ic:SetTexture(Okanvil.BRAND_ICON); ic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	ic:SetSize(52 * 0.92, 52 * 0.92); ic:SetPoint("CENTER")
+	ic:SetTexture(W.UI .. "medallion")
+	local ring = p:CreateTexture(nil, "OVERLAY")
+	ring:SetAllPoints(p); ring:SetTexture(W.UI .. "ring")
+	ring:SetVertexColor(0.886, 0.722, 0.263)
 	p:SetMovable(true); p:EnableMouse(true); p:RegisterForDrag("LeftButton")
 	p:SetScript("OnDragStart", p.StartMoving)
 	p:SetScript("OnDragStop", function(s)
@@ -657,11 +635,12 @@ function Okanvil:RefreshNav()
 			self._navButtons[nb] = b
 			-- re-apply the metrics: the font slider can move since this row was built
 			b:SetHeight(navRowH())
-			b.icon:SetSize(navIcon(), navIcon())
+			b.slot:SetSize(navIcon(), navIcon())
+			W.DressFramedIcon(b.slot, nil, navIcon())
 			b.text:SetFont(Okanvil:Font(), navFont())
 			b:ClearAllPoints(); b:SetPoint("TOPLEFT", 0, -y); b:SetPoint("TOPRIGHT", 0, -y)
 			b.text:SetText(item.title)
-			if item.icon then b.icon:SetTexture(item.icon); b.icon:Show() else b.icon:Hide() end
+			if item.icon then b.icon:SetTexture(item.icon); b.slot:Show() else b.slot:Hide() end
 			b._key = item.key
 			-- A module whose real UI is a floating window can claim its own nav click
 			-- (navAction) rather than open a page that only says "open the window".
@@ -732,29 +711,31 @@ function Okanvil:MountPageRat()
 	-- On the window's BORDER layer: above its own backdrop, below every child
 	-- frame, so it is the background of the header, the nav and every page.
 	local art = host:CreateTexture(nil, "BORDER")
-	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
+	art:SetPoint("TOPLEFT", 6, -6); art:SetPoint("BOTTOMRIGHT", -6, 6)
 	art:SetTexture(WALL_TEX)
 	-- The texture is 2:1 and the window a little narrower: trim the LEFT edge
 	-- (dark stone under the fade anyway) and keep the smith on the right whole.
 	local w, h = host:GetWidth() or 1100, host:GetHeight() or 660
 	local uspan = math.min(1, (w / h) / 2)
 	art:SetTexCoord(1 - uspan, 1, 0, 1)
-	-- Readability fade, in two steps like the mock: near-solid dark over the nav
-	-- and the first third, easing off across the page, clear on the right where
-	-- the smith is. Text always sits on calm dark; the art lives at the edge.
+	-- Readability fade, in two steps: a light dark wash over the nav and the
+	-- first third, easing off to almost nothing on the right. The art shows
+	-- across the whole window; only the side where the menu sits is darker.
 	local d = C.panelD
 	local fadeL = host:CreateTexture(nil, "ARTWORK")   -- above the art (BORDER); same layer = random order
-	fadeL:SetPoint("TOPLEFT", 1, -1); fadeL:SetPoint("BOTTOMLEFT", 1, 1)
+	fadeL:SetPoint("TOPLEFT", 6, -6); fadeL:SetPoint("BOTTOMLEFT", 6, 6)
 	fadeL:SetWidth(math.floor(w * 0.36))
 	fadeL:SetTexture(FLAT)
-	fadeL:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.96, d[1], d[2], d[3], 0.86)
+	fadeL:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.85, d[1], d[2], d[3], 0.70)
 	local fadeR = host:CreateTexture(nil, "ARTWORK")
-	fadeR:SetPoint("TOPLEFT", fadeL, "TOPRIGHT"); fadeR:SetPoint("BOTTOMRIGHT", -1, 1)
+	fadeR:SetPoint("TOPLEFT", fadeL, "TOPRIGHT"); fadeR:SetPoint("BOTTOMRIGHT", -6, 6)
+	-- the art's corners cut parallel to the window's, a slim gap all round
+	local covers = W.CoverCorners(host, art, W.COVER, C.body[1], C.body[2], C.body[3], Okanvil.db.bgAlpha or 0.95)
 	fadeR:SetTexture(FLAT)
-	fadeR:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.86, d[1], d[2], d[3], 0.30)
+	fadeR:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.70, d[1], d[2], d[3], 0.20)
 	local function refresh()
-		if (Okanvil.db.ratArt or "on") == "off" then art:Hide(); fadeL:Hide(); fadeR:Hide(); return end
-		art:SetAlpha(Okanvil.db.ratAlpha or 0.45); art:Show(); fadeL:Show(); fadeR:Show()
+		if (Okanvil.db.ratArt or "on") == "off" then art:Hide(); fadeL:Hide(); fadeR:Hide(); covers:SetShown(false); return end
+		art:SetAlpha(Okanvil.db.ratAlpha or 0.45); art:Show(); fadeL:Show(); fadeR:Show(); covers:SetShown(true)
 	end
 	art.refresh = refresh
 	refresh()
@@ -848,13 +829,10 @@ function Okanvil:ShowPanel(key)
 	self:ClearAllFocus()          -- switching pages releases any text-box focus
 	for _, b in ipairs(self._navButtons) do
 		b._active = (b._key == key)
-		if b._active then
-			b.hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.12); b.bar:Show()
-			b.text:SetTextColor(u3(C.accentText))
-		else
-			b.hl:SetVertexColor(0, 0, 0, 0); b.bar:Hide()
-			b.text:SetTextColor(u3(C.text))
-		end
+		b.hl:SetVertexColor(0, 0, 0, 0)
+		W.SetFramedIconGold(b.slot, b._active)
+		if b._active then b.text:SetTextColor(u3(C.accentText))
+		else b.text:SetTextColor(u3(C.text)) end
 	end
 
 	local entry = self.panels[key]

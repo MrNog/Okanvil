@@ -41,7 +41,8 @@ function Okanvil:BuildHome()
 
 	-- header: product wordmark (fixed) + guild skin subtitle + version
 	-- product wordmark (there's no logo.blp; the text wordmark IS the logo)
-	local title = W.Text(p, "Okanvil", "huge", "accent"); title:SetPoint("TOPLEFT", X, -20)
+	-- the wordmark in the talent screen's face (Morpheus, outlined, cream)
+	local title = W.TitleText(p, "Okanvil", 30); title:SetPoint("TOPLEFT", X, -26)
 	local anchor = title
 	-- guild skin (editable) as a subtitle under the product name
 	-- Same rule as the title bar: no guild, no guild skin. The brand is stored
@@ -175,12 +176,18 @@ function Okanvil:BuildHome()
 	-- button and this snapshot list; both are guild data, and this is where you
 	-- already come to look at guild data, so they live here instead of behind
 	-- their own nav row.
-	local tabOnline = W.Button(p, "Online", "tabOn")
-	tabOnline:SetSize(72, 22)
-	tabOnline:SetPoint("TOPLEFT", tiles._t1, "BOTTOMLEFT", 0, -10)
-	local tabSnaps = W.Button(p, "Snapshots", "tab")
-	tabSnaps:SetSize(92, 22)
-	tabSnaps:SetPoint("LEFT", tabOnline, "RIGHT", 10, 0)
+	-- The three views are side tabs on the window's edge (on the panel, not the
+	-- scroll child, which would clip them). tabRow holds the spot the old tab
+	-- row had, so the cards and the export button still hang off it.
+	local tabRow = CreateFrame("Frame", nil, p)
+	tabRow:SetSize(72, 1)
+	tabRow:SetPoint("TOPLEFT", tiles._t1, "BOTTOMLEFT", 0, -10)
+	local showTab   -- defined below, once every card exists
+	local tabOnline = W.SideTab(wrap, "Online", "Interface\\Icons\\INV_Misc_GroupNeedMore",
+		function() showTab("online") end)
+	tabOnline:SetKind("tabOn")
+	local tabSnaps = W.SideTab(wrap, "Snapshots", "Interface\\Icons\\INV_Misc_Note_02",
+		function() showTab("snaps") end)
 	-- Snapshots and the roster export ARE the Guild module -- switching it off in
 	-- Modules should take them with it. It did not: the module had a switch that
 	-- changed nothing on the one page its features live on.
@@ -188,8 +195,6 @@ function Okanvil:BuildHome()
 	tabSnaps:SetShown(guildOn)
 	local exportBtn = W.Button(p, "Export roster")
 	exportBtn:SetSize(110, 22)
-	exportBtn:SetPoint("RIGHT", p, "RIGHT", -X, 0)
-	exportBtn:SetPoint("TOP", tabOnline, "TOP", 0, 0)
 	-- Exports feed the website, which is officer work: no button for anyone else.
 	exportBtn:SetShown(guildOn and Okanvil.U and Okanvil.U.canSeePrio and Okanvil.U.canSeePrio() and true or false)
 	exportBtn:Tooltip("Build the roster JSON the web hub imports.")
@@ -202,11 +207,16 @@ function Okanvil:BuildHome()
 	end)
 
 	local gcard = W.Frame(p, "bare")
-	gcard:SetPoint("TOPLEFT", tabOnline, "BOTTOMLEFT", 0, -10)
+	gcard:SetPoint("TOPLEFT", tabRow, "BOTTOMLEFT", 0, -6)
 	gcard:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 	gcard:SetPoint("BOTTOM", p, "BOTTOM", 0, 12)
 	gcard:SetHeight(180)   -- fallback min; the BOTTOM anchor stretches it taller
 	local gh = W.Text(gcard, "GUILD ONLINE", "note", "dim"); gh:SetPoint("TOPLEFT", 0, -8)
+	-- the roster export sits on the list it exports, at the heading's right end
+	exportBtn:SetParent(gcard)
+	exportBtn:ClearAllPoints()
+	exportBtn:SetPoint("RIGHT", gcard, "RIGHT", -12, 0)
+	exportBtn:SetPoint("TOP", gcard, "TOP", 0, -1)
 	-- flat scroll (no Blizzard template): plain ScrollFrame + our own slider
 	local gsf = CreateFrame("ScrollFrame", nil, gcard)
 	gsf:SetPoint("TOPLEFT", 8, -24); gsf:SetPoint("BOTTOMRIGHT", -12, 6)
@@ -522,11 +532,13 @@ function Okanvil:BuildHome()
 	-- Raids down the side, toons across the top, the sizes each toon is saved to in
 	-- the cells. Each toon's row is only as fresh as its last login (see
 	-- Core/Lockouts.lua), so a toon not seen today says how old its row is.
-	local tabSaved = W.Button(p, "Saved raids", "tab")
-	tabSaved:SetSize(100, 22)
+	local tabSaved = W.SideTab(wrap, "Saved raids", "Interface\\Icons\\Achievement_Dungeon_Icecrown_IcecrownEntrance",
+		function() showTab("saved") end)
+	-- stacked from the top; Snapshots only while the Guild module is on
 	local function placeTabs()
-		tabSaved:ClearAllPoints()
-		tabSaved:SetPoint("LEFT", tabSnaps:IsShown() and tabSnaps or tabOnline, "RIGHT", 10, 0)
+		tabOnline:Place(0)
+		tabSnaps:Place(1)
+		tabSaved:Place(tabSnaps:IsShown() and 2 or 1)
 	end
 	placeTabs()
 
@@ -758,7 +770,7 @@ function Okanvil:BuildHome()
 	lcard:SetScript("OnSizeChanged", function(self) if self:IsShown() then rebuildSaved() end end)
 
 	-- tab switching: one card visible at a time, all filling the same space
-	local function showTab(which)
+	function showTab(which)
 		Okanvil:Trace("UI", "home tab " .. tostring(which))
 		local snaps, saved = (which == "snaps"), (which == "saved")
 		gcard:SetShown(not snaps and not saved)
@@ -773,9 +785,7 @@ function Okanvil:BuildHome()
 		if snaps then rebuildSnaps() end
 		if saved then rebuildSaved() end
 	end
-	tabOnline:SetScript("OnClick", function() showTab("online") end)
-	tabSnaps:SetScript("OnClick", function() showTab("snaps") end)
-	tabSaved:SetScript("OnClick", function() showTab("saved") end)
+
 
 	-- (The web-hub link now lives in the window FOOTER, WeakAuras-style -- always
 	-- visible, click to copy the URL. No card here anymore.)
@@ -794,7 +804,7 @@ function Okanvil:BuildHome()
 	local pugHead = W.Text(pug, "No guild -- pug mode", "head", "accent")
 	pugHead:SetPoint("TOPLEFT", 0, 0)
 	local pugText = W.Text(pug, "Find a raid in chat, or build your own and spam the LFM line. "
-		.. "Joined a guild? Run |cff00ff00/okanvil setup|r again to turn on the guild tools.", "body", "dim")
+		.. "Joined a guild? Run |cffffd200/okanvil setup|r again to turn on the guild tools.", "body", "dim")
 	pugText:SetPoint("TOPLEFT", pugHead, "BOTTOMLEFT", 0, -8)
 	pugText:SetPoint("RIGHT", pug, "RIGHT", 0, 0)
 	pugText:SetJustifyH("LEFT")
@@ -1045,13 +1055,12 @@ function Okanvil:BuildHome()
 		setPugMode(false)
 		local online, mine, mineIdx = 0, "--", nil
 		local raiders, sewers = 0, 0
-		-- "Raiders" = officers and the rank just below them; everyone deeper is the
-		-- rest of the roster. Derived from how many ranks the guild actually has,
-		-- so a four-rank guild and a ten-rank guild both split sensibly.
+		-- "Raiders" = officers down to the raider rank (the first non-alt rank below
+		-- them); everyone deeper is the rest of the roster. Read from the guild's own
+		-- ranks and permissions, so adding or reordering a rank needs no code change.
 		local RAIDER_RANK = 2
-		if Okanvil.U and Okanvil.U.guildRanks then
-			local _, maxIdx = Okanvil.U.guildRanks()
-			if maxIdx and maxIdx >= 2 then RAIDER_RANK = math.min(2, maxIdx - 1) end
+		if Okanvil.U and Okanvil.U.raiderRank then
+			RAIDER_RANK = Okanvil.U.raiderRank() or RAIDER_RANK
 		end
 		local myName = UnitName and UnitName("player")
 		local onlineList = {}
@@ -1219,7 +1228,7 @@ function Okanvil:BuildHome()
 				-- pushed to the far right edge.
 				row.main = row:CreateFontString(nil, "OVERLAY")
 				row.main:SetFont(Okanvil:Font(), gfs - 1)
-				row.main:SetPoint("LEFT", RANK_X + 84, 0); row.main:SetJustifyH("LEFT"); row.main:SetWordWrap(false)
+				row.main:SetPoint("LEFT", row.rank, "RIGHT", 10, 0); row.main:SetJustifyH("LEFT"); row.main:SetWordWrap(false)
 				-- hairline under each row, and a highlight under the cursor: this list
 				-- is clicked, so the row you are about to invite must be obvious.
 				row.sep = row:CreateTexture(nil, "BACKGROUND")

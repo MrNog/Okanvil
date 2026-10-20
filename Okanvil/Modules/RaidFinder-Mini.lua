@@ -169,6 +169,7 @@ function Okanvil.RaidFinderMini_Render()
 
 		r.wsp._info = info
 		r.join._info = info
+		Okanvil.RaidFinder_PaintContact(r, r.join)
 
 		-- zebra
 		if i % 2 == 0 then r._base:SetVertexColor(1, 1, 1, 0) else r._base:SetVertexColor(1, 1, 1, 0.03) end

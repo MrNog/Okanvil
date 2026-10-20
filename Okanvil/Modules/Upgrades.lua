@@ -1146,7 +1146,7 @@ local toast
 local function makeToast()
 	local W = Okanvil.W
 	local t = CreateFrame("Button", "Okanvil_UpgradeToast", UIParent)
-	t:SetSize(320, 52)
+	t:SetSize(340, 66)
 	local pos = udb().toastPos or { "CENTER", "CENTER", 0, 120 }
 	t:SetPoint(pos[1], UIParent, pos[2], pos[3], pos[4])
 	t:SetMovable(true); t:SetClampedToScreen(true)
@@ -1158,19 +1158,23 @@ local function makeToast()
 		udb().toastPos = { p, rp, x, y }
 	end)
 	t:SetFrameStrata("HIGH")
+	-- the small cut: a toast is a box, not a window
+	t._okKeepCut = true
+	W.Chamfer(t, false)
 	Okanvil:Skin(t, "panel")
 	local ac = Okanvil.Colors and Okanvil.Colors.accent or { 0.75, 0.58, 0.23 }
 	t:SetBackdropBorderColor(ac[1], ac[2], ac[3])
-	t.icon = t:CreateTexture(nil, "ARTWORK")
-	t.icon:SetSize(40, 40); t.icon:SetPoint("LEFT", 6, 0)
-	t.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	local fi = W.FramedIcon(t, nil, 46)
+	fi:SetPoint("LEFT", 12, 0)
+	t.icon = fi.icon
 	t.top = W.Text(t, "UPGRADE DROPPED", "note", "accent")
-	t.top:SetPoint("TOPLEFT", t.icon, "TOPRIGHT", 8, -1)
+	t.top:SetPoint("TOPLEFT", fi, "TOPRIGHT", 12, -2)
 	t.name = W.Text(t, "", 13)
-	t.name:SetPoint("LEFT", t.icon, "RIGHT", 8, -2); t.name:SetPoint("RIGHT", -8, -2)
+	t.name:SetPoint("LEFT", fi, "RIGHT", 12, 0); t.name:SetPoint("RIGHT", -16, 0)
 	t.name:SetJustifyH("LEFT")
+	if t.name.SetWordWrap then t.name:SetWordWrap(false) end
 	t.meta = W.Text(t, "", "note", "dim")
-	t.meta:SetPoint("BOTTOMLEFT", t.icon, "BOTTOMRIGHT", 8, 1)
+	t.meta:SetPoint("BOTTOMLEFT", fi, "BOTTOMRIGHT", 12, 2)
 	t:SetScript("OnEnter", function(self)
 		self.hold = true
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
@@ -1797,7 +1801,7 @@ SlashCmdList.OKUPGRADES = function(arg)
 		local spec = U.Spec()
 		local v = U.Judge(link, raid)
 		Okanvil:Print(link .. " for " .. (spec and spec.label or "?") .. ": "
-			.. (v and ("|cff7cfc8a" .. U.Label(v) .. "|r") or "|cff8a8d93no upgrade|r"))
+			.. (v and ("|cffffd200" .. U.Label(v) .. "|r") or "|cff8a8d93no upgrade|r"))
 		return
 	end
 	if not active() then Okanvil:Print("Upgrades is off (Modules)."); return end

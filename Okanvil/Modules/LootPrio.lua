@@ -841,7 +841,7 @@ function P.BuildTab(p)
 			status:SetText("|cffffd200" .. n .. " items|r |cffff5555-- old format, "
 				.. "re-export from the site for groups and colours|r")
 		elseif n > 0 then
-			status:SetText("|cff7cfc8a" .. n .. " items|r")
+			status:SetText("|cffffd200" .. n .. " items|r")
 		else
 			status:SetText("|cff8a8d93No list yet -- Import list, and paste the site's export.|r")
 		end

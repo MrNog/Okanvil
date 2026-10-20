@@ -1187,7 +1187,7 @@ local function showSeen()
 		-- "redo" throws it away so the next pull records it again.
 		local killed = P.KilledAt(raid.zone, d, src)
 		local state = W.Text(child, killed
-			and ("|cff7cfc8akilled|r |cff6f7176%s|r"):format(date("%d %b", killed))
+			and ("|cffffd200killed|r |cff6f7176%s|r"):format(date("%d %b", killed))
 			or "|cffe0b860recording|r", "note")
 		state:SetPoint("LEFT", h, "RIGHT", 8, 0)
 
@@ -1430,9 +1430,9 @@ local function build(panel)
 
 	local dash = W.Dashboard(panel, {
 		title = "Notes",
+		settingsTab = "raid",
 		subtitle = "Switch on as you walk into each room",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.notes) or "Interface\\Icons\\INV_Scroll_03",
-		pills = true,
 		drawerWidth = 0,
 		footerHeight = 0,
 		-- No button for the fight window. It follows the room: walk into one a
@@ -1469,27 +1469,27 @@ local function build(panel)
 			if N.LastSend then
 				local sent, got, ago = N.LastSend()
 				if sent and ago and ago < 120 then
-					local c = (got > 0) and "|cff7cfc8a" or "|cffff5555"
+					local c = (got > 0) and "|cffffd200" or "|cffff5555"
 					return ("|cff6f7176Sent %d -- |r%s%d confirmed|r"):format(sent, c, got)
 				end
 			end
 			return N.auditLine or ""
 		end,
-		-- Before the first pill is built, not after: BuildPage puts the Follow
-		-- the room switch on the toolbar, and the toolbar is only reachable
-		-- through the dashboard this hands over.
-		onReady = function(d) F.dash = d end,
-
-		tabs = {
-			{ key = "notes", label = "Notes", height = 420, fill = true,
-			  build = function(p) N.BuildPage(p) end },
-			-- The fight window's settings live beside the notes they display,
-			-- not in the addon's global Settings page.
-			{ key = "window", label = "Fight window", height = 300,
-			  build = function(p) N.BuildWindowPage(p) end },
-		},
 	})
 	F.dash = dash
+	-- one view, no tab: the notes fill the page (the fight window's options and
+	-- Follow the room are in Settings > Raid)
+	N.BuildPage(dash.main)
+end
+
+-- Follow the room: switch to the boss's note on walking into their room.
+-- Set from Settings > Raid > Fight notes.
+function N.AutoZone() return not db or db.autoZone ~= false end
+function N.SetAutoZone(v)
+	if not db then return end
+	db.autoZone = v and true or false
+	if v then applyZone() end
+	N.Refresh()
 end
 
 function N.BuildPage(p)
@@ -1503,36 +1503,6 @@ function N.BuildPage(p)
 	-- line, and pinning both to the same left edge stacked them on each other.
 	-- Placed after F.count is built, at the end of BuildPage.
 
-	-- On the TAB ROW, at the right end, not down in the page foot.
-	--
-	-- It is a page-wide switch -- it decides what the whole page shows, the same
-	-- way the Notes/Fight window pills do -- so it belongs on the row those pills
-	-- sit on, opposite them. In the foot it was a fourth thing competing for a
-	-- strip that already held the count, the room and the syntax hint, and it
-	-- cost the note card a row it wanted more.
-	--
-	-- Parented to the dashboard's toolbar, which is free at its right end: this
-	-- page has no drawer, so nothing else claims that corner.
-	local toolbar = (F.dash and F.dash.toolbar) or p
-	F.auto = W.Check(toolbar, "Follow the room",
-		function() return db.autoZone end,
-		function(v)
-			db.autoZone = v and true or false
-			if v then applyZone() end
-			N.Refresh()
-		end)
-	-- The checkbox label sits to the RIGHT of the 18px box, so the whole widget
-	-- is anchored by its box and the words run on past it -- anchoring the box
-	-- itself to the right edge would push the text off the panel. Measured and
-	-- offset instead, so the LABEL ends at the edge.
-	if toolbar == p then
-		F.auto:SetPoint("TOPRIGHT", -10, -6)
-	else
-		-- +6 is the gap W.Check leaves between the box and its label.
-		local lw = (F.auto.text and F.auto.text:GetStringWidth()) or 92
-		F.auto:SetPoint("RIGHT", toolbar, "RIGHT", -(lw + 6), 0)
-	end
-	F.auto:Tooltip("Switch to the boss's note when you walk into their room.\nNever switches while you are in combat.")
 
 	-- ---- left: the note list ----
 	-- The card stops short of the bottom to leave room for the two buttons under
@@ -1738,7 +1708,7 @@ function N.BuildPage(p)
 	-- and the left card moved down with it, leaving the right one floating a
 	-- row and a half higher with a strip of bare panel beside its heading.
 	F.readCard:SetPoint("TOPLEFT", RX, CARD_Y - 28)
-	-- 30: the foot is ONE row again. Follow the room moved up to the toolbar,
+	-- 30: the foot is ONE row (Follow the room is in Settings, not down here),
 	-- so the card takes back the 22px its second row was holding.
 	-- -6: the same margin the list card keeps on the left, so the two halves
 	-- sit symmetrically in the page instead of the note stopping short of the edge.
@@ -1807,130 +1777,11 @@ function N.BuildPage(p)
 	F.hint:SetPoint("BOTTOMRIGHT", -10, 12)
 	F.hint:SetJustifyH("RIGHT")
 
-	-- No anchor for F.auto here: it lives on the toolbar now, beside the pills.
+	-- (Follow the room is a setting now: Settings > Raid > Fight notes.)
 	-- The foot is one row again -- the count, the room and the syntax hint --
 	-- which is what let the note card drop from 52 to 30.
 
 	N.Refresh()
-end
-
--- ------------------------------------------------------------
--- Fight window settings, as a pill beside the notes.
---
--- A right-click menu on the window itself was the first try, and it closed the
--- moment you clicked anything in it. Settings belong on a page.
--- ------------------------------------------------------------
-function N.BuildWindowPage(p)
-	local WIN = Okanvil.NotesWindow
-	local X = 6
-	local y = -14
-
-	local head = W.Text(p, "FIGHT WINDOW", "head", "accent")
-	head:SetPoint("TOPLEFT", X, y)
-	y = y - 28
-
-	local hint = W.Text(p,
-		"A small window with the current note's timers, so you can read it with Okanvil closed. Hover it and click the padlock to unlock; unlocked, drag it anywhere or pull the bottom-right corner to set its width.",
-		"note", "dim")
-	hint:SetPoint("TOPLEFT", X, y)
-	hint:SetPoint("RIGHT", p, "RIGHT", -16, 0)
-	hint:SetJustifyH("LEFT")
-	hint:SetHeight(34)
-	y = y - 52
-
-	-- W.Slider draws its label ABOVE the bar, so each one needs clearance on top
-	-- as well as below -- 46px of pitch put the next label on the last bar.
-	F.wAlpha = W.Slider(p, "Background opacity", 0, 100, 5,
-		function() return WIN and WIN.GetAlpha() or 85 end,
-		function(v) if WIN then WIN.SetAlpha(v) end end)
-	F.wAlpha:SetPoint("TOPLEFT", X, y)
-	F.wAlpha:SetWidth(240)
-	y = y - 30
-
-	local aHint = W.Text(p, "At 0 the panel disappears and the text takes an outline.", "note", "dim")
-	aHint:SetPoint("TOPLEFT", X, y)
-	y = y - 40
-
-	F.wRoom = W.Check(p, "Only show in the boss's room",
-		function() return WIN and WIN.OnlyInRoom() end,
-		function(v) if WIN then WIN.SetOnlyInRoom(v) end end)
-	F.wRoom:SetPoint("TOPLEFT", X, y)
-	F.wRoom:Tooltip("Off, the window stays up everywhere -- useful while writing\nnotes, noisy while playing.")
-	y = y - 26
-
-	-- Each checkbox carries a hint line under it, the same rhythm as the sliders:
-	-- control, hint, then the gap. Two bare checkboxes 40px apart read as one
-	-- cramped block and put the next slider's label on top of the last box.
-	local rHint = W.Text(p, "Off, the window stays up everywhere.", "note", "dim")
-	rHint:SetPoint("TOPLEFT", X, y)
-	y = y - 40
-
-	F.wMine = W.Check(p, "Only my lines",
-		function() return WIN and WIN.OnlyMine() end,
-		function(v) if WIN then WIN.SetOnlyMine(v) end end)
-	F.wMine:SetPoint("TOPLEFT", X, y)
-	F.wMine:Tooltip("On: only the lines with the name of the character you are on.\nOff: the whole note.\nEither way, a note that does not name you never opens the window.")
-	y = y - 26
-
-	local mHint = W.Text(p, "On: only your lines. Off: the whole note. Not named: no window.", "note", "dim")
-	mHint:SetPoint("TOPLEFT", X, y)
-	y = y - 48
-
-	F.wSize = W.Slider(p, "Text size", 10, 20, 1,
-		function() return WIN and WIN.GetSize() or 13 end,
-		function(v) if WIN then WIN.SetSize(v) end end)
-	F.wSize:SetPoint("TOPLEFT", X, y)
-	F.wSize:SetWidth(240)
-	y = y - 30
-
-	local sHint = W.Text(p, "The window grows to fit the note at whatever size you pick.", "note", "dim")
-	sHint:SetPoint("TOPLEFT", X, y)
-	y = y - 40
-
-	-- Icons separately from the text. They carry the part you read fastest --
-	-- which cooldown -- so they are worth making bigger than the words beside
-	-- them, and tying the two together would stop you doing that.
-	F.wIcon = W.Slider(p, "Icon size", 12, 32, 2,
-		function() return WIN and WIN.GetIconSize() or 18 end,
-		function(v) if WIN then WIN.SetIconSize(v) end end)
-	F.wIcon:SetPoint("TOPLEFT", X, y)
-	F.wIcon:SetWidth(240)
-	y = y - 30
-
-	local iHint = W.Text(p, "The spell and marker icons inside a note.", "note", "dim")
-	iHint:SetPoint("TOPLEFT", X, y)
-	y = y - 42
-
-	-- No role slots.
-	--
-	-- There was a page of boxes here -- Holy1, Prot, Ret -- that filled {Holy1}
-	-- style tags in the notes. It worked for paladin cooldowns and nothing else:
-	-- the list of roles lived in this file, so wanting a Lust, a PI or a tank
-	-- cooldown meant editing the addon and shipping a release. Mid-raid, that is
-	-- not a thing anybody can do.
-	--
-	-- A note is text. Write the player's name in it, like MRT, and any cooldown
-	-- works the moment you type it -- no list to extend, nothing to keep in step.
-
-	-- ---- sharing ----
-	local shHead = W.Text(p, "SHARING", "head", "accent")
-	shHead:SetPoint("TOPLEFT", X, y)
-	y = y - 28
-
-	F.wShare = W.Check(p, "Keep notes in step with other officers",
-		function() return db.share ~= false end,
-		function(v) db.share = v and true or false end)
-	F.wShare:SetPoint("TOPLEFT", X, y)
-	F.wShare:Tooltip("Officers running Okanvil swap notes automatically, newest wins.\nPer note, so two officers can edit different bosses and both survive.")
-	y = y - 32
-
-	-- Send and "Who has them?" live in the page header, beside Fight window:
-	-- they act on the raid, and burying them on a config tab meant the answer to
-	-- "did they get it?" was two clicks away from the note you just changed.
-	local shHint = W.Text(p,
-		"Send to raid and Who has them? are in the header, beside Fight window.",
-		"note", "dim")
-	shHint:SetPoint("TOPLEFT", X, y)
 end
 
 -- ------------------------------------------------------------
@@ -1986,7 +1837,7 @@ function N.RunAudit()
 		elseif #stale > 0 then
 			N.auditLine = ("|cffe0b860%d on an older copy|r"):format(#stale)
 		else
-			N.auditLine = ("|cff7cfc8aAll %d up to date|r"):format(#ok)
+			N.auditLine = ("|cffffd200All %d up to date|r"):format(#ok)
 		end
 		if F and F.dash then F.dash:Refresh() end
 		showAudit(ok, stale, missing, noWA)
@@ -2064,7 +1915,7 @@ function N.Refresh()
 		local by = N.AuthorOf(name)
 		if by then
 			local stamp = db.stamps and db.stamps[name]
-			local col = own and "|cff7cfc8a" or "|cffb8babd"
+			local col = own and "|cffffd200" or "|cffb8babd"
 			local when = stamp and ("  |cff8a8d93%s|r"):format(date("%d %b %H:%M", stamp)) or ""
 			r.dot:SetText(("|cff8a8d93by|r %s%s|r%s"):format(col, by, when))
 		else
@@ -2246,7 +2097,7 @@ function N.PaintLines()
 				r.t:SetText("")          -- passed: the line stays, the clock goes
 				r:SetAlpha(0.45)
 			else
-				local col = left <= 5 and "|cffff5555" or (left <= 10 and "|cffe0b860" or "|cff7cfc8a")
+				local col = left <= 5 and "|cffff5555" or (left <= 10 and "|cffe0b860" or "|cffffd200")
 				r.t:SetText(col .. fmt(left) .. "|r")
 				r:SetAlpha(1)
 			end
@@ -2344,7 +2195,7 @@ SlashCmdList["OKNOTES"] = function(msg)
 		end
 		Okanvil.cdb.notesUnlocked = not Okanvil.cdb.notesUnlocked
 		if Okanvil.cdb.notesUnlocked then
-			Okanvil:Print("Notes |cff00ff00unlocked|r on this character -- you can edit them.")
+			Okanvil:Print("Notes |cffffd200unlocked|r on this character -- you can edit them.")
 		else
 			Okanvil:Print("Notes |cffff5555locked|r again on this character.")
 		end
@@ -2362,7 +2213,7 @@ SlashCmdList["OKNOTES"] = function(msg)
 		if not (P and P.SetDebug) then return end
 		P.SetDebug(not P.Debug())
 		if P.Debug() then
-			Okanvil:Print("Notes log recording |cff7cfc8aON|r -- pull the boss, then |cffe0b860/reload|r.")
+			Okanvil:Print("Notes log recording |cffffd200ON|r -- pull the boss, then |cffe0b860/reload|r.")
 			Okanvil:Print("|cff8a8d93The pull is written to SavedVariables\\Okanvil.lua"
 				.. " (OkanvilNotesDB.log), so nothing scrolls away.|r")
 			-- Prove the switch reached the SAVED table, not just the copy in
@@ -2371,7 +2222,7 @@ SlashCmdList["OKNOTES"] = function(msg)
 			-- fine writes nothing -- which is indistinguishable from a bug.
 			local stored = OkanvilNotesDB and OkanvilNotesDB.log
 			if stored and stored.watching then
-				Okanvil:Print("|cff7cfc8aSaved.|r The flag is in the file -- /reload will write the pull.")
+				Okanvil:Print("|cffffd200Saved.|r The flag is in the file -- /reload will write the pull.")
 			else
 				Okanvil:Print("|cffff5555Not saved|r -- this client is running older code. Restart WoW.")
 			end

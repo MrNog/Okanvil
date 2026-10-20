@@ -522,7 +522,7 @@ local function reserved_items(info)
 	return out
 end
 
-local ROLE_COLOR = { tank = "|cff4a90d9", healer = "|cff7cfc8a", dps = "|cffe05555" }
+local ROLE_COLOR = { tank = "|cff4a90d9", healer = "|cffffd200", dps = "|cffe05555" }
 local ROLE_SHORT = { tank = "Tank", healer = "Heal", dps = "DPS" }
 
 -- Class-color escape ("|cffRRGGBB") for a WoW class token, from the client's
@@ -802,6 +802,74 @@ local function build_whisper(info)
 end
 Okanvil.RaidFinder_BuildWhisper = build_whisper
 
+-- Leaders we have whispered (Join or a plain /w) and whether they answered, read
+-- off our own whispers. Session only: the listings expire within minutes anyway.
+local contacted = {}
+local function contactKey(name) return name and (name:gsub("%-.*$", "")):lower() end
+function Okanvil.RaidFinder_Contact(name) return contacted[contactKey(name) or ""] end
+do
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("CHAT_MSG_WHISPER_INFORM")
+	f:RegisterEvent("CHAT_MSG_WHISPER")
+	f:SetScript("OnEvent", function(_, event, msg, who)
+		local k = contactKey(who)
+		if not k then return end
+		if event == "CHAT_MSG_WHISPER_INFORM" then
+			contacted[k] = contacted[k] or {}
+			contacted[k].sent = time()
+		elseif contacted[k] then
+			contacted[k].reply, contacted[k].replyAt = msg, time()
+		else
+			return
+		end
+		if Okanvil.RaidFinder_Render then Okanvil.RaidFinder_Render() end
+		if Okanvil.RaidFinderMini_Render then Okanvil.RaidFinderMini_Render() end
+	end)
+end
+
+local GOLD_CHECK = "Interface\\Buttons\\UI-CheckBox-Check"
+local REPLY_ICON = "Interface\\GossipFrame\\GossipGossipIcon"
+-- The mark beside a row's Join: a gold tick once we whispered that leader, a
+-- speech bubble once they answered; the tooltip says when, and what they said.
+function Okanvil.RaidFinder_PaintContact(r, anchor)
+	if not r.contact then
+		local m = CreateFrame("Frame", nil, r)
+		m:SetSize(22, 22)
+		m:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
+		m.tex = m:CreateTexture(nil, "ARTWORK")
+		m.tex:SetAllPoints()
+		m:EnableMouse(true)
+		m:SetScript("OnEnter", function(s)
+			local c = s._c
+			if not c then return end
+			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+			GameTooltip:AddLine("Whispered " .. Okanvil.RaidFinder_Ago(c.sent) .. " ago", 1, 0.82, 0)
+			if c.reply then
+				GameTooltip:AddLine("Replied " .. Okanvil.RaidFinder_Ago(c.replyAt) .. " ago:", 0.75, 0.75, 0.75)
+				GameTooltip:AddLine(c.reply, 1, 1, 1, true)
+			end
+			GameTooltip:Show()
+		end)
+		m:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		r.contact = m
+	end
+	local c = r._info and Okanvil.RaidFinder_Contact(r._info.sender)
+	r.contact._c = c
+	if c and c.sent then
+		r.contact.tex:SetTexture(c.reply and REPLY_ICON or GOLD_CHECK)
+		r.contact:Show()
+	else
+		r.contact:Hide()
+	end
+end
+
+function Okanvil.RaidFinder_Ago(t)
+	local s = math.max(0, time() - (t or time()))
+	if s < 60 then return s .. "s" end
+	if s < 3600 then return math.floor(s / 60) .. "m" end
+	return math.floor(s / 3600) .. "h"
+end
+
 -- Join: send the whisper immediately.
 function Okanvil.RaidFinder_Join(info)
 	if not info or not info.sender then
@@ -890,19 +958,21 @@ end
 --   Instance | GS | Roles | Ress | Action (/w, Join) | Leader | Age
 -- x = left offset inside the row (row width tracks the scroll frame).
 -- ------------------------------------------------------------
+-- the raid is always a short tag ("ToGC25"), so its column is narrow; the room
+-- goes to the leader's name (and its "guild" tag) and the age
 local COL = {
 	instance = 10,
-	gs       = 130,
-	roles    = 185,
-	ress     = 320,
-	saved    = 372,
-	action   = 428,
-	leader   = 540,
-	age      = 650,
-	items    = 700,
+	gs       = 85,
+	roles    = 135,
+	ress     = 275,
+	saved    = 327,
+	action   = 383,
+	leader   = 510,
+	age      = 672,
+	items    = 728,
 }
 local ITEM_ICONS = 5   -- reserved item icons shown in the Items column
-local ROW_H = 22
+local ROW_H = 28
 local RESS_W = 42     -- Ress chip width (header centers over this)
 
 -- one whisper/Join row. Created once, recycled by index.
@@ -934,7 +1004,7 @@ local function make_row(parent)
 	r:SetScript("OnLeave", function(s) s._hl:SetVertexColor(1, 1, 1, 0); hide_tip() end)
 
 	local function fs(x, size)
-		local t = W.Text(r, "", size or 12)
+		local t = W.Text(r, "", size or 14)
 		t:SetPoint("LEFT", x, 0); t:SetJustifyH("LEFT")
 		return t
 	end
@@ -955,7 +1025,7 @@ local function make_row(parent)
 
 	-- Ress chip -- a bordered box around YES/NO (like the reference image)
 	r.ress = CreateFrame("Button", nil, r)
-	r.ress:SetSize(RESS_W, 17); r.ress:SetPoint("LEFT", COL.ress, 0)
+	r.ress:SetSize(RESS_W, 20); r.ress:SetPoint("LEFT", COL.ress, 0)
 	Okanvil:Skin(r.ress, "input")
 	r.ress.txt = W.Text(r.ress, "", "label"); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
 	r.ress:SetScript("OnEnter", function(s)
@@ -968,17 +1038,20 @@ local function make_row(parent)
 	r.saved:SetWidth(44); r.saved:SetJustifyH("CENTER")
 
 	-- Action: /w  +  Join
-	r.wsp = W.Button(r, "/w"); r.wsp:SetSize(34, 18); r.wsp:SetPoint("LEFT", COL.action, 0)
+	r.wsp = W.Button(r, "/w"); r.wsp:SetSize(36, 22); r.wsp:SetPoint("LEFT", COL.action, 0)
 	r.wsp:SetScript("OnClick", function(s)
 		if s._info then Okanvil.RaidFinder_Whisper(s._info) end
 	end)
-	r.join = W.Button(r, "Join", "primary"); r.join:SetSize(50, 18)
+	r.join = W.Button(r, "Join", "primary"); r.join:SetSize(54, 22)
 	r.join:SetPoint("LEFT", r.wsp, "RIGHT", 4, 0)
 	r.join:SetScript("OnClick", function(s)
 		if s._info then Okanvil.RaidFinder_Join(s._info) end
 	end)
 
 	r.leader = fs(COL.leader)
+	-- a long name stops before the age instead of running into it
+	r.leader:SetWidth(COL.age - COL.leader - 8)
+	if r.leader.SetWordWrap then r.leader:SetWordWrap(false) end
 	r.age    = fs(COL.age, 11)
 
 	-- Items: the reserved items themselves, one icon each, with the item's own
@@ -1104,11 +1177,12 @@ function Okanvil.RaidFinder_Render()
 		end
 
 		-- Saved (are you locked to this raid?)
-		if info.locked then r.saved:SetText("|cffff5555Saved|r") else r.saved:SetText("|cff7cfc8aOpen|r") end
+		if info.locked then r.saved:SetText("|cffff5555Saved|r") else r.saved:SetText("|cffffd200Open|r") end
 
 		-- Actions
 		r.wsp._info = info
 		r.join._info = info
+		Okanvil.RaidFinder_PaintContact(r, r.join)
 
 		-- Leader
 		r.leader:SetText(leader_text(info.sender))
@@ -1140,114 +1214,17 @@ function Okanvil.RaidFinder_Render()
 end
 
 -- ------------------------------------------------------------
--- SETTINGS TAB (overlay page from W.Dashboard tabs)
--- ------------------------------------------------------------
-local function buildSettings(pg)
-	local X = 14
-	local y = -12
-
-	-- One setting per row: title, what it does, ON / OFF on the right.
-	local function toggle(title, desc, key, after)
-		local r = W.ToggleRow(pg, title, desc,
-			function() return db[key] end,
-			function(v) db[key] = v; if after then after(v) end end)
-		r:SetPoint("TOPLEFT", X, y); r:SetPoint("RIGHT", pg, "RIGHT", -X, 0)
-		y = y - r:GetHeight()
-		return r
-	end
-
-	-- ---- RAID GEAR: your spec and GS as the /w and Join send them ----------
-	y = W.Section(pg, "RAID GEAR", X, y)
-
-	local card = W.Frame(pg, "soft")
-	card:SetPoint("TOPLEFT", X, y); card:SetPoint("RIGHT", pg, "RIGHT", -X, 0)
-	card:SetHeight(58)
-
-	local specK = W.Text(card, "SPEC", "note", "dim"); specK:SetPoint("TOPLEFT", 12, -10)
-	local specV = W.Text(card, "", "head"); specV:SetPoint("TOPLEFT", specK, "BOTTOMLEFT", 0, -3)
-	local gsK = W.Text(card, "GEARSCORE", "note", "dim"); gsK:SetPoint("TOPLEFT", 300, -10)
-	local gsV = W.Text(card, "", "head", "accent"); gsV:SetPoint("TOPLEFT", gsK, "BOTTOMLEFT", 0, -3)
-
-	local ovLabel = W.Text(card, "Override GS", "label", "dim")
-	ovLabel:SetPoint("TOPLEFT", gsV, "TOPRIGHT", 24, -2)
-	local refreshGear   -- fwd decl (edit-box callback needs it)
-	local ov = W.EditBox(card, function(text)
-		local n = tonumber((text or ""):gsub("[^%d.]", ""))
-		if n and n < 100 then n = n * 1000 end          -- allow "6.2" meaning 6200
-		db.gsOverride = n and math.floor(n) or 0
-		refreshGear()
-	end)
-	ov:SetSize(64, 20); ov:SetPoint("LEFT", ovLabel, "RIGHT", 8, 0)
-	if db.gsOverride and db.gsOverride > 0 then ov.edit:SetText(tostring(db.gsOverride)) end
-
-	function refreshGear()
-		local spec = Okanvil.RaidFinder_MySpec()
-		local _, token = UnitClass("player")
-		local c = token and RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
-		local hex = c and ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) or "|cffdcddde"
-		specV:SetText(hex .. (spec or "?") .. "|r")
-		local det = Okanvil.RaidFinder_DetectedGS()
-		gsV:SetText(det and string.format("%.1fk", det / 1000) or "n/a")
-	end
-	-- expose so the talent-change event can live-refresh the spec/GS line
-	Okanvil.RaidFinder_RefreshGear = refreshGear
-	refreshGear()
-	y = y - 58 - 6
-
-	toggle("Short spec name", "\"Blood DPS\" instead of \"Blood DPS Death Knight\"", "shortSpec", refreshGear)
-
-	-- ---- SCANNING --------------------------------------------------------
-	y = y - 18
-	y = W.Section(pg, "SCANNING", X, y)
-	toggle("Chat channels", "Trade, General, Global, LookingForGroup", "scanChannels")
-	toggle("Yell", "LFM lines shouted in Dalaran", "scanYell")
-	toggle("Keep scanning in the background", "Even with this tab closed", "background")
-
-	-- ---- LIST ------------------------------------------------------------
-	y = y - 18
-	y = W.Section(pg, "LIST", X, y)
-	toggle("Show raids I'm saved to", "Shown with \"saved\" so you skip them", "showSaved")
-
-	-- two sliders on one row; each paints its label above the bar, so room for it first
-	y = y - 30
-	local s1 = W.Slider(pg, "Hide listings after (sec)", 20, 300, 5,
-		function() return db.expiry end,
-		function(v) db.expiry = v end)
-	s1:SetPoint("TOPLEFT", X, y); s1:SetWidth(220)
-	local s2 = W.Slider(pg, "Minimum GS", 0, 7000, 100,
-		function() return db.minGS end,
-		function(v) db.minGS = v; if page_visible() then Okanvil.RaidFinder_Render() end end)
-	s2:SetPoint("TOPLEFT", X + 260, y); s2:SetWidth(220)
-	y = y - 14 - 18
-
-	-- ---- TOOLS -----------------------------------------------------------
-	y = y - 10
-	y = W.Section(pg, "TOOLS", X, y)
-	local vb = W.Button(pg, "Verify achievement IDs")
-	vb:SetPoint("TOPLEFT", X, y); vb:SetSize(180, 24)
-	vb:SetScript("OnClick", function() Okanvil.RaidFinder_VerifyAchievements() end)
-	local vh = W.Text(pg, "Checks the achievement links against this server", "note", "dim")
-	vh:SetPoint("LEFT", vb, "RIGHT", 10, 0)
-	y = y - 24 - 16
-
-	-- the tab scrolls when the window is short
-	pg:SetHeight(-y)
-	local sf = pg:GetParent()
-	if sf and sf._relayout then sf._relayout() end
-end
-
--- ------------------------------------------------------------
 -- BUILD PAGE (W.Dashboard)  -- filters row + list area (scaffold)
 -- ------------------------------------------------------------
 local function buildUI(panel)
 	ui = {}
 	local dash = W.Dashboard(panel, {
 		title = "Raid Finder",
+		settingsTab = "invite",
 		subtitle = "LFM raids read from chat -- paused inside raids",
 		icon = ICON,
 		drawerWidth = 0,   -- single-panel page
 		footerHeight = 0,  -- no footer -> the list uses the full height (no dead strip)
-		landingLabel = "Listings",
 		statusText = function() return "" end,
 		-- CTA header button opens the floating Mini Raid Browser (same pattern as
 		-- Loot's "Mini Roll Manager"). It scans + shows listings in a compact
@@ -1257,9 +1234,6 @@ local function buildUI(panel)
 			if Okanvil.RaidFinderMini_Toggle then Okanvil.RaidFinderMini_Toggle()
 			else Okanvil:Print("Mini Raid Browser not loaded.") end
 		end,
-		tabs = {
-			{ key = "settings", label = "Settings", height = 640, build = function(pg) buildSettings(pg) end },
-		},
 	})
 	local main = dash.main
 

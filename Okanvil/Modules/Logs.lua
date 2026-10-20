@@ -82,7 +82,7 @@ local function cardToggle(parent, title, sub, getFn, setFn)
 	local b = flatButton(card, "", 48, 20)
 	b:SetPoint("RIGHT", -10, 0)
 	local function paint()
-		b.text:SetText(getFn() and "|cff7cfc8aON|r" or "|cff8a8d93OFF|r")
+		b.text:SetText(getFn() and "|cffffd200ON|r" or "|cff8a8d93OFF|r")
 	end
 	paint()
 	b:SetScript("OnClick", function() setFn(not getFn()); paint() end)

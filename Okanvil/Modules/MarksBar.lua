@@ -25,7 +25,7 @@ Okanvil.MarksBar = MB
 local ICON_N   = 8
 local BTN      = 22
 local GAP      = 2
-local PAD      = 4
+local PAD      = 8
 local SEP      = 16   -- the gap at a group boundary (twice the old 8)
 
 local bar
@@ -220,16 +220,12 @@ local function layoutTail(f)
 	end
 
 	if lead then
-		f.clear:ClearAllPoints()
-		f.clear:SetPoint("LEFT", x, 0)
-		f.clear:Show()
-		x = x + BTN + SEP
+		x = x - GAP + SEP
 
 		f.divider:ClearAllPoints()
 		f.divider:SetPoint("LEFT", x - SEP / 2, 0)
 		f.divider:Show()
 	else
-		f.clear:Hide()
 		f.divider:Hide()
 	end
 
@@ -365,10 +361,11 @@ local function build()
 	local W = Okanvil.W
 	local C = Okanvil.Colors
 
-	local f = W.Frame(UIParent, "dark")
+	local f = W.Frame(UIParent, "input")
+	f._okKeepCut = true
 	f:SetFrameStrata("MEDIUM")
 	f:SetBackdropColor(0.05, 0.05, 0.06, 0.92)
-	f:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 0.75)
+	f:SetBackdropBorderColor(C.edge[1], C.edge[2], C.edge[3], 1)
 	f:SetClampedToScreen(true)
 	f:EnableMouse(true)
 	f:SetMovable(true)
@@ -401,8 +398,11 @@ local function build()
 		hl:SetTexture("Interface\\Buttons\\WHITE8X8")
 		hl:SetVertexColor(1, 1, 1, 0.18)
 
-		b:SetScript("OnClick", function()
-			-- Toggle: clicking the icon already on the target removes it.
+		-- Left-click puts the mark on the target (again = take it off); right-click
+		-- on any mark clears the target's mark.
+		b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+		b:SetScript("OnClick", function(_, button)
+			if button == "RightButton" then SetRaidTargetIcon("target", 0); return end
 			if GetRaidTargetIndex("target") == i then
 				SetRaidTargetIcon("target", 0)
 			else
@@ -411,12 +411,6 @@ local function build()
 		end)
 		f.marks[i] = b
 	end
-
-	-- Clear: strip the icon off the current target
-	local clear = W.Button(f, "X", "danger")
-	clear:SetSize(BTN, BTN)
-	clear:SetScript("OnClick", function() SetRaidTargetIcon("target", 0) end)
-	f.clear = clear
 
 	-- A hairline between the marks and the shortcuts: two different kinds of action.
 	local div = f:CreateTexture(nil, "ARTWORK")
@@ -455,23 +449,17 @@ local function build()
 		local b = CreateFrame("Button", nil, f)
 		b:SetSize(BTN, BTN)
 
-		local t = b:CreateTexture(nil, "ARTWORK")
-		t:SetAllPoints()
-		t:SetTexture((sc.iconFn and sc.iconFn()) or sc.icon)
-		t:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+		-- the icon in the kit's octagon frame, like the nav's; the one call to
+		-- action (pull) wears the gold frame, the rest the grey one
+		W.DressFramedIcon(b, (sc.iconFn and sc.iconFn()) or sc.icon, BTN)
+		W.SetFramedIconGold(b, sc.accent and true or false)
+		local t = b.icon
 		if not sc.accent then t:SetVertexColor(0.82, 0.82, 0.85, 1) end
 
 		local hl = b:CreateTexture(nil, "HIGHLIGHT")
-		hl:SetAllPoints()
+		hl:SetAllPoints(t)
 		hl:SetTexture("Interface\\Buttons\\WHITE8X8")
 		hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.25)
-
-		if sc.accent then
-			local glow = b:CreateTexture(nil, "BACKGROUND")
-			glow:SetAllPoints()
-			glow:SetTexture("Interface\\Buttons\\WHITE8X8")
-			glow:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.30)
-		end
 
 		b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 		b:SetScript("OnClick", function(_, button) sc.run(button) end)

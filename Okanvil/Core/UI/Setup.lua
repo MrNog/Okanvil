@@ -24,7 +24,7 @@ local CONTENT_TOP = -76           -- below the header rule
 
 local WALLPAPER = "Interface\\AddOns\\Okanvil\\Media\\setup-bg"
 
-local GREEN, DIM, GOLD = "|cff7cfc8a", "|cff8a8d93", "|cffe0b860"
+local GREEN, DIM, GOLD = "|cffffd200", "|cff8a8d93", "|cffe0b860"
 local ICON_OK = "Interface\\RaidFrame\\ReadyCheck-Ready"
 
 -- The two things every raider needs. Plain ON / OFF lines, because turning
@@ -479,9 +479,9 @@ function Okanvil:ShowSetup(fromVersion)
 						.. (#on > 0 and table.concat(on, ", ") or "nothing"))
 					howto:ClearAllPoints()
 					howto:SetPoint("TOPLEFT", summary, "BOTTOMLEFT", 0, -18)
-					howto:SetText(GOLD .. "Open Okanvil|r with |cff00ff00/okanvil|r or the anvil "
+					howto:SetText(GOLD .. "Open Okanvil|r with |cffffd200/okanvil|r or the anvil "
 						.. "on the minimap.\n\n" .. GOLD .. "Run this again|r with "
-						.. "|cff00ff00/okanvil setup|r.\n\n" .. GOLD .. "New to Okanvil?|r The tour shows "
+						.. "|cffffd200/okanvil setup|r.\n\n" .. GOLD .. "New to Okanvil?|r The tour shows "
 						.. "what each part does, one page each.")
 					tourB:ClearAllPoints()
 					tourB:SetPoint("TOP", howto, "BOTTOM", 0, -18)
@@ -571,7 +571,7 @@ function Okanvil:ShowSetup(fromVersion)
 		end
 		self_.db.setupVersion = Okanvil.SETUP_VERSION
 		finish()
-		self_:Print("setup saved. |cff8a8d93Run it again any time with|r |cff00ff00/okanvil setup|r.")
+		self_:Print("setup saved. |cff8a8d93Run it again any time with|r |cffffd200/okanvil setup|r.")
 		if reload then
 			if tour then self_.db.tourPending = true end
 			ReloadUI()

@@ -32,7 +32,7 @@ local function menu(b)
 end
 local ROLE_COLOR = {
 	tank   = "|cff4a90d9",
-	healer = "|cff7cfc8a",
+	healer = "|cffffd200",
 	melee  = "|cffe05555",
 	ranged = "|cffc77dd6",
 }
@@ -1076,7 +1076,7 @@ function M.RefreshLootList()
 			local q = rarity and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[rarity]
 			local label = (q and q.hex or "|cffdcddde") .. (inm or it.name) .. "|r"
 			if it.slot ~= "" then label = label .. " |cff6f7176" .. it.slot .. "|r" end
-			if already then label = "|cff7cfc8a>|r " .. label end
+			if already then label = "|cffffd200>|r " .. label end
 			row.text:SetText(label)
 
 			row._link = link
@@ -1413,7 +1413,7 @@ function M.RefreshUI()
 			for _, c in ipairs(miss) do names[#names + 1] = c.short end
 			F.classRunTag:SetText(#names > 0
 				and ("|cffff5555still need|r " .. table.concat(names, ", "))
-				or "|cff7cfc8aall nine classes covered|r")
+				or "|cffffd200all nine classes covered|r")
 		else
 			F.classRunTag:SetText("")
 		end
@@ -1451,6 +1451,8 @@ function M.OpenReserves()
 
 	local cats = W.Frame(w, "bare")
 	cats:SetPoint("TOPLEFT", 10, -34); cats:SetPoint("TOPRIGHT", -10, -34); cats:SetHeight(22)
+	-- the same toggles as the strip on the page, so they look the same: gold edge when on
+	cats._okContent = true
 	F.moreResBtns = {}
 	local x = 0
 	for _, c in ipairs(M.ReserveCats) do
@@ -1483,7 +1485,7 @@ local WHISPERS = {
 	status = {
 		new      = { "new",      "|cffe0b860" },
 		invited  = { "invited",  "|cff4a90d9" },
-		joined   = { "joined",   "|cff7cfc8a" },
+		joined   = { "joined",   "|cffffd200" },
 		declined = { "declined", "|cffe05555" },
 		busy     = { "in group", "|cffe05555" },
 		offline  = { "offline",  "|cffe05555" },
@@ -1551,6 +1553,7 @@ function M.BuildUI(parent)
 
 	local dash = W.Dashboard(parent, {
 		title = "PuG",
+		settingsTab = "invite",
 		icon = (Okanvil.ICONS and Okanvil.ICONS.pug) or "Interface\\Icons\\Ability_Warrior_RallyingCry",
 		drawerWidth = 0,          -- one full-width page; the board needs the room
 		footerHeight = 0,
@@ -1561,7 +1564,7 @@ function M.BuildUI(parent)
 		primaryKind = function() return M.IsActive() and "primary" or "secondary" end,
 		onPrimary = function() M.Toggle(); M.RefreshUI() end,
 		statusText = function()
-			if M.IsActive() then return "|cff7cfc8aSpamming ON|r" end
+			if M.IsActive() then return "|cffffd200Spamming ON|r" end
 			return "|cffff5555Spamming OFF|r"
 		end,
 		-- No tabs: the Reserves tab is the "+ more" window on the reserve strip.

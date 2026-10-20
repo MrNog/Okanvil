@@ -60,13 +60,528 @@ local C = {
 	borderHi = { 0.34, 0.30, 0.18 },       -- gold-tinted hover/focus border
 	text     = { 0.863, 0.867, 0.871 },    -- #dcddde
 	textDim  = { 0.541, 0.553, 0.576 },    -- #8a8d93
-	ok       = { 0.486, 0.988, 0.541 },    -- #7cfc8a
+	-- "on / done / good" is gold like every other state: the UI kit has no green
+	ok       = { 1.0, 0.82, 0.0 },
 	danger   = { 0.85, 0.30, 0.32 },
 	dark     = { 0.078, 0.082, 0.090 },    -- text on gold buttons
+	-- the UI kit's window: near-black body, bronze edge
+	body     = { 0.043, 0.043, 0.047 },
+	edge     = { 0.235, 0.204, 0.157 },
+	titleText = { 0.878, 0.761, 0.478 },   -- a window's title in its title bar
+	cream    = { 0.953, 0.918, 0.839 },    -- Morpheus headers over the art
 }
 Okanvil.Colors = C
 
 local function unpack3(t, a) return t[1], t[2], t[3], a or 1 end
+
+-- ------------------------------------------------------------
+-- UI kit pieces (wow-addons/UI-KIT.md): the red X, the red plate button that
+-- matches it, framed icons, the medallion, the checkbox, the stepper and the
+-- title bar. The art lives in Media\UI.
+-- ------------------------------------------------------------
+local UI = "Interface\\AddOns\\Okanvil\\Media\\UI\\"
+W.UI = UI
+-- the header face of the newer game's talent screen: outlined, with a hard shadow
+W.TITLE_FONT = "Fonts\\MORPHEUS.TTF"
+
+-- 3.3.5a's IsEnabled returns 1 or 0, and 0 is truthy in Lua.
+local function isDisabled(b)
+	local enabled = b:IsEnabled()
+	return not enabled or enabled == 0
+end
+
+-- the red X, all four states from one sheet
+function W.CloseButton(parent)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(24, 24)
+	-- a plain Button has no state textures yet, so each one is set before it is cut
+	local function dress(state, l, r, t, bottom, blend)
+		b["Set" .. state .. "Texture"](b, UI .. "redbutton2x")
+		local tex = b["Get" .. state .. "Texture"](b)
+		tex:SetTexCoord(l, r, t, bottom)
+		if blend then tex:SetBlendMode(blend) end
+	end
+	dress("Normal", 39 / 256, 75 / 256, 1 / 128, 39 / 128)
+	dress("Pushed", 39 / 256, 75 / 256, 81 / 128, 119 / 128)
+	dress("Disabled", 39 / 256, 75 / 256, 41 / 128, 79 / 128)
+	dress("Highlight", 115 / 256, 151 / 256, 1 / 128, 39 / 128, "ADD")
+	-- always square: callers written for the old text X asked for 22x20 and the art stretched
+	local setSize = b.SetSize
+	function b:SetSize(w, h)
+		local sz = math.max(w or 24, h or 24)
+		setSize(self, sz, sz)
+	end
+	-- the same fields a W.Button has, so code written for an "X" W.Button still runs
+	b.text = b:CreateFontString(nil, "OVERLAY")
+	b.text:Hide()
+	b._paint = function() end
+	function b:SetKind() end
+	return b
+end
+
+-- The X's twin with a centred minus (Media\UI\minus, cut from the X's sheet):
+-- normal, pushed and disabled side by side; the highlight is the X's own.
+function W.MinusButton(parent)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(24, 24)
+	local function dress(state, l, r, t, bottom, tex, blend)
+		b["Set" .. state .. "Texture"](b, tex)
+		local x = b["Get" .. state .. "Texture"](b)
+		x:SetTexCoord(l, r, t, bottom)
+		if blend then x:SetBlendMode(blend) end
+	end
+	dress("Normal", 0, 36 / 128, 0, 38 / 64, UI .. "minus")
+	dress("Pushed", 40 / 128, 76 / 128, 0, 38 / 64, UI .. "minus")
+	dress("Disabled", 80 / 128, 116 / 128, 0, 38 / 64, UI .. "minus")
+	dress("Highlight", 115 / 256, 151 / 256, 1 / 128, 39 / 128, UI .. "redbutton2x", "ADD")
+	return b
+end
+
+-- the red plate: a three-slice whose caps keep the frame's corners at any width
+local PLATE_W, PLATE_H, CAP_W = 128, 64, 32
+local PLATE_U = {
+	left = { 0, CAP_W / PLATE_W },
+	middle = { CAP_W / PLATE_W, (PLATE_W - CAP_W) / PLATE_W },
+	right = { (PLATE_W - CAP_W) / PLATE_W, 1 },
+}
+
+local function threeSlice(b, layer, tex, u, v)
+	local pieces = {}
+	for _, part in ipairs({ "left", "middle", "right" }) do
+		local t = b:CreateTexture(nil, layer)
+		t:SetTexture(tex)
+		t:SetTexCoord(u[part][1], u[part][2], v[1], v[2])
+		pieces[part] = t
+	end
+	pieces.left:SetPoint("TOPLEFT"); pieces.left:SetPoint("BOTTOMLEFT")
+	pieces.right:SetPoint("TOPRIGHT"); pieces.right:SetPoint("BOTTOMRIGHT")
+	pieces.middle:SetPoint("TOPLEFT", pieces.left, "TOPRIGHT")
+	pieces.middle:SetPoint("BOTTOMRIGHT", pieces.right, "BOTTOMLEFT")
+	return pieces
+end
+
+local function capWidth(pieces, w)
+	pieces.left:SetWidth(w); pieces.right:SetWidth(w)
+end
+
+local function eachPiece(pieces, fn) for _, t in pairs(pieces) do fn(t) end end
+
+-- the bronze plate (retail's dropdown and button). Media/UI/plate, 128x512: one
+-- state a row, 80 apart (78 tall); caps 24 wide on either side of a 16px middle
+-- (one column repeated, sampled away from the joins).
+-- The art carries its shadow, so it is drawn past the frame: drawn for a 25 tall
+-- box it is 39 tall and reaches 7 out on every side, the caps 12 wide.
+local BRONZE = UI .. "plate"
+local BRONZE_ROW = { normal = 0, hover = 1, open = 2, disabled = 3 }
+local BRONZE_U = { left = { 0, 24 / 128 }, middle = { 28 / 128, 36 / 128 }, right = { 40 / 128, 64 / 128 } }
+
+local function bronzePlate(b)
+	local pieces = {}
+	for _, part in ipairs({ "left", "middle", "right" }) do
+		local t = b:CreateTexture(nil, "BACKGROUND")
+		t:SetTexture(BRONZE)
+		pieces[part] = t
+	end
+	local function size()
+		local h = b:GetHeight() or 25
+		if h <= 0 then h = 25 end
+		local out, cap = 7 * h / 25, 12 * h / 25
+		pieces.left:ClearAllPoints()
+		pieces.left:SetPoint("TOPLEFT", -out, out); pieces.left:SetPoint("BOTTOMLEFT", -out, -out)
+		pieces.right:ClearAllPoints()
+		pieces.right:SetPoint("TOPRIGHT", out, out); pieces.right:SetPoint("BOTTOMRIGHT", out, -out)
+		capWidth(pieces, cap)
+		pieces.middle:ClearAllPoints()
+		pieces.middle:SetPoint("TOPLEFT", pieces.left, "TOPRIGHT")
+		pieces.middle:SetPoint("BOTTOMRIGHT", pieces.right, "BOTTOMLEFT")
+	end
+	b:HookScript("OnSizeChanged", size)
+	size()
+	function pieces:State(state)
+		local i = BRONZE_ROW[state] or 0
+		local v0, v1 = i * 80 / 512, (i * 80 + 78) / 512
+		for part, u in pairs(BRONZE_U) do self[part]:SetTexCoord(u[1], u[2], v0, v1) end
+	end
+	function pieces:SetShown(on)
+		for _, part in ipairs({ "left", "middle", "right" }) do
+			if on then self[part]:Show() else self[part]:Hide() end
+		end
+	end
+	pieces:State("normal")
+	return pieces
+end
+
+-- an icon in the gold (or grey) octagon frame. The frame's opening is 75% of it,
+-- so the icon is drawn at 80%: its edge tucks under the metal.
+local FRAME_GOLD = { 0, 80 / 256, 0, 80 / 128 }
+local FRAME_GREY = { 128 / 256, 208 / 256, 0, 80 / 128 }
+
+-- dresses an existing frame: f.icon + f.frame. Returns f.
+function W.DressFramedIcon(f, texture, size)
+	local icon = f.icon or f:CreateTexture(nil, "ARTWORK")
+	icon:ClearAllPoints()
+	icon:SetSize(size * 0.8, size * 0.8)
+	icon:SetPoint("CENTER")
+	if texture then icon:SetTexture(texture) end
+	icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+	-- a re-dress (new size) keeps the frame's gold / grey state
+	local fresh = not f.frame
+	local frame = f.frame or f:CreateTexture(nil, "OVERLAY")
+	frame:ClearAllPoints()
+	frame:SetSize(size, size)
+	frame:SetPoint("CENTER", icon, "CENTER")
+	if fresh then
+		frame:SetTexture(UI .. "iconframes")
+		frame:SetTexCoord(unpack(FRAME_GOLD))
+	end
+	f.icon, f.frame = icon, frame
+	return f
+end
+
+-- gold frame = current / on; grey frame = the rest
+function W.SetFramedIconGold(f, gold)
+	if f.frame then f.frame:SetTexCoord(unpack(gold and FRAME_GOLD or FRAME_GREY)) end
+end
+
+-- grey frame + grey icon: cannot act right now
+function W.SetFramedIconUsable(f, usable)
+	W.SetFramedIconGold(f, usable)
+	if f.icon then
+		f.icon:SetDesaturated(not usable)
+		local s = usable and 1 or 0.6
+		f.icon:SetVertexColor(s, s, s)
+	end
+end
+
+function W.FramedIcon(parent, texture, size, gold)
+	local f = CreateFrame("Frame", nil, parent)
+	f:SetSize(size, size)
+	W.DressFramedIcon(f, texture, size)
+	W.SetFramedIconGold(f, gold ~= false)
+	return f
+end
+
+function W.FramedIconButton(parent, texture, size)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(size, size)
+	W.DressFramedIcon(b, texture, size)
+	local hl = b:CreateTexture(nil, "HIGHLIGHT")
+	hl:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+	hl:SetBlendMode("ADD")
+	hl:SetAllPoints(b.icon)
+	return b
+end
+
+-- Okanvil's app icon (the anvil) cut round inside a gold ring, over a window's
+-- top-left corner. The picture is 92% of the ring so no sliver shows past it.
+function W.Medallion(parent, size)
+	size = size or 60
+	local m = CreateFrame("Frame", nil, parent)
+	m:SetSize(size, size)
+	m:SetPoint("CENTER", parent, "TOPLEFT", 10, -8)
+	m:SetFrameLevel(parent:GetFrameLevel() + 10)
+	local icon = m:CreateTexture(nil, "ARTWORK")
+	icon:SetSize(size * 0.92, size * 0.92)
+	icon:SetPoint("CENTER")
+	icon:SetTexture(UI .. "medallion")
+	local ring = m:CreateTexture(nil, "OVERLAY")
+	ring:SetAllPoints(m)
+	ring:SetTexture(UI .. "ring")
+	ring:SetVertexColor(0.886, 0.722, 0.263)
+	m.icon, m.ring = icon, ring
+	return m
+end
+
+-- A window's title bar: no strip of its own (the title sits on the window's art),
+-- a hairline under it, the title centred in gold. The caller adds the X
+-- (W.CloseButton) at its right end.
+function W.TitleBar(parent, height)
+	local bar = CreateFrame("Frame", nil, parent)
+	bar:SetHeight(height or 26)
+	bar._okChrome = true
+	-- every button on a title bar is drawn like the X beside it: the red plate
+	bar._okTitleBar = true
+	-- 6px in, like the art; its top corners are cut by covers (below)
+	bar:SetPoint("TOPLEFT", 6, -6)
+	bar:SetPoint("TOPRIGHT", -6, -6)
+	local rule = bar:CreateTexture(nil, "BORDER")
+	rule:SetTexture(FLAT); rule:SetVertexColor(unpack3(C.edge)); rule:SetHeight(1)
+	rule:SetPoint("BOTTOMLEFT"); rule:SetPoint("BOTTOMRIGHT")
+	-- the bar's top corners follow the window's cut
+	bar.covers = W.CoverCorners(bar, bar, W.COVER, C.body[1], C.body[2], C.body[3], 1, { "TOPLEFT", "TOPRIGHT" })
+	-- they wear the window's fill colour, like the art's covers
+	local pch = parent._okChamfer
+	if pch then
+		pch.covers = pch.covers or {}
+		pch.covers[#pch.covers + 1] = bar.covers
+		local c = pch.color
+		if c and (c[4] or 0) > 0 then bar.covers:Tint(c[1], c[2], c[3], c[4]) end
+	end
+	local title = bar:CreateFontString(nil, "OVERLAY")
+	title:SetFont(STANDARD_TEXT_FONT, 15)
+	title:SetShadowColor(0, 0, 0, 1); title:SetShadowOffset(1, -1)
+	title:SetTextColor(unpack3(C.accentText))
+	title:SetPoint("CENTER")
+	bar.title = title
+	return bar, title
+end
+
+-- a header in the talent screen's face: Morpheus, outlined, hard shadow, cream
+function W.TitleText(parent, text, size)
+	local fs = parent:CreateFontString(nil, "OVERLAY")
+	fs:SetFont(W.TITLE_FONT, size or 20, "OUTLINE")
+	fs:SetShadowColor(0, 0, 0, 1); fs:SetShadowOffset(2, -2)
+	fs:SetTextColor(unpack3(C.cream))
+	if text then fs:SetText(text) end
+	return fs
+end
+
+-- the kit's checkbox: box + tick textures on `parent`, size x size, tick hidden
+local CHECK_BOX = { 0.5, 0.734375, 0.015625, 0.12890625 }
+local CHECK_MARK = { 0.03125, 0.265625, 0.203125, 0.31640625 }
+function W.CheckTextures(parent, size)
+	local box = parent:CreateTexture(nil, "ARTWORK")
+	box:SetSize(size, size)
+	box:SetTexture(UI .. "controls")
+	box:SetTexCoord(unpack(CHECK_BOX))
+	local tick = parent:CreateTexture(nil, "OVERLAY")
+	tick:SetAllPoints(box)
+	tick:SetTexture(UI .. "controls")
+	tick:SetTexCoord(unpack(CHECK_MARK))
+	tick:Hide()
+	return box, tick
+end
+
+-- the kit's field edge (the search field's three-slice) behind any one-line box
+local FIELD_TEX = UI .. "controls"
+local FIELD_U = { left = { 0.03125, 0.15625 }, middle = { 0.40625, 0.4375 }, right = { 0.21875, 0.34375 } }
+local FIELD_V = { 0.015625, 0.171875 }
+local function dressField(f)
+	local pieces = threeSlice(f, "BACKGROUND", FIELD_TEX, FIELD_U, FIELD_V)
+	local function size() capWidth(pieces, math.max(4, (f:GetHeight() or 22) * 0.4)) end
+	f:HookScript("OnSizeChanged", size)
+	size()
+	f._field = pieces
+	return pieces
+end
+local function litField(f, on)
+	if not f._field then return end
+	local s = on and 1.25 or 1
+	eachPiece(f._field, function(t) t:SetVertexColor(s, s, s) end)
+end
+
+-- W.DressSearch(editBox): the kit's search field on an EditBox that already
+-- has its scripts -- the field edge, the glass on the left, a clear button on
+-- the right while there is text. Call it after the box's own SetScripts.
+function W.DressSearch(e)
+	dressField(e)
+	e:SetTextInsets(22, 22, 0, 0)
+	local glass = e:CreateTexture(nil, "ARTWORK")
+	glass:SetSize(12, 12); glass:SetPoint("LEFT", 6, 0)
+	glass:SetTexture(UI .. "controls")
+	glass:SetTexCoord(0.625, 0.8125, 0.203125, 0.296875)
+	glass:SetVertexColor(0.6, 0.6, 0.6)
+	local clr = CreateFrame("Button", nil, e)
+	clr:SetSize(14, 14); clr:SetPoint("RIGHT", -5, 0)
+	clr:SetNormalTexture(UI .. "controls")
+	clr:GetNormalTexture():SetTexCoord(0.03125, 0.1875, 0.3515625, 0.4296875)
+	clr:GetNormalTexture():SetVertexColor(0.7, 0.7, 0.7)
+	clr:SetScript("OnEnter", function(s) s:GetNormalTexture():SetVertexColor(1, 1, 1) end)
+	clr:SetScript("OnLeave", function(s) s:GetNormalTexture():SetVertexColor(0.7, 0.7, 0.7) end)
+	clr:SetScript("OnClick", function() e:SetText(""); e:ClearFocus() end)
+	clr:Hide()
+	local function paint()
+		if (e:GetText() or "") ~= "" then clr:Show() else clr:Hide() end
+	end
+	e:HookScript("OnTextChanged", paint)
+	e:HookScript("OnEditFocusGained", function() litField(e, true); glass:SetVertexColor(1, 1, 1) end)
+	e:HookScript("OnEditFocusLost", function() litField(e, false); glass:SetVertexColor(0.6, 0.6, 0.6) end)
+	paint()
+	return e
+end
+
+-- the dropdown's dark text holder, a nine-slice drawn at 0.8; also the edge of
+-- a multi-line box
+local DROP = UI .. "dropdown"
+local HOLDER_U = { 0, 0.125, 0.296875, 0.421875 }
+local HOLDER_V = { 0.625, 0.6796875, 0.71484375, 0.78515625 }
+local EDGE_X = { { "LEFT", -6.4 }, { "LEFT", 6.4 }, { "RIGHT", -6.4 }, { "RIGHT", 6.4 } }
+local EDGE_Y = { { "TOP", 5.6 }, { "TOP", -5.6 }, { "BOTTOM", 7.2 }, { "BOTTOM", -7.2 } }
+local function dressHolder(b)
+	for row = 1, 3 do
+		for col = 1, 3 do
+			local piece = b:CreateTexture(nil, "BACKGROUND")
+			piece:SetTexture(DROP)
+			piece:SetTexCoord(HOLDER_U[col], HOLDER_U[col + 1], HOLDER_V[row], HOLDER_V[row + 1])
+			local x1, y1, x2, y2 = EDGE_X[col], EDGE_Y[row], EDGE_X[col + 1], EDGE_Y[row + 1]
+			piece:SetPoint("TOPLEFT", b, y1[1] .. x1[1], x1[2], y1[2])
+			piece:SetPoint("BOTTOMRIGHT", b, y2[1] .. x2[1], x2[2], y2[2])
+		end
+	end
+end
+W.DressHolder = dressHolder
+
+-- ------------------------------------------------------------
+-- Cut corners. No frame in Okanvil is a plain rectangle: the corners are cut
+-- like the icon frames'. 3.3.5a cannot mask a frame, so Media\UI\chamfer (a
+-- white cut-corner fill and a 1px cut-corner line, in a large and a small
+-- size) is sliced nine ways behind the frame and tinted.
+--
+-- W.Chamfer(frame, big) takes over the frame's backdrop: SetBackdropColor /
+-- SetBackdropBorderColor / GetBackdropColor tint the pieces instead, so every
+-- caller written for a flat backdrop keeps working. The fill sits on the
+-- BACKGROUND layer (below art on BORDER), the line on OVERLAY.
+-- ------------------------------------------------------------
+local CHAMF = UI .. "chamfer"
+-- corner slices: the large set's are 24px on the sheet (cut 20), the small set's 16 (cut 12)
+local CH_U_BIG = { 0, 24 / 128, 40 / 128, 64 / 128 }
+local CH_U_SMALL = { 0, 16 / 128, 48 / 128, 64 / 128 }
+local function ninePieces(f, layer, ox, oy, corner, CH_U)
+	local pieces = {}
+	local xs = { { "LEFT", 0 }, { "LEFT", corner }, { "RIGHT", -corner }, { "RIGHT", 0 } }
+	local ys = { { "TOP", 0 }, { "TOP", -corner }, { "BOTTOM", corner }, { "BOTTOM", 0 } }
+	for row = 1, 3 do
+		for col = 1, 3 do
+			local t = f:CreateTexture(nil, layer)
+			t:SetTexture(CHAMF)
+			t:SetTexCoord(ox + CH_U[col], ox + CH_U[col + 1], oy + CH_U[row], oy + CH_U[row + 1])
+			local x1, y1, x2, y2 = xs[col], ys[row], xs[col + 1], ys[row + 1]
+			t:SetPoint("TOPLEFT", f, y1[1] .. x1[1], x1[2], y1[2])
+			t:SetPoint("BOTTOMRIGHT", f, y2[1] .. x2[1], x2[2], y2[2])
+			pieces[#pieces + 1] = t
+		end
+	end
+	return pieces
+end
+
+-- The size of one screen pixel in this frame's units, never under 1. In a
+-- scaled-down window a 1-unit border is thinner than a pixel and, depending on
+-- where it lands, the game rounds it away (the last of a row of buttons lost
+-- its right edge).
+local screenH
+function W.Pixel(f)
+	if not screenH then
+		local res = GetCVar and GetCVar("gxResolution") or ""
+		screenH = tonumber(res:match("%d+x(%d+)")) or 768
+	end
+	local e = (f and f:GetEffectiveScale()) or 1
+	return math.max(1, 768 / (screenH * e))
+end
+
+function W.Chamfer(f, big)
+	if f._okChamfer then return f._okChamfer end
+	f:SetBackdrop(nil)
+	-- windows: a 10px cut; boxes, fields and buttons: 6px
+	local oy = big and 0 or 0.5
+	local corner = big and 12 or 8
+	local u = big and CH_U_BIG or CH_U_SMALL
+	local ch = { fill = ninePieces(f, "BACKGROUND", 0, oy, corner, u),
+		edge = ninePieces(f, "OVERLAY", 0.5, oy, corner, u), color = { 0, 0, 0, 0 } }
+	local function tint(list, r, g, b, a)
+		for _, t in ipairs(list) do t:SetVertexColor(r or 0, g or 0, b or 0, a or 1) end
+	end
+	-- The cut is the OUTSIDE of a window only: a frame placed straight on the
+	-- screen (its parent is UIParent) and 30 tall or more. Everything inside a
+	-- window -- boxes, lists, buttons, fields -- keeps a plain square box, drawn
+	-- by the frame's own backdrop, so a square selection never sits in a cut box.
+	-- _okKeepCut opts a frame in anyway (side tabs, the stepper's - / +, the
+	-- Ranking art card).
+	local mt = getmetatable(f).__index
+	local rawSB, rawSBC, rawSBBC = mt.SetBackdrop, mt.SetBackdropColor, mt.SetBackdropBorderColor
+	ch.border = { 0, 0, 0, 0 }
+	ch.show = true
+	local function paint()
+		local c, e = ch.color, ch.border
+		for _, cv in ipairs(ch.covers or {}) do cv:Tint(c[1], c[2], c[3], c[4]) end
+		if ch.flat then
+			rawSBC(f, c[1], c[2], c[3], c[4]); rawSBBC(f, e[1], e[2], e[3], e[4])
+		else
+			tint(ch.fill, c[1], c[2], c[3], c[4]); tint(ch.edge, e[1], e[2], e[3], e[4])
+		end
+	end
+	local function mode()
+		local h = f:GetHeight() or 0
+		local outside = f:GetParent() == UIParent and h >= 30
+		local flat = not (f._okKeepCut or outside)
+		ch.flat = flat
+		local cut = ch.show and not flat
+		for _, t in ipairs(ch.fill) do if cut then t:Show() else t:Hide() end end
+		for _, t in ipairs(ch.edge) do if cut then t:Show() else t:Hide() end end
+		if flat and ch.show then
+			local px = W.Pixel(f)
+			rawSB(f, { bgFile = FLAT, edgeFile = FLAT, edgeSize = px,
+				insets = { left = px, right = px, top = px, bottom = px } })
+		else
+			rawSB(f, nil)
+		end
+		paint()
+	end
+	function f:SetBackdropColor(r, g, b, a)
+		ch.color = { r or 0, g or 0, b or 0, a or 1 }
+		paint()
+	end
+	function f:SetBackdropBorderColor(r, g, b, a)
+		ch.border = { r or 0, g or 0, b or 0, a or 1 }
+		paint()
+	end
+	function f:GetBackdropColor() return unpack(ch.color) end
+	-- a later SetBackdrop(nil) means "no box": hide everything; any other call
+	-- keeps the frame's look
+	function f:SetBackdrop(bd)
+		ch.show = bd ~= nil
+		mode()
+	end
+	f:HookScript("OnSizeChanged", mode)
+	f._okChamfer = ch
+	mode()
+	return ch
+end
+
+-- Corner covers. Art is square and 3.3.5a cannot mask it, so inside a cut window
+-- its corners would leave a wide gap at each cut while the sides keep a slim one.
+-- A small triangle (Media\UI\cutcover) in the window's own background colour laid
+-- over each corner of the art cuts it parallel to the window's edge.
+--   W.CoverCorners(host, region, size, r, g, b, a[, corners])
+local COVER = UI .. "cutcover"
+local COVER_TC = { TOPLEFT = { 0, 1, 0, 1 }, TOPRIGHT = { 1, 0, 0, 1 },
+	BOTTOMLEFT = { 0, 1, 1, 0 }, BOTTOMRIGHT = { 1, 0, 1, 0 } }
+-- For art 6px inside a window's 10px cut. The art's own corner must sit INSIDE
+-- the cut (6 + 6 > 10), or the cover would paint a black square corner outside
+-- the window; the cover then cuts it parallel to the edge, the same 5px gap as
+-- the sides. Size = 10 - 0.586 x the inset.
+W.COVER = 6.5
+function W.CoverCorners(host, region, size, r, g, b, a, corners)
+	local list = {}
+	for _, c in ipairs(corners or { "TOPLEFT", "TOPRIGHT", "BOTTOMLEFT", "BOTTOMRIGHT" }) do
+		local t = host:CreateTexture(nil, "OVERLAY")
+		t:SetTexture(COVER)
+		t:SetTexCoord(unpack(COVER_TC[c]))
+		t:SetSize(size, size)
+		t:SetPoint(c, region, c, 0, 0)
+		t:SetVertexColor(r, g, b, a or 1)
+		list[#list + 1] = t
+	end
+	function list:SetAlpha(alpha) for _, t in ipairs(self) do t:SetAlpha(alpha) end end
+	function list:SetShown(on) for _, t in ipairs(self) do if on then t:Show() else t:Hide() end end end
+	function list:Tint(cr, cg, cb, ca) for _, t in ipairs(self) do t:SetVertexColor(cr, cg, cb, ca or 1) end end
+	-- On a window with the cut-corner backdrop the covers wear ITS fill colour
+	-- (a grey panel, the near-black main window...) and follow every change of it:
+	-- a cover in any other colour shows as a dark corner inside the window.
+	local ch = host._okChamfer
+	if ch then
+		ch.covers = ch.covers or {}
+		ch.covers[#ch.covers + 1] = list
+		local c = ch.color
+		if c and (c[4] or 0) > 0 then list:Tint(c[1], c[2], c[3], c[4]) end
+	end
+	return list
+end
+
+-- a frame with no fill and no edge, but a backdrop all the same, so code that
+-- recolours a box's edge (focus, a warning) still runs on it
+local function clearBackdrop(f)
+	W.Chamfer(f, false)
+end
 
 -- Clip a ScrollFrame's overflow if the client supports it. SetClipsChildren
 -- was added in WoW 5.x; on 3.3.5 it's absent, so we no-op there (the
@@ -91,10 +606,12 @@ Okanvil.Clip = Clip
 -- ------------------------------------------------------------
 function Okanvil:Skin(frame, kind)
 	kind = kind or "panel"
-	frame:SetBackdrop({
-		bgFile = FLAT, edgeFile = FLAT, edgeSize = 1,
-		insets = { left = 1, right = 1, top = 1, bottom = 1 },
-	})
+	if kind == "page" or kind == "well" or kind == "row" then
+		frame:SetBackdrop(nil)
+	else
+		-- cut corners: large for windows and panels, small for boxes and fields
+		W.Chamfer(frame, kind == "panel" or kind == "dark")
+	end
 	local fill = C.panel
 	if kind == "dark" or kind == "input" then fill = C.panelD
 	elseif kind == "raise" then fill = C.panelHi end
@@ -276,12 +793,17 @@ end
 -- half its headings in all-caps notes and the other half in normal-case labels
 -- -- which is exactly what Settings and the Loot page had drifted into.
 -- ------------------------------------------------------------
+-- The kit's section: 11px uppercase gold, hairline to the column's end.
 function W.Section(parent, text, x, y, reach)
-	local t = W.Text(parent, text, "note", "dim")
+	text = text or ""
+	-- upper-case plain labels; one carrying a colour code is left as written
+	if not text:find("|c", 1, true) then text = text:upper() end
+	local t = W.FixedText(parent, text, 12)
+	t:SetTextColor(unpack3(C.accentText))
 	t:SetPoint("TOPLEFT", x, y)
 	local rule = parent:CreateTexture(nil, "ARTWORK")
 	rule:SetTexture("Interface\\Buttons\\WHITE8x8")
-	rule:SetVertexColor(C.border[1], C.border[2], C.border[3], 1)
+	rule:SetVertexColor(C.edge[1], C.edge[2], C.edge[3], 1)
 	rule:SetHeight(1)
 	rule:SetPoint("LEFT", t, "RIGHT", 8, 0)
 	if reach then
@@ -302,218 +824,362 @@ end
 W.SLIDER_TOP = 20
 
 -- ------------------------------------------------------------
--- Button. kind:
---   "primary"   solid gold fill, dark bold label (calls to action)
---   nil/"secondary"  surface fill, hairline border, dim label -> gold on hover
---   "danger"    like secondary but red label/hover
--- Matches the RATS Hub button hierarchy.
+-- Button: every one is the red plate, the X's family. kind:
+--   "primary"          the main action (or a picked choice): full red, gold label
+--   nil / "secondary"  the rest: the same plate a touch darker, cream label
+--   "danger"           a light red label
+--   "tab" / "tabOn"    a text tab; the picked one gold with a gold underline
+--   "glyph"            a bare gold glyph (pager arrows), no plate
+-- A button labelled "X" is the red close X.
 -- ------------------------------------------------------------
+-- Where a button sits decides how it is drawn. In chrome -- a page header, a
+-- title bar, a floating window's own controls -- the main action is the red
+-- plate. Inside content -- list rows, a page's body, a settings row -- every
+-- button is the quiet box: red plates in the middle of a list read as clutter.
+local function isChrome(parent)
+	local depth, f = 0, parent
+	while f and f ~= UIParent do
+		if f._okChrome then return true end
+		-- a popup's own list of toggles is content, however shallow it sits
+		if f._okContent then return false end
+		if f == Okanvil.win then return false end
+		depth = depth + 1
+		f = f:GetParent()
+	end
+	return depth <= 3
+end
+W.IsChrome = isChrome
+
 function W.Button(parent, text, kind)
+	if text == "X" or text == "x" then return Mod(W.CloseButton(parent)) end
+	local chrome = isChrome(parent)
+	local onBar = parent and parent._okTitleBar
 	local b = CreateFrame("Button", nil, parent)
-	b:SetBackdrop({
-		bgFile = FLAT, edgeFile = FLAT, edgeSize = 1,
-		insets = { left = 1, right = 1, top = 1, bottom = 1 },
-	})
-	local primary = (kind == "primary")
-	-- Button labels get a FIXED size (12) so the global "Font size" slider can't
-	-- grow them past the button box. The slider is for body text, not chrome.
+	clearBackdrop(b)
+	-- Button labels get a FIXED size so Settings > Text size can't grow them past
+	-- the box. The slider is for body text, not chrome.
 	local t = W.Text(b, text, "body")
-	-- fixed: Settings > Text size must not grow a label past its button
 	t._okFixed = true
 	-- Tabs read one size up: they name the page you are on, not an action.
-	if kind == "tab" or kind == "tabOn" then t._okSize = 14 end
+	t._okSize = (kind == "tab" or kind == "tabOn") and 14 or 13
 	t:SetFont(Okanvil:Font(), t._okSize)
 	t:SetPoint("CENTER")
 	b.text = t
 	b._kind = kind
 
-	-- "tab" / "tabOn": the forge look's tabs -- no box, dim label, and the picked
-	-- one in gold with a gold underline (see the first-run setup / the mock).
-	local under
+	local plate, glow, under, uline, bronze
+	local function ensurePlate()
+		if plate then return end
+		local v = { 0, 1 }
+		plate = threeSlice(b, "BACKGROUND", UI .. "redplate", PLATE_U, v)
+		glow = threeSlice(b, "HIGHLIGHT", UI .. "redplate", PLATE_U, v)
+		eachPiece(glow, function(g) g:SetBlendMode("ADD"); g:SetAlpha(0.25) end)
+		local function size()
+			local cap = CAP_W * (b:GetHeight() or PLATE_H) / PLATE_H
+			capWidth(plate, cap); capWidth(glow, cap)
+		end
+		b:HookScript("OnSizeChanged", size)
+		size()
+	end
+
 	local function paint(hover)
+		local off = isDisabled(b)
 		local isTab = (kind == "tab" or kind == "tabOn")
-		if under then under:SetShown(kind == "tabOn") end
+		-- content: the quiet box, never the red plate (plates in a list read as clutter)
+		local link = false
+		local plated = not isTab and kind ~= "glyph"
+		-- red is for a window's one main action; everything else, and a row of
+		-- choices (buttons switched with SetKind), is on the bronze plate: the
+		-- picked choice lit, the others dark
+		local picked = b._toggle and ((kind == "primary") or b._active)
+		local unpicked = plated and b._toggle and not picked
+		local red = plated and (b._main or (kind == "primary" and not b._toggle))
+		-- a main action switched off by its owner (nothing to give yet): the grey plate
+		local idle = red and b._main ~= "always" and b._toggle and kind ~= "primary"
+		local metal = plated and not red
+		if red then ensurePlate() end
+		if metal and not bronze then bronze = bronzePlate(b) end
+		if plate then
+			local shade = off and 0.6 or (b._down and 0.75 or (idle and 0.85 or 1))
+			eachPiece(plate, function(p)
+				if red then p:Show() else p:Hide() end
+				p:SetDesaturated(off or idle)
+				p:SetVertexColor(shade, shade, shade)
+			end)
+			eachPiece(glow, function(g) if red then g:Show() else g:Hide() end end)
+		end
+		if bronze then
+			bronze:SetShown(metal)
+			if metal then
+				bronze:State((off or unpicked) and "disabled"
+					or ((picked or b._down) and "open")
+					or (hover and "hover") or "normal")
+			end
+		end
+		if under then if kind == "tabOn" then under:Show() else under:Hide() end end
+		if link then
+			-- gold text, no box; the main action / the picked one is underlined
+			if not uline then
+				uline = b:CreateTexture(nil, "ARTWORK")
+				uline:SetTexture(FLAT); uline:SetHeight(1)
+				uline:SetPoint("TOPLEFT", t, "BOTTOMLEFT", 0, -2)
+				uline:SetPoint("TOPRIGHT", t, "BOTTOMRIGHT", 0, -2)
+			end
+			b:SetBackdropColor(0, 0, 0, 0)
+			b:SetBackdropBorderColor(0, 0, 0, 0)
+			local picked = (kind == "primary") or b._active
+			if picked or hover then uline:Show() else uline:Hide() end
+			uline:SetVertexColor(1, 0.82, 0, picked and 0.9 or 0.45)
+			if off then t:SetTextColor(0.5, 0.5, 0.5)
+			elseif kind == "danger" then t:SetTextColor(unpack3(C.danger))
+			elseif hover then t:SetTextColor(1, 1, 1)
+			else t:SetTextColor(unpack3(C.accentText)) end
+			return
+		end
+		if uline then uline:Hide() end
+		if kind == "glyph" then
+			b:SetBackdropColor(0, 0, 0, 0)
+			b:SetBackdropBorderColor(0, 0, 0, 0)
+			if off then t:SetTextColor(0.4, 0.4, 0.4)
+			elseif hover then t:SetTextColor(1, 1, 1)
+			else t:SetTextColor(unpack3(C.accentText)) end
+			return
+		end
 		if isTab then
 			if not under then
 				under = b:CreateTexture(nil, "ARTWORK")
-				under:SetTexture(FLAT); under:SetVertexColor(unpack3(C.accent))
+				under:SetTexture(FLAT); under:SetVertexColor(unpack3(C.accentText))
 				under:SetHeight(2); under:SetPoint("BOTTOMLEFT", 2, 0); under:SetPoint("BOTTOMRIGHT", -2, 0)
-				under:SetShown(kind == "tabOn")
+				if kind == "tabOn" then under:Show() else under:Hide() end
 			end
 			b:SetBackdropColor(0, 0, 0, 0)
 			b:SetBackdropBorderColor(0, 0, 0, 0)
 			if kind == "tabOn" then t:SetTextColor(unpack3(C.accentText))
 			elseif hover then t:SetTextColor(unpack3(C.accentHi))
 			else t:SetTextColor(0.74, 0.75, 0.77) end
-		elseif primary then
-			local f = hover and C.accentHi or C.accent
-			b:SetBackdropColor(f[1], f[2], f[3], 1)
-			b:SetBackdropBorderColor(unpack3(C.accentHi))
-			t:SetTextColor(unpack3(C.dark))
+		elseif red then
+			b:SetBackdropColor(0, 0, 0, 0)
+			b:SetBackdropBorderColor(0, 0, 0, 0)
+			-- white on the red plate, gold under the cursor; grey on the grey plate
+			if off then t:SetTextColor(0.5, 0.5, 0.5)
+			elseif hover then t:SetTextColor(unpack3(C.accentText))
+			elseif idle then t:SetTextColor(0.75, 0.75, 0.75)
+			else t:SetTextColor(1, 1, 1) end
+		elseif metal then
+			b:SetBackdropColor(0, 0, 0, 0)
+			b:SetBackdropBorderColor(0, 0, 0, 0)
+			-- gold on the bronze plate, white under the cursor or when picked;
+			-- an unpicked choice grey
+			if off then t:SetTextColor(0.5, 0.5, 0.5)
+			elseif unpicked and not hover then t:SetTextColor(0.6, 0.6, 0.6)
+			elseif kind == "danger" then t:SetTextColor(1, 0.55, 0.5)
+			elseif hover or picked then t:SetTextColor(1, 1, 1)
+			else t:SetTextColor(unpack3(C.accentText)) end
 		else
-			b:SetBackdropColor(unpack3(hover and C.panelHi or C.surface))
-			b:SetBackdropBorderColor(unpack3(hover and C.borderHi or C.border))
-			local lbl = (kind == "danger") and C.danger or (hover and C.accentHi or C.textDim)
-			t:SetTextColor(unpack3(b._active and C.accentHi or lbl))
+			-- the quiet button: solid dark fill, light bronze edge, cream label;
+			-- gold edge while hovered or picked (a segment that is on, the main action)
+			local lit = (hover or b._active or (kind == "primary")) and not off
+			b:SetBackdropColor(0.094, 0.086, 0.075, 1)
+			if lit then b:SetBackdropBorderColor(1, 0.82, 0, 0.6)
+			else b:SetBackdropBorderColor(0.463, 0.384, 0.267, 1) end
+			if off then t:SetTextColor(0.5, 0.5, 0.5)
+			elseif kind == "danger" then t:SetTextColor(unpack3(C.danger))
+			elseif hover then t:SetTextColor(1, 1, 1)
+			else t:SetTextColor(unpack3(C.cream)) end
 		end
 	end
 	b._paint = paint
 	paint(false)
 	b:SetScript("OnEnter", function(s) paint(true); tipEnter(s) end)
-	b:SetScript("OnLeave", function(s) paint(false); tipLeave() end)
+	b:SetScript("OnLeave", function(s) s._down = nil; paint(false); tipLeave() end)
+	b:HookScript("OnMouseDown", function(s) s._down = true; paint(s._hover) end)
+	b:HookScript("OnMouseUp", function(s) s._down = nil; paint(s._hover) end)
+	b:HookScript("OnEnable", function(s) paint(s._hover) end)
+	b:HookScript("OnDisable", function(s) paint(false) end)
 
-	-- Re-style in place. For an ON/OFF toggle the STATE is the fill, not a colour
-	-- code in the label: a "primary" button is a solid gold box whose label is
-	-- painted dark, so an embedded |cff8a8d93 (dim grey) override lands grey-on-gold
-	-- and is unreadable. Flip the kind instead -> ON = gold primary, OFF = surface.
+	-- Re-style in place: a toggle shows its state by switching kind.
 	function b:SetKind(k)
 		self._kind = k
-		primary = (k == "primary")
 		kind = k
+		-- switched by its owner: one of a row of choices (see `unpicked` above)
+		if k ~= "tab" and k ~= "tabOn" then self._toggle = true end
 		paint(self._hover)
+	end
+	-- A window's main action: the red plate whatever its kind. "always" keeps it
+	-- red when its owner switches it to secondary (an ON/OFF call to action);
+	-- otherwise secondary shows the grey plate.
+	function b:SetMain(on)
+		self._main = on
+		paint(self._hover)
+		return self
 	end
 	b:HookScript("OnEnter", function(s) s._hover = true end)
 	b:HookScript("OnLeave", function(s) s._hover = false end)
 	return Mod(b)
 end
 
+-- the sign buttons of a stepper: gold bars drawn centred (the font's "-" sits low)
+function W.SignButton(parent, plus)
+	local b = W.Button(parent, "")
+	b._okKeepCut = true
+	b:SetSize(24, 22)
+	local bars = { { 8, 2 } }
+	if plus then bars[2] = { 2, 8 } end
+	for _, sz in ipairs(bars) do
+		local bar = b:CreateTexture(nil, "OVERLAY")
+		bar:SetTexture(FLAT)
+		bar:SetVertexColor(unpack3(C.accentText))
+		bar:SetSize(sz[1], sz[2])
+		bar:SetPoint("CENTER", 0, 0)
+	end
+	return b
+end
+
 -- ------------------------------------------------------------
--- Check (flat checkbox)
+-- Check -- the kit's checkbox (20x20), label to its right
 -- ------------------------------------------------------------
 function W.Check(parent, label, getFn, setFn)
 	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(18, 18)
-	local box = W.Frame(b, "input")
-	box:SetAllPoints()
-	-- Our own palette, not Blizzard's UI-CheckBox-Check -- that texture carries its
-	-- own yellow and bevel and clashes with the flat gold-on-dark used everywhere
-	-- else. A filled gold square inset in the box: unambiguous at 18px, and it needs
-	-- no SetRotation, which stock 3.3.5a textures do not have.
-	local tick = box:CreateTexture(nil, "OVERLAY")
-	tick:SetTexture(FLAT)
-	tick:SetVertexColor(unpack3(C.accent))
-	tick:SetPoint("TOPLEFT", 4, -4)
-	tick:SetPoint("BOTTOMRIGHT", -4, 4)
+	b:SetSize(20, 20)
+	local box, tick = W.CheckTextures(b, 20)
+	box:SetPoint("CENTER")
 	local t = W.Text(b, label)
 	t:SetPoint("LEFT", b, "RIGHT", 6, 0)
 	b.text = t
-	local function refresh() tick:SetShown(getFn and getFn() or false) end
+	local function refresh()
+		if getFn and getFn() then tick:Show() else tick:Hide() end
+	end
 	refresh()
 	b:SetScript("OnClick", function()
 		if setFn then setFn(not (getFn and getFn())) end
 		refresh()
 	end)
-	-- honour :Tooltip() like W.Button does -- without tipEnter here, calling
-	-- :Tooltip() on a checkbox silently did nothing (this OnEnter overwrote it).
-	b:SetScript("OnEnter", function(s) box:SetBackdropBorderColor(unpack3(C.borderHi)); tipEnter(s) end)
-	b:SetScript("OnLeave", function() box:SetBackdropBorderColor(unpack3(C.border)); tipLeave() end)
+	b:SetScript("OnEnter", function(s) box:SetVertexColor(1.25, 1.25, 1.25); tipEnter(s) end)
+	b:SetScript("OnLeave", function() box:SetVertexColor(1, 1, 1); tipLeave() end)
 	b.refresh = refresh
 	return Mod(b)
 end
 
 -- ------------------------------------------------------------
--- ToggleRow -- the forge look's setting: a title, a dim line under it saying
--- what it does, an ON / OFF button on the right, a hairline below. Replaces a
--- checkbox wherever a setting deserves its one-line reason.
---   local r = W.ToggleRow(parent, "Title", "what it does", getFn, setFn)
+-- Settings rows (the kit): 30 tall, the name on the left, the control on the
+-- right edge, every other row a faint band, hover lightens. No hint line, no
+-- tooltip. Rows count their own stripes per parent; W.ResetStripes(parent)
+-- starts a new section.
+-- ------------------------------------------------------------
+W.ROW_H = 34
+function W.ResetStripes(parent) parent._okStripe = false end
+
+function W.SettingsRow(parent, label)
+	local row = CreateFrame("Button", nil, parent)
+	row:SetHeight(W.ROW_H)
+	W.ROW_FONT = W.ROW_FONT or 16
+	if parent._okStripe then
+		local band = row:CreateTexture(nil, "BACKGROUND")
+		band:SetTexture(FLAT); band:SetVertexColor(1, 1, 1, 0.03); band:SetAllPoints(row)
+	end
+	parent._okStripe = not parent._okStripe
+	local hover = row:CreateTexture(nil, "HIGHLIGHT")
+	hover:SetTexture(FLAT); hover:SetVertexColor(1, 1, 1, 0.05); hover:SetAllPoints(row)
+	local fs = W.FixedText(row, label, W.ROW_FONT)
+	fs:SetPoint("LEFT", 6, 0)
+	-- a hard shadow keeps the label readable over bright art, with no box behind it
+	fs:SetShadowColor(0, 0, 0, 1); fs:SetShadowOffset(1.5, -1.5)
+	fs:SetJustifyH("LEFT")
+	row.text = fs
+	return Mod(row)
+end
+
+-- ------------------------------------------------------------
+-- ToggleRow -- a settings row with a checkbox on its right; the whole row
+-- toggles it. `desc` is accepted and ignored (the kit has no hint lines).
+--   local r = W.ToggleRow(parent, "Title", nil, getFn, setFn)
 --   r:SetPoint("TOPLEFT", x, y); r:SetPoint("RIGHT", parent, "RIGHT", -x, 0)
 --   y = y - r:GetHeight()
--- r.refresh() repaints from getFn; r:Tooltip(text) works like on a button.
+-- r.refresh() repaints from getFn.
 -- ------------------------------------------------------------
 function W.ToggleRow(parent, title, desc, getFn, setFn)
-	local r = CreateFrame("Frame", nil, parent)
-	r:SetHeight((desc and desc ~= "") and 44 or 32)
-	r:EnableMouse(true)
-	local rule = r:CreateTexture(nil, "BORDER")
-	rule:SetTexture(FLAT); rule:SetVertexColor(1, 1, 1, 0.06)
-	rule:SetHeight(1); rule:SetPoint("BOTTOMLEFT"); rule:SetPoint("BOTTOMRIGHT")
-
-	local btn = W.Button(r, "")
-	btn:SetSize(52, 22); btn:SetPoint("RIGHT", 0, 0)
-	r.btn = btn
-
-	local t = W.Text(r, title, "body")
-	t:SetJustifyH("LEFT")
-	r.text = t
-	if desc and desc ~= "" then
-		t:SetPoint("TOPLEFT", 0, -6)
-		local d = W.Text(r, desc, "note", "dim")
-		d:SetPoint("TOPLEFT", t, "BOTTOMLEFT", 0, -3)
-		d:SetPoint("RIGHT", btn, "LEFT", -12, 0); d:SetJustifyH("LEFT")
-		if d.SetWordWrap then d:SetWordWrap(false) end
-		r.desc = d
-	else
-		t:SetPoint("LEFT", 0, 0)
-	end
-	t:SetPoint("RIGHT", btn, "LEFT", -12, 0)
-
+	local r = W.SettingsRow(parent, title)
+	local box = CreateFrame("Frame", nil, r)
+	box:SetSize(20, 20); box:SetPoint("RIGHT", -4, 0)
+	local tex, tick = W.CheckTextures(box, 20)
+	tex:SetPoint("CENTER")
+	r.btn = box
+	r.text:SetPoint("RIGHT", box, "LEFT", -8, 0)
 	local function refresh()
-		local on = getFn and getFn() or false
-		btn:SetKind(on and "primary" or nil)
-		btn.text:SetText(on and "ON" or "OFF")
+		if getFn and getFn() then tick:Show() else tick:Hide() end
 	end
-	btn:SetScript("OnClick", function()
+	r:SetScript("OnClick", function()
 		if setFn then setFn(not (getFn and getFn())) end
 		refresh()
 	end)
 	r.refresh = refresh
 	refresh()
-	Mod(r)
-	-- the tooltip hangs off the whole row, the button included
-	r:SetScript("OnEnter", tipEnter); r:SetScript("OnLeave", tipLeave)
-	btn:HookScript("OnEnter", function() if r._tip then tipEnter(r) end end)
-	btn:HookScript("OnLeave", tipLeave)
 	return r
 end
 
 -- ------------------------------------------------------------
--- Slider (thin flat track + thumb + label above)
+-- Slider -- drawn as the kit's stepper: the label on the left, then
+-- [-] value [+] at the right end. Same arguments as the old slider.
+--   r:SetValue(v) repaints, r:GetValue() reads.
 -- ------------------------------------------------------------
+local function stepFormat(step)
+	if step >= 1 then return "%d" end
+	if step >= 0.1 then return "%.1f" end
+	return "%.2f"
+end
+
 function W.Slider(parent, label, lo, hi, step, getFn, setFn, onRelease)
-	local s = CreateFrame("Slider", nil, parent)
-	s:SetSize(200, 14)
-	s:SetOrientation("HORIZONTAL")
-	s:SetMinMaxValues(lo, hi)
-	s:SetValueStep(step)
-	if s.SetObeyStepOnDrag then s:SetObeyStepOnDrag(true) end
-	Okanvil:Skin(s, "input")
-	s:EnableMouse(true)
-
-	local thumb = s:CreateTexture(nil, "OVERLAY")
-	thumb:SetTexture(FLAT)
-	thumb:SetVertexColor(unpack3(C.accent))
-	thumb:SetSize(8, 18)
-	s:SetThumbTexture(thumb)
-
-	local title = W.Text(s, nil, nil, "dim")
-	title:SetPoint("BOTTOMLEFT", s, "TOPLEFT", 0, 5)
+	local r = CreateFrame("Frame", nil, parent)
+	r:SetSize(300, 24)
+	local plus = W.SignButton(r, true)
+	plus:SetPoint("RIGHT", 0, 0)
+	local value = W.FixedText(r, "", 15)
+	value:SetTextColor(unpack3(C.accentText))
+	value:SetShadowColor(0, 0, 0, 1); value:SetShadowOffset(1.5, -1.5)
+	value:SetWidth(48); value:SetJustifyH("CENTER")
+	value:SetPoint("RIGHT", plus, "LEFT", -2, 0)
+	local minus = W.SignButton(r, false)
+	minus:SetPoint("RIGHT", value, "LEFT", -2, 0)
+	local title = W.FixedText(r, label, 13)
+	title:SetPoint("LEFT", 0, 0)
+	title:SetPoint("RIGHT", minus, "LEFT", -8, 0)
+	title:SetJustifyH("LEFT")
+	r.text = title
+	local fmt = stepFormat(step)
+	local cur
 	local function paint(v)
 		if v == 0 then v = 0 end   -- -0 prints as "-0"
-		title:SetText(label .. ": |cffffd200" .. v .. "|r")
+		cur = v
+		value:SetText(fmt:format(v))
 	end
-	paint(getFn()); s:SetValue(getFn())
-
-	s:SetScript("OnValueChanged", function(_, v)
-		v = math.floor(v / step + 0.5) * step
-		paint(v); s._pending = v
-		if not onRelease then setFn(v) end
-	end)
-	if onRelease then
-		s:SetScript("OnMouseUp", function() if s._pending then setFn(s._pending) end end)
+	local function bump(d)
+		local v = math.floor(((cur or getFn() or lo) + d) / step + 0.5) * step
+		if v < lo - step / 2 or v > hi + step / 2 then return end
+		v = math.max(lo, math.min(hi, v))
+		paint(v)
+		setFn(v)
 	end
-	s:SetScript("OnEnter", function() thumb:SetVertexColor(1, 1, 1, 1) end)
-	s:SetScript("OnLeave", function() thumb:SetVertexColor(unpack3(C.accent)) end)
-	return Mod(s)
+	minus:SetScript("OnClick", function() bump(-step) end)
+	plus:SetScript("OnClick", function() bump(step) end)
+	paint(getFn() or lo)
+	function r:SetValue(v) paint(v) end
+	function r:GetValue() return cur end
+	function r:SetMinMaxValues(a, b) lo, hi = a, b end
+	r.minus, r.plus = minus, plus
+	return Mod(r)
 end
 
 -- ------------------------------------------------------------
 -- EditBox (single line, focus-highlighted)
 -- ------------------------------------------------------------
 function W.EditBox(parent, onEnter)
-	local box = W.Frame(parent, "input")
+	-- the kit's field edge; the backdrop stays (clear) so callers can still tint it
+	local box = W.Frame(parent, "bare")
+	clearBackdrop(box)
+	dressField(box)
 	local e = CreateFrame("EditBox", nil, box)
-	e:SetPoint("TOPLEFT", 6, -1)
-	e:SetPoint("BOTTOMRIGHT", -6, 1)
+	e:SetPoint("TOPLEFT", 8, -1)
+	e:SetPoint("BOTTOMRIGHT", -8, 1)
 	e:SetAutoFocus(false)
 	e:SetFontObject(GameFontHighlightSmall)
 	-- A caller that needs bigger text sets box:SetTextSize(n) after building --
@@ -522,13 +1188,13 @@ function W.EditBox(parent, onEnter)
 	e:SetFont(fp, 12)                 -- fixed size: the box height is fixed, so the
 	e:SetTextColor(unpack3(C.text))   -- global font slider must not overflow it
 	e:SetScript("OnEscapePressed", e.ClearFocus)
-	e:SetScript("OnEditFocusGained", function() box:SetBackdropBorderColor(unpack3(C.borderHi)) end)
+	e:SetScript("OnEditFocusGained", function() litField(box, true) end)
 	-- COMMIT ON FOCUS LOSS as well as on Enter. Only firing on Enter meant typing
 	-- a value and then clicking away silently threw it out -- the field still
 	-- showed the text, so it looked saved, and the setting only "worked" after a
 	-- /reload repainted the box from the unchanged db.
 	e:SetScript("OnEditFocusLost", function(s)
-		box:SetBackdropBorderColor(unpack3(C.border))
+		litField(box, false)
 		if onEnter and s._committed ~= s:GetText() then
 			s._committed = s:GetText()
 			onEnter(s:GetText())
@@ -583,7 +1249,10 @@ end
 -- on focus-lost so callers can persist. Exposes .edit and :SetText/:GetText.
 -- ------------------------------------------------------------
 function W.MultiEdit(parent, onDone)
-	local box = W.Frame(parent, "input")
+	-- the dropdown's dark holder as the edge of a multi-line box
+	local box = W.Frame(parent, "bare")
+	clearBackdrop(box)
+	dressHolder(box)
 	local sf = CreateFrame("ScrollFrame", nil, box)
 	sf:SetPoint("TOPLEFT", 5, -5); sf:SetPoint("BOTTOMRIGHT", -10, 5)
 	local e = CreateFrame("EditBox", nil, sf)
@@ -621,9 +1290,9 @@ function W.MultiEdit(parent, onDone)
 		if ypos < off then sf:SetVerticalScroll(ypos)
 		elseif (ypos + height) > (off + viewH) then sf:SetVerticalScroll(math.max(0, ypos + height - viewH)) end
 	end)
-	e:SetScript("OnEditFocusGained", function() box:SetBackdropBorderColor(unpack3(C.borderHi)) end)
+	e:SetScript("OnEditFocusGained", function() box:SetBackdropBorderColor(1, 0.82, 0, 0.35) end)
 	e:SetScript("OnEditFocusLost", function()
-		box:SetBackdropBorderColor(unpack3(C.border))
+		box:SetBackdropBorderColor(0, 0, 0, 0)
 		if onDone then onDone(e:GetText()) end
 	end)
 
@@ -662,7 +1331,8 @@ end
 -- get trapped inside -- or clipped by -- the main window.
 -- ============================================================
 local MENU  -- lazily created shared menu
-local MENU_MAX_H = 260
+local MENU_MAX_H = 280
+local MENU_INSET_X, MENU_INSET_Y, MENU_ROW_H, MENU_CHECK_W = 12, 10, 21, 16
 
 local function ensureMenu()
 	if MENU then return MENU end
@@ -670,16 +1340,26 @@ local function ensureMenu()
 	m:SetFrameStrata("TOOLTIP")
 	m:SetClampedToScreen(true)
 	m:SetToplevel(true)
-	Okanvil:Skin(m, "input")
-	-- Opaque whatever the window opacity is (a list over the game must be read),
-	-- with a gold-tinted edge so it reads as "open" against the page.
-	m:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.98)
-	m:SetBackdropBorderColor(unpack3(C.borderHi))
+	-- the kit's list: the tooltip box, plus a solid fill (the tooltip background
+	-- alone is see-through)
+	m:SetBackdrop({
+		bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+		tile = true, tileSize = 16, edgeSize = 16,
+		insets = { left = 5, right = 5, top = 5, bottom = 5 },
+	})
+	m:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+	m:SetBackdropBorderColor(0.5, 0.5, 0.5)
+	local fill = m:CreateTexture(nil, "BACKGROUND")
+	fill:SetTexture(FLAT)
+	fill:SetVertexColor(0.04, 0.04, 0.045, 1)
+	fill:SetPoint("TOPLEFT", 4, -4)
+	fill:SetPoint("BOTTOMRIGHT", -4, 4)
 	m:Hide()
 
 	local sf = CreateFrame("ScrollFrame", nil, m)
-	sf:SetPoint("TOPLEFT", 3, -3)
-	sf:SetPoint("BOTTOMRIGHT", -8, 3)
+	sf:SetPoint("TOPLEFT", MENU_INSET_X, -MENU_INSET_Y)
+	sf:SetPoint("BOTTOMRIGHT", -MENU_INSET_X, MENU_INSET_Y)
 	Clip(sf)
 	local child = CreateFrame("Frame", nil, sf)
 	child:SetSize(10, 1)
@@ -687,8 +1367,8 @@ local function ensureMenu()
 	m.sf, m.child = sf, child
 
 	local sb = CreateFrame("Slider", nil, m)
-	sb:SetPoint("TOPRIGHT", -3, -3)
-	sb:SetPoint("BOTTOMRIGHT", -3, 3)
+	sb:SetPoint("TOPRIGHT", -6, -MENU_INSET_Y)
+	sb:SetPoint("BOTTOMRIGHT", -6, MENU_INSET_Y)
 	sb:SetWidth(4)
 	sb:SetOrientation("VERTICAL")
 	sb:SetValueStep(1)
@@ -701,7 +1381,11 @@ local function ensureMenu()
 	m.sb = sb
 
 	m.rows = {}
-	m:SetScript("OnHide", function() m.owner = nil end)
+	m:SetScript("OnHide", function()
+		local o = m.owner
+		m.owner = nil
+		if o and o.syncArrow then o.syncArrow() end
+	end)
 	-- The menu lives on UIParent, so nothing hides it with its button: close it
 	-- when the button goes away (window closed, page rebuilt) or on a click
 	-- anywhere outside the menu and its button.
@@ -745,7 +1429,8 @@ local function openMenu(owner)
 	local items = owner.listFn()
 	local cur = owner.getFn and owner.getFn()
 	local font = Okanvil:Font()
-	local rowH = 22
+	local rowH = MENU_ROW_H
+	local inner = m:GetWidth() - MENU_INSET_X * 2
 	local y = 0
 	for _, r in ipairs(m.rows) do r:Hide() end
 	for i, it in ipairs(items) do
@@ -759,20 +1444,18 @@ local function openMenu(owner)
 			r.tex = r:CreateTexture(nil, "ARTWORK")
 			r.tex:SetPoint("TOPLEFT", 1, -1); r.tex:SetPoint("BOTTOMRIGHT", -1, 1); r.tex:Hide()
 			r.t = r:CreateFontString(nil, "OVERLAY")
-			r.t:SetPoint("LEFT", 10, 0); r.t:SetJustifyH("LEFT")
+			r.t:SetPoint("LEFT", MENU_CHECK_W + 2, 0); r.t:SetJustifyH("LEFT")
 			r.t:SetShadowColor(0, 0, 0, 1); r.t:SetShadowOffset(1, -1)
-			-- the current choice: a faint gold wash and a gold bar on its left
-			r.sel = r:CreateTexture(nil, "BACKGROUND")
-			r.sel:SetAllPoints(); r.sel:SetTexture(FLAT)
-			r.sel:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.10)
-			r.bar = r:CreateTexture(nil, "ARTWORK")
-			r.bar:SetTexture(FLAT); r.bar:SetVertexColor(unpack3(C.accent))
-			r.bar:SetWidth(2); r.bar:SetPoint("TOPLEFT", 0, -3); r.bar:SetPoint("BOTTOMLEFT", 0, 3)
+			-- the current choice carries Blizzard's tick on its left
+			r.check = r:CreateTexture(nil, "ARTWORK")
+			r.check:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+			r.check:SetSize(MENU_CHECK_W, MENU_CHECK_W); r.check:SetPoint("LEFT", 0, 0)
 			local hl = r:CreateTexture(nil, "HIGHLIGHT")
-			hl:SetAllPoints(); hl:SetTexture(FLAT); hl:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0.14)
+			hl:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+			hl:SetBlendMode("ADD"); hl:SetAllPoints()
 			m.rows[i] = r
 		end
-		r:SetHeight(rowH); r:SetWidth(m:GetWidth() - 12)
+		r:SetHeight(rowH); r:SetWidth(inner)
 		r:SetPoint("TOPLEFT", 0, -y)
 		if owner.preview == "font" then
 			local fp = Okanvil.LSM and Okanvil.LSM:Fetch("font", val, true)
@@ -786,11 +1469,9 @@ local function openMenu(owner)
 		elseif r.tex then r.tex:Hide() end
 		r.t:SetText(label)
 		local isCur = (val ~= false and val == cur)
-		r.sel:SetShown(isCur); r.bar:SetShown(isCur)
+		if isCur then r.check:Show() else r.check:Hide() end
 		if val == false then r.t:SetTextColor(unpack3(C.textDim))   -- a label, not a choice
-		elseif isCur then r.t:SetTextColor(unpack3(C.accentText))
-		elseif owner.preview == "statusbar" then r.t:SetTextColor(1, 1, 1)
-		else r.t:SetTextColor(unpack3(C.text)) end
+		else r.t:SetTextColor(1, 1, 1) end
 		r:SetScript("OnClick", function()
 			if val == false then return end     -- label rows do nothing when clicked
 			owner.setFn(val)
@@ -807,15 +1488,16 @@ local function openMenu(owner)
 		local w = m.rows[i].t:GetStringWidth() or 0
 		if w > widest then widest = w end
 	end
-	local mw = math.max(owner:GetWidth(), widest + 34)
+	local mw = math.max(owner:GetWidth() + 4, widest + MENU_CHECK_W + 2 + MENU_INSET_X * 2 + 12)
 	if mw ~= m:GetWidth() then
 		m:SetWidth(mw)
-		for i = 1, #items do m.rows[i]:SetWidth(mw - 12) end
+		for i = 1, #items do m.rows[i]:SetWidth(mw - MENU_INSET_X * 2) end
 	end
+	m.child:SetWidth(mw - MENU_INSET_X * 2)
 	m.child:SetHeight(math.max(1, y))
-	local h = math.min(y + 6, MENU_MAX_H)
+	local h = math.min(y + MENU_INSET_Y * 2, MENU_MAX_H)
 	m:SetHeight(h)
-	local maxScroll = math.max(0, y - (h - 6))
+	local maxScroll = math.max(0, y - (h - MENU_INSET_Y * 2))
 	m.sb:SetMinMaxValues(0, maxScroll); m.sb:SetValue(0)
 	m.sb:SetShown(maxScroll > 0)
 	placeMenu(m, owner, h)
@@ -825,24 +1507,52 @@ end
 -- ------------------------------------------------------------
 -- DropDown button (borrows the global menu)
 -- ------------------------------------------------------------
+-- the bronze plate's arrow button (Media/UI/plate), at rest and lit
+local ARROW = {
+	normal = { 70 / 128, 124 / 128, 0, 54 / 512 },
+	hover = { 70 / 128, 124 / 128, 60 / 512, 114 / 512 },
+}
+
 function W.DropDown(parent, listFn, getFn, setFn, preview)
 	local dd = CreateFrame("Button", nil, parent)
-	dd:SetSize(160, 22)
-	Okanvil:Skin(dd, "input")
+	dd:SetSize(160, 26)
+	clearBackdrop(dd)
+	-- the bronze plate: lit under the cursor and while its list is open
+	local plate = bronzePlate(dd)
+	local txt
+	local function edge(lit)
+		local open = MENU and MENU:IsShown() and MENU.owner == dd
+		plate:State((open and "open") or (lit and "hover") or "normal")
+		if txt then
+			if lit or open then txt:SetTextColor(1, 1, 1)
+			else txt:SetTextColor(unpack3(C.accentText)) end
+		end
+	end
+	dd._edge = edge
+	edge(false)
 	-- fixed size (12): the dropdown box is a fixed height, so its text must not
 	-- scale with the global body-font slider (it would clip / overflow).
-	local txt = W.FixedText(dd, nil, "body")
-	txt:SetPoint("LEFT", 6, 0); txt:SetPoint("RIGHT", -16, 0); txt:SetJustifyH("LEFT")
+	txt = W.FixedText(dd, nil, 15)
+	txt:SetTextColor(unpack3(C.accentText))
+	txt:SetPoint("LEFT", 8, 0); txt:SetPoint("RIGHT", -26, 0); txt:SetJustifyH("LEFT")
 	dd.textFS = txt
-	-- WoW's small menu arrow turned to point down (8-point SetTexCoord -- 3.3.5a
-	-- textures cannot rotate), desaturated so it takes the palette's colours.
-	local arrow = dd:CreateTexture(nil, "OVERLAY")
-	arrow:SetTexture("Interface\\ChatFrame\\ChatFrameExpandArrow")
-	arrow:SetSize(12, 12); arrow:SetPoint("RIGHT", -5, 0)
-	arrow:SetTexCoord(0, 1, 1, 1, 0, 0, 1, 0)
-	if arrow.SetDesaturated then arrow:SetDesaturated(true) end
-	local function tint(c) arrow:SetVertexColor(unpack3(c)) end
-	tint(C.textDim)
+	local arrow = dd:CreateTexture(nil, "ARTWORK")
+	arrow:SetTexture(BRONZE)
+	-- the plate's face sits lower in its art than its shadow, so the arrow
+	-- button drops to the face's centre
+	arrow:SetSize(22, 22); arrow:SetPoint("RIGHT", -2, -2)
+	local function syncArrow()
+		local open = MENU and MENU:IsShown() and MENU.owner == dd
+		arrow:SetTexCoord(unpack(ARROW[(open or dd._hover) and "hover" or "normal"]))
+		if dd._edge then dd._edge(dd._hover) end
+	end
+	dd.syncArrow = syncArrow
+	syncArrow()
+	-- one height everywhere: the holder art is drawn for 24 (callers asked 22-26)
+	local setSize, setHeight = dd.SetSize, dd.SetHeight
+	function dd:SetSize(w, h) setSize(self, w, 26) end
+	function dd:SetHeight() setHeight(self, 26) end
+	local function tint() syncArrow() end
 	dd.listFn, dd.getFn, dd.setFn, dd.preview = listFn, getFn, setFn, preview
 	function dd:refreshText()
 		local v = getFn() or ""
@@ -853,9 +1563,11 @@ function W.DropDown(parent, listFn, getFn, setFn, preview)
 		end
 	end
 	dd:refreshText()
-	dd:SetScript("OnEnter", function(s) s:SetBackdropBorderColor(unpack3(C.borderHi)); tint(C.accentHi) end)
-	dd:SetScript("OnLeave", function(s) s:SetBackdropBorderColor(unpack3(C.border)); tint(C.textDim) end)
-	dd:SetScript("OnClick", function(s) openMenu(s) end)
+	dd:SetScript("OnEnter", function(s) s._hover = true; tint(); edge(true); tipEnter(s) end)
+	dd:SetScript("OnLeave", function(s) s._hover = false; s._down = nil; tint(); edge(false); tipLeave() end)
+	dd:SetScript("OnMouseDown", function(s) s._down = true; tint() end)
+	dd:SetScript("OnMouseUp", function(s) s._down = nil; tint() end)
+	dd:SetScript("OnClick", function(s) openMenu(s); tint() end)
 	return Mod(dd)
 end
 
@@ -901,6 +1613,63 @@ local function headerFont(b)
 	return b
 end
 W.HeaderFont = headerFont
+-- ------------------------------------------------------------
+-- Side tab: a page's tab on the main window's right edge -- the tab's icon in
+-- the kit frame, the open one wider and gold, its name on hover.
+--   local t = W.SideTab(page, "History", icon, onClick)
+--   t:Place(i)             -- i-th tab from the top, 0-based
+--   t:SetKind("tabOn")     -- open; "tab" = closed
+-- Parented to the page so it shows and hides with it; never inside a scroll
+-- frame (it would be clipped).
+-- ------------------------------------------------------------
+local SIDE_W, SIDE_ON_W, SIDE_H, SIDE_GAP, SIDE_TOP = 54, 60, 46, 6, -70
+function W.SideTab(parent, label, icon, onClick)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(SIDE_W, SIDE_H)
+	-- below the window: its left 8px (with the left cut corners) tuck under the
+	-- window's edge, so only the right side shows, joined to the window
+	b:SetFrameLevel(math.max(0, (Okanvil.win:GetFrameLevel() or 1) - 1))
+	b._okKeepCut = true
+	W.Chamfer(b, false)
+	local slot = W.FramedIcon(b, icon, 34, false)
+	slot:SetPoint("CENTER", 4, 0)
+	b.slot = slot
+	-- one pixel over the window's edge, so the tab and the window read as one
+	-- `extra` pushes it further down (the Settings shortcut sits apart from the page's tabs)
+	function b:Place(i, extra)
+		self:ClearAllPoints()
+		self:SetPoint("TOPLEFT", Okanvil.win, "TOPRIGHT", -8, SIDE_TOP - i * (SIDE_H + SIDE_GAP) - (extra or 0))
+	end
+	function b:SetKind(k)
+		local on = (k == "tabOn")
+		self:SetWidth(on and SIDE_ON_W or SIDE_W)
+		W.SetFramedIconGold(self.slot, on)
+		if on then self:SetBackdropColor(0.102, 0.090, 0.075, 1)
+		else self:SetBackdropColor(C.body[1], C.body[2], C.body[3], 1) end
+		self:SetBackdropBorderColor(unpack3(C.edge))
+	end
+	b:SetKind("tab")
+	b:SetScript("OnClick", onClick)
+	b:SetScript("OnEnter", function(s)
+		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+		GameTooltip:AddLine(label, 1, 1, 1)
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	return b
+end
+
+-- The gear at the bottom of a page's side tabs: opens Settings on the tab that
+-- holds this page's options. `after` = how many side tabs sit above it.
+function W.SettingsSideTab(parent, settingsKey, after)
+	local b = W.SideTab(parent, "Settings", Okanvil.ICONS and Okanvil.ICONS.settings,
+		function() Okanvil:OpenSettingsTab(settingsKey) end)
+	b:Place(after or 0, (after or 0) > 0 and 12 or 0)
+	-- a panel docked to the window's right (Whispers) moves out past it
+	parent._okSideTabs = true
+	return b
+end
+
 function W.Dashboard(parent, cfg)
 	cfg = cfg or {}
 	local D = { pages = {}, tabBtns = {} }
@@ -913,6 +1682,11 @@ function W.Dashboard(parent, cfg)
 	-- pill, so there is nothing to go "< Back" to. The overlay mode stays for
 	-- pages whose tabs really are separate screens on top of a landing page.
 	local pillMode = cfg.pills and true or false
+	-- Two or more pills go onto the main window's right edge as side tabs (an
+	-- icon in the kit frame, the open one wider and gold); the tab row in the
+	-- page goes away. A lone pill keeps the old row, since a page may put its
+	-- own controls there (Notes does).
+	local sideMode = pillMode and cfg.tabs and #cfg.tabs >= 2 and Okanvil.win and true or false
 	-- An overlay page gets its landing view as the FIRST tab (cfg.landingLabel).
 	-- A lone "Settings" tab reads as a selected item, not as a tab: with the
 	-- landing beside it there are always two, and the lit one is where you are.
@@ -925,6 +1699,7 @@ function W.Dashboard(parent, cfg)
 	-- the page sits on the window's art like every other part of the shell.
 	local header = W.Frame(parent, "bare")
 	header:SetPoint("TOPLEFT", 0, 0); header:SetPoint("TOPRIGHT", 0, 0)
+	header._okChrome = true
 	header:SetHeight(cfg.subtitle and 48 or 40)
 	D.header = header
 	local hrule = header:CreateTexture(nil, "ARTWORK")
@@ -934,12 +1709,15 @@ function W.Dashboard(parent, cfg)
 
 	local ix = 10
 	if cfg.icon then
-		local ic = header:CreateTexture(nil, "OVERLAY")
-		ic:SetSize(26, 26); ic:SetPoint("LEFT", 10, 0)
-		ic:SetTexture(cfg.icon); ic:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-		ix = 46
+		-- the page's icon in the gold frame, like its row in the nav
+		local ic = W.FramedIcon(header, cfg.icon, 30, true)
+		ic:SetPoint("LEFT", 8, 0)
+		D.hicon = ic
+		ix = 48
 	end
-	local htitle = W.Text(header, cfg.title, "title", "accent")
+	-- the page's name in the talent screen's face (Morpheus, outlined, cream)
+	local htitle = W.TitleText(header, cfg.title, 20)
+	function htitle:Point(...) self:SetPoint(...); return self end
 	-- subtitle = one short grey line under the title saying what the page is for
 	local tdy = cfg.subtitle and 7 or 0
 	htitle:SetPoint("LEFT", ix, tdy)
@@ -973,6 +1751,7 @@ function W.Dashboard(parent, cfg)
 		-- is really an ON/OFF switch can show its state as the button fill.
 		cta = W.Button(header, cfg.primaryText and cfg.primaryText() or "",
 			cfg.primaryKind and cfg.primaryKind() or "primary")
+		cta:SetMain("always")
 		headerFont(cta):SetSize(BTN_W, BTN_H); cta:SetPoint("RIGHT", -10, 0)
 		cta:SetScript("OnClick", function() cfg.onPrimary() end)
 		D.cta = cta
@@ -1092,7 +1871,10 @@ function W.Dashboard(parent, cfg)
 	-- Transparent: the body it replaces is hidden while it shows, so the page art
 	-- carries through instead of a dark slab.
 	local overlay = W.Frame(parent, "bare")
-	if switchMode then
+	if sideMode then
+		overlay:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -4)
+		overlay:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", 0, -4)
+	elseif switchMode then
 		overlay:SetPoint("TOPLEFT", toolbar, "BOTTOMLEFT", -PAD, -4)
 		overlay:SetPoint("TOPRIGHT", toolbar, "BOTTOMRIGHT", PAD, -4)
 	else
@@ -1137,6 +1919,8 @@ function W.Dashboard(parent, cfg)
 		-- Build the page lazily the first time, INSIDE a flat scroll container (no
 		-- Blizzard template) so a tall config page never spills off the window.
 		-- tab.height gives the content height; the child scrolls if it exceeds the view.
+		-- the header names the open side tab, in gold beside the page's name
+		if sideMode then htitle:SetText((cfg.title or "") .. "  |cffffd100" .. (tab.label or "") .. "|r") end
 		if not D.pages[key] then
 			-- in pill mode there is no "< Back" row to clear, so the page starts at
 			-- the top of the overlay instead of 34px down
@@ -1192,7 +1976,16 @@ function W.Dashboard(parent, cfg)
 	-- lay the tab buttons + drawer toggle onto the toolbar. Width auto-fits the
 	-- label (min 60) so longer labels like "Appearance"/"Collectors" never clip.
 	local prev
-	local function addTabBtn(key, label, onClick)
+	local function addSideTab(key, label, icon, onClick)
+		local n = 0
+		for _ in pairs(D.tabBtns) do n = n + 1 end
+		local b = W.SideTab(parent, label, icon or cfg.icon, onClick)
+		b:Place(n)
+		b._key = key
+		D.tabBtns[key] = b
+	end
+	local function addTabBtn(key, label, onClick, icon)
+		if sideMode then return addSideTab(key, label, icon, onClick) end
 		local b = W.Button(toolbar, label, "tab")
 		local tw = (b.text and b.text:GetStringWidth() or 60) + 22
 		b:SetSize(math.max(64, tw), 26); b._key = key
@@ -1204,8 +1997,15 @@ function W.Dashboard(parent, cfg)
 	end
 	if landing then addTabBtn(LANDING, landing, closeOverlay) end
 	for _, t in ipairs(cfg.tabs or {}) do
-		addTabBtn(t.key, t.label, function() openPage(t.key) end)
+		addTabBtn(t.key, t.label, function() openPage(t.key) end, t.icon)
 	end
+	if sideMode and not hasDrawer then toolbar:Hide() end
+	-- cfg.settingsTab = a Settings tab key: a gear under the side tabs opens it
+	if cfg.settingsTab and Okanvil.win then
+		D.settingsTab = W.SettingsSideTab(parent, cfg.settingsTab, sideMode and #cfg.tabs or 0)
+	end
+	-- a panel docked to the window's right (Whispers) moves out past the tabs
+	if sideMode then parent._okSideTabs = true end
 	if landing then paintTabs(LANDING) end
 	-- drawer toggle (right end of toolbar) -- only when the page has a drawer.
 	-- Width follows the LABEL, never a magic number: "Show collected" is wider
@@ -1337,11 +2137,13 @@ function W.ForgeArt(f, alpha)
 	local st = Okanvil.ForgeArtStyle
 	-- BACKGROUND for the art, BORDER for the fade: separate layers, so the fade
 	-- is always on top (one layer = undefined order). The backdrop sits below both.
-	local art = f:CreateTexture(nil, "BACKGROUND")
-	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
+	-- 6px inside the edge (the same gap all round); covers cut its corners like the window's
+	local art = f:CreateTexture(nil, "BORDER")
+	art:SetPoint("TOPLEFT", 6, -6); art:SetPoint("BOTTOMRIGHT", -6, 6)
 	art:SetTexture(st and st.tex or FORGE_ART)
-	local fade = f:CreateTexture(nil, "BORDER")
-	fade:SetPoint("TOPLEFT", 1, -1); fade:SetPoint("BOTTOMRIGHT", -1, 1)
+	local fade = f:CreateTexture(nil, "ARTWORK")
+	fade:SetPoint("TOPLEFT", 6, -6); fade:SetPoint("BOTTOMRIGHT", -6, 6)
+	local covers = W.CoverCorners(f, art, W.COVER, C.body[1], C.body[2], C.body[3], 0.97)
 	fade:SetTexture(FLAT)
 	local d = C.panelD
 	fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], st and st.washL or 0.92,
@@ -1369,8 +2171,8 @@ function W.ForgeArt(f, alpha)
 	end
 	local function refresh()
 		local off = Okanvil.db and (Okanvil.db.ratArt or "on") == "off"
-		if off then art:Hide(); fade:Hide(); return end
-		art:SetAlpha(st and 1 or alpha or 0.22); art:Show(); fade:Show(); crop()
+		if off then art:Hide(); fade:Hide(); covers:SetShown(false); return end
+		art:SetAlpha(st and 1 or alpha or 0.22); art:Show(); fade:Show(); covers:SetShown(true); crop()
 	end
 	f:HookScript("OnSizeChanged", crop)
 	f:HookScript("OnShow", refresh)
@@ -1450,18 +2252,21 @@ function Okanvil:Popup(title)
 	-- it exists to be READ, and at 60% the raid frames behind it turned a
 	-- table of spell ids into noise.
 	local C = Okanvil.Colors
-	f:SetBackdropColor(C.panelD[1], C.panelD[2], C.panelD[3], 0.97)
-	f:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1)
+	f:SetBackdropColor(C.body[1], C.body[2], C.body[3], 0.97)
+	f:SetBackdropBorderColor(unpack3(C.edge))
 	W.ForgeArt(f, 0.22)
-	-- The setup's header: no raised strip, a gold title, a hairline under it.
-	local hdr = W.Frame(f, "bare")
-	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(26)
+	-- the kit's title bar: gradient, centred gold title, the red X
+	local hdr = W.TitleBar(f, 26)
 	hdr:EnableMouse(true); hdr:RegisterForDrag("LeftButton")
 	hdr:SetScript("OnDragStart", function() f:StartMoving() end)
 	hdr:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
-	W.Hairline(hdr, "BOTTOM", 8)
-	local t = W.Text(hdr, title, "head", "accent"); t:SetPoint("LEFT", 10, 0)
-	local close = W.Button(hdr, "X"); close:SetSize(20, 18); close:SetPoint("RIGHT", -2, 0)
+	local t = hdr.title
+	t:ClearAllPoints()
+	t:SetPoint("LEFT", 30, 0); t:SetPoint("RIGHT", -30, 0)
+	t:SetJustifyH("CENTER")
+	t:SetText(title or "")
+	if t.SetWordWrap then t:SetWordWrap(false) end
+	local close = W.CloseButton(hdr); close:SetPoint("RIGHT", -4, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 	f.header, f.title, f.closeBtn = hdr, t, close
 
@@ -1632,9 +2437,6 @@ function Okanvil:ShowExport(text, label, hint)
 	if not f then
 		f = self:Popup("Export")
 		f:SetSize(440, 320)
-		f.title:SetPoint("RIGHT", f.header, "RIGHT", -28, 0)
-		f.title:SetJustifyH("LEFT")
-		if f.title.SetWordWrap then f.title:SetWordWrap(false) end
 		local hint = W.Text(f, EXPORT_HINT, "note", "dim")
 		hint:SetPoint("TOPLEFT", 10, -30); hint:SetPoint("RIGHT", f, "RIGHT", -10, 0)
 		hint:SetJustifyH("LEFT")
@@ -1700,9 +2502,6 @@ function Okanvil:ShowCopyLine(text, label, hint)
 	if not f then
 		f = self:Popup("Copy")
 		f:SetSize(420, 96)
-		f.title:SetPoint("RIGHT", f.header, "RIGHT", -28, 0)
-		f.title:SetJustifyH("LEFT")
-		if f.title.SetWordWrap then f.title:SetWordWrap(false) end
 		local h = W.Text(f, "", "note", "dim")
 		h:SetPoint("TOPLEFT", 10, -32); h:SetPoint("RIGHT", f, "RIGHT", -10, 0)
 		h:SetJustifyH("LEFT")
