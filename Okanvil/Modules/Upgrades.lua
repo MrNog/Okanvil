@@ -1491,6 +1491,8 @@ local classOnly = {}
 local CLASSES_PREFIX = (ITEM_CLASSES_ALLOWED or "Classes: %s"):gsub("%%s", "")
 local function allowedClasses(link, id)
 	if classOnly[id] ~= nil then return classOnly[id] or nil end
+	-- not cached: the tooltip has no "Classes:" line yet; ask again later
+	if not GetItemInfo(link) then return nil end
 	local byName = {}
 	for _, list in ipairs({ LOCALIZED_CLASS_NAMES_MALE or {}, LOCALIZED_CLASS_NAMES_FEMALE or {} }) do
 		for token, nm in pairs(list) do byName[nm] = token end
@@ -1524,6 +1526,9 @@ function U.FitsAnySpec(link, class)
 	if not (P and P.FitsSpec and OkanvilFitSpecs and link) then return true end
 	local id = tonumber(link:match("item:(%d+)"))
 	local name = GetItemInfo(link)
+	-- a class-locked item ("Classes: Warrior", the tier pieces) is for those classes only
+	local only = id and allowedClasses(link, id)
+	if only and not only[class] then return false end
 	for _, sp in ipairs(OkanvilFitSpecs) do
 		if sp.class == class then
 			local b = FIT_TO_BIS[sp.key]
