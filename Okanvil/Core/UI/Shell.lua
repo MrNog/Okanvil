@@ -714,6 +714,14 @@ end
 -- ------------------------------------------------------------
 local WALL_TEX = "Interface\\AddOns\\Okanvil\\Media\\window-bg"
 
+-- A separate addon named Okanvil-Wall replaces the wallpaper with its own
+-- wall.blp (same 1024x512 DXT5 cut). It sits in its own folder, so Okanvil
+-- updates never touch it.
+local function WallTexture()
+	if IsAddOnLoaded("Okanvil-Wall") then return "Interface\\AddOns\\Okanvil-Wall\\wall" end
+	return WALL_TEX
+end
+
 -- ONE rat, once, on the shared content well -- NOT per panel.
 --
 -- Old design mounted a rat on every panel (main + drawer + each scroll/fill
@@ -733,7 +741,7 @@ function Okanvil:MountPageRat()
 	-- frame, so it is the background of the header, the nav and every page.
 	local art = host:CreateTexture(nil, "BORDER")
 	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
-	art:SetTexture(WALL_TEX)
+	art:SetTexture(WallTexture())
 	-- The texture is 2:1 and the window a little narrower: trim the LEFT edge
 	-- (dark stone under the fade anyway) and keep the smith on the right whole.
 	local w, h = host:GetWidth() or 1100, host:GetHeight() or 660
