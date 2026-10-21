@@ -479,6 +479,14 @@ function Okanvil:BuildUpgrades(host)
 		dash:Refresh()
 		for v, b in pairs(viewTabs) do b:SetKind(v == state.view and "tabOn" or "tab") end
 		if specFS then specFS:SetText(specText()) end
+		-- the "For me" tab wears your current spec's icon
+		do
+			local spec = U.Spec()
+			local icons = spec and OkanvilBisIcons and OkanvilBisIcons[U.CLASS_BIS[spec.class] or ""]
+			local tex = icons and (icons[spec.list] or icons.classIcon)
+			local me = viewTabs.me
+			if tex and me and me.slot then me.slot.icon:SetTexture(tex) end
+		end
 		if state.view == "bis" then
 			bar:Hide(); body:Hide(); bis:Show()
 			paintBis()
