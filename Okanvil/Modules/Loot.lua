@@ -2615,10 +2615,12 @@ function L.StartRoll(link, mode)
 		Okanvil.Comms.After(secs, function()
 			-- Only the roll this timer was started for: a newer roll has replaced
 			-- it, and closing that one would cut it short. With no roll of ours
-			-- left (an award cleared it), the item it opened still closes.
-			if activeRoll == roll
-				or (activeRoll == nil and called and handRollDrop == called) then
+			-- left (an award cleared it), the item it opened still closes, but
+			-- quietly: the raid already saw who got it.
+			if activeRoll == roll then
 				L.StopRoll()
+			elseif activeRoll == nil and called and handRollDrop == called then
+				retireRollTargets("roll timer ended after the award")
 			end
 		end)
 	end

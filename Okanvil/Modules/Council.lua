@@ -2984,6 +2984,14 @@ function C_.BuildRunTab(body)
 		return c
 	end
 
+	-- Off by default: many master looters take the whole corpse and ask later.
+	opt("Ask automatically when a corpse opens",
+		"On a council night, every epic goes to the raid as one question",
+		"Off by default. Only on a council night, and only for epics.\n"
+			.. "Off = loot the corpse, then ask from the mini roll when you are ready.",
+		function() return db().autoAsk end,
+		function(v) db().autoAsk = v end)
+
 	-- Any officer can switch it, not only the master looter (Wishlist.lua).
 	local Wi = Okanvil.Wish
 	if Wi and Wi.CanTrigger() then
@@ -3696,7 +3704,9 @@ end
 function C_.CouncilMode()
 	local SR = Okanvil.SoftRes
 	if not (SR and SR.Mode) then return true end
-	return SR.Mode() == "council"
+	-- Someone else's mode has not arrived yet right after a reload, so a raider
+	-- keeps the round; only the one who sets the mode knows it for sure.
+	return SR.Mode() == "council" or (SR.CanSetMode and not SR.CanSetMode()) or false
 end
 
 function C_.RestoreAsk()
