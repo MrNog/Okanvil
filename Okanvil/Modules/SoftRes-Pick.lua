@@ -259,7 +259,13 @@ local function loadPicks()
 	local saved = (db().myPicks or {})[picksKey()]
 	picks = {}
 	for _, id in ipairs(saved and saved.list or {}) do picks[#picks + 1] = id end
-	state.locked = saved ~= nil and saved.sentGen ~= nil and saved.sentGen == state.gen
+	state.sent = saved ~= nil and saved.sentGen ~= nil
+	-- a wish can change until the master looter locks the list; a soft reserve is final
+	if state.kind == "wish" then
+		state.locked = Okanvil.Wish and Okanvil.Wish.IsLocked() or false
+	else
+		state.locked = state.sent and saved.sentGen == state.gen
+	end
 end
 
 -- Bosses and their items for this raid and difficulty, filtered by the search.
@@ -458,8 +464,11 @@ paint = function()
 	if not (win and win:IsShown()) then return end
 	local C = Okanvil.Colors
 	win.title:SetText(state.kind == "wish" and "Wishlist" or "Soft reserve")
-	win.sub:SetText(SR.RaidLabel({ key = state.raid, size = state.size, hc = state.hc })
-		.. (state.kind == "wish" and "  ·  1 per raid ID, for the council" or ("  ·  " .. state.limit)))
+	if state.kind == "wish" and Okanvil.Wish then
+		win.sub:SetText(Okanvil.Wish.Label() .. "  ·  1 per raid ID")
+	else
+		win.sub:SetText(SR.RaidLabel({ key = state.raid, size = state.size, hc = state.hc }) .. "  ·  " .. state.limit)
+	end
 
 	-- the picks, stacked; everything below moves down to fit them
 	local y = -36
@@ -520,8 +529,12 @@ paint = function()
 	end
 
 	if state.locked then
-		win.status:SetText("|cffffd200Sent|r |cff8a8d93-- it can no longer be changed|r")
+		win.status:SetText(state.kind == "wish" and "|cffffd200Locked|r |cff8a8d93-- wishes can no longer change|r"
+			or "|cffffd200Sent|r |cff8a8d93-- it can no longer be changed|r")
 		win.send:Disable(); win.send:SetAlpha(0.4)
+	elseif state.kind == "wish" and state.sent then
+		win.status:SetText("|cffffd200Sent|r |cff8a8d93-- change it until the list is locked|r")
+		win.send:Enable(); win.send:SetAlpha(1)
 	else
 		win.status:SetText(#picks .. " / " .. state.limit)
 		win.send:Enable(); win.send:SetAlpha(1)
@@ -549,7 +562,8 @@ function P.Send()
 	if #picks == 0 then Okanvil:Print("Pick an item first."); return end
 	if state.kind == "wish" then
 		Okanvil:Confirm("Send your wish? The council sees it when the item drops.\n"
-			.. "|cff8a8d93It is not a reserve. You cannot change it after.|r", "Send", P.DoSend)
+			.. "|cff8a8d93It is not a reserve. You can change it until the master looter locks the list.|r",
+			"Send", P.DoSend)
 		return
 	end
 	Okanvil:Confirm("Send your soft reserve? You cannot change it after.", "Send", P.DoSend)
@@ -564,7 +578,8 @@ function P.DoSend()
 	end
 	local payload = table.concat(picks, ";")
 	savePicks(state.gen)
-	state.locked = true
+	state.sent = true
+	if state.kind ~= "wish" then state.locked = true end
 	if state.kind == "wish" then
 		if Okanvil.Wish then Okanvil.Wish.SendPick(state.lockKey, picks[1]) end
 		win:Hide()

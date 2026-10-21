@@ -2992,13 +2992,13 @@ function C_.BuildRunTab(body)
 		function() return db().autoAsk end,
 		function(v) db().autoAsk = v end)
 
-	-- Any officer can switch it, not only the master looter (Wishlist.lua).
+	-- The master looter opens it, for this raid ID only (Wishlist.lua).
 	local Wi = Okanvil.Wish
 	if Wi and Wi.CanTrigger() then
 		local wrow = opt("Wishlist",
-			"25-man raids: raiders pick one item per raid ID; the board marks it WISH",
-			"Off by default. Turning it on opens the wish window for raiders with Okanvil.\n"
-				.. "Only tells the council what a raider is after -- it is not a reserve.",
+			"25-man, normal & heroic: raiders pick one item for this raid ID; the board marks it WISH",
+			"Closed on every new raid ID. Opening it opens the wish window for raiders with Okanvil.\n"
+				.. "Raiders can change their wish until you lock it. It is not a reserve.",
 			function() return Wi.IsOn() end,
 			function(v) Wi.SetOn(v); if Wi._paintRow then Wi._paintRow() end end)
 		-- Clear beside the switch, the same as the WH panel's

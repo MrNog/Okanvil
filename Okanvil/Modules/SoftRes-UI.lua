@@ -37,7 +37,7 @@ local function isML()
 	local RM = Okanvil.RollMgr
 	if RM and RM.IsML and RM.IsML() then return true end
 	local Wi = Okanvil.Wish
-	return Wi and Wi.CanTrigger and Wi.CanTrigger() or false
+	return Wi and Wi.CanSee and Wi.CanSee() or false
 end
 
 local function classColor(token)

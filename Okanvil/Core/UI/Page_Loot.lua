@@ -75,6 +75,12 @@ function Okanvil:BuildLoot()
 			c.sub = W.Text(c, "", "note", "dim"); c.sub:SetPoint("TOPLEFT", c.name, "BOTTOMLEFT", 0, -3)
 			c.sub:SetPoint("RIGHT", c, "RIGHT", -8, 0); c.sub:SetJustifyH("LEFT")
 			for _, fs in ipairs({ c.name, c.sub }) do if fs.SetWordWrap then fs:SetWordWrap(false) end end
+			-- your wish on this raid ID opens the wish window again, until the list is locked
+			c:EnableMouse(true)
+			c:SetScript("OnMouseUp", function(s)
+				local Wi = Okanvil.Wish
+				if s._changeable and Wi and Wi.OpenMine then Wi.OpenMine() end
+			end)
 			picks.cards[i] = c
 			return c
 		end
@@ -93,6 +99,8 @@ function Okanvil:BuildLoot()
 			local SR = Okanvil.SoftRes
 			local mode = SR and SR.Mode and SR.Mode()
 			local want = (mode == "council" and "wish") or (mode == "sr" and "sr") or nil
+			-- a wish sent before the first kill moves to the raid ID first
+			if Okanvil.Wish and Okanvil.Wish.Key then Okanvil.Wish.Key() end
 			local sets = {}
 			for _, set in ipairs(want and SR.MyPickSets and SR.MyPickSets() or {}) do
 				if set.kind == want then sets[#sets + 1] = set end
@@ -120,7 +128,9 @@ function Okanvil:BuildLoot()
 					c.name:SetText(name or ("item " .. e.id)); c.name:SetTextColor(r, g, bl)
 					c.kind:SetText((e.wish and "|cffe0b860WISH|r" or "|cff8a8d93SOFT RESERVE|r")
 						.. "  |cff6f7176" .. idLabel(e.set) .. "|r")
-					c.sub:SetText(bossOf(e.id) or "")
+					local Wi = Okanvil.Wish
+					c._changeable = e.wish and Wi and Wi.Accepting() and e.set.lockKey == Wi.Key() or false
+					c.sub:SetText((bossOf(e.id) or "") .. (c._changeable and "  |cff8a8d93·  click to change|r" or ""))
 					-- the wish wears the gold edge it has on the council board
 					if e.wish then c:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 0.8)
 					else c:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1) end

@@ -911,6 +911,12 @@ function RM.Rebuild()
 			end)
 			f.askB = askB
 			y = y - (bh + 10)
+		elseif SRM and SRM.Mode() == "council" then
+			-- clicking an item only shows its rolls here; say who asks
+			local hint = keep(W.Text(body, "Click an item to see its rolls. Only the master looter asks the council.",
+				10, "dim"))
+			hint:SetPoint("TOPLEFT", M, y); hint:SetWidth(INNER); hint:SetJustifyH("LEFT")
+			y = y - ((hint:GetStringHeight() or 12) + 8)
 		end
 	end
 
@@ -961,13 +967,13 @@ function RM.SyncSRButton()
 	-- CSV) before any list is loaded.
 	-- SR in SR mode; WH (the wishes) on a council night with the wishlist on
 	local WP = Okanvil.Wish and Okanvil.Wish.Panel
-	-- the same people as WH: an officer, the raid leader or the master looter
-	local canSee = isML() or (Okanvil.Wish and Okanvil.Wish.CanTrigger and Okanvil.Wish.CanTrigger())
+	-- the same people as WH: the master looter and the officers
+	local canSee = isML() or (Okanvil.Wish and Okanvil.Wish.CanSee and Okanvil.Wish.CanSee())
 	if canSee and SRM and SRM.WhisperMode() and (SRM.Summary() or Okanvil.LITE) then
 		win.srBtn.text:SetText("SR")
 		win.srBtn:Tooltip("Soft reserves: every reserved item, who reserved it,\nand what happened to it tonight.")
 		win.srBtn:Show()
-	elseif WP and SRM and SRM.Mode() == "council" and Okanvil.Wish.IsOn() and Okanvil.Wish.CanTrigger() then
+	elseif WP and SRM and SRM.Mode() == "council" and Okanvil.Wish.IsOn() and Okanvil.Wish.CanSee() then
 		win.srBtn.text:SetText("WH")
 		win.srBtn:Tooltip("Wishes: what each raider is after this raid ID.")
 		win.srBtn:Show()
