@@ -3001,6 +3001,14 @@ function C_.BuildRunTab(body)
 				.. "Raiders can change their wish until you lock it. It is not a reserve.",
 			function() return Wi.IsOn() end,
 			function(v) Wi.SetOn(v); if Wi._paintRow then Wi._paintRow() end end)
+		-- Opening it warns the whole raid: only the checkbox switches it, a click
+		-- elsewhere on the line does nothing.
+		local toggle = wrow:GetScript("OnClick")
+		wrow:SetScript("OnClick", nil)
+		wrow.btn:EnableMouse(true)
+		wrow.btn:SetScript("OnMouseUp", function(s, button)
+			if button == "LeftButton" and s:IsMouseOver() and toggle then toggle(wrow) end
+		end)
 		-- Clear beside the switch, the same as the WH panel's
 		local clr = W.Button(wrow, "Clear"); clr:SetSize(52, 22)
 		clr:SetPoint("RIGHT", wrow.btn, "LEFT", -6, 0)
