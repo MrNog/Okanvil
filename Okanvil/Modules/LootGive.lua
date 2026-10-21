@@ -192,13 +192,29 @@ function G.Paint()
 	for _, p in ipairs(list) do if p == G.pick and p.cand then still = true end end
 	if not still then G.pick = nil end
 
+	-- each column is as wide as its longest name, so no name is ever cut
+	local colW = {}
+	for col = 0, COLS - 1 do colW[col] = CELL_W end
+	for i, p in ipairs(list) do
+		local c = cell(i)
+		c.txt:SetText(p.name)
+		local col = (i - 1) % COLS
+		colW[col] = math.max(colW[col], math.ceil(c.txt:GetStringWidth()) + 10)
+	end
+	local colX, width = {}, PAD
+	for col = 0, COLS - 1 do
+		colX[col] = width
+		width = width + colW[col] + GAP
+	end
+	win:SetWidth(width - GAP + PAD)
+
 	for i, p in ipairs(list) do
 		local c = cell(i)
 		local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
 		c:ClearAllPoints()
-		c:SetPoint("TOPLEFT", PAD + col * (CELL_W + GAP), -(TOP + row * (CELL_H + GAP)))
+		c:SetPoint("TOPLEFT", colX[col], -(TOP + row * (CELL_H + GAP)))
+		c:SetWidth(colW[col])
 		c.p = p
-		c.txt:SetText(p.name)
 		if p.cand then
 			local cc = RAID_CLASS_COLORS and RAID_CLASS_COLORS[p.class or ""]
 			if cc then c.txt:SetTextColor(cc.r, cc.g, cc.b) else c.txt:SetTextColor(1, 0.82, 0) end
@@ -279,11 +295,14 @@ function G.OpenTest()
 	openAtCursor()
 end
 
--- The stock loot frame and ElvUI both open GroupLootDropDown through
--- ToggleDropDownMenu; close it as it opens and show this window in its place.
-hooksecurefunc("ToggleDropDownMenu", function(level, _, menu)
-	if not (GroupLootDropDown and menu == GroupLootDropDown) then return end
-	if (level or 1) ~= 1 or not db().on then return end
+-- The stock loot frame and ElvUI both open GroupLootDropDown as the first
+-- dropdown level. ElvUI calls its own local copy of ToggleDropDownMenu, so a
+-- hook on the global never sees it; the list frame showing is what both share.
+-- Close it as it opens and show this window in its place.
+DropDownList1:HookScript("OnShow", function()
+	local menu = UIDROPDOWNMENU_OPEN_MENU
+	if not (GroupLootDropDown and (menu == GroupLootDropDown or menu == "GroupLootDropDown")) then return end
+	if not db().on then return end
 	CloseDropDownMenus()
 	local ok, err = pcall(G.OpenReal)
 	if not ok and Okanvil.Err then Okanvil:Err("LootGive.OpenReal", err) end
