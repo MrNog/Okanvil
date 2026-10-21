@@ -3871,7 +3871,14 @@ function C_.FitAudit()
 				for _, cls in ipairs(AUDIT_CLASSES) do
 					if fitsClass(link, cls) then fits[#fits + 1] = cls end
 				end
-				out[#out + 1] = table.concat({ id, name, equip or "", from[id], table.concat(fits, ",") }, "|")
+				-- the stats it was judged on: "STRENGTH=59,DODGE_RATING=40"
+				local st = {}
+				for k, v in pairs(GetItemStats(link) or {}) do
+					st[#st + 1] = (k:gsub("^ITEM_MOD_", ""):gsub("_SHORT$", "")) .. "=" .. tostring(v)
+				end
+				table.sort(st)
+				out[#out + 1] = table.concat({ id, name, equip or "", from[id], table.concat(fits, ","),
+					table.concat(st, ",") }, "|")
 			end
 		end
 		Okanvil.db.fitAudit = { at = date("%Y-%m-%d %H:%M"), rows = out }
