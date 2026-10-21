@@ -456,7 +456,8 @@ local CASTER_WORDS = { "spell power", "harmful spells", "healing spells", "your 
 	"mana", "your heals", "healing done" }
 local MELEE_WORDS = { "attack power", "melee attacks", "ranged attacks", "melee and ranged" }
 -- a tank's: it works when you are hit
-local TANK_WORDS = { "struck by", "you are hit", "damage taken", "you take damage",
+local TANK_WORDS = { "struck by", "you are hit", "damage taken", "you take damage", "damage you take",
+	"reduces all damage",
 	"armor by", "armor value", "maximum health",
 	"dodge", "parry", "block", "defense" }
 local function effectKind(link)
@@ -655,7 +656,15 @@ function P.FitsSpec(link, key, noClassLoot, listed)
 	end
 	local eff = effectKind(link)
 	local jewel = equip == "INVTYPE_TRINKET" or equip == "INVTYPE_NECK" or equip == "INVTYPE_FINGER"
-	local tanky = tankS or eff == "tank" or (jewel and stats.RESISTANCE0_NAME ~= nil)
+	-- a neck, ring or trinket whose only stat is Stamina is a tank's (Sindragosa's
+	-- Flawless Fang: Stamina and an on-use damage cut)
+	local onlyStam = jewel and stats.ITEM_MOD_STAMINA_SHORT ~= nil
+	if onlyStam then
+		for k in pairs(stats) do
+			if k:find("^ITEM_MOD_") and k ~= "ITEM_MOD_STAMINA_SHORT" then onlyStam = false; break end
+		end
+	end
+	local tanky = tankS or eff == "tank" or (jewel and stats.RESISTANCE0_NAME ~= nil) or onlyStam
 	local casterOnly = spell and not phys and not tankS
 
 	if role == "tank" then
