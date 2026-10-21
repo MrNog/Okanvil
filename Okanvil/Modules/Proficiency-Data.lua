@@ -456,7 +456,8 @@ local CASTER_WORDS = { "spell power", "harmful spells", "healing spells", "your 
 	"mana", "your heals", "healing done" }
 local MELEE_WORDS = { "attack power", "melee attacks", "ranged attacks", "melee and ranged" }
 -- a tank's: it works when you are hit
-local TANK_WORDS = { "struck by", "you are hit", "damage taken", "you take damage",
+local TANK_WORDS = { "struck by", "you are hit", "damage taken", "you take damage", "damage you take",
+	"reduces all damage",
 	"armor by", "armor value", "maximum health",
 	"dodge", "parry", "block", "defense" }
 local function effectKind(link)
@@ -618,6 +619,23 @@ local SLOT_JEWEL = { INVTYPE_TRINKET = true, INVTYPE_NECK = true, INVTYPE_FINGER
 --          or melee effect
 -- listed: the item is on the spec's BiS list, so only the hard rules apply.
 -- noClassLoot skips ClassLoot (/okup audit checks the rules against it).
+-- Items that drop in the current phase's raids (ICC, the Ruby Sanctum), built
+-- from the loot tables the first time it is asked.
+local CURRENT_RAIDS = { "icc", "rs" }
+local currentIds
+local function currentPhase(id)
+	if not currentIds then
+		if not OkanvilRaidLoot then return false end
+		currentIds = {}
+		for _, raid in ipairs(CURRENT_RAIDS) do
+			for _, b in ipairs(OkanvilRaidLoot[raid] or {}) do
+				for _, it in ipairs(b.items or {}) do currentIds[it.id] = true end
+			end
+		end
+	end
+	return currentIds[id] == true
+end
+
 function P.FitsSpec(link, key, noClassLoot, listed)
 	if not (link and GetItemStats and key) then return true end
 	local fit = fitSpec(key)
@@ -655,7 +673,15 @@ function P.FitsSpec(link, key, noClassLoot, listed)
 	end
 	local eff = effectKind(link)
 	local jewel = equip == "INVTYPE_TRINKET" or equip == "INVTYPE_NECK" or equip == "INVTYPE_FINGER"
-	local tanky = tankS or eff == "tank" or (jewel and stats.RESISTANCE0_NAME ~= nil)
+	-- a neck, ring or trinket whose only stat is Stamina is a tank's (Sindragosa's
+	-- Flawless Fang: Stamina and an on-use damage cut)
+	local onlyStam = jewel and stats.ITEM_MOD_STAMINA_SHORT ~= nil
+	if onlyStam then
+		for k in pairs(stats) do
+			if k:find("^ITEM_MOD_") and k ~= "ITEM_MOD_STAMINA_SHORT" then onlyStam = false; break end
+		end
+	end
+	local tanky = tankS or eff == "tank" or (jewel and stats.RESISTANCE0_NAME ~= nil) or onlyStam
 	local casterOnly = spell and not phys and not tankS
 
 	if role == "tank" then
@@ -669,6 +695,9 @@ function P.FitsSpec(link, key, noClassLoot, listed)
 	elseif role == "str" or role == "agi" or role == "cat" then
 		if tanky or eff == "caster" or casterOnly then return false end
 		if role == "agi" and not listed and str and not agiAp then return false end
+		-- a cat wore Strength pieces while agility ones were scarce; ICC and the
+		-- Ruby Sanctum drop agility for every slot, so their Strength-only gear is not a cat's
+		if role == "cat" and not listed and str and not agiAp and id and currentPhase(id) then return false end
 		return true
 	end
 	-- caster, healer

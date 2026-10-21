@@ -826,13 +826,10 @@ end
 -- tokens -- whose stats suit a spec of my class: no Intellect plate for a
 -- warrior, no caster cloth for a death knight, no spell-power neck for a rogue.
 -- Any spec of the class, not just my two: talents change between raids. The
--- same BiS lists and stat rules as the item tooltip's stars. An item not cached
--- yet passes: its stats are unknown, so recheckUncached judges it again once
--- they arrive.
-local function fitsMe(link)
+-- same BiS lists and stat rules as the item tooltip's stars.
+local function fitsClass(link, cls)
 	local P = Okanvil.Prof
 	if not P then return true end
-	local cls = select(2, UnitClass("player"))
 	local can = true
 	if P.CanEquip then can = P.CanEquip(link, cls) elseif P.CanIUse then can = P.CanIUse(link) end
 	if can then
@@ -844,6 +841,47 @@ local function fitsMe(link)
 		end
 	end
 	return can and true or false
+end
+
+-- The classes each asked item suits, worked out on the master looter's client:
+-- the item is on the corpse there, so its stats are known. A raider's client
+-- often has not cached a fresh drop when the question lands, and an uncached
+-- item used to reach every class. One character per class on the wire.
+local CLASS_CH = { DEATHKNIGHT = "1", DRUID = "2", HUNTER = "3", MAGE = "4", PALADIN = "5",
+	PRIEST = "6", ROGUE = "7", SHAMAN = "8", WARLOCK = "9", WARRIOR = "0" }
+local fitFromML = {}     -- item id -> the class characters it suits
+
+-- "50682=1250;50633=4689": only items cached here; the rest a raider judges itself.
+local function classFitPayload(ids)
+	local parts = {}
+	for _, id in ipairs(ids) do
+		local link = select(2, GetItemInfo(id))
+		if link then
+			local chars = {}
+			for cls, ch in pairs(CLASS_CH) do
+				if fitsClass(link, cls) then chars[#chars + 1] = ch end
+			end
+			table.sort(chars)
+			parts[#parts + 1] = id .. "=" .. table.concat(chars)
+		end
+	end
+	return table.concat(parts, ";")
+end
+
+local function readClassFit(body)
+	fitFromML = {}
+	for id, chars in (body or ""):gmatch("(%d+)=(%d*)") do fitFromML[tonumber(id)] = chars end
+end
+
+-- Is this item one to ask me about? The master looter's answer when it sent one;
+-- otherwise my own client judges it. An item not cached yet passes then: its
+-- stats are unknown, so recheckUncached judges it again once they arrive.
+local function fitsMe(link)
+	local cls = select(2, UnitClass("player"))
+	local id = tonumber(tostring(link):match("item:(%d+)"))
+	local chars = id and fitFromML[id]
+	if chars then return chars:find(CLASS_CH[cls] or "-", 1, true) ~= nil end
+	return fitsClass(link, cls)
 end
 
 -- The round's uncached items, once the server has sent them: the ones that do
@@ -1285,6 +1323,10 @@ if C then
 			C_.ShowRestored(round)
 		end
 	end)
+	-- the asker's class fit for the question right behind it (C_.Ask)
+	C.On("CFIT", function(sender, body)
+		if sender and sender:gsub("%-.*", "") ~= UnitName("player") then readClassFit(body) end
+	end)
 
 	-- COUNCIL NIGHT, as the master looter has it. Only the ML can switch it, so
 	-- every other officer shows the ML's state in their header, read-only --
@@ -1469,6 +1511,11 @@ function C_.Ask(links, boss)
 	-- round and never a real one.
 	local rec = { items = shown, boss = boss or "", replies = {}, at = GetTime(),
 		test = C_.testMode or nil }
+
+	-- which classes each item suits, just ahead of the question on the same channel
+	local fit = classFitPayload(ids)
+	readClassFit(fit)
+	if fit ~= "" then C.Send("CFIT", fit) end
 
 	local round = C.Ask(TOPIC, payload, {
 		-- The wire round stays open for 30 minutes. Nothing auto-passes any
@@ -3797,6 +3844,66 @@ end
 -- The escape hatch the plan asks for -- when something goes wrong at 22:30 the
 -- answer has to be one command, not "everyone reload".
 -- ------------------------------------------------------------
+-- /okcouncil fitcheck: every raid drop against every class, the same test the
+-- popup runs, saved to db.fitAudit for a reading outside the game. Items are
+-- pulled into the cache first; one still missing after the wait is listed as such.
+local AUDIT_CLASSES = { "DEATHKNIGHT", "DRUID", "HUNTER", "MAGE", "PALADIN",
+	"PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR" }
+function C_.FitAudit()
+	local ids, seen, from = {}, {}, {}
+	for raid, bosses in pairs(OkanvilRaidLoot or {}) do
+		for _, b in ipairs(bosses) do
+			for _, it in ipairs(b.items or {}) do
+				if it.id and not seen[it.id] then
+					seen[it.id] = true
+					ids[#ids + 1] = it.id
+					from[it.id] = raid .. "/" .. (b.boss or "?") .. "/" .. (it.m or "")
+					Okanvil:WarmItem(it.id)
+				end
+			end
+		end
+	end
+	Okanvil:Print(("Fit check: loading %d items into the cache..."):format(#ids))
+	local waited = 0
+	local function finish()
+		local out, missing, skipped = {}, 0, 0
+		for _, id in ipairs(ids) do
+			local name, link, _, _, _, _, _, _, equip = GetItemInfo(id)
+			if not link then
+				missing = missing + 1
+				out[#out + 1] = id .. "|?|" .. from[id] .. "|uncached"
+			elseif not C_.IsCouncilItem(id) then
+				skipped = skipped + 1
+			else
+				local fits = {}
+				for _, cls in ipairs(AUDIT_CLASSES) do
+					if fitsClass(link, cls) then fits[#fits + 1] = cls end
+				end
+				-- the stats it was judged on: "STRENGTH=59,DODGE_RATING=40"
+				local st = {}
+				for k, v in pairs(GetItemStats(link) or {}) do
+					st[#st + 1] = (k:gsub("^ITEM_MOD_", ""):gsub("_SHORT$", "")) .. "=" .. tostring(v)
+				end
+				table.sort(st)
+				out[#out + 1] = table.concat({ id, name, equip or "", from[id], table.concat(fits, ","),
+					table.concat(st, ",") }, "|")
+			end
+		end
+		Okanvil.db.fitAudit = { at = date("%Y-%m-%d %H:%M"), rows = out }
+		Okanvil:Print(("Fit check done: %d items checked, %d not gear, %d never cached. /reload to save it.")
+			:format(#out - missing, skipped, missing))
+	end
+	local function poll()
+		local cold = 0
+		for _, id in ipairs(ids) do if not GetItemInfo(id) then cold = cold + 1 end end
+		waited = waited + 5
+		if cold == 0 or waited >= 300 then finish(); return end
+		if waited % 30 == 0 then Okanvil:Print(("Fit check: %d items still loading..."):format(cold)) end
+		C.After(5, poll)
+	end
+	C.After(5, poll)
+end
+
 _G.SLASH_OKCOUNCIL1 = "/okcouncil"
 _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 	-- Keep the RAW text: an item link is case-sensitive (|cff1eff00|Hitem:...),
@@ -3813,6 +3920,7 @@ _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 	-- Closes BOTH sides: the popup on this client, and -- if we are the one who
 	-- asked -- the round itself. Only hiding the frame left the round collecting
 	-- answers into a window nobody could see.
+	if msg == "fitcheck" then C_.FitAudit(); return end
 	if msg == "close" then
 		closeFrame()
 		if C_.current and C_.current.round and C.CloseAsk then
