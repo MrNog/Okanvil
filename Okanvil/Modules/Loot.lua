@@ -1819,7 +1819,9 @@ local function mlChatBoss(s, player, id)
 		if dp.boss == boss and dp.corpse then return nil end
 	end
 	if not canDropHere(s, id) then return nil end
-	if bossHasTable(boss) and OkanvilItemBoss[id] ~= boss then return nil end
+	-- a shared token is in no boss's table; its own list of droppers vouches for it
+	if bossHasTable(boss) and OkanvilItemBoss[id] ~= boss
+		and not (TOKEN_BOSSES[id] and TOKEN_BOSSES[id][boss]) then return nil end
 	return boss
 end
 
@@ -1849,10 +1851,29 @@ local function tagReceiver(player, link)
 	-- from, and the current boss is almost always wrong.
 	-- STRICT: never claim a copy that already belongs to somebody else -- with several
 	-- copies of one item, the last receiver would otherwise overwrite the first.
-	local target = findOpenDrop(s, id, true) or findAnyOpenDrop(s, id)
-	-- ML looting a corpse nobody scanned: every line is a new copy. A row this path
-	-- already made (fromML) is a previous copy, never this one.
-	if chatBoss and (not target or target.fromML) then
+	--
+	-- The master looter (or any loot holder) picking an item up is a NEW copy reaching
+	-- their bags. It may only claim a row of this pull that nobody holds yet: a row they
+	-- already hold is a copy already in their bags, and an older boss's row is an older
+	-- copy -- an unawarded token from Putricide swallowed Sindragosa's that way.
+	local target
+	if L.IsHolder(player) then
+		local now = time()
+		for i = #s.drops, 1, -1 do
+			local d = s.drops[i]
+			if d.id == id and not d.awarded and (now - (d.t or 0)) <= DROP_MATCH_WINDOW
+				and (not d.heldBy or d.heldBy == "") and (not d.receivedBy or d.receivedBy == "")
+				and (not chatBoss or d.boss == chatBoss) then
+				target = d
+				break
+			end
+		end
+	else
+		target = findOpenDrop(s, id, true) or findAnyOpenDrop(s, id)
+	end
+	-- ML looting a corpse nobody scanned: every line is a new copy unless the loop
+	-- above found a free row of this boss for it.
+	if chatBoss and not target then
 		target = storeDrop(chatBoss, id, link, name, rarity, isBoE(link), nil, nil, true)
 		if target then target.fromML = true end
 	end
@@ -1888,7 +1909,8 @@ local function tagReceiver(player, link)
 		-- Sack of Wonder]") reads exactly like a master-loot give, and nothing but the
 		-- item tells them apart. A boss with no table (Naxx, older raids) keeps the old
 		-- behaviour: there is nothing to check against.
-		if bossHasTable(boss) and OkanvilItemBoss[id] ~= boss then return end
+		if bossHasTable(boss) and OkanvilItemBoss[id] ~= boss
+			and not (TOKEN_BOSSES[id] and TOKEN_BOSSES[id][boss]) then return end
 		-- The boss's own table is not enough: a weekly sack opened right after Blood-Queen
 		-- hands out her 25-man choker in a 10. Wrong size or difficulty = not this kill's loot.
 		if not canDropHere(s, id) then return end
@@ -2120,6 +2142,9 @@ local function recordRollWon(player, link)
 	end
 	if dp then
 		dp.receivedBy = player
+		-- a won roll is decided, even when the winner is the master looter: without it
+		-- the ML's copy still read as "held", and the ML's next win took it again
+		dp.awarded = true
 		dp.heldBy = nil                       -- a winner outranks whoever carried it
 		dp.passed = nil                       -- someone has it: it was not passed on
 		dp.rollID = nil; dp.rollStart = nil   -- para de mostrar "rolling"
@@ -2711,6 +2736,16 @@ local function captureRoll(msg)
 	local spec = (hiN >= 100) and "main" or "off"
 	local key = noRealm(who)
 
+	-- A loosely worded call waiting for proof (onRollAnnounce): this roll is it, unless
+	-- a real call came after it.
+	local pc = L._pendingCall
+	if pc then
+		L._pendingCall = nil
+		if (GetTime() - pc.at) <= 60 and pc.at >= externalRollAt then
+			L.NoteExternalRoll(pc.link, pc.n, true, pc.sender)
+		end
+	end
+
 	-- No managed roll running: record into an item that is actually OPEN for rolls.
 	--   1. externalRollDrop -- an external roller ANNOUNCED this item. Authoritative
 	--      even if you clicked something else, so rolls follow the item being rolled
@@ -2843,7 +2878,9 @@ end
 -- is spelt -- rol, rool, rolll, r0ll, rolls. (A field on L: this file is at Lua's
 -- limit of locals.)
 L._ROLL_WORDS = { ms = true, mspec = true, mainspec = true, main = true, os = true, ospec = true,
-	offspec = true, off = true, need = true, greed = true }
+	offspec = true, off = true, need = true, greed = true,
+	-- roll addons that word it as an auction: "Bidding for [item] started. Please place your bets."
+	bid = true, bids = true, bidding = true, bet = true, bets = true }
 function L._rollWord(text)
 	text = (text or ""):lower():gsub("m%.s%.?", "ms"):gsub("o%.s%.?", "os")
 	for w in text:gmatch("%a+") do
@@ -2911,6 +2948,19 @@ local function onRollAnnounce(msg, sender, event)
 		return
 	end
 	if lower:find("%f[%w]passed%f[%W]") or lower:find("disenchant") then return end
+	-- the auction-style close ("Bidding for [item] ended/closed") is no new call: read as
+	-- one, it would open a second roll. Like a "won" line it ends the roll-off it names,
+	-- so the next bid on the same item goes to the next copy.
+	if lower:find("%f[%w]bid") and (lower:find("%f[%w]end") or lower:find("%f[%w]finish")
+		or lower:find("%f[%w]close") or lower:find("%f[%w]cancel") or lower:find("%f[%w]over%f[%W]")) then
+		local wl = msg:match("|Hitem:(%d+)")
+		local cur = externalRollDrop
+		if wl and cur and cur.id == tonumber(wl) and canOpenRoll(sender, event) then
+			cur.rollDone = true
+			rollTrace("roll-off ended on " .. dropTag(cur))
+		end
+		return
+	end
 
 	local link = msg:match("|c%x+|Hitem:.-|h.-|h|r") or msg:match("|Hitem:[^|]+|h%[.-%]|h")
 	if not link then return end
@@ -2950,12 +3000,30 @@ local function onRollAnnounce(msg, sender, event)
 	end
 
 	rest = rest:gsub("[%s%p%d]", "")
-	-- A bare link is a roll call only from the ML or over raid warning: assists and
-	-- leaders paste their own gear into raid chat all the time.
-	if rest == "" and not isLootCaller(sender, event) then
-		rollTrace(("%s from %s: bare link, not the ML, not a roll call"):format(link, tostring(sender)))
-	elseif rest == "" then
+	-- The ML or raid warning linking an item in any other wording ("next up [x]", "[x]
+	-- go") is a call only when the item is this raid's loot and the raid then rolls:
+	-- the call waits (L._pendingCall) and the first /roll inside a minute opens it.
+	-- Nobody rolls -> it was talk, and nothing changes. The result lines (won, passed,
+	-- ended) were filtered above; "[x] goes to Bob" / "gz" are results too.
+	-- Assists and leaders in plain raid chat still need a roll word or a bare link --
+	-- they paste their own gear there all the time.
+	if rest == "" and isLootCaller(sender, event) then
 		L.NoteExternalRoll(link, winnerCount(lower), true, sender)
+	elseif isLootCaller(sender, event) then
+		local id = tonumber(link:match("item:(%d+)"))
+		local s = activeBucket()
+		local known = id and (dropExistsForID(s, id)
+			or ((OkanvilItemBoss and OkanvilItemBoss[id] or TOKEN_BOSSES[id]) and canDropHere(s, id)))
+		if lower:find("%f[%w]goes%s+to%f[%W]") or lower:find("%f[%w]gz%f[%W]") or lower:find("%f[%w]grats") then
+			rollTrace(("%s from %s: a result, not a roll call"):format(link, tostring(sender)))
+		elseif not known then
+			rollTrace(("%s from %s: not this raid's loot, not a roll call"):format(link, tostring(sender)))
+		else
+			L._pendingCall = { link = link, n = winnerCount(lower), sender = sender, at = GetTime() }
+			rollTrace(("%s from %s: a call if the raid rolls"):format(link, tostring(sender)))
+		end
+	elseif rest == "" then
+		rollTrace(("%s from %s: bare link, not the ML, not a roll call"):format(link, tostring(sender)))
 	else
 		rollTrace(("%s from %s: not read as a roll call"):format(link, tostring(sender)))
 	end

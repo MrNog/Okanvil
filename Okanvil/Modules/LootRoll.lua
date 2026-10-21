@@ -286,7 +286,19 @@ local function buildWindow()
 	local f = CreateFrame("Frame", "Okanvil_RollMgr", UIParent)
 	f:SetSize(WIN_W, 200)   -- height set dynamically in Refresh
 	local d = db()
-	f:SetPoint(d.point or "RIGHT", UIParent, d.point or "RIGHT", d.x or -30, d.y or 60)
+	-- Pinned by its TOP: the height changes per boss page, and a centre anchor grew the
+	-- window both ways -- the header slid and the close X landed under the page arrow.
+	if d.point == "TOPLEFT" and d.x and d.y then
+		f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", d.x, d.y)
+	else
+		f:SetPoint(d.point or "RIGHT", UIParent, d.point or "RIGHT", d.x or -30, d.y or 60)
+		local l, t = f:GetLeft(), f:GetTop()
+		if l and t then
+			f:ClearAllPoints()
+			f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t)
+			d.point, d.x, d.y = "TOPLEFT", l, t
+		end
+	end
 	-- DIALOG, not HIGH. The main hub window is HIGH too, and two frames sharing a
 	-- strata have no defined order between them -- so the mini roll and the hub
 	-- interleaved, drawing the hub's rows through the roll list. This window
@@ -303,8 +315,11 @@ local function buildWindow()
 	f:SetScript("OnDragStart", f.StartMoving)
 	f:SetScript("OnDragStop", function(s)
 		s:StopMovingOrSizing()
-		local p, _, _, x, y = s:GetPoint(1)
-		d.point, d.x, d.y = p, x, y
+		local l, t = s:GetLeft(), s:GetTop()
+		if not (l and t) then return end
+		s:ClearAllPoints()
+		s:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t)
+		d.point, d.x, d.y = "TOPLEFT", l, t
 	end)
 	f:SetClampedToScreen(true)
 
