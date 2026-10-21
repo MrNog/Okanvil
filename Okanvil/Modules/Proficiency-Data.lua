@@ -619,6 +619,23 @@ local SLOT_JEWEL = { INVTYPE_TRINKET = true, INVTYPE_NECK = true, INVTYPE_FINGER
 --          or melee effect
 -- listed: the item is on the spec's BiS list, so only the hard rules apply.
 -- noClassLoot skips ClassLoot (/okup audit checks the rules against it).
+-- Items that drop in the current phase's raids (ICC, the Ruby Sanctum), built
+-- from the loot tables the first time it is asked.
+local CURRENT_RAIDS = { "icc", "rs" }
+local currentIds
+local function currentPhase(id)
+	if not currentIds then
+		if not OkanvilRaidLoot then return false end
+		currentIds = {}
+		for _, raid in ipairs(CURRENT_RAIDS) do
+			for _, b in ipairs(OkanvilRaidLoot[raid] or {}) do
+				for _, it in ipairs(b.items or {}) do currentIds[it.id] = true end
+			end
+		end
+	end
+	return currentIds[id] == true
+end
+
 function P.FitsSpec(link, key, noClassLoot, listed)
 	if not (link and GetItemStats and key) then return true end
 	local fit = fitSpec(key)
@@ -678,6 +695,9 @@ function P.FitsSpec(link, key, noClassLoot, listed)
 	elseif role == "str" or role == "agi" or role == "cat" then
 		if tanky or eff == "caster" or casterOnly then return false end
 		if role == "agi" and not listed and str and not agiAp then return false end
+		-- a cat wore Strength pieces while agility ones were scarce; ICC and the
+		-- Ruby Sanctum drop agility for every slot, so their Strength-only gear is not a cat's
+		if role == "cat" and not listed and str and not agiAp and id and currentPhase(id) then return false end
 		return true
 	end
 	-- caster, healer
