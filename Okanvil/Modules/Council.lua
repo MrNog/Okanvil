@@ -3836,6 +3836,59 @@ end
 -- The escape hatch the plan asks for -- when something goes wrong at 22:30 the
 -- answer has to be one command, not "everyone reload".
 -- ------------------------------------------------------------
+-- /okcouncil fitcheck: every raid drop against every class, the same test the
+-- popup runs, saved to db.fitAudit for a reading outside the game. Items are
+-- pulled into the cache first; one still missing after the wait is listed as such.
+local AUDIT_CLASSES = { "DEATHKNIGHT", "DRUID", "HUNTER", "MAGE", "PALADIN",
+	"PRIEST", "ROGUE", "SHAMAN", "WARLOCK", "WARRIOR" }
+function C_.FitAudit()
+	local ids, seen, from = {}, {}, {}
+	for raid, bosses in pairs(OkanvilRaidLoot or {}) do
+		for _, b in ipairs(bosses) do
+			for _, it in ipairs(b.items or {}) do
+				if it.id and not seen[it.id] then
+					seen[it.id] = true
+					ids[#ids + 1] = it.id
+					from[it.id] = raid .. "/" .. (b.boss or "?") .. "/" .. (it.m or "")
+					Okanvil:WarmItem(it.id)
+				end
+			end
+		end
+	end
+	Okanvil:Print(("Fit check: loading %d items into the cache..."):format(#ids))
+	local waited = 0
+	local function finish()
+		local out, missing, skipped = {}, 0, 0
+		for _, id in ipairs(ids) do
+			local name, link, _, _, _, _, _, _, equip = GetItemInfo(id)
+			if not link then
+				missing = missing + 1
+				out[#out + 1] = id .. "|?|" .. from[id] .. "|uncached"
+			elseif not C_.IsCouncilItem(id) then
+				skipped = skipped + 1
+			else
+				local fits = {}
+				for _, cls in ipairs(AUDIT_CLASSES) do
+					if fitsClass(link, cls) then fits[#fits + 1] = cls end
+				end
+				out[#out + 1] = table.concat({ id, name, equip or "", from[id], table.concat(fits, ",") }, "|")
+			end
+		end
+		Okanvil.db.fitAudit = { at = date("%Y-%m-%d %H:%M"), rows = out }
+		Okanvil:Print(("Fit check done: %d items checked, %d not gear, %d never cached. /reload to save it.")
+			:format(#out - missing, skipped, missing))
+	end
+	local function poll()
+		local cold = 0
+		for _, id in ipairs(ids) do if not GetItemInfo(id) then cold = cold + 1 end end
+		waited = waited + 5
+		if cold == 0 or waited >= 300 then finish(); return end
+		if waited % 30 == 0 then Okanvil:Print(("Fit check: %d items still loading..."):format(cold)) end
+		C.After(5, poll)
+	end
+	C.After(5, poll)
+end
+
 _G.SLASH_OKCOUNCIL1 = "/okcouncil"
 _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 	-- Keep the RAW text: an item link is case-sensitive (|cff1eff00|Hitem:...),
@@ -3852,6 +3905,7 @@ _G.SlashCmdList["OKCOUNCIL"] = function(msg)
 	-- Closes BOTH sides: the popup on this client, and -- if we are the one who
 	-- asked -- the round itself. Only hiding the frame left the round collecting
 	-- answers into a window nobody could see.
+	if msg == "fitcheck" then C_.FitAudit(); return end
 	if msg == "close" then
 		closeFrame()
 		if C_.current and C_.current.round and C.CloseAsk then
