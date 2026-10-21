@@ -38,12 +38,13 @@ end
 function Okanvil:BuildUpgrades(host)
 	local state = { open = {}, allOpen = true, view = db().view == "bis" and "bis" or "me" }
 	local viewTabs, specFS = {}
-	-- the spec in your class colour
+	-- the spec and class in your class colour ("Blood DPS Death Knight")
 	local function specText()
 		local spec = U.Spec()
 		local c = spec and RAID_CLASS_COLORS and RAID_CLASS_COLORS[spec.class]
 		local hex = c and ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) or "|cffe0b860"
-		return "|cff8a8d93Spec|r " .. (spec and (hex .. spec.label .. "|r") or "|cff8a8d93?|r")
+		local cls = UnitClass("player") or ""
+		return "|cff8a8d93Spec|r " .. (spec and (hex .. spec.label .. " " .. cls .. "|r") or "|cff8a8d93?|r")
 	end
 	local modeTabs = {}
 	local refresh
@@ -569,6 +570,9 @@ function Okanvil:BuildUpgrades(host)
 				if u.v.bis then cr, cg, cb = 1, 0.5, 0
 				elseif u.v.rank then cr, cg, cb = u3(C.accentText) end
 				it.bar:SetVertexColor(cr, cg, cb, 0.9)
+				-- a BiS item's frame is orange, like its label; any other upgrade keeps the gold
+				if u.v.bis then it.slot.frame:SetVertexColor(1, 0.55, 0.15)
+				else it.slot.frame:SetVertexColor(1, 1, 1) end
 				-- what it replaces, from the middle of the row
 				local half = math.floor((p:GetWidth() or 600) * 0.48)
 				it.name:SetWidth(half - ICON - 30); it.sub:SetWidth(half - ICON - 30)

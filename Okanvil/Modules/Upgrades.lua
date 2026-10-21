@@ -1002,11 +1002,51 @@ local function lockKey(r)
 	return SR and SR.LockKey and r and SR.LockKey(r) or nil
 end
 
+-- The first kill of a lockout lands before the lockout exists: lockKey() falls back to
+-- the date ("icc25:20261020"), and the kills after it go under the real raid ID. Once
+-- the ID is known, a date key of the same raid from the last few hours is this run.
+local ADOPT_SECS = 12 * 3600
+local function adoptDateKey(d, k)
+	local base, tail = k:match("^(.*):([^:]*)$")
+	if not base or tail:match("^%d%d%d%d%d%d%d%d$") then return end   -- no ID yet
+	for dk, l in pairs(d) do
+		local b2, t2 = dk:match("^(.*):([^:]*)$")
+		if b2 == base and t2:match("^%d%d%d%d%d%d%d%d$") and type(l) == "table"
+			and time() - (l._at or 0) <= ADOPT_SECS then
+			d[k] = d[k] or {}
+			for boss, v in pairs(l) do if boss ~= "_at" then d[k][boss] = v end end
+			d[k]._at = math.max(d[k]._at or 0, l._at or 0)
+			d[dk] = nil
+		end
+	end
+end
+
+-- A boss whose loot this run recorded is dead, seen or not: the Gunship and Valithria
+-- have no NPC that dies, and a kill can happen out of your sight.
+local function lootSaw(raid, bossName)
+	local L = Okanvil.Loot
+	if not (L and L.Sessions and L.RunKey) then return false end
+	local s, key = L.Sessions()[1], L.RunKey()
+	if not (s and key and s.key == key) then return false end
+	for _, dp in ipairs(s.drops or {}) do
+		local b = dp.boss
+		if b and b ~= "" and b ~= "Trash" and not dp.hidden then
+			local hit = U.BossFor(raid, b)
+			if hit and hit.boss == bossName then return true end
+		end
+	end
+	return false
+end
+
 function U.Killed(raid, bossName)
 	local key, _, r = U.Here()
 	if key ~= raid then return false end
-	local l = killDB()[lockKey(r) or ""]
-	return l and l[bossName] and true or false
+	local k = lockKey(r) or ""
+	local d = killDB()
+	adoptDateKey(d, k)
+	local l = d[k]
+	if l and l[bossName] then return true end
+	return lootSaw(raid, bossName)
 end
 
 local function markKill(npc)
@@ -1016,6 +1056,7 @@ local function markKill(npc)
 	local k = b and lockKey(r)
 	if not k then return end
 	local d = killDB()
+	adoptDateKey(d, k)
 	d[k] = d[k] or {}
 	if d[k][b.boss] then return end
 	d[k][b.boss] = true
