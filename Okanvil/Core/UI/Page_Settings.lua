@@ -511,7 +511,7 @@ function Okanvil:ShowVersionChecker()
 		scroll:SetScript("OnMouseWheel", function(self, delta)
 			local cur = self:GetVerticalScroll()
 			local max = math.max(0, child:GetHeight() - self:GetHeight())
-			local nxt = cur - delta * 30
+			local nxt = cur - delta * 60
 			if nxt < 0 then nxt = 0 elseif nxt > max then nxt = max end
 			self:SetVerticalScroll(nxt)
 		end)
@@ -525,6 +525,28 @@ function Okanvil:ShowVersionChecker()
 		if out.SetJustifyV then out:SetJustifyV("TOP") end
 		f.out = out
 
+		-- One row per player: name, "Patch-Y" in green with it, red without (grey
+		-- while it is asking), then the Okanvil version.
+		local ROW_H, PY_X, VER_X = 18, 150, 240
+		f.rows = {}
+		local head = CreateFrame("Frame", nil, child)
+		head:SetHeight(ROW_H); head:SetPoint("TOPLEFT", 0, 0); head:SetPoint("RIGHT", child, "RIGHT", 0, 0)
+		for _, col in ipairs({ { "Player", 0 }, { "Patch", PY_X }, { "Okanvil", VER_X } }) do
+			local t = W.Text(head, col[1], "note", "dim"); t:SetPoint("LEFT", col[2], 0)
+		end
+		W.Hairline(head, "BOTTOM", 0)
+		local function row(i)
+			local r = f.rows[i]
+			if r then return r end
+			r = CreateFrame("Frame", nil, child)
+			r:SetHeight(ROW_H)
+			r.name = W.Text(r, "", "body"); r.name:SetPoint("LEFT", 0, 0)
+			r.py = W.Text(r, "Patch-Y", "body"); r.py:SetPoint("LEFT", PY_X, 0)
+			r.ver = W.Text(r, "", "body"); r.ver:SetPoint("LEFT", VER_X, 0)
+			f.rows[i] = r
+			return r
+		end
+
 		local function paint()
 			local Comms = Okanvil.Comms
 			if not Comms then f.out:SetText("|cffff5555Comms unavailable.|r"); return end
@@ -532,30 +554,42 @@ function Okanvil:ShowVersionChecker()
 			local roster = Comms.GroupRoster and Comms.GroupRoster(f._scope) or {}
 			local mine = tostring(Okanvil.version or "?")
 			local waiting = Comms.VersionCheckRunning and Comms.VersionCheckRunning()
-			local lines, ok, old, none = {}, 0, 0, 0
+			local py = Comms.PatchYReplies and Comms.PatchYReplies() or {}
+			local ok, old, none, pyN = 0, 0, 0, 0
 			local missing = {}
-			for _, name in ipairs(roster) do
+			for _, r in ipairs(f.rows) do r:Hide() end
+			for i, name in ipairs(roster) do
 				local v = replies[name]
+				local r = row(i)
+				r:ClearAllPoints()
+				r:SetPoint("TOPLEFT", 0, -(ROW_H + 4) - (i - 1) * ROW_H)
+				r:SetPoint("RIGHT", child, "RIGHT", 0, 0)
 				if not v then
 					none = none + 1
 					missing[#missing + 1] = name
-					lines[#lines + 1] = "|cff8a8d93" .. name .. "|r  "
-						.. (waiting and "|cff8a8d93waiting...|r" or "|cffff5555no reply|r")
+					r.ver:SetText(waiting and "|cff8a8d93...|r" or "|cffff5555no reply|r")
 				elseif v == mine then
 					ok = ok + 1
-					lines[#lines + 1] = name .. "  |cffffd200" .. v .. "|r"
+					r.ver:SetText("|cffffd200" .. v .. "|r")
 				else
 					old = old + 1
-					lines[#lines + 1] = name .. "  |cffff8040" .. v .. "|r"
+					r.ver:SetText("|cffff8040" .. v .. "|r")
 				end
+				-- the guild's client patch, asked in the same check
+				if py[name] then pyN = pyN + 1 end
+				r.name:SetText(name)
+				r.py:SetText((py[name] and "|cff40c040" or waiting and "|cff8a8d93" or "|cffff5555") .. "Patch-Y|r")
+				r:Show()
 			end
-			if #lines == 0 then
-				f.out:SetText("|cff8a8d93Nobody to ask.|r")
+			if #roster == 0 then
+				head:Hide()
+				f.out:SetText("|cff8a8d93Nobody to ask.|r"); f.out:Show()
 			else
-				f.out:SetText(table.concat(lines, "\n"))
+				head:Show(); f.out:Hide()
 			end
 			f.status:SetText("|cffffd200" .. ok .. "|r / |cffff8040" .. old
 				.. "|r / |cffff5555" .. none .. "|r"
+				.. "   |cff8a8d93Patch-Y|r " .. pyN .. "/" .. #roster
 				.. (waiting and "  |cff8a8d93asking...|r" or ""))
 			f._missing = missing
 			if not waiting and #missing > 0 then
@@ -563,12 +597,12 @@ function Okanvil:ShowVersionChecker()
 			else
 				f.bLink:Hide()
 			end
-			-- size the scroll child to the text so the wheel range is right
+			-- size the scroll child to the rows so the wheel range is right
 			local w = f.scroll:GetWidth() or 0
-			if w < 10 then w = 288 end            -- first paint runs before layout
+			if w < 10 then w = 388 end            -- first paint runs before layout
 			f.out:SetWidth(w)
 			f.child:SetWidth(w)
-			f.child:SetHeight(math.max(f.out:GetStringHeight() + 8, 1))
+			f.child:SetHeight(math.max((#roster + 1) * ROW_H + 12, f.out:GetStringHeight() + 8, 1))
 		end
 		f.paint = paint
 

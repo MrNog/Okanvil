@@ -447,6 +447,32 @@ C.On("VERR", function(sender, ver)
 	if C.onVersionReply then C.onVersionReply() end
 end)
 
+-- Patch-Y, the guild's client patch (Data\patch-y.mpq), carries its own addon,
+-- !PyAndre, which answers "REQ" on its prefix with "VER:<version>" by whisper.
+-- The version check asks it too, so a raider shows up whatever Okanvil they run;
+-- no answer = no patch, or its addon switched off.
+local PY_PREFIX, PY_ADDON = "PCHY_A", "!PyAndre"
+local pyReplies = {}       -- name -> Patch-Y version
+C.PatchYReplies = function() return pyReplies end
+local pyFrame = CreateFrame("Frame")
+pyFrame:RegisterEvent("CHAT_MSG_ADDON")
+pyFrame:SetScript("OnEvent", function(_, _, prefix, msg, _, sender)
+	if prefix ~= PY_PREFIX or not (msg and sender) then return end
+	local ver = msg:match("^VER:(.*)$")
+	if not ver then return end
+	pyReplies[(sender:gsub("%-.*$", ""))] = ver ~= "" and ver or "?"
+	if C.onVersionReply then C.onVersionReply() end
+end)
+local function askPatchY(chan)
+	wipe(pyReplies)
+	-- our own: the addon is loaded or it is not
+	local me = UnitName and UnitName("player")
+	if me and IsAddOnLoaded and IsAddOnLoaded(PY_ADDON) then
+		pyReplies[me] = GetAddOnMetadata(PY_ADDON, "Version") or "?"
+	end
+	SendAddonMessage(PY_PREFIX, "REQ", chan)
+end
+
 -- Kick off a check. `scope` is "group" (default) or "guild"; `onDone(replies)`
 -- fires after `timeout` seconds (default 5). Returns false when there is nobody
 -- to ask (solo for "group", unguilded for "guild").
@@ -467,6 +493,7 @@ function C.RequestVersions(scope, onDone, timeout)
 	if me then verReplies[me] = tostring(Okanvil.version or "?") end
 	verRunning = true
 	wire(pack("VERQ"), chan)
+	askPatchY(chan)
 	C.After(timeout or 5, function()
 		verRunning = false
 		-- The checker alone learns whether a newer build is out.
