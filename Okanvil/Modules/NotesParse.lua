@@ -432,6 +432,127 @@ local function parseTime(line)
 	return secs, (opts ~= "" and opts or nil), rest
 end
 
+-- One ability, one id per difficulty: the groups DBM-Icecrown, -Coliseum and
+-- -ChamberOfAspects test with IsSpellID, normal and heroic, 10 and 25. A note
+-- is written once per size and serves both difficulties, so an anchor counts
+-- the cast under whichever of its group's ids the fight uses; this core even
+-- fires the 10N id in 10H for some (Infest, Harvest Soul). Left out: 72023,
+-- which DBM files under two abilities, and its groups that mix two spells.
+local SAME_ABILITY = {
+	-- Obsidian and Ruby Sanctum
+	{ 56908, 58956 },  -- Flame Breath
+	{ 57579, 59127 },  -- Shadow Fissure
+	{ 74403, 74404 },
+	{ 74525, 74526, 74527, 74528 },
+	{ 74806, 75954, 75955, 75956 },
+	-- Trial of the Crusader
+	{ 65724, 67213, 67214, 67215 },
+	{ 65748, 67216, 67217, 67218 },
+	{ 65816, 68145, 68146, 68147 },  -- Hellfire
+	{ 65820, 68141, 68139, 68140 },
+	{ 65858, 67259, 67260, 67261 },  -- Shield of Lights
+	{ 65874, 67256, 67257, 67258 },  -- Shield of Darkness
+	{ 65875, 67303, 67304, 67305 },  -- Twin's Pact
+	{ 65876, 67306, 67307, 67308 },  -- Twin's Pact
+	{ 65878, 65877 },  -- Wyvern Sting
+	{ 65927, 65929 },  -- Charge Stun
+	{ 65950, 67296, 67297, 67298 },  -- Touch of Light
+	{ 66001, 67281, 67282, 67283 },  -- Touch of Darkness
+	{ 66013, 67700, 68509, 68510 },  -- Penetrating Cold
+	{ 66017, 68753, 68754, 68755 },  -- Death Grip
+	{ 66046, 67206, 67207, 67208 },  -- Light Vortex
+	{ 66058, 67182, 67183, 67184 },  -- Dark Vortex
+	{ 66086, 67974, 67975, 67976 },  -- Tranquility
+	{ 66118, 67630, 68646, 68647 },  -- Leeching Swarm
+	{ 66178, 68759, 68760, 68761 },  -- Shadowstep
+	{ 66197, 68123, 68124, 68125 },  -- Legion Flame
+	{ 66228, 67106, 67107, 67108 },  -- Nether Power
+	{ 66269, 67898, 67899, 67900 },  -- Nether Portal
+	{ 66330, 67647, 67648, 67649 },  -- Staggering Stomp
+	{ 66334, 67905, 67906, 67907 },  -- Mistress' Kiss
+	{ 66528, 67029, 67030, 67031 },  -- Fel Lightning
+	{ 66532, 66963, 66964, 66965 },  -- Fel Fireball
+	{ 66613, 66007 },  -- Hammer of Justice
+	{ 66689, 67650, 67651, 67652 },  -- Arctic Breath
+	{ 66794, 67644, 67645, 67646 },  -- Sweep
+	{ 66823, 67618, 67619, 67620 },  -- Paralytic Toxin
+	{ 66824, 67612, 67613, 67614 },  -- Paralytic Bite
+	{ 66879, 67624, 67625, 67626 },  -- Burning Bite
+	{ 66901, 67615, 67616, 67617 },  -- Paralytic Spray
+	{ 66902, 67627, 67628, 67629 },  -- Burning Spray
+	{ 67051, 67050, 67049, 66237 },  -- Incinerate Flesh
+	{ 67245, 67248, 67249, 67250 },  -- Power of the Twins
+	{ 67246, 65879, 65916, 67244 },  -- Power of the Twins
+	{ 67477, 66331, 67478, 67479 },  -- Impale
+	{ 67641, 66883, 67642, 67643 },  -- Slime Pool
+	{ 67657, 66759, 67658, 67659 },  -- Frothing Rage
+	{ 67901, 67902, 67903, 66258 },  -- Infernal Eruption
+	{ 68758, 68757, 68756, 66115 },  -- Hand of Freedom
+	-- Icecrown Citadel
+	{ 68980, 74325, 74326, 74327 },  -- Harvest Soul
+	{ 68981, 74270, 74271, 74272 },  -- Remorseless Winter
+	{ 69057, 70826, 72088, 72089 },  -- Bone Spike Graveyard
+	{ 69062, 72669, 72670 },
+	{ 69166, 71912 },  -- Inhaled Blight
+	{ 69195, 71219, 73031, 73032 },  -- Pungent Blight
+	{ 69240, 71218, 73019, 73020 },  -- Vile Gas
+	{ 69242, 73800, 73801, 73802 },  -- Soul Shriek
+	{ 69278, 71221 },  -- Gas Spore
+	{ 69291, 72101, 72102, 72103 },
+	{ 69325, 71730 },  -- Lay Waste
+	{ 69409, 73797, 73798, 73799 },  -- Soul Reaper
+	{ 69649, 71056, 71057, 71058 },  -- Frost Breath
+	{ 69674, 71224, 73022, 73023 },  -- Mutated Infection
+	{ 70127, 72528, 72529, 72530 },  -- Mystic Buffet
+	{ 70337, 73912, 73913, 73914 },  -- Necrotic Plague
+	{ 70338, 73785, 73786, 73787 },
+	{ 70351, 71966, 71967, 71968 },  -- Unstable Experiment
+	{ 70352, 74118 },
+	{ 70353, 74119 },
+	{ 70447, 72836, 72837, 72838 },  -- Volatile Ooze Adhesive
+	{ 70539, 72457, 72875, 72876 },  -- Regurgitated Ooze
+	{ 70541, 73779, 73780, 73781 },  -- Infest
+	{ 70633, 71283, 72025, 72026 },  -- Gut Spray
+	{ 70672, 72455, 72832, 72833 },  -- Gaseous Bloat
+	{ 70754, 71748, 72024 },  -- Fireball
+	{ 70867, 70879, 71473, 71525 },  -- Essence of the Blood Queen
+	{ 70877, 71474 },  -- Frenzied Bloodthirst
+	{ 71001, 72108, 72109, 72110 },  -- Death and Decay
+	{ 71179, 71741 },  -- Mana Void
+	{ 71420, 72007, 72501, 72502 },  -- Frostbolt
+	{ 71510, 70838 },  -- Blood Mirror
+	{ 71530, 71531, 71532, 71533 },  -- Essence of the Blood Queen
+	{ 71615, 71618 },  -- Tear Gas
+	{ 71807, 72796, 72797, 72798 },  -- Glittering Sparks
+	{ 71818, 71819, 71820, 71821 },  -- Twilight Bloodbolt
+	{ 72039, 73037, 73038, 73039 },  -- Empowered Shock Vortex
+	{ 72143, 72146, 72147, 72148 },  -- Enrage
+	{ 72172, 72173 },  -- Call Blood Beast
+	{ 72219, 72551, 72552, 72553 },  -- Gastric Bloat
+	{ 72259, 74273, 74274, 74275 },  -- Remorseless Winter
+	{ 72272, 72273 },  -- Vile Gas
+	{ 72306, 69638 },  -- Battle Fury
+	{ 72356, 72357, 72358 },  -- Call Blood Beast
+	{ 72385, 72441, 72442, 72443 },  -- Boiling Blood
+	{ 72451, 72463, 72671, 72672 },  -- Mutated Plague
+	{ 72499, 72500, 72497, 72496 },  -- Dark Martyrdom
+	{ 72615, 72295, 74280, 74281 },  -- Malleable Goo
+	{ 72754, 73708, 73709, 73710 },  -- Defile
+	{ 72842, 72843 },  -- Volatile Experiment
+	{ 72851, 72852, 71621, 72850 },  -- Create Concoction
+	{ 72855, 72856, 70911 },  -- Unbound Plague
+	{ 72905, 72906, 72907, 72908 },  -- Frostbolt Volley
+	{ 73058, 72378 },  -- Blood Nova
+	{ 73061, 73062, 73063, 73064 },  -- Frost Breath
+	{ 73121, 73122, 73120, 71893 },  -- Guzzle Potions
+	{ 73144, 73145 },  -- Bone Spike Graveyard
+	{ 73654, 74295, 74296, 74297 },
+}
+local sameAs = {}      -- id -> every id of its ability
+for _, ids in ipairs(SAME_ABILITY) do
+	for _, id in ipairs(ids) do sameAs[id] = ids end
+end
+
 -- The anchor decides what the offset counts FROM. A bare {time:} counts from
 -- the pull; anything else names an occurrence of a combat-log event.
 local function parseAnchor(opts)
@@ -439,16 +560,25 @@ local function parseAnchor(opts)
 	for opt in opts:gmatch("[^,]+") do
 		local prefix, spellID, count = opt:match("^(%a+):(%d+):?(%d*)$")
 		if prefix and (prefix == "SCC" or prefix == "SCS" or prefix == "SAA" or prefix == "SAR") then
-			-- The key is matched exactly as typed. Most Icecrown abilities carry a
-			-- different id per difficulty (Infest 70541/73779/73780/73781), and
-			-- nothing translates between them: a note must name the id of its own
-			-- difficulty, or the line waits for an event that never comes.
+			-- Most Icecrown abilities carry a different id per difficulty (Infest
+			-- 70541/73779/73780/73781). The id as typed is the key; `alts` are the
+			-- same occurrence under the ability's other ids (SAME_ABILITY), so one
+			-- note fires in normal and heroic. Each id keeps its own count.
+			local n = (count ~= "" and count) or "1"
+			local alts
+			for _, other in ipairs(sameAs[tonumber(spellID)] or {}) do
+				if other ~= tonumber(spellID) then
+					alts = alts or {}
+					alts[#alts + 1] = prefix .. ":" .. other .. ":" .. n
+				end
+			end
 			return {
 				kind   = "event",
 				prefix = prefix,
 				spell  = tonumber(spellID),
-				count  = (count ~= "" and count) or "1",
-				key    = prefix .. ":" .. spellID .. ":" .. ((count ~= "" and count) or "1"),
+				count  = n,
+				key    = prefix .. ":" .. spellID .. ":" .. n,
+				alts   = alts,
 			}
 		end
 		local ph = opt:match("^p(%d+)$")
@@ -694,7 +824,12 @@ function P.Remaining(entry, now)
 		return entry.time - (now - phaseAt)
 	end
 
+	-- the first of the ability's ids to reach that occurrence
 	local at = reached[entry.anchor.key]
+	for _, k in ipairs(entry.anchor.alts or {}) do
+		local t = reached[k]
+		if t and (not at or t < at) then at = t end
+	end
 	if not at then return nil end
 	return entry.time - (now - at)
 end

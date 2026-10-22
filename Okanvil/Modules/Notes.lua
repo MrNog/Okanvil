@@ -133,7 +133,6 @@ local defaults = {
 	slots = {},
 	slotStamp = 0,     -- when the slots last changed, for the sync
 	viewSize = nil,    -- 10/25 tab; nil = follow the raid you are in
-	viewHeroic = nil,  -- normal/heroic tab; nil = follow the raid you are in
 	viewRaid = nil,    -- ICC/ToC/RS tab; nil = follow the zone you are in
 }
 
@@ -160,12 +159,11 @@ local defaults = {
 -- ------------------------------------------------------------
 local SIZE_SUFFIX = " (10)"
 
--- Heroic gets its own note, because it is a different fight with the same boss
--- name -- and, more sharply than the 10/25 split, a different set of SPELL IDS.
--- Eighty ICC abilities are numbered per difficulty: Putricide's Unstable
--- Experiment is 70351 on 10N, 71966 on 25N and 71967 on 10HC. A note written
--- for one difficulty does not merely read oddly at another, its anchors wait
--- for casts that never come, and nothing on screen says why.
+-- One note per size serves normal and heroic: the guild writes the plan for
+-- heroic and runs it on normal too. Heroic abilities carry other spell ids
+-- (Unstable Experiment 70351 on 10N, 71967 on 10HC); NotesParse's SAME_ABILITY
+-- lets an anchor fire on any of them. Notes saved under " (HC)" by older builds
+-- stay in the database but are no longer listed or used.
 local HC_SUFFIX = " (HC)"
 
 -- The KEY a note is stored under, for a boss, a size and a difficulty. The 25
@@ -246,11 +244,9 @@ function N.ViewSize()
 	return N.RaidSize() or 25
 end
 
--- Which difficulty the PAGE is showing, on the same terms as the size: follows
--- the raid until a tab is pressed.
+-- The page shows the one note per size, which is the normal key.
 function N.ViewHeroic()
-	if db and db.viewHeroic ~= nil then return db.viewHeroic end
-	return N.RaidHeroic() or false
+	return false
 end
 
 -- Both tabs land here, because they do the same thing to the selection: keep
@@ -272,51 +268,26 @@ function N.SetViewSize(size)
 	reselect()
 end
 
-function N.SetViewHeroic(on)
-	if not db then return end
-	db.viewHeroic = on and true or false
-	reselect()
-end
-
--- The note name for this boss at the size and difficulty we are raiding.
---
--- SIZE falls back, DIFFICULTY does not, and the asymmetry is deliberate.
+-- The note name for this boss at the size we are raiding. Normal and heroic
+-- share it (see HC_SUFFIX).
 --
 -- A 10 and a 25 are the same fight with fewer people, so a guild that keeps one
 -- note per boss should not have the window go blank the moment they run a 10 --
--- the 25 plan is still broadly right. Heroic is not like that: its abilities
--- carry DIFFERENT SPELL IDS, so a normal note shown in a heroic raid is not
--- merely approximate, its anchors wait for casts that never come. Showing it
--- would be worse than showing nothing, because nothing is at least obvious.
+-- the 25 plan is still broadly right, and a 10 without its own note gets it.
 function N.SizedName(name)
 	if not name or name == "" then return name end
 
-	local heroic = N.RaidHeroic()
 	local size = N.RaidSize()
 
 	-- Outside a raid the group has no size, and reading that as "25" sent a solo
 	-- player standing in a note's room to the 25 note while the 10 was the one
 	-- selected -- so the room check said "not here" and nothing ran on a dummy.
 	-- With no raid to decide, the variant already chosen for this boss stands,
-	-- and failing that the size and difficulty the page is showing.
+	-- and failing that the size the page is showing.
 	if size == nil then
 		local sel = db and db.selected
-		if sel and N.BossOf(sel) == name then return sel end
-		size, heroic = N.ViewSize(), N.ViewHeroic()
-	end
-
-	-- Heroic: exact match or nothing.
-	if heroic then
-		local want = N.KeyFor(name, size, true)
-		local t = db and db.notes and db.notes[want]
-		if t and t ~= "" then return want end
-		-- The 25 heroic note, for a 10 heroic raid that has not written its own.
-		if size == 10 then
-			local wide = N.KeyFor(name, 25, true)
-			local w = db and db.notes and db.notes[wide]
-			if w and w ~= "" then return wide end
-		end
-		return want          -- unwritten: the page shows it empty, and says so
+		if sel and N.BossOf(sel) == name and not N.IsHeroic(sel) then return sel end
+		size = N.ViewSize()
 	end
 
 	if size ~= 10 then return name end
@@ -651,9 +622,7 @@ function N.List()
 
 	local extra = {}
 	for n in pairs((db and db.notes) or {}) do
-		-- Matched on BOTH markers: a note written for the other difficulty is a
-		-- different note, and listing it here would offer a plan whose anchors
-		-- cannot fire at the difficulty this tab is showing.
+		-- this size's notes; old heroic copies stay hidden
 		if not seen[n] and N.SizeOf(n) == size and N.IsHeroic(n) == heroic
 			and isLastTab and not known[N.BossOf(n)] then
 			extra[#extra + 1] = n
@@ -1098,7 +1067,8 @@ local function belongsTo(src, boss)
 end
 
 local function viewDiff()
-	return N.ViewSize() .. (N.ViewHeroic() and "H" or "N")
+	-- the note is shared, the casts are not: the catalogue of the raid you are in
+	return N.ViewSize() .. (N.RaidHeroic() and "H" or "N")
 end
 
 local function diffLabel(diff)
@@ -1245,7 +1215,7 @@ local function showSeen()
 		sb:SetValue(0)
 		sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 		sf:EnableMouseWheel(true)
-		sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 40) end)
+		sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 60) end)
 	end
 end
 
@@ -1608,7 +1578,7 @@ function N.BuildPage(p)
 	lsb:SetThumbTexture(lth)
 	lsb:SetScript("OnValueChanged", function(_, v) lsf:SetVerticalScroll(v) end)
 	lsf:EnableMouseWheel(true)
-	lsf:SetScript("OnMouseWheel", function(_, d) lsb:SetValue(lsb:GetValue() - d * 30) end)
+	lsf:SetScript("OnMouseWheel", function(_, d) lsb:SetValue(lsb:GetValue() - d * 60) end)
 	lsf:SetScript("OnSizeChanged", function() lchild:SetWidth(lsf:GetWidth()) end)
 	F.listChild, F.listSF, F.listSB = lchild, lsf, lsb
 
@@ -1620,29 +1590,6 @@ function N.BuildPage(p)
 	-- column, level with the first row of filters on the left. Centred, it sat
 	-- between the two filter rows and read as a caption for neither.
 	F.title:SetPoint("TOPLEFT", RX, CARD_Y - 2)
-
-	-- Normal / Heroic, on the NOTE rather than on the page.
-	--
-	-- Here and not up with the size pills because it belongs to the plan, not to
-	-- the browsing: the boss stays selected and its place in the list does not
-	-- move, only which of its two versions you are reading. Sat directly over the
-	-- note it switches, so there is no doubt about what it applies to.
-	F.diffTabs = {}
-	for i, hc in ipairs({ false, true }) do
-		local b = W.Button(p, hc and "Heroic" or "Normal", "secondary")
-		b:SetSize(62, TAB_H)
-		-- Beside the boss name, because it changes which version of THAT
-		-- plan you are reading -- not which page you are on.
-		b:SetPoint("LEFT", F.title, "RIGHT", 12 + (i - 1) * 60, 1)
-		b._hc = hc
-		b:Tooltip(hc
-			and "The heroic plan."
-				.. "\nHeroic abilities carry DIFFERENT spell ids, so a normal"
-				.. "\nnote's timers never fire here -- this is its own note."
-			or "The normal plan.")
-		b:SetScript("OnClick", function() N.SetViewHeroic(hc) end)
-		F.diffTabs[#F.diffTabs + 1] = b
-	end
 
 	-- No "Fill names" button. The slots resolve as you type now, so writing the
 	-- names into the text bought nothing and cost the note its link to the slot
@@ -1732,7 +1679,7 @@ function N.BuildPage(p)
 	rsb:SetThumbTexture(rth)
 	rsb:SetScript("OnValueChanged", function(_, v) rsf:SetVerticalScroll(v) end)
 	rsf:EnableMouseWheel(true)
-	rsf:SetScript("OnMouseWheel", function(_, d) rsb:SetValue(rsb:GetValue() - d * 30) end)
+	rsf:SetScript("OnMouseWheel", function(_, d) rsb:SetValue(rsb:GetValue() - d * 60) end)
 	rsf:SetScript("OnSizeChanged", function() rchild:SetWidth(rsf:GetWidth()) end)
 	F.readChild, F.readSF, F.readSB = rchild, rsf, rsb
 	F.lineRows = {}
@@ -1888,12 +1835,6 @@ function N.Refresh()
 			b:SetKind((b._raid == vr and b._size == vs) and "tabOn" or "tab")
 		end
 	end
-	if F.diffTabs then
-		local vh = N.ViewHeroic()
-		for _, b in ipairs(F.diffTabs) do
-			b:SetKind(b._hc == vh and "tabOn" or "tab")
-		end
-	end
 
 	-- the list
 	for _, r in ipairs(F.rows) do r:Hide() end
@@ -1999,16 +1940,7 @@ function N.Refresh()
 		F.entries = Okanvil.NotesParse and Okanvil.NotesParse.Parse(text) or {}
 		local timed = 0
 		for _, e in ipairs(F.entries) do if e.time then timed = timed + 1 end end
-		-- An empty heroic note is the expected state, not a fault -- the plan
-		-- simply has not been written yet -- but it has to SAY so, because the
-		-- normal version sitting one tab away looks like it should have appeared.
-		if #F.entries == 0 and N.IsHeroic(sel) then
-			-- Short: it shares the footer row. The why is in the Heroic tab's
-			-- own tooltip, where there is room for it.
-			F.count:SetText("|cffe8734aNo heroic note yet|r")
-		else
-			F.count:SetText(("|cff6f7176%d lines, %d timed|r"):format(#F.entries, timed))
-		end
+		F.count:SetText(("|cff6f7176%d lines, %d timed|r"):format(#F.entries, timed))
 		if not editing then N.PaintLines() end
 	else
 		F.editing = nil
@@ -2145,6 +2077,19 @@ core:SetScript("OnEvent", function(_, event, arg1)
 				db.notes[name] = nil
 			end
 		end
+
+		-- Heroic notes from older builds: one note per size serves heroic now.
+		for name in pairs(db.notes or {}) do
+			if N.IsHeroic(name) then
+				db.notes[name] = nil
+				if db.stamps then db.stamps[name] = nil end
+			end
+		end
+		-- A heroic note selected by an older build: its boss's one note now.
+		if db.selected and N.IsHeroic(db.selected) then
+			db.selected = N.KeyFor(N.BossOf(db.selected), N.SizeOf(db.selected))
+		end
+		db.viewHeroic = nil
 
 		-- Whatever was selected may have just gone with them.
 		if db.selected and not (db.notes[db.selected]
