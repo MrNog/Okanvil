@@ -539,17 +539,18 @@ function P.ShowImport(onDone)
 	local f = importDlg
 	if not f then
 		f = Okanvil:Popup("Import loot priority")
-		f:SetSize(460, 300)
+		f:SetSize(460, 320)
 
 		local hint = W.Text(f, "Copy the site's \"Export reserved\", paste here (Ctrl+V), then Save.", "note", "dim")
-		hint:SetPoint("TOPLEFT", 10, -30)
+		-- clear of the title bar, the same 16px in as the box and the buttons
+		hint:SetPoint("TOPLEFT", 16, -42)
 
 		local box = W.MultiEdit(f)
-		box:SetPoint("TOPLEFT", 8, -46)
-		box:SetPoint("BOTTOMRIGHT", -8, 38)
+		box:SetPoint("TOPLEFT", 14, -62)
+		box:SetPoint("BOTTOMRIGHT", -14, 48)
 
 		local save = W.Button(f, "Save", "primary")
-		save:SetSize(100, 22); save:SetPoint("BOTTOMLEFT", 8, 8)
+		save:SetSize(100, 22); save:SetPoint("BOTTOMLEFT", 14, 16)
 		local cancel = W.Button(f, "Cancel")
 		cancel:SetSize(80, 22); cancel:SetPoint("LEFT", save, "RIGHT", 6, 0)
 		local msg = W.Text(f, "", "label", "dim")

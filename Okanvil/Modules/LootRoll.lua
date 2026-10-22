@@ -329,7 +329,7 @@ local function buildWindow()
 	local title = hdr.title
 	title:ClearAllPoints(); title:SetPoint("LEFT", 10, 0); title:SetJustifyH("LEFT")
 	f.title = title
-	local close = W.CloseButton(hdr); close:SetPoint("RIGHT", -2, 0)
+	local close = W.CloseButton(hdr); close:SetSize(18, 18); close:SetPoint("RIGHT", -4, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
 	f.closeBtn = close
 	-- Ctrl + mouse wheel on the title bar sizes the window; never past the screen

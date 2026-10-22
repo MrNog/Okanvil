@@ -1938,7 +1938,7 @@ function W.Dashboard(parent, cfg)
 			th:SetVertexColor(unpack3(C.accent)); sb:SetThumbTexture(th)
 			sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 			sf:EnableMouseWheel(true)
-			sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
+			sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 60) end)
 			local function relayout()
 				page:SetWidth(sf:GetWidth() or 400)
 				-- A `fill` page is not a tall form that scrolls: it owns its own

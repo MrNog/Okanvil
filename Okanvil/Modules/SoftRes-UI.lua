@@ -152,7 +152,7 @@ local function build()
 	sb:SetThumbTexture(th)
 	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, dz) sb:SetValue(sb:GetValue() - dz * 30) end)
+	sf:SetScript("OnMouseWheel", function(_, dz) sb:SetValue(sb:GetValue() - dz * 60) end)
 
 	f.sf, f.child, f.sb = sf, child, sb
 	f.heads, f.rows = {}, {}

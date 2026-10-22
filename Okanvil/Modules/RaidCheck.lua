@@ -521,7 +521,7 @@ local function buildToast()
 
 	local close = W.Button(f, "X")
 	close:SetSize(16, 15)
-	close:SetPoint("TOPRIGHT", -5, -5)
+	close:SetPoint("TOPRIGHT", -10, -5)
 	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- Shortcuts to the pages, in the order the nav lists them.

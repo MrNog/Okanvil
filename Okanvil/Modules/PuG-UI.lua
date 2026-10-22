@@ -420,7 +420,7 @@ local function buildBoard(p)
 		csb:SetThumbTexture(cth)
 		csb:SetScript("OnValueChanged", function(_, v) csf:SetVerticalScroll(v) end)
 		csf:EnableMouseWheel(true)
-		csf:SetScript("OnMouseWheel", function(_, dz) csb:SetValue(csb:GetValue() - dz * 40) end)
+		csf:SetScript("OnMouseWheel", function(_, dz) csb:SetValue(csb:GetValue() - dz * 60) end)
 		csf:SetScript("OnSizeChanged", function() cchild:SetWidth(csf:GetWidth()) end)
 
 		local rows = {}

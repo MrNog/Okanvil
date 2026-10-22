@@ -91,7 +91,7 @@ function W.ScrollList(parent, x, w, top, bottom)
 	sb:SetThumbTexture(th)
 	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v); syncMouse() end)
 	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, dz) sb:SetValue(sb:GetValue() - dz * 30) end)
+	sf:SetScript("OnMouseWheel", function(_, dz) sb:SetValue(sb:GetValue() - dz * 60) end)
 	sf:SetScript("OnSizeChanged", function() child:SetWidth(sf:GetWidth()) end)
 
 	local function relayout(h)

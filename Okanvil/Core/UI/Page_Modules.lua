@@ -53,7 +53,7 @@ function Okanvil:Settings_Modules(panel)
 	sf:SetScript("OnMouseWheel", function(self, delta)
 		local cur = self:GetVerticalScroll()
 		local max = math.max(0, child:GetHeight() - self:GetHeight())
-		local nxt = cur - delta * 40
+		local nxt = cur - delta * 60
 		if nxt < 0 then nxt = 0 elseif nxt > max then nxt = max end
 		self:SetVerticalScroll(nxt)
 	end)

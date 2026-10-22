@@ -236,7 +236,7 @@ function Okanvil:BuildHome()
 	gsb:SetThumbTexture(gth)
 	gsb:SetScript("OnValueChanged", function(_, v) gsf:SetVerticalScroll(v); syncRowMouse(gsf, gchild) end)
 	gsf:EnableMouseWheel(true)
-	gsf:SetScript("OnMouseWheel", function(_, d) gsb:SetValue(gsb:GetValue() - d * 24) end)
+	gsf:SetScript("OnMouseWheel", function(_, d) gsb:SetValue(gsb:GetValue() - d * 60) end)
 	wrap.gsf, wrap.gchild, wrap.gsb, wrap.gRows = gsf, gchild, gsb, {}
 	local gempty = W.Text(gcard, "", "body", "dim"); gempty:SetPoint("TOPLEFT", 10, -26)
 	wrap.gempty = gempty

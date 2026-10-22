@@ -577,7 +577,7 @@ function OkanvilLogs.BuildUI(host)
 	sb:SetThumbTexture(th)
 	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
+	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 60) end)
 	sf:SetScript("OnSizeChanged", function() child:SetWidth(sf:GetWidth()) end)
 	parent._histSF, parent._histChild, parent._histSB = sf, child, sb
 	parent._histRows, parent._histDetail = {}, {}

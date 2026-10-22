@@ -699,7 +699,7 @@ function G.ShowSnapshot(snap)
 		sb:SetThumbTexture(th)
 		sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 		sf:EnableMouseWheel(true)
-		sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 24) end)
+		sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 60) end)
 		f.sf, f.child, f.sb, f.body = sf, child, sb, W.Text(child, "", "body")
 		f.body:SetPoint("TOPLEFT", 6, -6); f.body:SetPoint("TOPRIGHT", -6, -6); f.body:SetJustifyH("LEFT")
 		viewer = f

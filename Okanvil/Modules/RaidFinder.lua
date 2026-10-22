@@ -962,7 +962,7 @@ end
 -- goes to the leader's name (and its "guild" tag) and the age
 local COL = {
 	instance = 10,
-	gs       = 85,
+	gs       = 100,     -- clear of the longest tag, "Naxx10 Wk"
 	roles    = 135,
 	ress     = 275,
 	saved    = 327,
@@ -1405,7 +1405,7 @@ local function buildUI(panel)
 	sb:SetThumbTexture(th)
 	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 30) end)
+	sf:SetScript("OnMouseWheel", function(_, d) sb:SetValue(sb:GetValue() - d * 60) end)
 	sf:SetScript("OnSizeChanged", function() child:SetWidth(sf:GetWidth()) end)
 	ui.sf, ui.child, ui.sb = sf, child, sb
 
