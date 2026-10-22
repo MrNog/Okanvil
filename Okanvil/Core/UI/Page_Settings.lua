@@ -493,14 +493,19 @@ function Okanvil:ShowVersionChecker()
 		local box = W.Frame(f, "soft")
 		box:SetPoint("TOPLEFT", 10, -62); box:SetPoint("BOTTOMRIGHT", -10, 44)
 
-		-- The download link, to copy and paste wherever you choose. Never whispered
-		-- to the list: a line to every name that did not answer reads as spam.
-		-- Only shown once the check has finished: while it runs, "no reply" still
-		-- means "not yet".
+		-- The download link, to copy and paste wherever you choose. Only shown once
+		-- the check has finished: while it runs, "no reply" still means "not yet".
 		local bLink = W.Button(f, "Copy download link")
-		bLink:SetSize(260, 26); bLink:SetPoint("BOTTOMLEFT", 12, 10)
+		bLink:SetSize(190, 26); bLink:SetPoint("BOTTOMLEFT", 12, 10)
 		bLink:Hide()
 		f.bLink = bLink
+		-- Whisper the group members without Okanvil, only on this click and after a
+		-- confirm: never automatic, never the guild (a line to every guildie is spam).
+		local bWsp = W.Button(f, "Whisper missing")
+		bWsp:SetSize(150, 26); bWsp:SetPoint("LEFT", bLink, "RIGHT", 8, 0)
+		bWsp:Tooltip("Whisper everyone in the group without Okanvil:\nwe run loot council, please install it (with the link).")
+		bWsp:Hide()
+		f.bWsp = bWsp
 		local scroll = CreateFrame("ScrollFrame", nil, box)
 		scroll:SetPoint("TOPLEFT", 6, -6); scroll:SetPoint("BOTTOMRIGHT", -6, 6)
 		Okanvil.Clip(scroll)
@@ -594,8 +599,9 @@ function Okanvil:ShowVersionChecker()
 			f._missing = missing
 			if not waiting and #missing > 0 then
 				f.bLink:Show()
+				if f._scope == "group" then f.bWsp:Show() else f.bWsp:Hide() end
 			else
-				f.bLink:Hide()
+				f.bLink:Hide(); f.bWsp:Hide()
 			end
 			-- size the scroll child to the rows so the wheel range is right
 			local w = f.scroll:GetWidth() or 0
@@ -625,6 +631,20 @@ function Okanvil:ShowVersionChecker()
 		end
 		bLink:SetScript("OnClick", function()
 			Okanvil:ShowExport(DOWNLOAD_URL, "Okanvil download link", "Ctrl+C to copy, then paste it where you want.")
+		end)
+		bWsp:SetScript("OnClick", function()
+			local list = {}
+			for _, n in ipairs(f._missing or {}) do list[#list + 1] = n end
+			if #list == 0 or f._scope ~= "group" then return end
+			Okanvil:Confirm(("Whisper %d player%s without Okanvil?\n|cff8a8d93%s|r"):format(#list,
+				#list == 1 and "" or "s", table.concat(list, ", ")), "Whisper", function()
+				local msg = "We run loot council with Okanvil. Please install it: https://" .. DOWNLOAD_URL
+				-- one every half second, so the server does not drop them as spam
+				for i, n in ipairs(list) do
+					Okanvil.Comms.After((i - 1) * 0.5, function() SendChatMessage(msg, "WHISPER", nil, n) end)
+				end
+				Okanvil:Print(("Whispered %d player%s the Okanvil link."):format(#list, #list == 1 and "" or "s"))
+			end)
 		end)
 		bGroup:SetScript("OnClick", function() ask("group") end)
 		bGuild:SetScript("OnClick", function() ask("guild") end)
