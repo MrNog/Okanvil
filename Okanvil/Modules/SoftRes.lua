@@ -381,6 +381,13 @@ function SR.SetMode(m)
 	if was ~= m and SR.SetIntake and SR.IntakeOpen() then SR.SetIntake(false) end
 	syncNight()
 	sendMode()
+	-- The wishlist belongs to Council: SR or Roll pauses it. The wish window
+	-- closes (raiders close theirs on LOOTMODE) and no wish counts, but the raid
+	-- ID keeps it open, locked and listed: a pug between two guild nights must
+	-- not turn the guild's wishlist off or unlock it.
+	if m ~= "council" and SR.PickWindow and SR.PickWindow.HideKind then
+		SR.PickWindow.HideKind("wish")
+	end
 	if SR.onChange then SR.onChange() end
 	if SR.onPanel then SR.onPanel() end
 	local RM = Okanvil.RollMgr
@@ -407,6 +414,10 @@ do
 			if not MODES[mode] or sender ~= setterName() then return end
 			if remote and remote.mode == mode and remote.from == sender then return end
 			remote = { mode = mode, from = sender }
+			-- no wishes outside Council: the wish window closes
+			if mode ~= "council" and SR.PickWindow and SR.PickWindow.HideKind then
+				pcall(SR.PickWindow.HideKind, "wish")
+			end
 			repaint()
 		end)
 		C.On("LOOTMODEQ", function() sendMode() end)

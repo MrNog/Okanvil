@@ -230,6 +230,7 @@ local state = { raid = "icc", size = 25, hc = false, limit = 1, lockKey = "", fr
 local picks = {}      -- item ids
 local filter = ""
 local scroll = 0
+local flipped = {}    -- boss -> true: clicked away from its default (a wish starts folded, a reserve open)
 local ROWS, ROW_H, WIN_W, SLOT_H = 12, 22, 380, 28
 
 -- Where this character's picks are saved (db.myPicks): one key per kind and
@@ -251,7 +252,9 @@ local function savePicks(sentGen)
 	local d = db()
 	d.myPicks = d.myPicks or {}
 	local old = d.myPicks[picksKey()]
-	d.myPicks[picksKey()] = { at = time(), list = picks, sentGen = sentGen or (old and old.sentGen) }
+	-- a pass stands until a wish is actually sent
+	d.myPicks[picksKey()] = { at = time(), list = picks, sentGen = sentGen or (old and old.sentGen),
+		pass = (not sentGen and old and old.pass) or nil }
 	if sentGen and Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end   -- "Your SR / wish" line
 end
 
@@ -260,34 +263,58 @@ local function loadPicks()
 	picks = {}
 	for _, id in ipairs(saved and saved.list or {}) do picks[#picks + 1] = id end
 	state.sent = saved ~= nil and saved.sentGen ~= nil
+	state.passed = state.sent and saved.pass or nil
 	-- a wish can change until the master looter locks the list; a soft reserve is final
 	if state.kind == "wish" then
-		state.locked = Okanvil.Wish and Okanvil.Wish.IsLocked() or false
+		-- locked holds a wish or pass already sent; a late joiner can still pick
+		state.locked = Okanvil.Wish and Okanvil.Wish.Frozen() or false
 	else
 		state.locked = state.sent and saved.sentGen == state.gen
 	end
 end
 
--- Bosses and their items for this raid and difficulty, filtered by the search.
+local canUse          -- below
+
+-- Bosses and their items for this raid and difficulty, filtered by the search
+-- and, with "Usable" on, by what you can use.
 local function entries()
 	local out, want, seen = {}, filter:lower(), {}
+	local onlyUsable = db().onlyUsable
 	local run = { key = state.raid, size = state.size, hc = state.hc }
+	-- which copy a row shows follows the raid difficulty: heroic set, the heroic
+	-- copy (its icon, ilvl and tooltip). The pick still counts for both copies.
+	local d = GetRaidDifficulty and GetRaidDifficulty()
+	local hcTag = state.size .. ((d == 3 or d == 4) and "h" or "n")
+	local rowOf = {}      -- name -> its index in this boss's items
 	for _, b in ipairs(OkanvilRaidLoot and OkanvilRaidLoot[state.raid] or {}) do
 		local items = {}
+		wipe(rowOf)
 		for _, it in ipairs(b.items or {}) do
+			-- this boss already has the item's other copy: swap in this one if it
+			-- is the difficulty being raided
+			local at = it.name and rowOf[it.name]
+			if at and (it.m or ""):find(hcTag, 1, true) then items[at] = it end
 			-- one row per item: its normal and heroic copies are the same reserve
 			-- epics only: white quest items (Crystalline Essence) are not loot to pick
 			local _, _, q, _, _, itype = GetItemInfo(it.id)
-			local plain = (q and q < 4) or itype == "Quest"
+			-- a wish is never a quest item (Festergut's Acidic Blood), even before the
+			-- client has cached it: the loot table's slot says so
+			local plain = (q and q < 4) or itype == "Quest" or (state.kind == "wish" and it.slot == "Quest")
 			if SR.InRun(it.m, run) and not seen[it.name or it.id] and not SR.IsMaterial(it.id, it.name) and not plain
-				and (want == "" or (it.name or ""):lower():find(want, 1, true)) then
+				and (want == "" or (it.name or ""):lower():find(want, 1, true))
+				and not (onlyUsable and not canUse(it.id)) then
 				seen[it.name or it.id] = true
 				items[#items + 1] = it
+				if it.name then rowOf[it.name] = #items end
 			end
 		end
 		if #items > 0 then
-			out[#out + 1] = { boss = b.boss }
-			for _, it in ipairs(items) do out[#out + 1] = { item = it } end
+			-- a search shows every match, folded bosses too
+			local shut = ((state.kind == "wish") ~= (flipped[b.boss] == true)) and want == ""
+			out[#out + 1] = { boss = b.boss, shut = shut, n = #items }
+			if not shut then
+				for _, it in ipairs(items) do out[#out + 1] = { item = it } end
+			end
 		end
 	end
 	return out
@@ -296,12 +323,14 @@ end
 -- ok, and "Cloth"/"Leather"/"Mail" when it is lighter than your own armour.
 -- The council's rule: your own armour, or lighter armour that suits your spec
 -- and beats what you wear (Prof.LighterWorthAsking).
-local function canUse(id)
+canUse = function(id)
 	local Pf = Okanvil.Prof
 	local _, link = GetItemInfo(id)
 	if not (Pf and Pf.CanIUse and link) then return true end
-	-- the right armour or weapon, but stats for another spec (spell power on a DK)
-	if Pf.StatsFitMe and not Pf.StatsFitMe(link) then return false end
+	-- the right armour or weapon, but stats for another spec (spell power on a DK);
+	-- a wish counts your off spec too, as the council does
+	local fits = (state.kind == "wish" and Pf.FitsEitherSpec) or Pf.StatsFitMe
+	if fits and not fits(link) then return false end
 	if Pf.CanIUse(link) then return true end
 	if Pf.LighterWorthAsking and Pf.LighterWorthAsking(link) then
 		return true, Pf.LighterArmor(link, (select(2, UnitClass("player"))))
@@ -309,8 +338,12 @@ local function canUse(id)
 	return false
 end
 
+-- by id, or by name: a pick of the normal copy is the heroic copy's row too
 local function picked(id)
-	for i, p in ipairs(picks) do if p == id then return i end end
+	local name = GetItemInfo(id)
+	for i, p in ipairs(picks) do
+		if p == id or (name and GetItemInfo(p) == name) then return i end
+	end
 end
 
 local function itemName(id, fallback)
@@ -336,35 +369,27 @@ local function build()
 	f:SetScript("OnDragStop", f.StopMovingOrSizing)
 	Okanvil:Skin(f, "panel")
 	tinsert(UISpecialFrames, "Okanvil_PickWindow")
-	-- the main window's wallpaper: BORDER layer (above the backdrop), its strength
-	-- from Settings, a dark fade easing off to the right where the smith stands
-	local art = f:CreateTexture(nil, "BORDER")
-	art:SetPoint("TOPLEFT", 1, -1); art:SetPoint("BOTTOMRIGHT", -1, 1)
-	art:SetTexture("Interface\\AddOns\\Okanvil\\Media\\window-bg")
-	local fade = f:CreateTexture(nil, "ARTWORK")
-	fade:SetPoint("TOPLEFT", 1, -1); fade:SetPoint("BOTTOMRIGHT", -1, 1)
-	fade:SetTexture("Interface\\Buttons\\WHITE8X8")
-	do
-		local d = C.panelD
-		fade:SetGradientAlpha("HORIZONTAL", d[1], d[2], d[3], 0.85, d[1], d[2], d[3], 0.35)
-	end
-	local function paintArt()
-		local db = Okanvil.db or {}
-		if (db.ratArt or "on") == "off" then art:Hide(); fade:Hide(); return end
-		local w, h = f:GetWidth() or 0, f:GetHeight() or 0
-		if w > 0 and h > 0 then art:SetTexCoord(1 - math.min(1, (w / h) / 2), 1, 0, 1) end
-		art:SetAlpha(db.ratAlpha or 0.45); art:Show(); fade:Show()
-	end
-	f:HookScript("OnSizeChanged", paintArt)
-	f:HookScript("OnShow", paintArt)
-
-	local hdr = W.Frame(f, "raise")
-	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(28)
-	f.title = W.Text(hdr, "Soft reserve", "head"); f.title:SetPoint("LEFT", 10, 0)
-	f.title:SetTextColor(C.accentText[1], C.accentText[2], C.accentText[3])
-	f.sub = W.Text(hdr, "", "label", "dim"); f.sub:SetPoint("LEFT", f.title, "RIGHT", 8, 0)
-	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -4, 0)
+	-- the mini roll's art and title bar: both cut at the window's corners
+	W.ForgeArt(f, 0.22)
+	local hdr = W.TitleBar(f, 26)
+	f.title = hdr.title
+	f.title:ClearAllPoints(); f.title:SetPoint("LEFT", 4, 0); f.title:SetJustifyH("LEFT")
+	f.title:SetText("Soft reserve")
+	local close = W.CloseButton(hdr); close:SetSize(18, 18); close:SetPoint("RIGHT", -2, 0)
 	close:SetScript("OnClick", function() f:Hide() end)
+	-- Usable: hide what you can't use; gold while on, remembered
+	local usable = W.Button(hdr, "Usable"); usable:SetSize(54, 18); usable:SetPoint("RIGHT", close, "LEFT", -4, 0)
+	usable:Tooltip("Show only items you can use (either spec).")
+	local function paintUsable() usable:SetKind(db().onlyUsable and "primary" or nil) end
+	usable:SetScript("OnClick", function()
+		db().onlyUsable = not db().onlyUsable or nil
+		scroll = 0
+		paintUsable(); paint()
+	end)
+	paintUsable()
+	f.sub = W.Text(hdr, "", "label", "dim"); f.sub:SetPoint("LEFT", f.title, "RIGHT", 8, 0)
+	f.sub:SetPoint("RIGHT", usable, "LEFT", -6, 0); f.sub:SetJustifyH("LEFT")
+	if f.sub.SetWordWrap then f.sub:SetWordWrap(false) end
 
 	-- the picks, one line each: item, then a remove cross
 	f.slots = {}
@@ -421,6 +446,12 @@ local function build()
 		r.txt:SetPoint("RIGHT", r.tag, "LEFT", -6, 0); r.txt:SetJustifyH("LEFT")
 		if r.txt.SetWordWrap then r.txt:SetWordWrap(false) end
 		r:SetScript("OnClick", function(self)
+			-- a boss header folds or unfolds its items
+			if self._boss then
+				flipped[self._boss] = not flipped[self._boss] or nil
+				paint()
+				return
+			end
 			local it = self._item
 			if not it then return end
 			if IsShiftKeyDown() then
@@ -445,15 +476,19 @@ local function build()
 		end)
 		r:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		r:EnableMouseWheel(true)
-		r:SetScript("OnMouseWheel", function(_, delta) scroll = scroll - delta * 3; paint() end)
+		r:SetScript("OnMouseWheel", function(_, delta) scroll = scroll - delta * 5; paint() end)
 		f.rows[i] = r
 	end
 	f:EnableMouseWheel(true)
-	f:SetScript("OnMouseWheel", function(_, delta) scroll = scroll - delta * 3; paint() end)
+	f:SetScript("OnMouseWheel", function(_, delta) scroll = scroll - delta * 5; paint() end)
 
 	f.status = W.Text(f, "", "label", "dim"); f.status:SetPoint("BOTTOMLEFT", 12, 14)
 	f.send = W.Button(f, "Send", "primary"); f.send:SetSize(80, 22); f.send:SetPoint("BOTTOMRIGHT", -10, 10)
 	f.send:SetScript("OnClick", function() P.Send() end)
+	-- a wish only: "I want nothing this raid ID", and the window stops asking
+	f.pass = W.Button(f, "Pass"); f.pass:SetSize(60, 22); f.pass:SetPoint("RIGHT", f.send, "LEFT", -6, 0)
+	f.pass:Tooltip("No wish this raid ID.\nThe window won't open for you again on it.")
+	f.pass:SetScript("OnClick", function() P.Pass() end)
 
 	-- Never keep the keyboard: a focused search box eats movement keys.
 	f:SetScript("OnHide", function() search.edit:ClearFocus() end)
@@ -465,13 +500,13 @@ paint = function()
 	local C = Okanvil.Colors
 	win.title:SetText(state.kind == "wish" and "Wishlist" or "Soft reserve")
 	if state.kind == "wish" and Okanvil.Wish then
-		win.sub:SetText(Okanvil.Wish.Label() .. "  ·  1 per raid ID")
+		win.sub:SetText(SR.RaidLabel({ key = state.raid, size = 25 }))
 	else
 		win.sub:SetText(SR.RaidLabel({ key = state.raid, size = state.size, hc = state.hc }) .. "  ·  " .. state.limit)
 	end
 
 	-- the picks, stacked; everything below moves down to fit them
-	local y = -36
+	local y = -40
 	for i, s in ipairs(win.slots) do
 		if i > state.limit then s:Hide() else
 			s:ClearAllPoints(); s:SetPoint("TOPLEFT", 10, y); s:SetPoint("TOPRIGHT", -10, y)
@@ -496,7 +531,7 @@ paint = function()
 	y = y - 28
 	for i, r in ipairs(win.rows) do
 		r:ClearAllPoints()
-		r:SetPoint("TOPLEFT", 1, y - (i - 1) * ROW_H); r:SetPoint("TOPRIGHT", -1, y - (i - 1) * ROW_H)
+		r:SetPoint("TOPLEFT", 6, y - (i - 1) * ROW_H); r:SetPoint("TOPRIGHT", -6, y - (i - 1) * ROW_H)
 	end
 	win:SetHeight(-y + ROWS * ROW_H + 44)
 
@@ -505,9 +540,11 @@ paint = function()
 	for i, r in ipairs(win.rows) do
 		local e = list[i + scroll]
 		r._item = e and e.item or nil
+		r._boss = e and e.boss or nil
 		if not e then r:Hide()
 		elseif e.boss then
-			r.icon:Hide(); r.tag:SetText("")
+			r.icon:Hide()
+			r.tag:SetText(e.shut and ("|cff8a8d93" .. e.n .. "  +|r") or "|cff8a8d93-|r")
 			r.txt:SetPoint("LEFT", 10, 0)
 			r.txt:SetText(e.boss:upper()); r.txt:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
 			r.txt:SetAlpha(1)
@@ -529,16 +566,20 @@ paint = function()
 	end
 
 	if state.locked then
-		win.status:SetText(state.kind == "wish" and "|cffffd200Locked|r |cff8a8d93-- wishes can no longer change|r"
-			or "|cffffd200Sent|r |cff8a8d93-- it can no longer be changed|r")
+		win.status:SetText(state.kind == "wish" and "|cffffd200Locked|r"
+			or "|cffffd200Sent|r")
 		win.send:Disable(); win.send:SetAlpha(0.4)
+	elseif state.kind == "wish" and state.passed then
+		win.status:SetText("|cffffd200Passed|r")
+		win.send:Enable(); win.send:SetAlpha(1)
 	elseif state.kind == "wish" and state.sent then
-		win.status:SetText("|cffffd200Sent|r |cff8a8d93-- change it until the list is locked|r")
+		win.status:SetText("|cffffd200Sent|r")
 		win.send:Enable(); win.send:SetAlpha(1)
 	else
 		win.status:SetText(#picks .. " / " .. state.limit)
 		win.send:Enable(); win.send:SetAlpha(1)
 	end
+	if state.kind == "wish" and not state.locked and not state.passed then win.pass:Show() else win.pass:Hide() end
 end
 
 function P.Open(raid, size, hc, limit, lockKey, from, g, kind)
@@ -546,7 +587,7 @@ function P.Open(raid, size, hc, limit, lockKey, from, g, kind)
 	state.raid, state.size, state.hc = raid, tonumber(size) or 25, hc and true or false
 	state.limit = math.max(1, math.min(3, tonumber(limit) or 1))
 	state.lockKey, state.from, state.gen = lockKey, from, tonumber(g) or 0
-	filter, scroll = "", 0
+	filter, scroll, flipped = "", 0, {}
 	loadPicks()
 	while #picks > state.limit do table.remove(picks) end
 	if not win then win = build() end
@@ -554,6 +595,15 @@ function P.Open(raid, size, hc, limit, lockKey, from, g, kind)
 	win.search.edit:ClearFocus()
 	win:Show()
 	paint()
+end
+
+-- "can't use" follows the spec you are in: a dual-spec swap with the window up
+-- repaints it, the same as closing and opening it again would.
+do
+	local specWatch = CreateFrame("Frame")
+	specWatch:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
+	specWatch:RegisterEvent("PLAYER_TALENT_UPDATE")
+	specWatch:SetScript("OnEvent", function() if win and win:IsShown() then paint() end end)
 end
 
 -- Send asks first: once sent, the picks are final.
@@ -598,6 +648,26 @@ function P.DoSend()
 	win:Hide()
 end
 
+-- No wish this raid ID. Saved as sent, so the window does not open again on it;
+-- picking an item and sending later still works.
+function P.Pass()
+	if state.kind ~= "wish" or state.locked then return end
+	Okanvil:Confirm("Pass: no wish this raid ID?\n|cff8a8d93The window won't open for you again on it.|r", "Pass", function()
+		local Wi = Okanvil.Wish
+		if not (Wi and Wi.Accepting()) then
+			Okanvil:Print("The wishlist is closed.")
+			win:Hide()
+			return
+		end
+		local d = db()
+		d.myPicks = d.myPicks or {}
+		picks = {}
+		d.myPicks[picksKey()] = { at = time(), list = {}, sentGen = state.gen, pass = true }
+		Wi.SendPass(state.lockKey)
+		win:Hide()
+	end)
+end
+
 -- Close the window if it is open on this kind of pick ("wish" / "sr").
 function P.HideKind(kind)
 	if win and win:IsShown() and state.kind == kind then win:Hide() end
@@ -618,7 +688,7 @@ end
 
 -- Every pick set this character sent and still holds: one per raid ID and kind,
 -- wishes first, newest first. A raid ID that is no longer in your saved list has
--- reset, and its picks with it. Each: { kind = "wish"|"sr", lockKey, list, at }.
+-- reset, and its picks with it. Each: { kind = "wish"|"sr", lockKey, list, at, pass }.
 function SR.MyPickSets()
 	local mine, out = ":" .. (me() or ""), {}
 	local cutoff = time() - KEEP_DAYS * 86400
@@ -628,7 +698,7 @@ function SR.MyPickSets()
 		if id then saved[tostring(id)] = true; any = true end
 	end
 	for k, p in pairs(db().myPicks or {}) do
-		if k:sub(-#mine) == mine and p.sentGen ~= nil and (p.at or 0) >= cutoff and p.list and #p.list > 0 then
+		if k:sub(-#mine) == mine and p.sentGen ~= nil and (p.at or 0) >= cutoff and (p.pass or (p.list and #p.list > 0)) then
 			local isWish = k:find("^wish:") ~= nil
 			local lockKey = k:sub(isWish and 6 or 1, -#mine - 1)
 			local id = idOfLockKey(lockKey)
@@ -636,8 +706,9 @@ function SR.MyPickSets()
 			local size = tonumber(lockKey:match("^%a+(%d+):"))
 			-- an ID that left the saved list has reset, and its picks with it
 			if not (id and any and not saved[id]) and not (isWish and size ~= 25) then
-				out[#out + 1] = { kind = isWish and "wish" or "sr", lockKey = lockKey, list = p.list, at = p.at or 0,
-					id = id }
+				-- a pass is one card that says so, item id 0
+				out[#out + 1] = { kind = isWish and "wish" or "sr", lockKey = lockKey, list = p.pass and { 0 } or p.list,
+					pass = p.pass, at = p.at or 0, id = id }
 			end
 		end
 	end

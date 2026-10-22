@@ -122,15 +122,22 @@ function Okanvil:BuildLoot()
 					c:ClearAllPoints()
 					c:SetPoint("TOPLEFT", 12 + (e.col - 1) * (e.cw + GAP), -4 - (e.row - 1) * (CARD_H + GAP))
 					c:SetWidth(e.cw)
-					local name, _, q, _, _, _, _, _, _, tex = GetItemInfo(e.id)
-					c.icon:SetTexture(tex or (GetItemIcon and GetItemIcon(e.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
-					local r, g, bl = GetItemQualityColor(q or 4)
-					c.name:SetText(name or ("item " .. e.id)); c.name:SetTextColor(r, g, bl)
-					c.kind:SetText((e.wish and "|cffe0b860WISH|r" or "|cff8a8d93SOFT RESERVE|r")
-						.. "  |cff6f7176" .. idLabel(e.set) .. "|r")
 					local Wi = Okanvil.Wish
 					c._changeable = e.wish and Wi and Wi.Accepting() and e.set.lockKey == Wi.Key() or false
-					c.sub:SetText((bossOf(e.id) or "") .. (c._changeable and "  |cff8a8d93·  click to change|r" or ""))
+					c.kind:SetText((e.wish and "|cffe0b860WISH|r" or "|cff8a8d93SOFT RESERVE|r")
+						.. "  |cff6f7176" .. idLabel(e.set) .. "|r")
+					if e.set.pass then
+						-- passed: the group loot Pass icon, and no item
+						c.icon:SetTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Up")
+						c.name:SetText("You do not wish for anything"); c.name:SetTextColor(0.75, 0.75, 0.75)
+						c.sub:SetText("Pass" .. (c._changeable and "  |cff8a8d93·  click to pick an item|r" or ""))
+					else
+						local name, _, q, _, _, _, _, _, _, tex = GetItemInfo(e.id)
+						c.icon:SetTexture(tex or (GetItemIcon and GetItemIcon(e.id)) or "Interface\\Icons\\INV_Misc_QuestionMark")
+						local r, g, bl = GetItemQualityColor(q or 4)
+						c.name:SetText(name or ("item " .. e.id)); c.name:SetTextColor(r, g, bl)
+						c.sub:SetText((bossOf(e.id) or "") .. (c._changeable and "  |cff8a8d93·  click to change|r" or ""))
+					end
 					-- the wish wears the gold edge it has on the council board
 					if e.wish then c:SetBackdropBorderColor(C.accent[1], C.accent[2], C.accent[3], 0.8)
 					else c:SetBackdropBorderColor(C.border[1], C.border[2], C.border[3], 1) end

@@ -1,8 +1,9 @@
 -- ============================================================
 --  Okanvil -- Wishlist: what each raider is after this raid ID.
 --
---  Optional, 25-man only. The master looter opens it for one raid ID; raiders
---  with Okanvil then get the soft-reserve pick window as a wish window: one
+--  Optional, 25-man only. The master looter switches it on for one raid ID and
+--  presses Ask; raiders with Okanvil then get the soft-reserve pick window as a
+--  wish window: one
 --  item per raid ID, normal or heroic, changeable until the master looter
 --  locks the list. It is NOT a reserve -- it only tells the council, on the
 --  board, that this item is what that raider is hunting. The council decides.
@@ -16,9 +17,12 @@
 --  to send their wish once more, for anyone who missed it.
 --
 --  Wire:
---    WISHPOST  raid, size, lockKey, gen      ML     -> group (opens the window)
+--    WISHON    raid, size, lockKey, locked   ML     -> group (switched on, no window)
+--    WISHPOST  raid, size, lockKey, gen, locked  ML -> group (Ask: opens the window)
 --    WISHOFF   lockKey                       ML     -> group
 --    WISHPICK  lockKey, itemId               raider -> group
+--    WISHPASS  lockKey                       raider -> group (no wish this ID)
+--    WISHLOCKED lockKey, itemId | "pass"     ML     -> raider (change refused)
 --
 --  /okwish test   your own wish window, solo
 -- ============================================================
@@ -46,6 +50,8 @@ function Wi.onChange()
 	if Wi.Panel then pcall(Wi.Panel.Sync); pcall(Wi.Panel.Paint) end
 	-- the Loot page's Lock button
 	if Wi._paintLock then pcall(Wi._paintLock) end
+	-- the Loot page's Wishlist row: its buttons follow on / off
+	if Wi._paintRow then pcall(Wi._paintRow) end
 end
 
 local KEEP_DAYS = 8
@@ -62,9 +68,9 @@ end
 local function stripRealm(n) return n and (n:gsub("%-.*$", "")) or n end
 local function me() return UnitName("player") end
 
--- Who may open, lock and clear it: the master looter. Solo (no group) you are
--- your own master looter, so the commands can be tried out.
-local function canTrigger(who)
+-- The master looter. Solo (no group) you are your own master looter, so the
+-- commands can be tried out.
+local function isML(who)
 	who = stripRealm(who)
 	if not who then return false end
 	local inGroup = (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0
@@ -73,6 +79,35 @@ local function canTrigger(who)
 	local ml = L and L.MasterLooterName and L.MasterLooterName()
 	return ml ~= nil and stripRealm(ml):lower() == who:lower()
 end
+
+-- The raid leader or an assist (rank 1 or 2 in the raid roster); in a party, its leader.
+local function isAssist(who)
+	who = stripRealm(who)
+	if not who then return false end
+	for i = 1, GetNumRaidMembers() or 0 do
+		local n, rank = GetRaidRosterInfo(i)
+		if n and stripRealm(n):lower() == who:lower() then return (rank or 0) >= 1 end
+	end
+	if (GetNumRaidMembers() or 0) == 0 and (GetNumPartyMembers() or 0) > 0 then
+		if who == me() then return IsPartyLeader() and true or false end
+		for i = 1, GetNumPartyMembers() do
+			if (UnitName("party" .. i) or ""):lower() == who:lower() then
+				return UnitIsPartyLeader("party" .. i) and true or false
+			end
+		end
+	end
+	return false
+end
+
+-- Whispered wishes go to the master looter, whoever opened the list.
+local function mlName()
+	local L = Okanvil.Loot
+	local ml = L and L.MasterLooterName and L.MasterLooterName()
+	return ml and stripRealm(ml) or me() or "me"
+end
+
+-- Who may open, ask, lock and clear it: the master looter and the assists.
+local function canTrigger(who) return isML(who) or isAssist(who) end
 Wi.CanTrigger = function() return canTrigger(me()) end
 
 -- Who sees the list: the master looter and the officers (the council).
@@ -154,7 +189,11 @@ end
 
 -- Open on this raid ID, or for this session by /okwish test (not saved, so a
 -- test never leaves it open after a reload).
-local function openState() return db().open[curKey()] end
+-- An entry with `off` is switched off but keeps its lock for when it is back on.
+local function openState()
+	local o = db().open[curKey()]
+	return (o and not o.off) and o or nil
+end
 function Wi.IsOn() return (Wi._test or openState() ~= nil) and true or false end
 -- Wishes are for the guild's 25-man raids only, normal or heroic.
 local function is25() return (SR.Raid().size or 25) == 25 end
@@ -177,21 +216,48 @@ local function prune()
 	end
 end
 
+-- A change refused by the lock: the master looter tells that raider what stands,
+-- so a client that missed the lock (offline when it came) shows the right wish.
+local function refused(lockKey, who, w)
+	if who == me() or not isML(me()) then return end
+	local C = Okanvil.Comms
+	if C and C.Whisper then C.Whisper("WISHLOCKED", who, lockKey, w.pass and "pass" or tostring(w.id)) end
+end
+
 -- One wish per raider per raid ID; a new one replaces it until the list is locked.
+-- Locked, a raider who has a wish or a pass keeps it; one with neither (a late
+-- joiner on the second night) can still send theirs.
 local function store(lockKey, who, id)
 	id = tonumber(id)
 	if not (who and id) then return end
 	lockKey = norm(lockKey)
 	local d = db()
-	-- closed or locked: the wishes already in stay, no new ones
-	if not Wi.IsOn() or Wi.IsLocked() then return end
+	if not Wi.IsOn() then return end
 	d.list[lockKey] = d.list[lockKey] or {}
 	local l = d.list[lockKey]
-	l._at = time()
 	local old = l[who]
 	if old and old.id == id then return end
+	if old and Wi.IsLocked() then refused(lockKey, who, old); return end
+	l._at = time()
 	l[who] = { id = id, name = GetItemInfo(id) }
 	Okanvil:Trace("WISH", who .. (old and " changes wish to " or " wishes ") .. tostring(l[who].name or id))
+	if Wi.onChange then Wi.onChange() end
+end
+
+-- A raider who wants nothing this raid ID: kept as a pass, so Ask missing
+-- leaves them alone. A wish sent later replaces it.
+local function storePass(lockKey, who)
+	if not who then return end
+	lockKey = norm(lockKey)
+	local d = db()
+	if not Wi.IsOn() then return end
+	d.list[lockKey] = d.list[lockKey] or {}
+	local l = d.list[lockKey]
+	if l[who] and l[who].pass then return end
+	if l[who] and Wi.IsLocked() then refused(lockKey, who, l[who]); return end
+	l._at = time()
+	l[who] = { pass = true }
+	Okanvil:Trace("WISH", who .. " passes")
 	if Wi.onChange then Wi.onChange() end
 end
 
@@ -200,16 +266,22 @@ function Wi.Of(who)
 	if not Wi.Live() then return nil end
 	local l = db().list[curKey()]
 	local w = l and l[stripRealm(who)]
+	if w and w.pass then return nil end
 	return w and w.id or nil, w and w.name
 end
 
 -- Every wish on this raid's lockout, sorted by player: { { who, id, name }, ... }.
+-- A pass is { who, pass = true }.
 function Wi.All()
 	local out = {}
 	local l = db().list[curKey()]
 	for who, w in pairs(l or {}) do
 		if who ~= "_at" and type(w) == "table" then
-			out[#out + 1] = { who = who, id = w.id, name = w.name or GetItemInfo(w.id) }
+			if w.pass then
+				out[#out + 1] = { who = who, pass = true }
+			else
+				out[#out + 1] = { who = who, id = w.id, name = w.name or GetItemInfo(w.id) }
+			end
 		end
 	end
 	table.sort(out, function(a, b) return a.who < b.who end)
@@ -252,18 +324,16 @@ function Wi.SetOn(on)
 	if on then
 		local r = SR.Raid()
 		prune()
+		-- back on keeps a lock: only Unlock or Clear lifts it
 		d.open[lockKey] = d.open[lockKey] or { at = time() }
-		d.open[lockKey].locked = nil
-		if C and C.Send then C.Send("WISHPOST", r.key, r.size, lockKey, 0) end
-		Okanvil:Print("Wishlist open for this raid ID: everyone in the group with Okanvil gets the wish window.")
-		announce(("WISHLIST open: pick 1 item for this raid ID in Okanvil, or whisper %s: wh [item]. "
-			.. "You can change it until the list is locked. It is not a reserve."):format(me() or "me"))
-		-- the master looter raids too: they get the window like everyone else
-		if not mySent(lockKey) then
-			openWhenCalm({ r.key, r.size, false, 1, lockKey, me(), "0", "wish" })
-		end
+		d.open[lockKey].off = nil
+		d.open[lockKey].asked = nil
+		-- on, quietly: nobody's window opens until Ask
+		if C and C.Send then C.Send("WISHON", r.key, r.size, lockKey, Wi.IsLocked() and "1" or "0") end
+		Okanvil:Print("Wishlist on for this raid ID. Press Ask to send the wish window.")
 	else
-		d.open[lockKey] = nil
+		-- off, not forgotten: the lock stays for when it is switched on again
+		if d.open[lockKey] then d.open[lockKey].off = true end
 		if C and C.Send then C.Send("WISHOFF", lockKey) end
 		if SR.PickWindow and SR.PickWindow.HideKind then SR.PickWindow.HideKind("wish") end
 		Okanvil:Print("Wishlist off.")
@@ -271,8 +341,33 @@ function Wi.SetOn(on)
 	if Wi.onChange then Wi.onChange() end
 end
 
+-- Ask is the only thing that sends the wish window: it opens for raiders who
+-- have neither sent a wish nor passed; everyone else just sends theirs again.
+-- The first Ask of a round (after switching it on, or after a Clear) also puts a
+-- raid warning up, for raiders without Okanvil; a later one (a late joiner) is
+-- quiet. Works while locked: the lock holds the wishes already in.
+function Wi.AskMissing()
+	if not Wi.Live() then Okanvil:Print("The wishlist is not on."); return end
+	local r, lockKey = SR.Raid(), curKey()
+	local C = Okanvil.Comms
+	if C and C.Send then C.Send("WISHPOST", r.key, r.size, lockKey, 0, Wi.IsLocked() and "1" or "0") end
+	local o = openState()
+	if o and not o.asked then
+		o.asked = true
+		announce(Wi.IsLocked()
+			and ("WISHLIST: no wish yet for this raid ID? Pick 1 item in Okanvil, or whisper %s: wh [item]."):format(mlName())
+			or ("WISHLIST open: pick 1 item for this raid ID in Okanvil, or whisper %s: wh [item]. "
+				.. "You can change it until the list is locked. It is not a reserve."):format(mlName()))
+	end
+	-- the master looter raids too: they get the window like everyone else
+	if not mySent(lockKey) then
+		openWhenCalm({ r.key, r.size, false, 1, lockKey, me(), "0", "wish" })
+	end
+	Okanvil:Print("Wish window sent to everyone without a wish.")
+end
+
 -- Clear every wish on this raid ID, everywhere: the officers' lists and each
--- raider's own sent wish, so the window opens again and everyone picks anew.
+-- raider's own sent wish, so Ask reaches everyone again.
 -- With no lockKey every raid ID goes: a wish saved under another raid, size or
 -- day would otherwise still show as "Your wish" after a Clear.
 local function wipeLocal(lockKey)
@@ -295,38 +390,47 @@ function Wi.Clear()
 	wipeLocal()
 	local C = Okanvil.Comms
 	if C and C.Send then C.Send("WISHCLEAR", lockKey) end
-	Okanvil:Print("Wishes cleared for this raid ID.")
-	-- still on: everyone gets the window again
-	if Wi.Live() then Wi.SetOn(true) end
+	-- a clear also lifts the lock; nobody's window opens until Ask, whose next
+	-- press is a new round with its raid warning
+	if Wi.IsLocked() then Wi.SetLocked(false, true) end
+	local o = db().open[lockKey]
+	if o then o.asked = nil end
+	Okanvil:Print("Wishes cleared for this raid ID. Press Ask to send the wish window.")
 end
 
--- Lock: the wishes already sent stay on the board, nobody can add or change one.
--- Every raider's window closes; opening it again, or Clear, unlocks it.
--- A lock only means something while the wishlist is open.
+-- Lock: the wishes and passes already sent are final for this raid ID. A raider
+-- with neither can still send one (Ask). It lasts across nights and an off / on
+-- of the wishlist; only Unlock or Clear lifts it.
 function Wi.IsLocked()
-	local o = openState()
+	local o = db().open[curKey()]
 	return (o and o.locked) and true or false
 end
-function Wi.Accepting() return Wi.Live() and not Wi.IsLocked() end
+-- Locked and this character already has a wish or a pass: nothing to change.
+function Wi.Frozen() return Wi.IsLocked() and mySent(curKey()) ~= nil end
+-- Can this character send (or change) a wish right now?
+function Wi.Accepting() return Wi.Live() and not Wi.Frozen() end
 local function applyLock(locked)
-	local o = openState()
-	if o then o.locked = locked or nil end
-	if locked and SR.PickWindow and SR.PickWindow.HideKind then SR.PickWindow.HideKind("wish") end
+	local d, k = db(), curKey()
+	if locked and not d.open[k] then d.open[k] = { at = time(), off = true } end
+	if d.open[k] then d.open[k].locked = locked or nil end
+	if Wi.Frozen() and SR.PickWindow and SR.PickWindow.HideKind then SR.PickWindow.HideKind("wish") end
 	if Wi.onChange then Wi.onChange() end
 end
-function Wi.SetLocked(locked)
+function Wi.SetLocked(locked, quiet)
 	applyLock(locked)
 	local C = Okanvil.Comms
 	if C and C.Send then C.Send("WISHLOCK", locked and "1" or "0") end
-	announce(locked and "WISHLIST LOCKED: your wishes are saved, no new or changed wishes for this raid ID."
-		or "WISHLIST open again: pick or change 1 item in Okanvil, or whisper " .. (me() or "me") .. ": wh [item].")
-	Okanvil:Print(locked and "Wishlist locked: no new wishes." or "Wishlist unlocked.")
+	if quiet then return end
+	announce(locked and "WISHLIST LOCKED: wishes are final for this raid ID. If you have none yet, you can still pick one."
+		or "WISHLIST open again: pick or change 1 item in Okanvil, or whisper " .. mlName() .. ": wh [item].")
+	Okanvil:Print(locked and "Wishlist locked: wishes are final, raiders without one can still pick."
+		or "Wishlist unlocked.")
 end
 
 -- ---- Raider: send -------------------------------------------------------------
 function Wi.SendPick(lockKey, id)
 	if not id then return end
-	if not Wi.Accepting() then
+	if not Wi.Live() then      -- the window checked the lock before saving the pick
 		Okanvil:Print("The wishlist is closed: wish not sent.")
 		return
 	end
@@ -340,11 +444,27 @@ function Wi.SendPick(lockKey, id)
 	end
 end
 
--- The wish this character already sent on a lockout (the pick window keeps it).
+-- No wish this raid ID: the window never opens for you again on it.
+function Wi.SendPass(lockKey)
+	if not Wi.Live() then      -- the window checked the lock before saving the pass
+		Okanvil:Print("The wishlist is closed.")
+		return
+	end
+	lockKey = norm(lockKey)
+	storePass(lockKey, me())
+	local C = Okanvil.Comms
+	if C and C.Send then C.Send("WISHPASS", lockKey) end
+	Okanvil:Print("Pass sent: no wish this raid ID.")
+end
+
+-- The wish this character already sent on a lockout (the pick window keeps it),
+-- or "pass".
 mySent = function(lockKey)
 	local s = Okanvil.db.softres and Okanvil.db.softres.myPicks
 	local p = s and s[SR.PickKey("wish", lockKey)]
-	return p and p.sentGen ~= nil and p.list and p.list[1] or nil
+	if not (p and p.sentGen ~= nil) then return nil end
+	if p.pass then return "pass" end
+	return p.list and p.list[1] or nil
 end
 
 -- ---- Wire -----------------------------------------------------------------------
@@ -363,7 +483,7 @@ end)
 do
 	local C = Okanvil.Comms
 	if C and C.On then
-		C.On("WISHPOST", function(sender, raid, size, lockKey, g)
+		C.On("WISHPOST", function(sender, raid, size, lockKey, g, locked)
 			sender = stripRealm(sender)
 			if sender == me() then return end
 			if not canTrigger(sender) then return end
@@ -371,19 +491,36 @@ do
 			lockKey = norm(lockKey)
 			local d = db()
 			d.open[lockKey] = d.open[lockKey] or { at = time() }
-			d.open[lockKey].locked = nil
+			d.open[lockKey].off = nil
+			-- the sender says whether it is locked (an older build sends nothing: open)
+			d.open[lockKey].locked = (locked == "1") or nil
 			if Wi.onChange then Wi.onChange() end
 			-- already sent this ID: send it again for whoever missed it, no window
 			local sent = mySent(lockKey)
-			if sent then
+			if sent == "pass" then
+				C.Send("WISHPASS", lockKey)
+				return
+			elseif sent then
 				C.Send("WISHPICK", lockKey, sent)
 				return
 			end
 			openWhenCalm({ raid, size, false, 1, lockKey, sender, g or "0", "wish" })
 		end)
+		-- switched on: the list is open on this raid ID, no window until Ask
+		C.On("WISHON", function(sender, raid, size, lockKey, locked)
+			sender = stripRealm(sender)
+			if sender == me() or not canTrigger(sender) or tonumber(size) ~= 25 then return end
+			lockKey = norm(lockKey)
+			local d = db()
+			d.open[lockKey] = d.open[lockKey] or { at = time() }
+			d.open[lockKey].off = nil
+			d.open[lockKey].locked = (locked == "1") or nil
+			if Wi.onChange then Wi.onChange() end
+		end)
 		C.On("WISHOFF", function(sender, lockKey)
 			if not canTrigger(sender) then return end
-			db().open[norm(lockKey)] = nil
+			local o = db().open[norm(lockKey)]
+			if o then o.off = true end
 			pending = nil
 			if SR.PickWindow and SR.PickWindow.HideKind then SR.PickWindow.HideKind("wish") end
 			if Wi.onChange then Wi.onChange() end
@@ -395,9 +532,41 @@ do
 		C.On("WISHCLEAR", function(sender, lockKey)
 			if not canTrigger(sender) or stripRealm(sender) == me() then return end
 			wipeLocal(norm(lockKey))
+			local o = db().open[norm(lockKey)]
+			if o then o.locked = nil end
 		end)
 		C.On("WISHPICK", function(sender, lockKey, id)
 			store(lockKey, stripRealm(sender), id)
+		end)
+		C.On("WISHPASS", function(sender, lockKey)
+			storePass(lockKey, stripRealm(sender))
+		end)
+		-- our change was refused, the list is locked: this is the wish that stands
+		C.On("WISHLOCKED", function(sender, lockKey, v)
+			if not canTrigger(sender) or not v then return end
+			lockKey = norm(lockKey)
+			local d = db()
+			d.open[lockKey] = d.open[lockKey] or { at = time() }
+			d.open[lockKey].locked = true
+			d.list[lockKey] = d.list[lockKey] or {}
+			local s = Okanvil.db.softres
+			if v == "pass" then
+				d.list[lockKey][me()] = { pass = true }
+				if s then
+					s.myPicks = s.myPicks or {}
+					s.myPicks[SR.PickKey("wish", lockKey)] = { at = time(), list = {}, sentGen = 0, pass = true }
+				end
+				Okanvil:Print("The wishlist is locked: you passed on this raid ID.")
+			elseif tonumber(v) then
+				local id = tonumber(v)
+				d.list[lockKey][me()] = { id = id, name = GetItemInfo(id) }
+				if SR.PickWindow and SR.PickWindow.MarkSent then SR.PickWindow.MarkSent("wish", lockKey, id) end
+				local _, link = GetItemInfo(id)
+				Okanvil:Print("The wishlist is locked: your wish stays " .. (link or ("item " .. id)) .. ".")
+			end
+			if SR.PickWindow and SR.PickWindow.HideKind then SR.PickWindow.HideKind("wish") end
+			if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
+			if Wi.onChange then Wi.onChange() end
 		end)
 		-- a wish someone whispered to the master looter, passed on for them
 		C.On("WISHFOR", function(sender, lockKey, id, who)
@@ -420,7 +589,8 @@ end
 local function reply(to, text) SendChatMessage(text, "WHISPER", nil, to) end
 
 local function onWhisper(text, sender)
-	if not (Wi.Live() and canTrigger(me())) then return end
+	-- the master looter alone answers, so a whisper gets one reply
+	if not (Wi.Live() and isML(me())) then return end
 	local rest = text:match("^%s*[Ww][Hh]%s+(.+)$") or text:match("^%s*[Ww][Ii][Ss][Hh]%s+(.+)$")
 	if not rest then return end
 	local who = stripRealm(sender)
@@ -434,15 +604,16 @@ local function onWhisper(text, sender)
 		reply(sender, "Wish: that item does not drop in this raid.")
 		return
 	end
-	if Wi.IsLocked() then
-		reply(sender, "Wish: the wishlist is locked for this raid ID.")
-		return
-	end
 	local lockKey = curKey()
 	local l = db().list[lockKey]
 	local had = l and l[who]
 	if had and had.id == id then
 		reply(sender, "Wish: that is already your wish for this raid ID.")
+		return
+	end
+	-- locked: a wish or pass already in stays; a first wish is still taken
+	if had and Wi.IsLocked() then
+		reply(sender, "Wish: the wishlist is locked, your wish for this raid ID stays.")
 		return
 	end
 	store(lockKey, who, id)
@@ -476,8 +647,10 @@ Wi.Panel = WP
 local wpanel
 -- Same look as the SR panel: items under their boss, icon and name, who wished
 -- for it underneath, and what became of it tonight.
-local WP_W, WP_PAD, WP_ICON, WP_GAP, WP_HDR = 290, 8, 20, 6, 26
+local WP_W, WP_PAD, WP_ICON, WP_GAP, WP_HDR = 290, 14, 28, 6, 26
 local WP_MIN, WP_MAX = 110, 560
+-- where the list starts: the title bar sits 6px inside the window's edge
+local WP_TOP = WP_HDR + 6
 
 local function rollWin() return _G.Okanvil_RollMgr end
 
@@ -493,32 +666,40 @@ local function wbuild()
 	f:EnableMouse(true); f:SetClampedToScreen(true)
 	if W.ForgeArt then W.ForgeArt(f, 0.22) end
 
-	local hdr = W.Frame(f, "bare")
-	hdr._okTitleBar = true   -- its buttons are drawn like the X: the red plate
-	hdr:SetPoint("TOPLEFT", 1, -1); hdr:SetPoint("TOPRIGHT", -1, -1); hdr:SetHeight(WP_HDR)
-	W.Hairline(hdr, "BOTTOM", 8)
-	local title = W.Text(hdr, "Wishes", "body", "accent")
-	title:SetPoint("LEFT", WP_PAD, 0); title:Color(1, 0.82, 0)
-	local close = W.Button(hdr, "X"); close:SetSize(22, 20); close:SetPoint("RIGHT", -3, 0)
+	-- the mini roll's title bar: its top corners follow the window's cut
+	local hdr = W.TitleBar(f, WP_HDR)
+	local title = hdr.title
+	title:ClearAllPoints(); title:SetPoint("LEFT", 4, 0); title:SetJustifyH("LEFT")
+	title:SetText("Wishes")
+	local close = W.CloseButton(hdr); close:SetSize(18, 18); close:SetPoint("RIGHT", -2, 0)
 	close:SetScript("OnClick", function() WP.Hide(true) end)
-	local clr = W.Button(hdr, "Clear"); clr:SetSize(44, 20); clr:SetPoint("RIGHT", close, "LEFT", -4, 0)
-	clr:Tooltip("Clear every wish on this raid ID.\nEveryone gets the window again.")
+	local clr = W.Button(hdr, "Clear"); clr:SetSize(44, 18); clr:SetPoint("RIGHT", close, "LEFT", -4, 0)
+	clr:Tooltip("Clear every wish on this raid ID and unlock it.\nThe window opens again only when you press Ask.")
 	clr:SetScript("OnClick", function()
-		Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Everyone picks again.|r", "Clear", Wi.Clear)
+		Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Press Ask after to send the wish window.|r", "Clear", Wi.Clear)
 	end)
 	f.clr = clr
+	local ask = W.Button(hdr, "Ask"); ask:SetSize(36, 18); ask:SetPoint("RIGHT", clr, "LEFT", -4, 0)
+	ask:Tooltip("Open the wish window for everyone without a wish (late joiners).\n"
+		.. "Not for those who already picked or passed. No raid warning.")
+	ask:SetScript("OnClick", function() Wi.AskMissing() end)
+	f.ask = ask
+	-- after the title, cut short before the buttons: never on top of the title
 	f.count = W.Text(hdr, "", "note", "dim")
-	f.count:SetPoint("RIGHT", clr, "LEFT", -8, 0)
+	f.count:SetPoint("LEFT", title, "RIGHT", 8, 0)
+	f.count:SetPoint("RIGHT", ask, "LEFT", -6, 0)
+	f.count:SetJustifyH("LEFT")
+	if f.count.SetWordWrap then f.count:SetWordWrap(false) end
 
 	-- flat scroll, like the SR panel
 	local sf = CreateFrame("ScrollFrame", nil, f)
-	sf:SetPoint("TOPLEFT", WP_PAD, -(WP_HDR + 6)); sf:SetPoint("BOTTOMRIGHT", -WP_PAD - 6, WP_PAD)
+	sf:SetPoint("TOPLEFT", WP_PAD, -(WP_TOP + 6)); sf:SetPoint("BOTTOMRIGHT", -WP_PAD - 6, WP_PAD)
 	local child = CreateFrame("Frame", nil, sf)
 	child:SetWidth(WP_W - WP_PAD * 2 - 6); child:SetHeight(1)
 	sf:SetScrollChild(child)
 	if Okanvil.Clip then Okanvil.Clip(sf) end
 	local sb = CreateFrame("Slider", nil, f)
-	sb:SetPoint("TOPRIGHT", -4, -(WP_HDR + 6)); sb:SetPoint("BOTTOMRIGHT", -4, WP_PAD); sb:SetWidth(4)
+	sb:SetPoint("TOPRIGHT", -9, -(WP_TOP + 6)); sb:SetPoint("BOTTOMRIGHT", -9, WP_PAD); sb:SetWidth(4)
 	sb:SetOrientation("VERTICAL"); sb:SetValueStep(1); sb:SetMinMaxValues(0, 0); sb:SetValue(0)
 	local th = sb:CreateTexture(nil, "OVERLAY")
 	th:SetTexture("Interface\\Buttons\\WHITE8x8")
@@ -527,7 +708,7 @@ local function wbuild()
 	sb:SetThumbTexture(th)
 	sb:SetScript("OnValueChanged", function(_, v) sf:SetVerticalScroll(v) end)
 	sf:EnableMouseWheel(true)
-	sf:SetScript("OnMouseWheel", function(_, dz) sb:SetValue(sb:GetValue() - dz * 30) end)
+	sf:SetScript("OnMouseWheel", function(_, dz) sb:SetValue(sb:GetValue() - dz * 60) end)
 	f.sf, f.child, f.sb = sf, child, sb
 	f.heads, f.rows = {}, {}
 
@@ -561,13 +742,14 @@ local function wRow(i)
 	if r then return r end
 	r = CreateFrame("Frame", nil, wpanel.child)
 	r:EnableMouse(true)
-	r.icon = r:CreateTexture(nil, "ARTWORK")
-	r.icon:SetSize(WP_ICON, WP_ICON); r.icon:SetPoint("TOPLEFT", 0, -3)
-	r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+	-- the kit's grey octagon around the icon
+	r.ic = W.FramedIcon(r, nil, WP_ICON, false)
+	r.ic:SetPoint("TOPLEFT", 0, -2)
+	r.icon = r.ic.icon
 	r.status = W.Text(r, "", "note")
 	r.status:SetPoint("TOPRIGHT", -4, -3); r.status:SetJustifyH("RIGHT")
 	r.name = W.Text(r, "", 11)
-	r.name:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", WP_GAP, 0)
+	r.name:SetPoint("TOPLEFT", r.ic, "TOPRIGHT", WP_GAP, -3)
 	r.name:SetPoint("RIGHT", r.status, "LEFT", -6, 0)
 	r.name:SetJustifyH("LEFT")
 	if r.name.SetWordWrap then r.name:SetWordWrap(false) end
@@ -633,17 +815,21 @@ function WP.Paint()
 	local W, L, f = Okanvil.W, Okanvil.Loot, wpanel
 
 	-- one entry per item, with everyone who wished for it, ordered by boss
-	local byItem, items = {}, {}
+	local byItem, items, passes = {}, {}, {}
 	for _, w in ipairs(Wi.All()) do
-		local name = w.name or GetItemInfo(w.id)
-		local key = name or w.id
-		local e = byItem[key]
-		if not e then
-			e = { id = w.id, name = name, who = {}, boss = bossOf(w.id, name) }
-			byItem[key] = e
-			items[#items + 1] = e
+		if w.pass then
+			passes[#passes + 1] = w.who
+		else
+			local name = w.name or GetItemInfo(w.id)
+			local key = name or w.id
+			local e = byItem[key]
+			if not e then
+				e = { id = w.id, name = name, who = {}, boss = bossOf(w.id, name) }
+				byItem[key] = e
+				items[#items + 1] = e
+			end
+			e.who[#e.who + 1] = w.who
 		end
-		e.who[#e.who + 1] = w.who
 	end
 	local order = {}
 	for i, b in ipairs(OkanvilRaidLoot and OkanvilRaidLoot[SR.Raid().key] or {}) do order[b.boss] = i end
@@ -712,9 +898,33 @@ function WP.Paint()
 		y = y + rh + 2
 	end
 	f._cold = cold
+
+	-- who passed: no wish this raid ID, and Ask missing leaves them alone
+	if #passes > 0 then
+		table.sort(passes)
+		hi = hi + 1
+		local h = wHead(hi)
+		h:SetPoint("TOPLEFT", 0, -y); h:SetWidth(width)
+		h.txt:SetText("Pass")
+		h:Show()
+		y = y + 18 + 4
+		f.passTxt = f.passTxt or W.Text(f.child, "", "note")
+		f.passTxt:ClearAllPoints(); f.passTxt:SetPoint("TOPLEFT", 0, -y)
+		f.passTxt:SetWidth(width); f.passTxt:SetJustifyH("LEFT")
+		local names = {}
+		for _, who in ipairs(passes) do
+			people = people + 1
+			names[#names + 1] = (L and L.ClassColorName and L.ClassColorName(who)) or who
+		end
+		f.passTxt:SetText(table.concat(names, "|cff6f7176, |r"))
+		f.passTxt:Show()
+		y = y + (f.passTxt:GetStringHeight() or 12) + 4
+	elseif f.passTxt then
+		f.passTxt:Hide()
+	end
 	y = y + 8
 
-	if #items == 0 then
+	if #items == 0 and #passes == 0 then
 		f.empty = f.empty or W.Text(f.child, "Nobody has sent a wish yet.", "note", "dim")
 		f.empty:SetPoint("TOPLEFT", 0, -4); f.empty:SetWidth(width); f.empty:SetJustifyH("LEFT")
 		f.empty:Show()
@@ -724,15 +934,15 @@ function WP.Paint()
 	end
 
 	local ni = #items
-	f.count:SetText(("%s N/H  ·  %d item%s, %d raider%s"):format(SR.RaidLabel({ key = SR.Raid().key, size = 25 }),
+	f.count:SetText(("%s  ·  %d item%s, %d raider%s"):format(SR.RaidLabel({ key = SR.Raid().key, size = 25 }),
 		ni, ni == 1 and "" or "s", people, people == 1 and "" or "s"))
-	-- the council reads the list; only the master looter clears it
-	if canTrigger(me()) then f.clr:Show() else f.clr:Hide() end
+	-- the council reads the list; only the master looter asks and clears it
+	if canTrigger(me()) then f.clr:Show(); f.ask:Show() else f.clr:Hide(); f.ask:Hide() end
 
 	f.child:SetHeight(math.max(1, y))
-	local h = math.min(WP_MAX, math.max(WP_MIN, WP_HDR + 6 + y + WP_PAD))
+	local h = math.min(WP_MAX, math.max(WP_MIN, WP_TOP + 6 + y + WP_PAD))
 	f:SetHeight(h)
-	local view = h - (WP_HDR + 6) - WP_PAD
+	local view = h - (WP_TOP + 6) - WP_PAD
 	local maxScroll = math.max(0, y - view)
 	f.sb:SetMinMaxValues(0, maxScroll)
 	if f.sb:GetValue() > maxScroll then f.sb:SetValue(maxScroll) end
@@ -746,13 +956,16 @@ function WP.Allowed()
 	return SR.Mode() == "council" and Wi.IsOn() and Wi.CanSee() and rm and rm:IsShown() and true or false
 end
 
+-- Closed by default: WH opens it, and it closes again with the mini roll.
+local wpOpen
+
 function WP.Show()
-	db().panel = true
+	wpOpen = true
 	local rm = rollWin()
-	-- follows the mini roll: hidden with it, back with it
+	-- closes with the mini roll; opening it again is WH
 	if rm and not rm._wishHooked then
 		rm._wishHooked = true
-		rm:HookScript("OnHide", function() WP.Hide(false) end)
+		rm:HookScript("OnHide", function() WP.Hide(true) end)
 		rm:HookScript("OnShow", function() WP.Sync() end)
 	end
 	if not WP.Allowed() then return end
@@ -760,7 +973,7 @@ function WP.Show()
 end
 
 function WP.Hide(forget)
-	if forget then db().panel = nil end
+	if forget then wpOpen = nil end
 	if wpanel then wpanel:Hide() end
 end
 
@@ -769,7 +982,7 @@ function WP.Toggle()
 end
 
 function WP.Sync()
-	if db().panel and WP.Allowed() then WP.Show() else WP.Hide(false) end
+	if wpOpen and WP.Allowed() then WP.Show() else WP.Hide(false) end
 end
 
 -- ---- Test ----------------------------------------------------------------------
@@ -793,7 +1006,7 @@ end
 -- Your own wish window again, to change the wish before the list is locked.
 function Wi.OpenMine()
 	if not Wi.Live() then Okanvil:Print("The wishlist is not open on this raid."); return end
-	if Wi.IsLocked() then Okanvil:Print("The wishlist is locked: wishes can no longer change."); return end
+	if Wi.Frozen() then Okanvil:Print("The wishlist is locked: your wish can no longer change."); return end
 	local r = SR.Raid()
 	local L = Okanvil.Loot
 	local ml = L and L.MasterLooterName and L.MasterLooterName()
@@ -801,7 +1014,7 @@ function Wi.OpenMine()
 end
 
 SLASH_OKWISH1 = "/okwish"
--- master looter commands: arg -> what it does
+-- master looter and assist commands: arg -> what it does
 local ML_CMD = {
 	clear = Wi.Clear, reset = Wi.Clear,
 	on = function() Wi.SetOn(true) end, off = function() Wi.SetOn(false) end,
@@ -813,6 +1026,6 @@ SlashCmdList.OKWISH = function(arg)
 	if arg == "" then Wi.OpenMine(); return end
 	local fn = ML_CMD[arg]
 	if not fn then Okanvil:Print("/okwish (your wish) | on | off | lock | unlock | clear | test"); return end
-	if not canTrigger(me()) then Okanvil:Print("Only the master looter can do that."); return end
+	if not canTrigger(me()) then Okanvil:Print("Only the master looter or an assist can do that."); return end
 	fn()
 end

@@ -3039,12 +3039,13 @@ function C_.BuildRunTab(body)
 		function() return db().autoAsk end,
 		function(v) db().autoAsk = v end)
 
-	-- The master looter opens it, for this raid ID only (Wishlist.lua).
+	-- The master looter or an assist opens it, for this raid ID only
+	-- (Wishlist.lua). Everyone has the row: a raider only gets Open.
 	local Wi = Okanvil.Wish
-	if Wi and Wi.CanTrigger() then
+	if Wi then
 		local wrow = opt("Wishlist",
 			"25-man, normal & heroic: raiders pick one item for this raid ID; the board marks it WISH",
-			"Closed on every new raid ID. Opening it opens the wish window for raiders with Okanvil.\n"
+			"Closed on every new raid ID. Switching it on opens nothing: Ask sends the wish window.\n"
 				.. "Raiders can change their wish until you lock it. It is not a reserve.",
 			function() return Wi.IsOn() end,
 			function(v) Wi.SetOn(v); if Wi._paintRow then Wi._paintRow() end end)
@@ -3059,9 +3060,9 @@ function C_.BuildRunTab(body)
 		-- Clear beside the switch, the same as the WH panel's
 		local clr = W.Button(wrow, "Clear"); clr:SetSize(52, 22)
 		clr:SetPoint("RIGHT", wrow.btn, "LEFT", -6, 0)
-		clr:Tooltip("Clear every wish on this raid ID.\nEveryone gets the window again.")
+		clr:Tooltip("Clear every wish on this raid ID and unlock it.\nThe window opens again only when you press Ask.")
 		clr:SetScript("OnClick", function()
-			Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Everyone picks again.|r", "Clear", Wi.Clear)
+			Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Press Ask after to send the wish window.|r", "Clear", Wi.Clear)
 		end)
 		-- Lock: keep the wishes in, take no new ones
 		local lock = W.Button(wrow, "Lock"); lock:SetSize(62, 22)
@@ -3081,15 +3082,39 @@ function C_.BuildRunTab(body)
 		lock:SetScript("OnShow", paintLock)
 		paintLock()
 		Wi._paintLock = paintLock
-		-- Lock and Clear only mean something while the wishlist is on
+		-- Ask: the window again, only for raiders without a wish (late joiners)
+		local ask = W.Button(wrow, "Ask"); ask:SetSize(48, 22)
+		ask:SetPoint("RIGHT", lock, "LEFT", -6, 0)
+		ask:Tooltip("Open the wish window for everyone without a wish (late joiners).\n"
+			.. "Not for those who already picked or passed. No raid warning.")
+		ask:SetScript("OnClick", function() Wi.AskMissing() end)
+		-- Open: your own wish window again, after closing it
+		local open = W.Button(wrow, "Open"); open:SetSize(56, 22)
+		open:SetPoint("RIGHT", ask, "LEFT", -6, 0)
+		open:Tooltip("Open your wish window.")
+		open:SetScript("OnClick", function() Wi.OpenMine() end)
+		-- The master looter and the assists: the switch, then Open, Ask, Lock and
+		-- Clear while it is on. A raider: Open alone, at the row's end, while it is
+		-- on. Repainted on show, on every wishlist change and when roles change.
 		local function paintRow()
-			if Wi.IsOn() then lock:Show(); clr:Show() else lock:Hide(); clr:Hide() end
+			local on, boss = Wi.IsOn(), Wi.CanTrigger()
+			if boss then wrow.btn:Show() else wrow.btn:Hide() end
+			for _, b in ipairs({ ask, lock, clr }) do if on and boss then b:Show() else b:Hide() end end
+			if on then open:Show() else open:Hide() end
+			open:ClearAllPoints()
+			if boss then open:SetPoint("RIGHT", ask, "LEFT", -6, 0) else open:SetPoint("RIGHT", wrow, "RIGHT", -4, 0) end
+			if wrow.refresh then wrow.refresh() end
 		end
 		wrow:HookScript("OnShow", paintRow)
 		paintRow()
 		Wi._paintRow = paintRow
-		if wrow.desc then wrow.desc:SetPoint("RIGHT", lock, "LEFT", -12, 0) end
-		wrow.text:SetPoint("RIGHT", lock, "LEFT", -12, 0)
+		local roles = CreateFrame("Frame", nil, wrow)
+		roles:RegisterEvent("RAID_ROSTER_UPDATE")
+		roles:RegisterEvent("PARTY_MEMBERS_CHANGED")
+		roles:RegisterEvent("PARTY_LOOT_METHOD_CHANGED")
+		roles:SetScript("OnEvent", function() if wrow:IsVisible() then paintRow() end end)
+		if wrow.desc then wrow.desc:SetPoint("RIGHT", open, "LEFT", -12, 0) end
+		wrow.text:SetPoint("RIGHT", open, "LEFT", -12, 0)
 	end
 
 	body.needH = -y + 8
