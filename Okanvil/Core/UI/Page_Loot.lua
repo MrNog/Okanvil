@@ -380,7 +380,11 @@ function Okanvil:Loot_BuildCollectors(p)
 	local en = W.ToggleRow(p, "Speed-run auto master-loot",
 		"Sweeps each boss into one bag -- only while you are master looter",
 		function() return L.CollectorsEnabled() end,
-		function(v) L.SetCollectorsEnabled(v); if p.onToggle then p.onToggle() end end)
+		function(v)
+			L.SetCollectorsEnabled(v)
+			for _, refresh in ipairs(p.refreshNames) do refresh() end
+			if p.onToggle then p.onToggle() end
+		end)
 	en:SetPoint("TOPLEFT", X, -2)
 	en:SetPoint("RIGHT", p, "RIGHT", -X, 0)
 	en:Tooltip(TIP)
@@ -388,6 +392,7 @@ function Okanvil:Loot_BuildCollectors(p)
 	local fields = CreateFrame("Frame", nil, p)
 	fields:SetAllPoints(p)
 	p.fields = fields
+	p.refreshNames = {}
 
 	local col = L.Collectors()
 	-- The three buttons sit at the RIGHT edge and the field stretches to meet them,
@@ -433,6 +438,7 @@ function Okanvil:Loot_BuildCollectors(p)
 			if n and UnitIsPlayer("target") then setName(n) else Okanvil:Print("Target a player first.") end
 		end)
 		cl:SetScript("OnClick", function() eb.edit:SetText(""); L.SetCollector(bucket, ""); paintPH() end)
+		p.refreshNames[#p.refreshNames + 1] = function() eb.edit:SetText(L.Collectors()[bucket] or ""); paintPH() end
 		paintPH()
 	end
 	row("main", "Main loot (BoP)", -52, "-- stays on the corpse --")

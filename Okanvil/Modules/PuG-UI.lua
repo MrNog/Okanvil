@@ -1212,7 +1212,8 @@ function M.RefreshUI()
 			-- Asking for players you already have, in front of the whole server,
 			-- is the worse of the two: a guessed ranged is still a body in the
 			-- raid, and the leader can move them by hand if the guess is wrong.
-			have[assigned] = (have[assigned] or 0) + 1
+			-- An offline player stays on the board, greyed, but holds no spot.
+			if pl.online ~= false then have[assigned] = (have[assigned] or 0) + 1 end
 		end
 	end
 

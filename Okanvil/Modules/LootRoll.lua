@@ -862,11 +862,11 @@ function RM.Rebuild()
 			if not top then
 				-- reserved by one raider only: theirs, no roll needed
 				local sole = soleReserver(selected)
-				if sole then L.AwardWinner(selected.id, sole, nil, nil); return end
+				if sole then L.AwardWinner(selected.id, sole, nil, nil, nil, nil, true); return end
 				Okanvil:Print("|cffff5555No rolls on this item yet.|r")
 				return
 			end
-			L.AwardWinner(selected.id, top.player, top.roll, top.spec or ((top.kind == "os") and "off" or nil))
+			L.AwardWinner(selected.id, top.player, top.roll, top.spec or ((top.kind == "os") and "off" or nil), nil, nil, true)
 		end)
 		-- Says which give this will be before it is clicked: GiveMasterLoot only
 		-- works from an OPEN corpse.

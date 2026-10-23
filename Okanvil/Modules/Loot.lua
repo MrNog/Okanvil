@@ -2596,8 +2596,14 @@ function L.StartRoll(link, mode)
 	local secs = L.RollTimer()
 	local called
 	do
+		-- The copy picked in the mini roll, else the newest unclaimed one. Loot is
+		-- often rolled long after the boss, so no time window: past one this found
+		-- nothing, and the rolls were dropped when the timer ended.
 		local s = activeBucket()
-		called = s and findOpenDrop(s, activeRoll.id)
+		local w = watchedDrop
+		if w and w.id == activeRoll.id and unowned(w) then called = w
+		else called = s and (findOpenDrop(s, activeRoll.id, true) or findAnyOpenDrop(s, activeRoll.id)) end
+		activeRoll.drop = called
 		if called then
 			L.OpenForRolls(called)
 			-- the roll's clock, on the item: the mini roll draws its loading bar from it
@@ -2618,7 +2624,7 @@ function L.StartRoll(link, mode)
 			-- left (an award cleared it), the item it opened still closes, but
 			-- quietly: the raid already saw who got it.
 			if activeRoll == roll then
-				L.StopRoll()
+				L.StopRoll(called)
 			elseif activeRoll == nil and called and handRollDrop == called then
 				retireRollTargets("roll timer ended after the award")
 			end
@@ -2641,7 +2647,11 @@ end
 -- Announces only when a roll was actually open. "Ask this one" on the council
 -- calls this as a safety net before every round, and a "stop rolling" line in
 -- raid chat for a roll nobody started just confuses the raid.
-function L.StopRoll()
+--
+-- keepOpen (the timer running out) leaves that drop open for hand rolls: a roll
+-- typed as the countdown ends lands a second later and still counts. Award, the
+-- next call or Stop closes it.
+function L.StopRoll(keepOpen)
 	local chan = announceChannel()
 	local wasOpen = activeRoll or externalRollDrop or handRollDrop
 	if chan and wasOpen then SendChatMessage(L.RollMsg("stop"), chan) end
@@ -2650,7 +2660,7 @@ function L.StopRoll()
 	-- finds nothing to award.
 	if activeRoll and activeRoll.list and #activeRoll.list > 0 then
 		local s = activeBucket()
-		local dp = s and findOpenDrop(s, activeRoll.id)
+		local dp = activeRoll.drop or (s and (findOpenDrop(s, activeRoll.id, true) or findAnyOpenDrop(s, activeRoll.id)))
 		if dp then
 			dp.rolls = dp.rolls or {}
 			local have = {}
@@ -2668,6 +2678,10 @@ function L.StopRoll()
 	externalRollDrop = nil       -- someone else's "Roll for: [item]" call
 	externalRollLastAt = 0       -- and its sliding capture window
 	handRollDrop = nil           -- an item the ML opened for a hand roll-off
+	if keepOpen then
+		L.OpenForRolls(keepOpen)
+		rollTrace("roll timer ended, late rolls still land on " .. dropTag(keepOpen))
+	end
 	if L.onRoll then L.onRoll() end
 end
 
@@ -3646,7 +3660,7 @@ end
 
 -- AWARD with CONFIRMATION -- SAME flow as RaidRoll RR_GiveLoot (where the idea came from):
 -- popup "are you sure? give [item] to X" with the button showing the winner's NAME,
--- and only OnAccept does it give (RR_ReallyGiveLoot -> GiveMasterLoot). Always confirm.
+-- and only OnAccept does it give (RR_ReallyGiveLoot -> GiveMasterLoot).
 -- Uses Okanvil:Confirm (our OWN dialog), NOT StaticPopup: a StaticPopup running the
 -- protected GiveMasterLoot taints Blizzard's shared popup pool and later blocks the
 -- player's enchant confirm. Our own frame can't touch that pool. See Widgets.lua.
@@ -3655,7 +3669,9 @@ end
 -- onGiven, when passed, runs only once the officer has confirmed AND the award
 -- went through -- not for a Cancel, and not for a give that could not happen
 -- because the item is still on a closed corpse.
-function L.AwardWinner(id, winner, topRoll, spec, de, onGiven)
+-- direct = true skips the confirm: the caller's button already names the winner,
+-- so the officer picked a name and then confirmed it by clicking "Give to <name>".
+function L.AwardWinner(id, winner, topRoll, spec, de, onGiven, direct)
 	L.Dbg("AwardWinner: id=" .. tostring(id) .. " winner=" .. tostring(winner)
 		.. " roll=" .. tostring(topRoll) .. " spec=" .. tostring(spec) .. (de and " DE" or ""))
 	if not (id and winner and winner ~= "") then
@@ -3673,6 +3689,10 @@ function L.AwardWinner(id, winner, topRoll, spec, de, onGiven)
 			function()
 				if commitAward(id, winner, true) and onGiven then onGiven() end
 			end)
+		return
+	end
+	if direct then
+		if commitAward(id, winner) and onGiven then onGiven() end
 		return
 	end
 	Okanvil:Confirm(
@@ -4190,7 +4210,15 @@ function L.Collectors() return collectorsDB() end
 function L.CollectorName(bucket) local n = collectorsDB()[bucket] or ""; return (n:gsub("^%s*(.-)%s*$", "%1")) end
 function L.SetCollector(bucket, name) collectorsDB()[bucket] = name or ""; if L.onLoot then L.onLoot() end end
 function L.CollectorsEnabled() return collectorsDB().enabled and true or false end
-function L.SetCollectorsEnabled(on) collectorsDB().enabled = on and true or false; if L.onLoot then L.onLoot() end end
+-- Turning it off forgets the names: last week's collector is not tonight's.
+-- Turning it on as master looter puts you on BoE / orbs, which the ML holds anyway.
+function L.SetCollectorsEnabled(on)
+	local c = collectorsDB()
+	c.enabled = on and true or false
+	if not on then c.main, c.frag, c.boe = "", "", ""
+	elseif c.boe == "" and L.IsMasterLooter() then c.boe = UnitName("player") or "" end
+	if L.onLoot then L.onLoot() end
+end
 function L.WhisperWinner() return collectorsDB().whisper and true or false end
 function L.SetWhisperWinner(on) collectorsDB().whisper = on and true or false end
 function L.WhisperMsg() return collectorsDB().whisperMsg or "" end

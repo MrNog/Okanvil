@@ -393,7 +393,7 @@ local function rosterList()
 				-- it the first time we see that player. After that the leader's click wins.
 				if flag == "MAINTANK" and db.assign[name] == nil then db.assign[name] = "tank" end
 				out[#out + 1] = {
-					name = name, class = class, online = online,
+					name = name, class = class, online = online and true or false,
 					role = M.GuessRole(name, class),
 				}
 			end
@@ -410,7 +410,7 @@ local function rosterList()
 		local nm = UnitName(unit)
 		if nm then
 			local _, cl = UnitClass(unit)
-			out[#out + 1] = { name = nm, class = cl, online = UnitIsConnected(unit),
+			out[#out + 1] = { name = nm, class = cl, online = UnitIsConnected(unit) and true or false,
 			                  role = M.GuessRole(nm, cl) }
 		end
 	end
@@ -446,7 +446,7 @@ local function assignedCounts()
 	local have = {}
 	for _, r in ipairs(ROLES) do have[r] = 0 end
 	for _, p in ipairs(M.RosterList()) do
-		local a = M.AssignedRole(p.name)      -- honours the respec check
+		local a = p.online and M.AssignedRole(p.name)      -- honours the respec check
 		if a and have[a] then have[a] = have[a] + 1 end
 	end
 	return have
@@ -549,7 +549,8 @@ local function rosterCounts()
 		-- board finally agree. A wrong guess is moved by hand; asking the whole
 		-- server for someone you already have cannot be taken back.
 		local role = p.role or HYBRID_PARK[p.class or ""] or "ranged"
-		have[role] = (have[role] or 0) + 1
+		-- an offline player holds no spot: the LFM keeps asking for one
+		if p.online then have[role] = (have[role] or 0) + 1 end
 	end
 	return have, #list
 end
@@ -652,7 +653,7 @@ function M.ClassCounts()
 	for _, c in ipairs(OkanvilClasses or {}) do have[c.token] = 0 end
 	local list = rosterList()
 	for _, p in ipairs(list) do
-		local tok = p.class and p.class:upper()
+		local tok = p.online and p.class and p.class:upper()
 		if tok and have[tok] ~= nil then have[tok] = have[tok] + 1 end
 	end
 	return have, #list

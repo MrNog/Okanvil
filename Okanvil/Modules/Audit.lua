@@ -487,3 +487,94 @@ runner:SetScript("OnUpdate", function(self, elapsed)
 		end
 	end
 end)
+
+-- ------------------------------------------------------------
+-- INSPECT TOOLTIP: the meta gem as the wearer has it.
+-- The client greys or whitens a meta gem's lines by the gems of whoever is
+-- LOOKING, so on an inspected player a working meta reads as inactive. Their
+-- own gems are counted here and the lines recoloured to match.
+-- ------------------------------------------------------------
+-- The wearer's gem colours, or nil while a gem is not in this client's cache yet
+-- (it is asked for, and the next hover reads it).
+local function wornColours(unit)
+	local have = { r = 0, y = 0, b = 0 }
+	local known = true
+	for _, e in ipairs(GEM_SLOTS) do
+		local link = GetInventoryItemLink(unit, e[1])
+		for i = 1, (link and 3 or 0) do
+			local _, gemLink = GetItemGem(link, i)
+			if gemLink then
+				local subType = select(7, GetItemInfo(gemLink))
+				if not subType then
+					known = false
+					Okanvil:WarmItem(gemLink)
+				end
+				for k in pairs(GEM_COLOURS[subType or ""] or {}) do have[k] = have[k] + 1 end
+			end
+		end
+	end
+	return known and have or nil
+end
+
+-- One condition line: true met, false not, nil not a line this can read.
+local function lineMet(low, have)
+	local n, c = low:match("at least (%d+) (%a+) gem")
+	if n and COLOUR_KEY[c] then return (have[COLOUR_KEY[c]] or 0) >= tonumber(n) end
+	local a, b = low:match("more (%a+) gems? than (%a+) gem")
+	if a and COLOUR_KEY[a] and COLOUR_KEY[b] then return have[COLOUR_KEY[a]] > have[COLOUR_KEY[b]] end
+	return nil
+end
+
+-- The inspect frame re-sets its tooltip several times a second, so a step is
+-- traced only when it differs from the last one.
+local lastTip
+local function tipTrace(text)
+	if text == lastTip then return end
+	lastTip = text
+	Okanvil:Trace("AUDIT", "meta tip: " .. text)
+end
+
+hooksecurefunc(GameTooltip, "SetInventoryItem", function(self, unit, slot)
+	if not unit or not UnitExists(unit) or UnitIsUnit(unit, "player") then
+		tipTrace("skip unit " .. tostring(unit))
+		return
+	end
+	-- the condition lines sit indented under the meta gem's own line
+	local lines = {}
+	for i = 3, self:NumLines() do
+		local fs = _G["GameTooltipTextLeft" .. i]
+		local low = ((fs and fs:GetText()) or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):lower()
+		if low:match("^%s*requires") and low:find("gem") then
+			lines[#lines + 1] = { fs = fs, low = low, i = i }
+		elseif #lines > 0 then
+			break
+		end
+	end
+	if #lines == 0 then
+		tipTrace(("no gem condition on %s slot %s (%d lines)"):format(unit, tostring(slot), self:NumLines()))
+		return
+	end
+	local have = wornColours(unit)
+	if not have then
+		tipTrace("gems not cached for " .. (UnitName(unit) or "?"))
+		return
+	end
+	local all = true
+	for _, l in ipairs(lines) do
+		local met = lineMet(l.low, have)
+		if met == nil then
+			tipTrace("unread condition '" .. l.low .. "'")
+			return
+		end
+		all = all and met
+		l.fs:SetTextColor(met and 1 or 0.5, met and 1 or 0.5, met and 1 or 0.5)
+	end
+	-- the meta's own line: the one right above its first condition
+	local metaLine = _G["GameTooltipTextLeft" .. (lines[1].i - 1)]
+	if metaLine then
+		local v = all and 1 or 0.5
+		metaLine:SetTextColor(v, v, v)
+	end
+	tipTrace(("%s: r%d y%d b%d -> %s"):format(UnitName(unit) or "?",
+		have.r, have.y, have.b, all and "active" or "inactive"))
+end)

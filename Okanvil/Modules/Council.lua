@@ -1794,9 +1794,9 @@ local function ensureBoard()
 		-- had answered BIS". AwardWinner writes receivedBy; this writes the reason.
 		if L.NoteCouncilAward then L.NoteCouncilAward(id, pick, ans) end
 
-		-- Marked only once the officer confirms: a Cancel on the confirm left the
-		-- board saying "given to" for an item nobody got.
-		L.AwardWinner(id, pick, nil, nil, nil, given)
+		-- Marked only once the give goes through: marking first left the board
+		-- saying "given to" for an item nobody got.
+		L.AwardWinner(id, pick, nil, nil, nil, given, true)
 	end)
 	f.give = give
 
