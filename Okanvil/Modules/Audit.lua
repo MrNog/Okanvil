@@ -534,24 +534,31 @@ local function tipTrace(text)
 	Okanvil:Trace("AUDIT", "meta tip: " .. text)
 end
 
+local function plain(t) return (t:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+local WHITE, GREY = "|cffffffff", "|cff808080"
+
 hooksecurefunc(GameTooltip, "SetInventoryItem", function(self, unit, slot)
 	if not unit or not UnitExists(unit) or UnitIsUnit(unit, "player") then
 		tipTrace("skip unit " .. tostring(unit))
 		return
 	end
-	-- the condition lines sit indented under the meta gem's own line
-	local lines = {}
+	-- The meta gem is ONE tooltip line: its effect, then each condition after a
+	-- line break, every part with its own colour code.
+	local fs, parts
 	for i = 3, self:NumLines() do
-		local fs = _G["GameTooltipTextLeft" .. i]
-		local low = ((fs and fs:GetText()) or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):lower()
-		if low:match("^%s*requires") and low:find("gem") then
-			lines[#lines + 1] = { fs = fs, low = low, i = i }
-		elseif #lines > 0 then
-			break
+		local f = _G["GameTooltipTextLeft" .. i]
+		local text = f and f:GetText()
+		if text and text:find("\n") then
+			local low = plain(text):lower()
+			if low:find("requires") and low:find("gem") then
+				fs, parts = f, {}
+				for part in (text .. "\n"):gmatch("(.-)\n") do parts[#parts + 1] = plain(part) end
+				break
+			end
 		end
 	end
-	if #lines == 0 then
-		tipTrace(("no gem condition on %s slot %s (%d lines)"):format(unit, tostring(slot), self:NumLines()))
+	if not fs then
+		tipTrace(("no meta gem on %s slot %s"):format(unit, tostring(slot)))
 		return
 	end
 	local have = wornColours(unit)
@@ -559,22 +566,18 @@ hooksecurefunc(GameTooltip, "SetInventoryItem", function(self, unit, slot)
 		tipTrace("gems not cached for " .. (UnitName(unit) or "?"))
 		return
 	end
-	local all = true
-	for _, l in ipairs(lines) do
-		local met = lineMet(l.low, have)
+	local all, out = true, {}
+	for k = 2, #parts do
+		local met = lineMet(parts[k]:lower(), have)
 		if met == nil then
-			tipTrace("unread condition '" .. l.low .. "'")
+			tipTrace("unread condition '" .. parts[k] .. "'")
 			return
 		end
 		all = all and met
-		l.fs:SetTextColor(met and 1 or 0.5, met and 1 or 0.5, met and 1 or 0.5)
+		out[k] = (met and WHITE or GREY) .. parts[k] .. "|r"
 	end
-	-- the meta's own line: the one right above its first condition
-	local metaLine = _G["GameTooltipTextLeft" .. (lines[1].i - 1)]
-	if metaLine then
-		local v = all and 1 or 0.5
-		metaLine:SetTextColor(v, v, v)
-	end
+	out[1] = (all and WHITE or GREY) .. parts[1] .. "|r"
+	fs:SetText(table.concat(out, "\n"))
 	tipTrace(("%s: r%d y%d b%d -> %s"):format(UnitName(unit) or "?",
 		have.r, have.y, have.b, all and "active" or "inactive"))
 end)
