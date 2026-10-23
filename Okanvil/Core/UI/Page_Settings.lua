@@ -477,11 +477,11 @@ function Okanvil:ShowVersionChecker()
 		f = Okanvil:Popup("Okanvil version check")
 		-- Wider and taller: this is a list you read across a raid, and at 320px
 		-- the names sat in a narrow column with most of the window empty.
-		f:SetSize(420, 460)
+		f:SetSize(420, 474)
 
 		-- scope buttons, RCLoot-style: Group | Guild
 		local bGroup = W.Button(f, "Group", "primary")
-		bGroup:SetSize(110, 26); bGroup:SetPoint("TOPLEFT", 12, -34)
+		bGroup:SetSize(110, 26); bGroup:SetPoint("TOPLEFT", 14, -44)
 		local bGuild = W.Button(f, "Guild")
 		bGuild:SetSize(110, 26); bGuild:SetPoint("LEFT", bGroup, "RIGHT", 8, 0)
 
@@ -491,7 +491,7 @@ function Okanvil:ShowVersionChecker()
 
 		-- results list inside a clipped scroll (long guild rosters must not spill)
 		local box = W.Frame(f, "soft")
-		box:SetPoint("TOPLEFT", 10, -62); box:SetPoint("BOTTOMRIGHT", -10, 44)
+		box:SetPoint("TOPLEFT", 12, -80); box:SetPoint("BOTTOMRIGHT", -12, 44)
 
 		-- The download link, to copy and paste wherever you choose. Only shown once
 		-- the check has finished: while it runs, "no reply" still means "not yet".
@@ -535,7 +535,7 @@ function Okanvil:ShowVersionChecker()
 		local ROW_H, PY_X, VER_X = 18, 150, 240
 		f.rows = {}
 		local head = CreateFrame("Frame", nil, child)
-		head:SetHeight(ROW_H); head:SetPoint("TOPLEFT", 0, 0); head:SetPoint("RIGHT", child, "RIGHT", 0, 0)
+		head:SetHeight(ROW_H); head:SetPoint("TOPLEFT", 0, -2); head:SetPoint("RIGHT", child, "RIGHT", 0, 0)
 		for _, col in ipairs({ { "Player", 0 }, { "Patch", PY_X }, { "Okanvil", VER_X } }) do
 			local t = W.Text(head, col[1], "note", "dim"); t:SetPoint("LEFT", col[2], 0)
 		end
@@ -567,7 +567,7 @@ function Okanvil:ShowVersionChecker()
 				local v = replies[name]
 				local r = row(i)
 				r:ClearAllPoints()
-				r:SetPoint("TOPLEFT", 0, -(ROW_H + 4) - (i - 1) * ROW_H)
+				r:SetPoint("TOPLEFT", 0, -(ROW_H + 6) - (i - 1) * ROW_H)
 				r:SetPoint("RIGHT", child, "RIGHT", 0, 0)
 				if not v then
 					none = none + 1

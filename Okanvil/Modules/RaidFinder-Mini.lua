@@ -24,7 +24,7 @@ local win          -- the floating window (built lazily)
 -- Sized to be READ, not to be small. The rows were 18px with 10-11px text, which
 -- is smaller than anything else in the addon -- a list you skim mid-raid for a
 -- raid to join is the last place to save pixels.
-local ROW_H = 24
+local ROW_H = 26
 -- VISIBLE_ROWS sizes the window; MAX_ROWS is how many listings the list will
 -- hold. They used to be the same number, which is why the list never scrolled:
 -- the window was always exactly tall enough for every row it would ever draw,
@@ -33,22 +33,22 @@ local VISIBLE_ROWS = 11
 local MAX_ROWS = 60
 local WIN_W = 460
 
--- mini-window column x-offsets (inside the row). Kept compact.
--- Rows are clipped to the scroll interior (WIN_W - 12px well pad - 12px scrollbar
--- gutter ~= 336px), so the last column (Join, +32w) must end before that edge or it
--- gets cut off. Join right edge = 278 + 32 = 310, leaving ~22px clearance.
--- Raid slot = gs - raid - 4 = 60px, which still fits the widest label ("Naxx10 Wk").
--- Column x-offsets inside a row, widened with the window so the longer raid names
--- and sender names stop being cut off.
+-- Column x-offsets inside a row. Rows are clipped to the scroll interior (WIN_W
+-- less the well's 16px and the scrollbar's 12px, ~432px), so Join (362 + 46)
+-- must end before that edge. Raid slot = gs - raid - 4 = 80px, which fits the
+-- widest label ("Naxx10 Wk").
 local M = {
 	raid   = 8,
 	gs     = 92,
 	sender = 140,
 	ress   = 262,
-	wsp    = 322,
-	join   = 360,
+	wsp    = 320,
+	join   = 362,
 }
 local RESS_W = 48
+-- the row's buttons: tall enough for the plate to hold its text (the kit's 22-24
+-- less the row's padding)
+local BTN_H, WSP_W, JOIN_W = 20, 34, 46
 
 local function C() return Okanvil.Colors end
 
@@ -102,18 +102,18 @@ local function make_row(parent)
 
 	-- Ress chip (bordered YES/NO) with the shared reserved-loot tooltip
 	r.ress = CreateFrame("Button", nil, r)
-	r.ress:SetSize(RESS_W, 19); r.ress:SetPoint("LEFT", M.ress, 0)
+	r.ress:SetSize(RESS_W, BTN_H); r.ress:SetPoint("LEFT", M.ress, 0)
 	Okanvil:Skin(r.ress, "input")
 	r.ress.txt = W.Text(r.ress, "", "label"); r.ress.txt:SetAllPoints(); r.ress.txt:SetJustifyH("CENTER")
 	r.ress:SetScript("OnEnter", function(s) S.show_tip(s, s._res) end)
 	r.ress:SetScript("OnLeave", function() S.hide_tip() end)
 
 	-- /W  +  Join (reuse the module's whisper/join)
-	r.wsp = W.Button(r, "/W"); r.wsp:SetSize(30, 19); r.wsp:SetPoint("LEFT", M.wsp, 0)
+	r.wsp = W.Button(r, "/W"); r.wsp:SetSize(WSP_W, BTN_H); r.wsp:SetPoint("LEFT", M.wsp, 0)
 	r.wsp:SetScript("OnClick", function(s)
 		if s._info then Okanvil.RaidFinder_Whisper(s._info) end
 	end)
-	r.join = W.Button(r, "Join", "primary"); r.join:SetSize(40, 19)
+	r.join = W.Button(r, "Join", "primary"); r.join:SetSize(JOIN_W, BTN_H)
 	r.join:SetPoint("LEFT", M.join, 0)
 	r.join:SetScript("OnClick", function(s)
 		if s._info then Okanvil.RaidFinder_Join(s._info) end
@@ -219,18 +219,18 @@ local function build()
 
 	local f = Okanvil:Popup("Mini Raid Browser")
 	local rows = VISIBLE_ROWS
-	f:SetSize(WIN_W, 44 + 16 + rows * ROW_H + 12)  -- titlebar+count + colhdr + rows + pad
+	f:SetSize(WIN_W, 62 + 18 + rows * ROW_H + 14)  -- titlebar+count + colhdr + rows + pad
 
-	-- count / hint line under the title bar
+	-- count / hint line under the title bar, clear of its rule
 	f.count = W.Text(f, "", "note", "dim")
-	f.count:SetPoint("TOPLEFT", 8, -30)
+	f.count:SetPoint("TOPLEFT", 14, -44)
 
 	-- Straight through to the Raid Finder page, where the filters live. The mini list
 	-- has no room for them, and hunting for the module in the nav to change one filter
 	-- is friction you feel every single raid night.
 	f.filters = W.Button(f, "Filters")
-	f.filters:SetSize(52, 16)
-	f.filters:SetPoint("TOPRIGHT", -28, -28)
+	f.filters:SetSize(64, 22)
+	f.filters:SetPoint("TOPRIGHT", -12, -38)
 	f.filters:SetScript("OnClick", function()
 		-- Toggle() would CLOSE the window if it happened to be open already, so build
 		-- and show it directly, then jump to the page.
@@ -243,9 +243,9 @@ local function build()
 
 	-- dark well holding the list
 	local well = W.Frame(f, "well")
-	well:SetPoint("TOPLEFT", 6, -44)
-	well:SetPoint("TOPRIGHT", -6, -44)
-	well:SetPoint("BOTTOM", f, "BOTTOM", 0, 8)
+	well:SetPoint("TOPLEFT", 8, -64)
+	well:SetPoint("TOPRIGHT", -8, -64)
+	well:SetPoint("BOTTOM", f, "BOTTOM", 0, 10)
 
 	-- column header strip (with clickable sort headers)
 	local hdr = W.Frame(well, "row")
@@ -286,8 +286,8 @@ local function build()
 	sortHeader(M.gs, "GS", "gs")
 	sortHeader(M.sender, "Sender", "leader")
 	colhC(M.ress, RESS_W, "Ress")
-	colhC(M.wsp, 24, "/W")
-	colhC(M.join, 32, "Join")
+	colhC(M.wsp, WSP_W, "/W")
+	colhC(M.join, JOIN_W, "Join")
 
 	-- flat scroll list (plain ScrollFrame + our slider), same idiom as the page
 	local sf = CreateFrame("ScrollFrame", nil, well)

@@ -121,6 +121,71 @@ function L:DailyDone()
 end
 
 -- ------------------------------------------------------------
+-- Weekly raid quest: has THIS toon handed in its "<Boss> Must Die!" this week?
+--
+-- 3.3.5a has no turn-in event or weekly-done query, but handing a quest in prints
+-- ERR_QUEST_COMPLETE_S ("%s completed.") in chat, and every Dalaran raid weekly is
+-- named "<Boss> Must Die!". The record is stamped with the next weekly reset, so
+-- like the daily heroic it is only ever written and expires on its own.
+-- ------------------------------------------------------------
+local WEEK = 7 * 86400
+local RESET_WD = 3   -- Wednesday ("%w": Sunday = 0); only a guess when nothing is known
+
+local function nextWeeklyReset()
+	local now = time()
+	-- the realm's weekly reset, learned from a raid lockout and rolled a week at a time
+	local db = Okanvil.db
+	local nxt = db and db.weeklyReset and db.weeklyReset[GetRealmName() or "?"]
+	if nxt then
+		while nxt <= now do nxt = nxt + WEEK end
+		while nxt - WEEK > now do nxt = nxt - WEEK end
+		return nxt
+	end
+	-- a weekly raid lockout this toon holds expires on that reset (3-day raids are shorter)
+	local best
+	for i = 1, GetNumSavedInstances() do
+		local _, _, reset, _, locked, _, _, isRaid = GetSavedInstanceInfo(i)
+		if isRaid and locked and reset and reset > 3 * 86400 and reset <= WEEK + 3600 then
+			best = math.max(best or 0, reset)
+		end
+	end
+	if best then return now + best end
+	-- guess: the daily reset hour on the next RESET_WD
+	local daily = now + ((GetQuestResetTime and GetQuestResetTime()) or 0)
+	for d = 0, 6 do
+		local t = daily + d * 86400
+		if tonumber(date("%w", t)) == RESET_WD then return t end
+	end
+	return now + WEEK
+end
+
+local questDone = "^" .. (ERR_QUEST_COMPLETE_S or "%s completed."):gsub("([%%%.%-%+%*%?%[%]%(%)%^%$])", "%%%1"):gsub("%%%%s", "(.+)") .. "$"
+
+function L:CheckWeekly(msg)
+	local db = Okanvil.db
+	local title = db and msg and msg:match(questDone)
+	if not (title and title:find("Must Die!$")) then return end
+	local name = UnitName("player")
+	if not name then return end
+	local _, class = UnitClass("player")
+	db.weeklyQ = db.weeklyQ or {}
+	db.weeklyQ[name] = { class = class, resets = nextWeeklyReset() }
+end
+
+-- toon name -> class, for every toon whose weekly quest is done and not yet reset
+function L:WeeklyDone()
+	local db = Okanvil.db
+	local out = {}
+	if not db or not db.weeklyQ then return out end
+	local now = time()
+	for charName, row in pairs(db.weeklyQ) do
+		if (row.resets or 0) > now then out[charName] = row.class
+		else db.weeklyQ[charName] = nil end
+	end
+	return out
+end
+
+-- ------------------------------------------------------------
 -- Read: every toon with at least one UNEXPIRED raid lockout.
 -- Expiry is decided here, at read time, against the stored absolute reset --
 -- a cached row from a toon you haven't logged in for a week self-cleans.
@@ -177,16 +242,23 @@ end
 -- ------------------------------------------------------------
 function L:Grid(withDaily)
 	local toons = self:Get()
-	local daily = {}
+	local daily, weekly = {}, {}
 	local listed = {}
 	for _, toon in ipairs(toons) do listed[toon.name] = true end
 	local added
-	for charName, class in pairs(withDaily and self:DailyDone() or {}) do
-		daily[charName] = true
-		if not listed[charName] then
-			toons[#toons + 1] = { name = charName, class = class, instances = {} }
-			added = true
+	local function list(done, mark)
+		for charName, class in pairs(done) do
+			mark[charName] = true
+			if not listed[charName] then
+				listed[charName] = true
+				toons[#toons + 1] = { name = charName, class = class, instances = {} }
+				added = true
+			end
 		end
+	end
+	if withDaily then
+		list(self:DailyDone(), daily)
+		list(self:WeeklyDone(), weekly)
 	end
 	if added then
 		local me = UnitName("player")
@@ -229,7 +301,7 @@ function L:Grid(withDaily)
 		if na ~= nb then return na < nb end
 		return (a:find("H") == nil) and (b:find("H") ~= nil)
 	end)
-	return toons, raids, cell, sizes, soonest, daily
+	return toons, raids, cell, sizes, soonest, daily, weekly
 end
 
 -- "4d 12h" / "12h 30m" / "45m" -- raid lockouts are long, so seconds are noise.
@@ -266,8 +338,13 @@ ev:RegisterEvent("RAID_INSTANCE_WELCOME")  -- zoned into an instance that saves 
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")  -- covers zoning out of the raid too
 ev:RegisterEvent("LFG_UPDATE_RANDOM_INFO") -- the random-heroic reward info landed
 ev:RegisterEvent("LFG_COMPLETION_REWARD")  -- a random dungeon was just finished
+ev:RegisterEvent("CHAT_MSG_SYSTEM")        -- "<quest> completed." on a turn-in
 
-ev:SetScript("OnEvent", function(_, event)
+ev:SetScript("OnEvent", function(_, event, msg)
+	if event == "CHAT_MSG_SYSTEM" then
+		L:CheckWeekly(msg)
+		return
+	end
 	if event == "UPDATE_INSTANCE_INFO" then
 		L:Scan()
 		return
