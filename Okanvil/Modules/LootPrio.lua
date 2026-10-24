@@ -538,7 +538,7 @@ local importDlg
 function P.ShowImport(onDone)
 	local f = importDlg
 	if not f then
-		f = Okanvil:Popup("Import loot priority")
+		f = Okanvil:Popup("Import loot priority", W.LOOT_ART)
 		f:SetSize(460, 320)
 
 		local hint = W.Text(f, "Copy the site's \"Export reserved\", paste here (Ctrl+V), then Save.", "note", "dim")
@@ -953,7 +953,7 @@ function P.Toggle()
 	if Okanvil.U and Okanvil.U.canSeePrio and not Okanvil.U.canSeePrio() then return end
 	if prioWin and prioWin:IsShown() then prioWin:Hide(); return end
 	if not prioWin then
-		local f = Okanvil:Popup("Loot priority")
+		local f = Okanvil:Popup("Loot priority", W.LOOT_ART)
 		f:SetSize(760, 520)
 		local body = W.Frame(f, "bare")
 		body:SetPoint("TOPLEFT", 4, -26)

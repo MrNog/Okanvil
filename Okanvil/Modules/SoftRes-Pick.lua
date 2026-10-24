@@ -275,11 +275,24 @@ end
 
 local canUse          -- below
 
+-- An upgrade for either of your specs, as the Upgrades page judges it. An item
+-- the client has not cached yet stays listed: it cannot be judged until it is.
+local function isUpgrade(id)
+	local Up = Okanvil.Upgrades
+	if not (Up and Up.Judge) then return true end
+	local _, link = GetItemInfo(id)
+	if not link then return true end
+	if Up.Judge(link, state.raid) then return true end
+	local off = Up.OffSpec and Up.OffSpec()
+	return off and Up.Judge(link, state.raid, off) and true or false
+end
+
 -- Bosses and their items for this raid and difficulty, filtered by the search
--- and, with "Usable" on, by what you can use.
+-- and, with "Usable" / "Upgrades" on, by what you can use or would gain from.
 local function entries()
 	local out, want, seen = {}, filter:lower(), {}
 	local onlyUsable = db().onlyUsable
+	local onlyUpgrades = state.kind == "wish" and db().onlyUpgrades
 	local run = { key = state.raid, size = state.size, hc = state.hc }
 	-- which copy a row shows follows the raid difficulty: heroic set, the heroic
 	-- copy (its icon, ilvl and tooltip). The pick still counts for both copies.
@@ -302,7 +315,8 @@ local function entries()
 			local plain = (q and q < 4) or itype == "Quest" or (state.kind == "wish" and it.slot == "Quest")
 			if SR.InRun(it.m, run) and not seen[it.name or it.id] and not SR.IsMaterial(it.id, it.name) and not plain
 				and (want == "" or (it.name or ""):lower():find(want, 1, true))
-				and not (onlyUsable and not canUse(it.id)) then
+				and not (onlyUsable and not canUse(it.id))
+				and not (onlyUpgrades and not isUpgrade(it.id)) then
 				seen[it.name or it.id] = true
 				items[#items + 1] = it
 				if it.name then rowOf[it.name] = #items end
@@ -370,7 +384,7 @@ local function build()
 	Okanvil:Skin(f, "panel")
 	tinsert(UISpecialFrames, "Okanvil_PickWindow")
 	-- the mini roll's art and title bar: both cut at the window's corners
-	W.ForgeArt(f, 0.22)
+	W.ForgeArt(f, 0.22, W.LOOT_ART)
 	local hdr = W.TitleBar(f, 26)
 	f.title = hdr.title
 	f.title:ClearAllPoints(); f.title:SetPoint("LEFT", 4, 0); f.title:SetJustifyH("LEFT")
@@ -387,8 +401,23 @@ local function build()
 		paintUsable(); paint()
 	end)
 	paintUsable()
+	-- Upgrades (wish only): just what beats your gear, either spec; remembered
+	local upg = W.Button(hdr, "Upgrades"); upg:SetSize(70, 18); upg:SetPoint("RIGHT", usable, "LEFT", -4, 0)
+	upg:Tooltip("Show only items that are an upgrade for you (either spec), as the Upgrades page sees it.")
+	local function paintUpg() upg:SetKind(db().onlyUpgrades and "primary" or nil) end
+	upg:SetScript("OnClick", function()
+		db().onlyUpgrades = not db().onlyUpgrades or nil
+		scroll = 0
+		paintUpg(); paint()
+	end)
+	paintUpg()
+	f.upgrades = upg
 	f.sub = W.Text(hdr, "", "label", "dim"); f.sub:SetPoint("LEFT", f.title, "RIGHT", 8, 0)
-	f.sub:SetPoint("RIGHT", usable, "LEFT", -6, 0); f.sub:SetJustifyH("LEFT")
+	f.sub:SetJustifyH("LEFT")
+	-- the subtitle runs up to the leftmost button shown
+	function f.FitSub()
+		f.sub:SetPoint("RIGHT", upg:IsShown() and upg or usable, "LEFT", -6, 0)
+	end
 	if f.sub.SetWordWrap then f.sub:SetWordWrap(false) end
 
 	-- the picks, one line each: item, then a remove cross
@@ -591,6 +620,8 @@ function P.Open(raid, size, hc, limit, lockKey, from, g, kind)
 	loadPicks()
 	while #picks > state.limit do table.remove(picks) end
 	if not win then win = build() end
+	if state.kind == "wish" and Okanvil.Upgrades then win.upgrades:Show() else win.upgrades:Hide() end
+	win.FitSub()
 	win.search.edit:SetText("")
 	win.search.edit:ClearFocus()
 	win:Show()

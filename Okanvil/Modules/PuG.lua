@@ -558,12 +558,15 @@ M.RosterCounts = rosterCounts
 
 -- What is STILL missing, per role, clamped at zero.
 local function stillNeeded()
-	local have = rosterCounts()
+	local have, inGroup = rosterCounts()
+	-- Offline players free their role, but not their seat: a group already at the raid
+	-- size cannot invite anyone until somebody is removed, so it asks for nobody.
+	local seatsFull = inGroup >= (tonumber(db.size) or 25)
 	local out = {}
 	for _, r in ipairs(ROLES) do
 		local want = tonumber(db.need[r]) or 0
 		local left = want - (have[r] or 0)
-		out[r] = left > 0 and left or 0
+		out[r] = (left > 0 and not seatsFull) and left or 0
 	end
 	return out
 end

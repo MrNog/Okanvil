@@ -557,7 +557,7 @@ function Okanvil:ShowVersionChecker()
 			local hl = r:CreateTexture(nil, "HIGHLIGHT")
 			hl:SetAllPoints(); hl:SetTexture("Interface\\Buttons\\WHITE8x8"); hl:SetVertexColor(1, 1, 1, 0.05)
 			r:SetScript("OnClick", function(self)
-				if not self._name then return end
+				if not self._name or self._self then return end
 				f.sel[self._name] = not f.sel[self._name] or nil
 				f.paint()
 			end)
@@ -578,6 +578,7 @@ function Okanvil:ShowVersionChecker()
 			local py = Comms.PatchYReplies and Comms.PatchYReplies() or {}
 			local ok, old, none, pyN = 0, 0, 0, 0
 			local missing = {}
+			local myName = UnitName("player")
 			for _, r in ipairs(f.rows) do r:Hide() end
 			for i, name in ipairs(roster) do
 				local v = replies[name]
@@ -600,6 +601,9 @@ function Okanvil:ShowVersionChecker()
 				if py[name] then pyN = pyN + 1 end
 				r.name:SetText(name)
 				r._name = name
+				-- your own row has no tick: there is nobody to whisper there
+				r._self = (name == myName) or nil
+				if r._self then f.sel[name] = nil; r.box:Hide() else r.box:Show() end
 				if f.sel[name] then r.tick:Show() else r.tick:Hide() end
 				r.py:SetText((py[name] and "|cff40c040" or waiting and "|cff8a8d93" or "|cffff5555") .. "Patch-Y|r")
 				r:Show()
@@ -616,16 +620,17 @@ function Okanvil:ShowVersionChecker()
 				.. (waiting and "  |cff8a8d93asking...|r" or ""))
 			f._missing = missing
 			-- a ticked name that left the list is no longer ticked
-			local inList, picked = {}, 0
+			local inList = {}
 			for _, n in ipairs(roster) do inList[n] = true end
 			for n in pairs(f.sel) do
-				if inList[n] then picked = picked + 1 else f.sel[n] = nil end
+				if not inList[n] then f.sel[n] = nil end
 			end
 			if not waiting and #roster > 0 then
 				f.bLink:Show(); f.bWsp:Show(); f.bPy:Show()
-				local tag = picked > 0 and (" (" .. picked .. ")") or ""
-				f.bWsp.text:SetText("Whisper Okanvil" .. tag)
-				f.bPy.text:SetText("Whisper Patch-Y" .. tag)
+				-- each button counts only the ticked players still without that addon
+				local nOk, nPy = #f.toWhisper(replies), #f.toWhisper(py)
+				f.bWsp.text:SetText("Whisper Okanvil" .. (nOk > 0 and (" (" .. nOk .. ")") or ""))
+				f.bPy.text:SetText("Whisper Patch-Y" .. (nPy > 0 and (" (" .. nPy .. ")") or ""))
 			else
 				f.bLink:Hide(); f.bWsp:Hide(); f.bPy:Hide()
 			end
@@ -637,6 +642,17 @@ function Okanvil:ShowVersionChecker()
 			f.child:SetHeight(math.max((#roster + 1) * ROW_H + 12, f.out:GetStringHeight() + 8, 1))
 		end
 		f.paint = paint
+
+		-- the ticked players not in `has` (the replies for that addon): whoever
+		-- already has it is never whispered about it
+		function f.toWhisper(has)
+			local list = {}
+			for n in pairs(f.sel) do
+				if not (has and has[n]) then list[#list + 1] = n end
+			end
+			table.sort(list)
+			return list
+		end
 
 		local function ask(scope)
 			local Comms = Okanvil.Comms
@@ -658,14 +674,16 @@ function Okanvil:ShowVersionChecker()
 		bLink:SetScript("OnClick", function()
 			Okanvil:ShowExport(DOWNLOAD_URL, "Okanvil download link", "Ctrl+C to copy, then paste it where you want.")
 		end)
-		local function whisperPicked(msg, what)
-			local list = {}
-			for n in pairs(f.sel) do list[#list + 1] = n end
-			if #list == 0 then
+		local function whisperPicked(msg, what, has, addon)
+			if not next(f.sel) then
 				Okanvil:Print("|cff8a8d93Tick the players to whisper first (click a name).|r")
 				return
 			end
-			table.sort(list)
+			local list = f.toWhisper(has)
+			if #list == 0 then
+				Okanvil:Print("|cff8a8d93Everyone ticked already has " .. addon .. ".|r")
+				return
+			end
 			-- one every half second, so the server does not drop them as spam
 			for i, n in ipairs(list) do
 				Okanvil.Comms.After((i - 1) * 0.5, function() SendChatMessage(msg, "WHISPER", nil, n) end)
@@ -673,10 +691,14 @@ function Okanvil:ShowVersionChecker()
 			Okanvil:Print(("Whispered %s to %s."):format(what, table.concat(list, ", ")))
 		end
 		bWsp:SetScript("OnClick", function()
-			whisperPicked("We run loot council with Okanvil. Please install it: https://" .. DOWNLOAD_URL, "the Okanvil link")
+			local Comms = Okanvil.Comms
+			whisperPicked("We run loot council with Okanvil. Please install it: https://" .. DOWNLOAD_URL, "the Okanvil link",
+				Comms and Comms.VersionReplies and Comms.VersionReplies(), "Okanvil")
 		end)
 		bPy:SetScript("OnClick", function()
-			whisperPicked("You don't have Patch-Y installed. Please install it.", "the Patch-Y note")
+			local Comms = Okanvil.Comms
+			whisperPicked("You don't have Patch-Y installed. Please install it.", "the Patch-Y note",
+				Comms and Comms.PatchYReplies and Comms.PatchYReplies(), "Patch-Y")
 		end)
 		bGroup:SetScript("OnClick", function() ask("group") end)
 		bGuild:SetScript("OnClick", function() ask("guild") end)

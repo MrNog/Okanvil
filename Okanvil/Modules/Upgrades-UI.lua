@@ -247,10 +247,14 @@ function Okanvil:BuildUpgrades(host)
 	bis:Hide()
 	local BIS_ICON, BIS_GAP, BIS_ROW, SLOT_W, ENH_W, ENH = 42, 6, 58, 70, 50, 16
 	local RANK_HEX = { "ff4040", "bf66ff", "ff9926", "4d99ff", "59e659", "b3b3b3" }
+	-- What you browse is not saved: every login and every spec change opens on
+	-- your own spec, so another toon never inherits the last one's lookup.
 	local mySpec = U.Spec()
-	state.bClass = db().bisClass or (mySpec and U.CLASS_BIS[mySpec.class]) or "Warrior"
-	state.bList = db().bisList or (mySpec and mySpec.list)
-	state.bPhase = db().bisPhase or U.Phase()
+	db().bisClass, db().bisList, db().bisPhase = nil, nil, nil
+	state.bClass = (mySpec and U.CLASS_BIS[mySpec.class]) or "Warrior"
+	state.bList = mySpec and mySpec.list
+	state.bPhase = U.Phase()
+	state.bSpec = mySpec and mySpec.label
 
 	-- "Death knight" -> its class colour, for the dropdowns
 	local TOKEN = {}
@@ -290,7 +294,7 @@ function Okanvil:BuildUpgrades(host)
 			return out
 		end,
 		function() return tint(state.bClass, state.bClass) end,
-		function(v) state.bClass = v; fixList(); db().bisClass, db().bisList = v, state.bList; refresh() end)
+		function(v) state.bClass = v; fixList(); refresh() end)
 	cdd:SetSize(170, CTRL_H); cdd:SetPoint("LEFT", bbar, "LEFT", Okanvil.UI.PAD_X, 0); big(cdd)
 	local sdd = W.DropDown(bbar,
 		function()
@@ -301,28 +305,29 @@ function Okanvil:BuildUpgrades(host)
 			return out
 		end,
 		function() return state.bList and (specIcon(state.bClass, state.bList) .. U.SpecText(state.bClass, state.bList)) or "" end,
-		function(v) state.bList = v; db().bisList = v; refresh() end)
+		function(v) state.bList = v; refresh() end)
 	sdd:SetSize(190, CTRL_H); sdd:SetPoint("LEFT", cdd, "RIGHT", 8, 0); big(sdd)
 	local phaseTabs, prevP = {}, sdd
 	for _, ph in ipairs(OkanvilBisPhases or {}) do
 		local b = big(W.Button(bbar, ph, "tab"))
 		b:SetSize(52, CTRL_H)
 		b:SetPoint("LEFT", prevP, "RIGHT", prevP == sdd and 14 or 2, 0)
-		b:SetScript("OnClick", function() state.bPhase = ph; db().bisPhase = ph; refresh() end)
+		b:SetScript("OnClick", function() state.bPhase = ph; refresh() end)
 		phaseTabs[ph] = b
 		prevP = b
 	end
 	-- back to the spec you are in, today's phase
 	local mine = W.Button(bbar, "My spec"):SetMain(true)
 	mine:SetSize(96, 24); mine:SetPoint("RIGHT", bbar, "RIGHT", -Okanvil.UI.PAD_X, 0)
-	mine:SetScript("OnClick", function()
+	local function toMine()
 		local sp = U.Spec()
 		if sp then state.bClass, state.bList = U.CLASS_BIS[sp.class] or state.bClass, sp.list end
 		state.bPhase = U.Phase()
+		state.bSpec = sp and sp.label
 		fixList()
-		db().bisClass, db().bisList, db().bisPhase = state.bClass, state.bList, state.bPhase
-		refresh()
-	end)
+	end
+	state.toMine = toMine
+	mine:SetScript("OnClick", function() toMine(); refresh() end)
 
 	local grid = CreateFrame("Frame", nil, bis)
 	grid:SetPoint("TOPLEFT", 0, -BAR_H - 10); grid:SetPoint("BOTTOMRIGHT", 0, 0)
@@ -486,6 +491,12 @@ function Okanvil:BuildUpgrades(host)
 			local tex = icons and (icons[spec.list] or icons.classIcon)
 			local me = viewTabs.me
 			if tex and me and me.slot then me.slot.icon:SetTexture(tex) end
+		end
+		-- a talent swap (or presence / form spec change) moves the list to the new spec
+		do
+			local spec = U.Spec()
+			local label = spec and spec.label
+			if label ~= state.bSpec and state.toMine then state.toMine() end
 		end
 		if state.view == "bis" then
 			bar:Hide(); body:Hide(); bis:Show()

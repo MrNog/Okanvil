@@ -2133,8 +2133,14 @@ local FORGE_ART = "Interface\\AddOns\\Okanvil\\Media\\setup-bg"
 --     washL = fade on the left, washR = fade on the right }
 -- The art is then drawn at full strength under that wash, and cropped to the
 -- window's shape from the picture's real aspect. The lite build sets it.
-function W.ForgeArt(f, alpha)
-	local st = Okanvil.ForgeArtStyle
+-- `style`, in the same shape, gives one window its own picture.
+--
+-- W.LOOT_ART is that picture for every loot window (roll, Give loot, soft
+-- reserves, wishlist, council, loot priority): the lucky rat with its dice,
+-- RatRoll's art, under a dark wash so the text on it reads.
+W.LOOT_ART = { tex = "Interface\\AddOns\\Okanvil\\Media\\roll-bg", aspect = 1.5, washL = 0.95, washR = 0.87 }
+function W.ForgeArt(f, alpha, style)
+	local st = style or Okanvil.ForgeArtStyle
 	-- BACKGROUND for the art, BORDER for the fade: separate layers, so the fade
 	-- is always on top (one layer = undefined order). The backdrop sits below both.
 	-- 6px inside the edge (the same gap all round); covers cut its corners like the window's
@@ -2237,7 +2243,7 @@ do
 	ev:SetScript("OnEvent", function() for _, fit in ipairs(fitted) do fit() end end)
 end
 
-function Okanvil:Popup(title)
+function Okanvil:Popup(title, art)
 	self:ClosePopup()
 	local f = CreateFrame("Frame", nil, UIParent)
 	f:SetFrameStrata("DIALOG")
@@ -2254,7 +2260,7 @@ function Okanvil:Popup(title)
 	local C = Okanvil.Colors
 	f:SetBackdropColor(C.body[1], C.body[2], C.body[3], 0.97)
 	f:SetBackdropBorderColor(unpack3(C.edge))
-	W.ForgeArt(f, 0.22)
+	W.ForgeArt(f, 0.22, art)
 	-- the kit's title bar: gradient, centred gold title, the red X
 	local hdr = W.TitleBar(f, 26)
 	hdr:EnableMouse(true); hdr:RegisterForDrag("LeftButton")

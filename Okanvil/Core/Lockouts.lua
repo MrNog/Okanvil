@@ -130,6 +130,9 @@ end
 -- ------------------------------------------------------------
 local WEEK = 7 * 86400
 local RESET_WD = 3   -- Wednesday ("%w": Sunday = 0); only a guess when nothing is known
+local THREE_DAY_RAIDS = {
+	["Zul'Gurub"] = true, ["Ruins of Ahn'Qiraj"] = true, ["Zul'Aman"] = true,
+}
 
 local function nextWeeklyReset()
 	local now = time()
@@ -141,11 +144,14 @@ local function nextWeeklyReset()
 		while nxt - WEEK > now do nxt = nxt - WEEK end
 		return nxt
 	end
-	-- a weekly raid lockout this toon holds expires on that reset (3-day raids are shorter)
+	-- a weekly raid lockout this toon holds expires on that reset, whatever day of the
+	-- week it is. Heroic dungeons (daily) are not raids, the old raids farmed for
+	-- mounts reset every 3 days, and an extended lockout runs past the reset.
 	local best
 	for i = 1, GetNumSavedInstances() do
-		local _, _, reset, _, locked, _, _, isRaid = GetSavedInstanceInfo(i)
-		if isRaid and locked and reset and reset > 3 * 86400 and reset <= WEEK + 3600 then
+		local iname, _, reset, _, locked, extended, _, isRaid = GetSavedInstanceInfo(i)
+		if isRaid and locked and not extended and not THREE_DAY_RAIDS[iname or ""]
+			and reset and reset > 0 and reset <= WEEK + 3600 then
 			best = math.max(best or 0, reset)
 		end
 	end

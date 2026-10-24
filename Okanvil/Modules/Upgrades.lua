@@ -579,15 +579,15 @@ local function SetOf(id)
 	return itemSet[id]
 end
 
-local function wornId(slot)
-	local l = GetInventoryItemLink("player", slot)
+local function wornId(slot, unit)
+	local l = GetInventoryItemLink(unit or "player", slot)
 	return l and tonumber(l:match("item:(%d+)"))
 end
--- how many pieces of this set you wear, by item id
-local function setCount(name)
+-- how many pieces of this set you (or an inspected unit) wear, by item id
+local function setCount(name, unit)
 	local n = 0
 	for slot = 1, 19 do
-		local id = wornId(slot)
+		local id = wornId(slot, unit)
 		if id and SetOf(id) == name then n = n + 1 end
 	end
 	return n
@@ -606,8 +606,10 @@ end
 
 -- The item tooltip's set block, told the truth: "(4/5)", the pieces you wear
 -- lit, and the bonuses you have green -- counted from the item ids you wear.
+-- `unit` is whose gear the tooltip shows (an inspected player's slot); you otherwise.
 local SET_ON, SET_OFF = { 1, 1, 0.6 }, { 0.5, 0.5, 0.5 }
-local function fixSetTip(tip)
+local function fixSetTip(tip, unit)
+	unit = unit or "player"
 	local name = tip:GetName()
 	if not name then return end
 	local setName, setLine, total
@@ -618,13 +620,18 @@ local function fixSetTip(tip)
 		if sn then setName, setLine, total = sn, i, tot; break end
 	end
 	if not setName then return end
-	local have = setCount(setName)
-	if have == 0 then return end                      -- not yours: the client's count stands
+	local have = setCount(setName, unit)
+	if have == 0 then return end                      -- not worn: the client's count stands
+	-- the heroic copy lists the normal piece names ("Lightsworn Headpiece" for a
+	-- worn "Sanctified Lightsworn Headpiece"), so both names light the piece
 	local wornNames = {}
 	for slot = 1, 19 do
-		local l = GetInventoryItemLink("player", slot)
+		local l = GetInventoryItemLink(unit, slot)
 		local n = l and GetItemInfo(l)
-		if n then wornNames[n] = true end
+		if n then
+			wornNames[n] = true
+			wornNames[(n:gsub("^Sanctified ", ""))] = true
+		end
 	end
 	_G[name .. "TextLeft" .. setLine]:SetText(setName .. " (" .. have .. "/" .. total .. ")")
 	-- the piece names, an empty line, then the bonuses: the block ends at the
@@ -653,9 +660,19 @@ local function fixSetTip(tip)
 		end
 	end
 end
+-- A slot of the inspect frame shows the inspected player's item: count their gear.
+local function tipUnit(tip)
+	local owner = tip.GetOwner and tip:GetOwner()
+	local p = owner
+	while p do
+		if p == InspectFrame then return InspectFrame.unit end
+		p = p:GetParent()
+	end
+	return nil
+end
 for _, t in ipairs({ GameTooltip, ItemRefTooltip }) do
 	t:HookScript("OnTooltipSetItem", function(tip)
-		local ok, err = pcall(fixSetTip, tip)
+		local ok, err = pcall(fixSetTip, tip, tipUnit(tip))
 		if not ok and Okanvil.Err then Okanvil:Err("Set tooltip", err) end
 	end)
 end

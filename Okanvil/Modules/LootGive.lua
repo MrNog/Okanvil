@@ -146,7 +146,7 @@ local function build()
 	if br then f:SetBackdropColor(br, bg, bb, 0.97) end
 	tinsert(UISpecialFrames, "Okanvil_LootGive")   -- Esc closes it
 	-- the forge art of the mini roll, as faint: the names sit on solid cells
-	W.ForgeArt(f, 0.22)
+	W.ForgeArt(f, 0.22, W.LOOT_ART)
 
 	f.slot = W.FramedIcon(f, nil, ICON, true)
 	f.slot:SetPoint("TOPLEFT", PAD, -PAD)

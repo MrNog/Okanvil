@@ -93,7 +93,7 @@ local function build()
 	if br then f:SetBackdropColor(br, bg, bb, 0.97) end
 	f:EnableMouse(true)
 	f:SetClampedToScreen(true)
-	W.ForgeArt(f, 0.22)
+	W.ForgeArt(f, 0.22, W.LOOT_ART)
 
 	-- the mini roll's title bar: buttons sit inside it, 6px in from the window edge
 	local hdr = W.TitleBar(f, HDR_H)

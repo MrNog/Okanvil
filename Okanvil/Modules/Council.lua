@@ -513,7 +513,7 @@ local FOOT_H  = 46
 local function ensureFrame()
 	if frame then return frame end
 
-	local f = Okanvil:Popup("Loot council")
+	local f = Okanvil:Popup("Loot council", W.LOOT_ART)
 	-- Out of the one-popup slot: this frame and the board are on screen together,
 	-- and creating one must not close the other.
 	Okanvil:SetPopup(nil)
@@ -1323,9 +1323,18 @@ if C then
 			C_.ShowRestored(round)
 		end
 	end)
-	-- the asker's class fit for the question right behind it (C_.Ask)
+	local function isML(name)
+		local L = Okanvil.Loot
+		local ml = L and L.MasterLooterName and L.MasterLooterName()
+		return ml and name and ml:gsub("%-.*", ""):lower() == name:gsub("%-.*", ""):lower()
+	end
+
+	-- the asker's class fit for the question right behind it (C_.Ask). Only the
+	-- master looter's counts; anyone else's is ignored and each client judges the
+	-- items itself. The asker's own copy is read in C_.Ask, so the echo is skipped.
 	C.On("CFIT", function(sender, body)
-		if sender and sender:gsub("%-.*", "") ~= UnitName("player") then readClassFit(body) end
+		if not sender or sender:gsub("%-.*", "") == UnitName("player") then return end
+		if isML(sender) then readClassFit(body) end
 	end)
 
 	-- COUNCIL NIGHT, as the master looter has it. Only the ML can switch it, so
@@ -1333,11 +1342,6 @@ if C then
 	-- they need to know whether the night is a council night without being able
 	-- to change it. The ML announces each change; anyone opening the page or
 	-- joining asks (CNQ) and the ML answers.
-	local function isML(name)
-		local L = Okanvil.Loot
-		local ml = L and L.MasterLooterName and L.MasterLooterName()
-		return ml and name and ml:gsub("%-.*", ""):lower() == name:gsub("%-.*", ""):lower()
-	end
 	C.On("CNIGHT", function(sender, v)
 		if not isML(sender) or isML(UnitName("player")) then return end
 		C_.remoteNight = (v == "1") and sender:gsub("%-.*", "") or nil
@@ -1585,7 +1589,7 @@ end
 
 local function ensureBoard()
 	if board then return board end
-	local f = Okanvil:Popup("Loot council -- responses")
+	local f = Okanvil:Popup("Loot council -- responses", W.LOOT_ART)
 	Okanvil:SetPopup(nil)      -- shares the screen with the raider frame (see ensureFrame)
 	-- Closed by hand = this officer is done with the round (voted, or has no
 	-- opinion). Answers still arrive, a reload still restores the round, but
@@ -2841,7 +2845,7 @@ function C_.OpenPicker()
 	end
 
 	if not picker then
-		picker = Okanvil:Popup("Pick items for the council")
+		picker = Okanvil:Popup("Pick items for the council", W.LOOT_ART)
 		picker:SetWidth(430)
 		picker:SetFrameStrata("DIALOG")
 		picker:SetFrameLevel(40)     -- opened on top of everything else here
@@ -3086,7 +3090,7 @@ function C_.BuildRunTab(body)
 		local ask = W.Button(wrow, "Ask"); ask:SetSize(48, 22)
 		ask:SetPoint("RIGHT", lock, "LEFT", -6, 0)
 		ask:Tooltip("Open the wish window for everyone without a wish (late joiners).\n"
-			.. "Not for those who already picked or passed. No raid warning.")
+			.. "Not for those who already picked or passed. Only the first Ask of a round raid-warns.")
 		ask:SetScript("OnClick", function() Wi.AskMissing() end)
 		-- Open: your own wish window again, after closing it
 		local open = W.Button(wrow, "Open"); open:SetSize(56, 22)

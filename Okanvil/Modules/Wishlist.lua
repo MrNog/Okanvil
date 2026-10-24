@@ -492,8 +492,9 @@ do
 			local d = db()
 			d.open[lockKey] = d.open[lockKey] or { at = time() }
 			d.open[lockKey].off = nil
-			-- the sender says whether it is locked (an older build sends nothing: open)
-			d.open[lockKey].locked = (locked == "1") or nil
+			-- this can only set the lock: lifting it takes WISHLOCK "0" or WISHCLEAR, so a
+			-- sender that never saw the lock (or an older build) cannot lift it
+			if locked == "1" then d.open[lockKey].locked = true end
 			if Wi.onChange then Wi.onChange() end
 			-- already sent this ID: send it again for whoever missed it, no window
 			local sent = mySent(lockKey)
@@ -514,7 +515,7 @@ do
 			local d = db()
 			d.open[lockKey] = d.open[lockKey] or { at = time() }
 			d.open[lockKey].off = nil
-			d.open[lockKey].locked = (locked == "1") or nil
+			if locked == "1" then d.open[lockKey].locked = true end
 			if Wi.onChange then Wi.onChange() end
 		end)
 		C.On("WISHOFF", function(sender, lockKey)
@@ -664,7 +665,7 @@ local function wbuild()
 	local br, bg, bb = f:GetBackdropColor()
 	if br then f:SetBackdropColor(br, bg, bb, 0.97) end
 	f:EnableMouse(true); f:SetClampedToScreen(true)
-	if W.ForgeArt then W.ForgeArt(f, 0.22) end
+	if W.ForgeArt then W.ForgeArt(f, 0.22, W.LOOT_ART) end
 
 	-- the mini roll's title bar: its top corners follow the window's cut
 	local hdr = W.TitleBar(f, WP_HDR)
@@ -681,7 +682,7 @@ local function wbuild()
 	f.clr = clr
 	local ask = W.Button(hdr, "Ask"); ask:SetSize(36, 18); ask:SetPoint("RIGHT", clr, "LEFT", -4, 0)
 	ask:Tooltip("Open the wish window for everyone without a wish (late joiners).\n"
-		.. "Not for those who already picked or passed. No raid warning.")
+		.. "Not for those who already picked or passed. Only the first Ask of a round raid-warns.")
 	ask:SetScript("OnClick", function() Wi.AskMissing() end)
 	f.ask = ask
 	-- after the title, cut short before the buttons: never on top of the title
