@@ -162,8 +162,9 @@ local SIZE_SUFFIX = " (10)"
 -- One note per size serves normal and heroic: the guild writes the plan for
 -- heroic and runs it on normal too. Heroic abilities carry other spell ids
 -- (Unstable Experiment 70351 on 10N, 71967 on 10HC); NotesParse's SAME_ABILITY
--- lets an anchor fire on any of them. Notes saved under " (HC)" by older builds
--- stay in the database but are no longer listed or used.
+-- lets an anchor fire on any of them. A note saved under " (HC)" by an older
+-- build moves into its size's normal note at login when that one is empty;
+-- otherwise it stays in the database, no longer listed or used.
 local HC_SUFFIX = " (HC)"
 
 -- The KEY a note is stored under, for a boss, a size and a difficulty. The 25
@@ -2079,10 +2080,32 @@ core:SetScript("OnEvent", function(_, event, arg1)
 		end
 
 		-- Heroic notes from older builds: one note per size serves heroic now.
+		-- A heroic note whose size has no normal text yet becomes that note,
+		-- with its stamp and author. Where the normal note has text, the heroic
+		-- one stays in the database untouched and unlisted. Collected first:
+		-- the move can add a key, which pairs() does not allow mid-loop.
+		local heroics = {}
 		for name in pairs(db.notes or {}) do
-			if N.IsHeroic(name) then
+			if N.IsHeroic(name) then heroics[#heroics + 1] = name end
+		end
+		for _, name in ipairs(heroics) do
+			local text = db.notes[name]
+			local normal = N.KeyFor(N.BossOf(name), N.SizeOf(name))
+			local have = db.notes[normal]
+			if text and text ~= "" and normal and (have == nil or have == "") then
+				db.notes[normal] = text
 				db.notes[name] = nil
-				if db.stamps then db.stamps[name] = nil end
+				db.stamps = db.stamps or {}
+				local hcStamp, nStamp = db.stamps[name], db.stamps[normal]
+				-- the newer of the two, so the moved text never reads as older
+				-- than the empty entry it fills
+				if hcStamp and (tonumber(hcStamp) or 0) > (tonumber(nStamp) or 0) then
+					db.stamps[normal] = hcStamp
+				end
+				db.stamps[name] = nil
+				db.authors = db.authors or {}
+				db.authors[normal] = db.authors[name]
+				db.authors[name] = nil
 			end
 		end
 		-- A heroic note selected by an older build: its boss's one note now.

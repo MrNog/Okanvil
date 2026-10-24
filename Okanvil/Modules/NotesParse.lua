@@ -438,6 +438,10 @@ end
 -- the cast under whichever of its group's ids the fight uses; this core even
 -- fires the 10N id in 10H for some (Infest, Harvest Soul). Left out: 72023,
 -- which DBM files under two abilities, and its groups that mix two spells.
+-- Essence of the Blood Queen (the boss's bite 70867 and a raider's bite 70879)
+-- and Power of the Twins (65879 and 65916, one per twin) are two spells each,
+-- both seen in one difficulty, so a group of them would count both events
+-- as one and fire "the Nth" early; their ids count alone.
 local SAME_ABILITY = {
 	-- Obsidian and Ruby Sanctum
 	{ 56908, 58956 },  -- Flame Breath
@@ -481,8 +485,6 @@ local SAME_ABILITY = {
 	{ 66901, 67615, 67616, 67617 },  -- Paralytic Spray
 	{ 66902, 67627, 67628, 67629 },  -- Burning Spray
 	{ 67051, 67050, 67049, 66237 },  -- Incinerate Flesh
-	{ 67245, 67248, 67249, 67250 },  -- Power of the Twins
-	{ 67246, 65879, 65916, 67244 },  -- Power of the Twins
 	{ 67477, 66331, 67478, 67479 },  -- Impale
 	{ 67641, 66883, 67642, 67643 },  -- Slime Pool
 	{ 67657, 66759, 67658, 67659 },  -- Frothing Rage
@@ -515,13 +517,11 @@ local SAME_ABILITY = {
 	{ 70633, 71283, 72025, 72026 },  -- Gut Spray
 	{ 70672, 72455, 72832, 72833 },  -- Gaseous Bloat
 	{ 70754, 71748, 72024 },  -- Fireball
-	{ 70867, 70879, 71473, 71525 },  -- Essence of the Blood Queen
 	{ 70877, 71474 },  -- Frenzied Bloodthirst
 	{ 71001, 72108, 72109, 72110 },  -- Death and Decay
 	{ 71179, 71741 },  -- Mana Void
 	{ 71420, 72007, 72501, 72502 },  -- Frostbolt
 	{ 71510, 70838 },  -- Blood Mirror
-	{ 71530, 71531, 71532, 71533 },  -- Essence of the Blood Queen
 	{ 71615, 71618 },  -- Tear Gas
 	{ 71807, 72796, 72797, 72798 },  -- Glittering Sparks
 	{ 71818, 71819, 71820, 71821 },  -- Twilight Bloodbolt
@@ -551,6 +551,14 @@ local SAME_ABILITY = {
 local sameAs = {}      -- id -> every id of its ability
 for _, ids in ipairs(SAME_ABILITY) do
 	for _, id in ipairs(ids) do sameAs[id] = ids end
+end
+
+-- Every id of the ability `id` belongs to, as separate values, or nothing when
+-- it has no other ids. Values rather than the table, so a caller (the Kaze
+-- WeakAura counts the same groups) cannot change it.
+function P.SameAbility(id)
+	local ids = sameAs[tonumber(id)]
+	if ids then return unpack(ids) end
 end
 
 -- The anchor decides what the offset counts FROM. A bare {time:} counts from
