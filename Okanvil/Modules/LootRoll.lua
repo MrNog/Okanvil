@@ -32,8 +32,10 @@ Okanvil.RollMgr = RM
 -- One size. There used to be a "full" layout twice this wide, switched by a
 -- chevron in the title bar -- but the compact one is what the window is FOR: a
 -- small thing beside the loot frame that never covers what you are looting.
-local SIZE = { ROW_H = 32, FONT_SZ = 11, SUB_SZ = 9, ROLL_H = 15, LIST_ROWS = 4, WIN_W = 270 }
+local SIZE = { ROW_H = 32, FONT_SZ = 11, SUB_SZ = 9, ROLL_H = 17, LIST_ROWS = 4, WIN_W = 270 }
 local MAX_ROLLS = 4   -- rolls visible in the roll box; the rest scroll within it
+-- The rolls are what the raid reads off the screen mid roll-off: larger than the list.
+local ROLL_SZ, ROLL_HD_SZ = 12, 11
 local STATUS_W = 56   -- the fixed status column on an item row ("rolling", "asked")
 
 -- Live geometry, unpacked from SIZE. These are locals rather than SIZE lookups
@@ -119,8 +121,13 @@ end
 -- with no master loot at all (solo). It stays a named function because Rebuild decides
 -- the layout from it and OnRollOpen decides whether the layout needs rebuilding from it,
 -- and those two must never disagree.
+--
+-- A called roll counts too, whatever the loot method: a raid on group loot for speed has
+-- one person carry the items and call /roll on them at the end, and the raiders need the
+-- buttons for that roll-off just as much as under master loot.
 local function wantsChatRollButtons()
 	if L and L.IsMasterLootMethod and L.IsMasterLootMethod() then return true end
+	if L and L.RollIsOpen and L.RollIsOpen() then return true end
 	return amML()
 end
 
@@ -323,7 +330,7 @@ local function buildWindow()
 	end)
 	f:SetClampedToScreen(true)
 
-	W.ForgeArt(f, 0.22)
+	W.ForgeArt(f, 0.22, W.LOOT_ART)
 	-- the windows' title bar; the title on the left, since the bar carries buttons
 	local hdr = W.TitleBar(f, 26)
 	local title = hdr.title
@@ -760,7 +767,7 @@ function RM.Rebuild()
 	local split = keep(body:CreateTexture(nil, "ARTWORK"))
 	split:SetTexture("Interface\\Buttons\\WHITE8x8"); split:SetVertexColor(1, 1, 1, 0.07); split:SetHeight(1)
 	split:SetPoint("TOPLEFT", M, y + 4); split:SetPoint("RIGHT", body, "RIGHT", -M, 0)
-	local rollHd = keep(W.Text(body, "", 10, "dim"))
+	local rollHd = keep(W.Text(body, "", ROLL_HD_SZ, "dim"))
 	rollHd:SetPoint("TOPLEFT", M, y); rollHd:SetPoint("RIGHT", body, "RIGHT", -M, 0)
 	rollHd:SetJustifyH("LEFT")
 	if rollHd.SetWordWrap then rollHd:SetWordWrap(false) end
@@ -781,8 +788,8 @@ function RM.Rebuild()
 		rr:SetPoint("TOPLEFT", PAD, -3 - (i - 1) * ROLL_H)
 		rr:SetPoint("RIGHT", rbox, "RIGHT", -PAD, 0)
 		rr.hl = rr:CreateTexture(nil, "BORDER"); rr.hl:SetAllPoints(); rr.hl:Hide()
-		rr.num = W.Text(rr, "", FONT_SZ); rr.num:SetPoint("RIGHT", -4, 0); rr.num:SetJustifyH("RIGHT")
-		rr.txt = W.Text(rr, "", FONT_SZ); rr.txt:SetPoint("LEFT", 4, 0)
+		rr.num = W.Text(rr, "", ROLL_SZ); rr.num:SetPoint("RIGHT", -4, 0); rr.num:SetJustifyH("RIGHT")
+		rr.txt = W.Text(rr, "", ROLL_SZ); rr.txt:SetPoint("LEFT", 4, 0)
 		rr.txt:SetPoint("RIGHT", rr.num, "LEFT", -6, 0); rr.txt:SetJustifyH("LEFT")
 		if rr.txt.SetWordWrap then rr.txt:SetWordWrap(false) end
 		-- Click a roll: give the item to that player (master looter only).
@@ -857,7 +864,7 @@ function RM.Rebuild()
 			local top = L.RollWinner and L.RollWinner(selected)
 			if not top then
 				local ar = L.ActiveRoll()
-				if ar and ar.best and ((not ar.id) or (not selected.id) or ar.id == selected.id) then top = ar.best end
+				if ar and ar.best and L.RollIsOn(ar, selected) then top = ar.best end
 			end
 			if not top then
 				-- reserved by one raider only: theirs, no roll needed
@@ -866,7 +873,12 @@ function RM.Rebuild()
 				Okanvil:Print("|cffff5555No rolls on this item yet.|r")
 				return
 			end
-			L.AwardWinner(selected.id, top.player, top.roll, top.spec or ((top.kind == "os") and "off" or nil), nil, nil, true)
+			-- A tie on top is no decided winner: the name order only picks who is listed
+			-- first, so that give goes through the confirm instead of one click.
+			local r = L.RollsRanked and L.RollsRanked(selected) or {}
+			local tied = r[2] and r[1].kind == r[2].kind and (r[1].roll or 0) == (r[2].roll or 0)
+			L.AwardWinner(selected.id, top.player, top.roll, top.spec or ((top.kind == "os") and "off" or nil),
+				nil, nil, not tied)
 		end)
 		-- Says which give this will be before it is clicked: GiveMasterLoot only
 		-- works from an OPEN corpse.
@@ -1070,7 +1082,7 @@ function RM.SelectItemById(id, exact)
 	-- different copy from the one taking the rolls: you watched "no rolls yet" while
 	-- the rolls landed on its twin.
 	--
-	-- Without it, two passes: first an item still OPEN for rolls (not awarded), so
+	-- Without it: a copy not rolled yet; then an item still OPEN for rolls (not awarded), so
 	-- re-rolling a fresh drop of an id doesn't land on an old awarded copy; then any copy.
 	local groups = L.DropsByBoss and L.DropsByBoss() or {}
 	local function pick(mode)
@@ -1078,6 +1090,8 @@ function RM.SelectItemById(id, exact)
 			for ii, d in ipairs(g.items) do
 				local hit
 				if mode == "exact" then hit = (d == exact)
+				elseif mode == "fresh" then
+					hit = d.id == id and not d.receivedBy and not d.rollDone and not (d.rolls and #d.rolls > 0)
 				else hit = d.id == id and (mode ~= "open" or not d.receivedBy) end
 				if hit then
 					selected = d                    -- module-scope: survives the window not existing
@@ -1108,6 +1122,9 @@ function RM.SelectItemById(id, exact)
 		return false
 	end
 	if exact and pick("exact") then return end
+	-- a copy nobody has rolled yet before one whose roll-off already ran (a Trophy
+	-- won on boss 1 still sits in the ML's bags, unawarded, until it is traded)
+	if pick("fresh") then return end
 	if pick("open") then return end
 	pick("any")
 end
@@ -1115,19 +1132,20 @@ end
 -- The rolls of one item, ranked. ONE roll per player (the Loot module already keeps
 -- only the first, this guards the manual-roll list too, which has no such rule).
 --
--- Rank: need beats all; ms (a /roll 1-100) beats os (a /roll 1-99); greed and
--- disenchant tie at the base level (the game awards the higher number between them,
--- so a greed 14 does NOT beat a DE 35). Equal ranks go to the higher number, and
--- equal numbers break on name -- table.sort is not stable, so without that tiebreak
--- two people on the same roll would swap places on every repaint.
-local RANK = { need = 3, ms = 2, greed = 1, de = 1, os = 0 }
+-- Rank: the same two tiers L.RollWinner uses, so the list and the item row always
+-- name the same winner. Need and ms (a /roll 1-100) are the top tier; greed,
+-- disenchant and os (a /roll 1-99) the lower one (the game awards the higher number
+-- between greed and DE, so a greed 14 does NOT beat a DE 35). Equal ranks go to the
+-- higher number, and equal numbers break on name -- table.sort is not stable, so
+-- without that tiebreak two people on the same roll would swap places on every repaint.
+local RANK = { need = 2, ms = 2, greed = 1, de = 1, os = 1 }
 
 local function rankedRolls(dp, ar)
 	local out, seen = {}, {}
 	local src
 	if dp and dp.rolls and #dp.rolls > 0 then
 		src = dp.rolls
-	elseif dp and ar and ((not ar.id) or (not dp.id) or (ar.id == dp.id)) then
+	elseif L.RollIsOn(ar, dp) then
 		src = ar.list          -- a managed /roll running on this item
 	end
 	for _, e in ipairs(src or {}) do
@@ -1474,7 +1492,7 @@ function RM.Refresh()
 		local owned = selected and selected.receivedBy and selected.receivedBy ~= ""
 			and selected.receivedBy ~= mlName
 		local top = selected and L.RollWinner and L.RollWinner(selected)
-		if not top and selected and ar and ar.best and ((not ar.id) or ar.id == selected.id) then top = ar.best end
+		if not top and selected and ar and ar.best and L.RollIsOn(ar, selected) then top = ar.best end
 		local sole = selected and not top and not owned and soleReserver(selected)
 		if selected and top and not owned then
 			local tag = (top.kind == "os" or top.spec == "off") and " OS" or ""
@@ -1646,6 +1664,13 @@ local function onLoot() popOrRefresh(false) end
 local lastChatRoll = nil
 function RM.OnRollOpen()
 	popOrRefresh(false)
+	RM.SyncRollButtons()
+end
+
+-- Re-decide the "Your roll" pair without repainting the page: a call has just paged
+-- the window to the called item (pendingBossIdx), and a popOrRefresh here would
+-- consume that and let the call's forced pop jump to the newest boss instead.
+function RM.SyncRollButtons()
 	if not (win and win:IsShown()) then return end
 	local now = wantsChatRollButtons()
 	if now == lastChatRoll then return end
@@ -1772,6 +1797,9 @@ ev:SetScript("OnEvent", function(_, event)
 		if not lootOn() then return end
 		local ok, err = pcall(RM.SelectItemById, id, dp)
 		if not ok and Okanvil.Err then Okanvil:Err("RollMgr SelectItemById", err) end
+		-- a call under group loot is what brings the roll buttons, so re-decide them now
+		-- rather than on the first roll that lands
+		RM.SyncRollButtons()
 	end
 	-- fired the instant a loot window opens with items (RaidRoll / RCLootCouncil
 	-- model) -- pop the mini roll even if the item is filtered from recording, and
