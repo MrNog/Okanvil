@@ -142,7 +142,7 @@ function Okanvil:BuildSettings()
 	local tabs = {
 		{ key = "general", label = "General", icon = "Interface\\Icons\\INV_Misc_Gear_01", height = 400,
 		  build = function(pg) Okanvil:Settings_General(pg) end },
-		{ key = "loot",    label = "Loot",    icon = "Interface\\Icons\\INV_Misc_Coin_02", height = 360,
+		{ key = "loot",    label = "Loot",    icon = "Interface\\Icons\\INV_Misc_Coin_02", height = 400,
 		  build = function(pg) Okanvil:Settings_Loot(pg) end },
 		{ key = "raid",    label = "Raid",    icon = "Interface\\Icons\\Achievement_Dungeon_Icecrown_IcecrownEntrance", height = 460,
 		  build = function(pg) Okanvil:Settings_RaidTools(pg) end },
@@ -239,6 +239,14 @@ function Okanvil:Settings_Loot(p)
 			db.council = db.council or {}
 			db.council.autoAsk = v and true or false
 		end)
+	-- Off = the mini roll never pops by itself (/okroll and the bar still open it).
+	-- The council's vote window is its own frame and still opens either way.
+	L:Check("Open the mini roll on loot", function()
+			return not db.rollmgr or db.rollmgr.autoShow ~= false
+		end, function(v)
+			db.rollmgr = db.rollmgr or { point = "RIGHT", x = -30, y = 60 }
+			db.rollmgr.autoShow = v and true or false
+		end)
 
 	L:Col(2)
 	if Lo and Lo.RollMsg then
@@ -305,6 +313,8 @@ function Okanvil:Settings_RaidTools(p)
 		L:Section("Marks bar")
 		L:Check("Show the marks bar", function() return mb().enabled and true or false end,
 			function(v) if MB.Toggle then MB:Toggle(v and true or false) end end)
+		L:Check("Show the dungeon queue", function() return mb().lfg ~= false end,
+			function(v) mb().lfg = v and true or false; if MB.Refresh then MB:Refresh() end end)
 		L:Stepper("Size", 70, 160, 5, function() return mb().scale or 100 end,
 			function(v) mb().scale = v; if MB.Refresh then MB:Refresh() end end)
 		L:Stepper("Pull timer (seconds)", 3, 30, 1, function() return mb().pullTime or 10 end,

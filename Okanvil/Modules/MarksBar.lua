@@ -196,6 +196,189 @@ local function canMark()
 	end
 	return (GetNumPartyMembers() or 0) > 0
 end
+
+-- ------------------------------------------------------------
+-- LFG slot -- the dungeon finder queue, live on the bar.
+-- Five role icons (tank, healer, 3 dps) and the time in queue: a gold role is
+-- filled, a grey one is still missing. Shown only while queued, so the bar is
+-- unchanged the rest of the time.
+--
+-- 3.3.5a API:
+--   GetLFGMode()        "queued" / "proposal" / "rolecheck" / "lfgparty" / ...
+--   GetLFGQueueStats()  hasData, leaderNeeds, tankNeeds, healerNeeds, dpsNeeds,
+--                       instanceType, instanceName, averageWait, tankWait,
+--                       healerWait, damageWait, myWait, queuedTime
+-- ------------------------------------------------------------
+local LFG_ROLES = { "TANK", "HEALER", "DAMAGER", "DAMAGER", "DAMAGER" }
+local LFG_TIME_W = 50   -- room for "READY" and "1:00:00" clear of the bar's edge
+
+local function lfgMode()
+	local mode = GetLFGMode and GetLFGMode()
+	if mode == "queued" or mode == "proposal" then return mode end
+	if not GetLFGMode and GetLFGInfoServer and select(3, GetLFGInfoServer()) then
+		return "queued"
+	end
+end
+
+-- Queued, and the slot not switched off in Settings.
+local function lfgWanted()
+	return cfg().lfg ~= false and lfgMode()
+end
+
+local function fmtTime(secs)
+	secs = math.max(0, math.floor(secs or 0))
+	if secs >= 3600 then
+		return ("%d:%02d:%02d"):format(secs / 3600, (secs % 3600) / 60, secs % 60)
+	end
+	return ("%d:%02d"):format(secs / 60, secs % 60)
+end
+
+-- Which of the five icons are filled, from what the queue still needs.
+-- No data yet (the first second of a queue) reads as nothing filled.
+local function lfgFilled(t, h, d)
+	return {
+		t == 0,
+		h == 0,
+		d ~= nil and d <= 2,
+		d ~= nil and d <= 1,
+		d == 0,
+	}
+end
+
+local function lfgMissingText(t, h, d)
+	local miss = {}
+	if (t or 1) > 0 then miss[#miss + 1] = "Tank" end
+	if (h or 1) > 0 then miss[#miss + 1] = "Healer" end
+	if (d or 3) > 0 then miss[#miss + 1] = (d or 3) .. " DPS" end
+	return #miss > 0 and table.concat(miss, ", ") or "nobody"
+end
+
+local function updateLfg(s)
+	local mode = lfgMode()
+	if not mode then return end
+	local C = Okanvil.Colors
+
+	if mode == "proposal" then
+		for i = 1, #LFG_ROLES do Okanvil.W.SetFramedIconUsable(s.roles[i], true) end
+		s.time:SetText("READY")
+		s.time:SetTextColor(C.accentText[1], C.accentText[2], C.accentText[3])
+		s.pulseUntil = math.huge
+		return
+	end
+
+	local _, _, t, h, d, _, _, _, _, _, _, _, queuedTime = GetLFGQueueStats()
+	local filled = lfgFilled(t, h, d)
+	for i = 1, #LFG_ROLES do Okanvil.W.SetFramedIconUsable(s.roles[i], filled[i]) end
+
+	-- The two roles a dungeon queue actually waits on: a short glow when one lands.
+	if (s.lastT and s.lastT > 0 and t == 0) or (s.lastH and s.lastH > 0 and h == 0) then
+		s.pulseUntil = GetTime() + 3
+	elseif s.pulseUntil == math.huge then
+		s.pulseUntil = nil   -- a declined proposal drops back to the queue
+	end
+	s.lastT, s.lastH = t, h
+
+	-- The server's queue time arrives with its first status packet, which can take
+	-- a while; until then the clock counts from when the slot first saw the queue.
+	s.startedAt = s.startedAt or GetTime()
+	s.time:SetText(fmtTime(GetTime() - (queuedTime or s.startedAt)))
+	s.time:SetTextColor(C.text[1], C.text[2], C.text[3])
+end
+
+local function buildLfg(f)
+	local W = Okanvil.W
+	local C = Okanvil.Colors
+
+	local s = CreateFrame("Button", nil, f)
+	s:SetSize(#LFG_ROLES * (BTN + GAP) + LFG_TIME_W, BTN)
+
+	-- the glow behind the icons when a tank/healer lands or the group is ready
+	local glow = s:CreateTexture(nil, "BACKGROUND")
+	glow:SetPoint("TOPLEFT", -3, 3)
+	glow:SetPoint("BOTTOMRIGHT", 3, -3)
+	glow:SetTexture("Interface\\Buttons\\WHITE8X8")
+	glow:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0)
+	s.glow = glow
+
+	s.roles = {}
+	for i, role in ipairs(LFG_ROLES) do
+		local r = W.FramedIcon(s, "Interface\\LFGFrame\\UI-LFG-ICON-ROLES", BTN)
+		r:SetPoint("LEFT", (i - 1) * (BTN + GAP), 0)
+		if GetTexCoordsForRole then r.icon:SetTexCoord(GetTexCoordsForRole(role)) end
+		s.roles[i] = r
+	end
+
+	local time = s:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	time:SetPoint("LEFT", s.roles[#LFG_ROLES], "RIGHT", 4, 0)
+	time:SetJustifyH("LEFT")
+	s.time = time
+
+	-- Once a second: the clock, and the queue stats read again -- they change
+	-- without always firing an event. The glow runs every frame while it lasts.
+	local tick = 0
+	s:SetScript("OnUpdate", function(self, elapsed)
+		tick = tick + elapsed
+		if tick >= 1 then
+			tick = 0
+			updateLfg(self)
+		end
+		if self.pulseUntil and GetTime() < self.pulseUntil then
+			local a = 0.15 + 0.25 * (0.5 + 0.5 * math.sin(GetTime() * 6))
+			self.glow:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], a)
+		else
+			self.pulseUntil = nil
+			self.glow:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0)
+		end
+	end)
+
+	s:RegisterForClicks("LeftButtonUp")
+	s:SetScript("OnClick", function()
+		if ToggleLFDParentFrame then ToggleLFDParentFrame() end
+	end)
+	s:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_NONE")
+		GameTooltip:ClearAllPoints()
+		GameTooltip:SetPoint("TOP", self, "BOTTOM", 0, -(PAD + 3))
+		local _, _, t, h, d, _, name, avg, _, _, _, myWait, queuedTime = GetLFGQueueStats()
+		GameTooltip:SetText(name or "Dungeon Finder", 1, 0.82, 0)
+		if lfgMode() == "proposal" then
+			GameTooltip:AddLine("Group ready", C.ok[1], C.ok[2], C.ok[3])
+		else
+			GameTooltip:AddDoubleLine("Missing", lfgMissingText(t, h, d), 0.8, 0.8, 0.8, 1, 1, 1)
+			if queuedTime then
+				GameTooltip:AddDoubleLine("In queue", fmtTime(GetTime() - queuedTime), 0.8, 0.8, 0.8, 1, 1, 1)
+			end
+			if avg and avg > 0 then
+				GameTooltip:AddDoubleLine("Average wait", fmtTime(avg), 0.8, 0.8, 0.8, 1, 1, 1)
+			end
+			if myWait and myWait > 0 then
+				GameTooltip:AddDoubleLine("Your wait", fmtTime(myWait), 0.8, 0.8, 0.8, 1, 1, 1)
+			end
+		end
+		GameTooltip:AddLine("Click: Dungeon Finder", 0.6, 0.6, 0.6)
+		GameTooltip:Show()
+	end)
+	s:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+	s:Hide()
+	return s
+end
+
+-- A hairline at a group boundary, one texture per boundary, reused.
+local function placeDivider(f, n, x)
+	local d = f.divs[n]
+	if not d then
+		d = f:CreateTexture(nil, "ARTWORK")
+		d:SetTexture("Interface\\Buttons\\WHITE8X8")
+		d:SetVertexColor(1, 1, 1, 0.12)
+		d:SetSize(1, BTN - 2)
+		f.divs[n] = d
+	end
+	d:ClearAllPoints()
+	d:SetPoint("LEFT", f, "LEFT", x - SEP / 2, 0)
+	d:Show()
+end
+
 -- Lay out the whole bar. A shortcut whose module is switched off is hidden and the
 -- rest slide left to close the gap, so the bar is never wider than the buttons that
 -- actually do something -- and the same is true of the marks: a plain raider gets a
@@ -320,18 +503,8 @@ local function layoutTail(f)
 			local g = GROUP_OF[sc.key]
 			if lastGroup and g and g ~= lastGroup then
 				nDiv = nDiv + 1
-				local d = f.divs[nDiv]
-				if not d then
-					d = f:CreateTexture(nil, "ARTWORK")
-					d:SetTexture("Interface\\Buttons\\WHITE8X8")
-					d:SetVertexColor(1, 1, 1, 0.12)
-					d:SetSize(1, BTN - 2)
-					f.divs[nDiv] = d
-				end
 				x = x + SEP - GAP
-				d:ClearAllPoints()
-				d:SetPoint("LEFT", f, "LEFT", x - SEP / 2, 0)
-				d:Show()
+				placeDivider(f, nDiv, x)
 			end
 			if g then lastGroup = g end
 			-- Cleared first: a shortcut moves now that the marks come and go, and
@@ -344,6 +517,26 @@ local function layoutTail(f)
 			b:Hide()
 		end
 	end
+	-- The LFG slot, last and in a group of its own, only while queued.
+	if f.lfg then
+		if lfgWanted() then
+			if x > PAD then
+				nDiv = nDiv + 1
+				x = x + SEP - GAP
+				placeDivider(f, nDiv, x)
+			end
+			f.lfg:ClearAllPoints()
+			f.lfg:SetPoint("LEFT", x, 0)
+			updateLfg(f.lfg)
+			f.lfg:Show()
+			x = x + f.lfg:GetWidth() + GAP
+		else
+			f.lfg:Hide()
+			f.lfg.startedAt = nil
+		end
+		f.lfgShown = f.lfg:IsShown()
+	end
+
 	-- Anything left over from a wider bar last time round.
 	for i = nDiv + 1, #f.divs do f.divs[i]:Hide() end
 
@@ -484,6 +677,8 @@ local function build()
 		f.short[sc.key] = b
 	end
 
+	f.lfg = buildLfg(f)
+
 	f:SetHeight(BTN + PAD * 2)
 	layoutTail(f)
 
@@ -600,4 +795,24 @@ ev:SetScript("OnEvent", Okanvil:CombatSafe("marksbar.roster", function(_, event)
 	end
 	MB:Refresh()
 end))
+
+-- The LFG slot. Its contents update on every queue event; the bar is only laid
+-- out again when the slot comes or goes, and that waits out combat like the
+-- roster relayout above.
+local lfgEv = CreateFrame("Frame")
+lfgEv:RegisterEvent("LFG_UPDATE")
+lfgEv:RegisterEvent("LFG_QUEUE_STATUS_UPDATE")
+lfgEv:RegisterEvent("LFG_PROPOSAL_SHOW")
+lfgEv:RegisterEvent("LFG_PROPOSAL_FAILED")
+lfgEv:RegisterEvent("LFG_PROPOSAL_SUCCEEDED")
+lfgEv:RegisterEvent("LFG_PROPOSAL_UPDATE")
+local lfgRelayout = Okanvil:CombatSafe("marksbar.lfg", function() MB:Refresh() end)
+lfgEv:SetScript("OnEvent", function()
+	if not bar then return end
+	if (lfgWanted() and true or false) ~= (bar.lfgShown and true or false) then
+		lfgRelayout()
+	elseif bar.lfgShown then
+		updateLfg(bar.lfg)
+	end
+end)
 
