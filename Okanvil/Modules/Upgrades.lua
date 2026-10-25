@@ -13,13 +13,28 @@ U.ADDON = "Okanvil-Upgrades"
 
 local function active() return Okanvil:ModuleActive(U.ADDON) end
 
--- GetInstanceDifficulty() inside a raid: 1 = 10, 2 = 25, 3 = 10 heroic, 4 = 25 heroic
-U.MODES = { "10n", "25n", "10h", "25h" }
+-- GetInstanceDifficulty() inside a raid: 1 = 10, 2 = 25, 3 = 10 heroic, 4 = 25 heroic;
+-- in a 5-man: 1 = normal, 2 = heroic
+U.MODES = { "10n", "25n", "10h", "25h", "5n", "5h" }
 -- the order they are shown in: each size with its heroic beside it
-U.MODE_ORDER = { "10n", "10h", "25n", "25h" }
-U.MODE_LABEL = { ["10n"] = "10", ["25n"] = "25", ["10h"] = "10 HC", ["25h"] = "25 HC" }
+U.MODE_ORDER = { "5n", "5h", "10n", "10h", "25n", "25h" }
+U.MODE_LABEL = { ["10n"] = "10", ["25n"] = "25", ["10h"] = "10 HC", ["25h"] = "25 HC",
+	["5n"] = "Normal", ["5h"] = "Heroic" }
 
-local function Loot() return OkanvilRaidLoot end
+-- The raids' loot and the dungeons' (DungeonLoot-Data) in one table, read only
+-- here: the loot recorder, soft reserves and the PuG page keep to the raids.
+local allLoot
+local function Loot()
+	if not allLoot then
+		allLoot = {}
+		for k, v in pairs(OkanvilRaidLoot or {}) do allLoot[k] = v end
+		for k, v in pairs(OkanvilDungeonLoot or {}) do allLoot[k] = v end
+	end
+	return allLoot
+end
+local dungeonKey = {}      -- zone name -> dungeon key
+for _, d in ipairs(OkanvilDungeons or {}) do dungeonKey[d.name] = d.key end
+function U.IsDungeon(key) return OkanvilDungeonLoot ~= nil and OkanvilDungeonLoot[key] ~= nil end
 
 -- ------------------------------------------------------------
 -- Spec: the talent tree with the most points, per class by tree index (the
@@ -371,7 +386,7 @@ local ROW_SLOTS = {
 
 -- id -> name for every raid drop, so a list id names its 10/25/heroic copies
 -- without a server query, and id -> how high its version is
-local VERSION = { ["10n"] = 1, ["25n"] = 2, ["10h"] = 2, ["25h"] = 3 }
+local VERSION = { ["5n"] = 0, ["5h"] = 1, ["10n"] = 1, ["25n"] = 2, ["10h"] = 2, ["25h"] = 3 }
 local lootName, lootVersion, lootMode
 local function NameOf(id)
 	if not lootName then
@@ -454,7 +469,8 @@ local function Rows(spec, raid)
 	local bySpec = cls and spec.list and cls[spec.list]
 	if not bySpec then return end
 	local phase
-	for _, p in ipairs(PHASE[raid] or { "T10" }) do
+	-- a dungeon's gear is pre-raid gear: the PR list, then T7
+	for _, p in ipairs(PHASE[raid] or (U.IsDungeon(raid) and { "PR", "T7" }) or { "T10" }) do
 		if not out(p) and bySpec[p] and #bySpec[p] > 0 then phase = p; break end
 	end
 	if not phase then return end
@@ -814,6 +830,16 @@ local function judge(link, raid, spec)
 	-- Lighter caster armour on a hybrid passes when the spec has a list: then only a
 	-- listed item can show (a Resto druid's cloth robe), and the list is what lets it.
 	local P = Okanvil.Prof
+	-- Levelling (below 80): the BiS lists are level 80 gear, so what counts is a
+	-- higher item level you can wear now; gear above your level waits.
+	local level = UnitLevel("player") or 80
+	if level < 80 then
+		local minLevel = select(5, GetItemInfo(link)) or 0
+		if minLevel > level then return nil end
+		local gain, empty = IlvlGain(link)
+		if gain then return empty and { empty = true } or { ilvl = gain } end
+		return nil
+	end
 	local rows, phase = Rows(spec, raid)
 	if P and P.CanIUse and not P.CanIUse(link) then
 		local ok = rows and P.LighterCasterGear and P.LighterCasterGear(link, (select(2, UnitClass("player"))))
@@ -933,7 +959,15 @@ function U.Here()
 	hereKey, hereMode, hereR = nil, nil, nil
 	local SR = Okanvil.SoftRes
 	local r = SR and SR.RaidHere and SR.RaidHere()
-	if not r then return nil end
+	if not r then
+		-- a 5-man: its key and normal / heroic, no raid ID
+		local zone, itype = GetInstanceInfo()
+		local key = itype == "party" and dungeonKey[zone]
+		if not key then return nil end
+		hereKey = key
+		hereMode = (GetInstanceDifficulty and GetInstanceDifficulty() == 2) and "5h" or "5n"
+		return hereKey, hereMode, nil
+	end
 	hereKey, hereMode, hereR = r.key, (Okanvil.U.raidMode and Okanvil.U.raidMode()) or "10n", r
 	return hereKey, hereMode, hereR
 end
@@ -994,6 +1028,12 @@ function U.BossFor(raid, npc)
 	for _, b in ipairs(bosses) do
 		if want then
 			if b.boss == want then return b end
+		elseif b.npcs then
+			-- fought as several NPCs (a dungeon's "Skarvald / Dalronn"): any of them
+			for _, n in ipairs(b.npcs) do
+				local ns = Squash(n)
+				if #ns >= 4 and sq:find(ns, 1, true) then return b end
+			end
 		else
 			local bs = Squash(b.boss)
 			if #bs >= 4 and sq:find(bs, 1, true) then return b end
@@ -1495,8 +1535,11 @@ local function dropsOf(id)
 end
 local RAID_TITLE = {}
 for _, r in ipairs(OkanvilRaids or {}) do RAID_TITLE[r.key] = r.name end
--- "25h" -> "25 Player (Heroic)", as the game's own instance names read
+for _, d in ipairs(OkanvilDungeons or {}) do RAID_TITLE[d.key] = d.name end
+-- "25h" -> "25 Player (Heroic)", as the game's own instance names read; a 5-man
+-- is just "Normal" / "Heroic"
 local function modeText(m)
+	if m == "5n" then return "Normal" elseif m == "5h" then return "Heroic" end
 	local size, hc = m:match("^(%d+)(%a)$")
 	if not size then return m end
 	return size .. " Player" .. (hc == "h" and " (Heroic)" or "")

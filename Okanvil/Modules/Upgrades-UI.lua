@@ -27,7 +27,14 @@ local function raidName(key)
 	for _, r in ipairs(OkanvilRaids or {}) do
 		if r.key == key then return r.name end
 	end
+	for _, d in ipairs(OkanvilDungeons or {}) do
+		if d.key == key then return d.name end
+	end
 	return key
+end
+
+local function lootOf(key)
+	return (OkanvilRaidLoot and OkanvilRaidLoot[key]) or (OkanvilDungeonLoot and OkanvilDungeonLoot[key])
 end
 
 local function db()
@@ -54,8 +61,12 @@ function Okanvil:BuildUpgrades(host)
 		local raid, mode = U.Here()
 		if raid then state.raid, state.mode = raid, mode; return end
 		state.raid = db().raid or "icc"
-		if U.RaidOut and not U.RaidOut(state.raid) then state.raid = "icc" end
+		if not lootOf(state.raid) or (U.RaidOut and not U.RaidOut(state.raid)) then state.raid = "icc" end
 		state.mode = db().mode or "25n"
+		-- a mode this raid or dungeon has
+		local modes, ok = U.ModesOf(state.raid), false
+		for _, m in ipairs(modes) do if m == state.mode then ok = true end end
+		if not ok then state.mode = modes[1] end
 	end
 	pickDefault()
 
@@ -99,6 +110,10 @@ function Okanvil:BuildUpgrades(host)
 						out[#out + 1] = { text = raidName(k), value = k }
 					end
 				end
+				-- the 5-mans after the raids
+				for _, d in ipairs(OkanvilDungeons or {}) do
+					out[#out + 1] = { text = "|cff8a8d935-man|r  " .. d.name, value = d.key }
+				end
 				return out
 			end,
 			function() return raidName(state.raid) end,
@@ -120,7 +135,7 @@ function Okanvil:BuildUpgrades(host)
 		local prev = dd
 		for _, m in ipairs(U.MODE_ORDER) do
 			local b = big(W.Button(header, U.MODE_LABEL[m], "tab"))
-			b:SetSize(m:find("h") and 84 or 58, CTRL_H)
+			b:SetSize((m == "5n" and 76) or (m:find("h") and 84) or 58, CTRL_H)
 			b:SetPoint("LEFT", prev, "RIGHT", prev == dd and 14 or 4, 0)
 			b:SetScript("OnClick", function()
 				state.mode = m; db().mode = m; refresh()
@@ -525,7 +540,7 @@ function Okanvil:BuildUpgrades(host)
 		for _, r in ipairs(bossRows) do r:Hide() end
 		for _, r in ipairs(itemRows) do r:Hide() end
 
-		local bosses = OkanvilRaidLoot and OkanvilRaidLoot[state.raid] or {}
+		local bosses = lootOf(state.raid) or {}
 		local hereRaid = U.Here()
 		local y, nb, ni, waiting, total = 6, 0, 0, 0, 0
 
