@@ -1628,7 +1628,15 @@ end
 local LABEL = "|cfff2e68c"
 local function dropRows(id, rows)
 	local drops = dropsOf(id)
-	if not drops then return end
+	if not drops then
+		-- not a raid drop: a dungeon, a vendor, a reputation, crafting (ItemSource-Data)
+		local src = OkanvilItemSource and (OkanvilItemSource[id] or OkanvilItemSource[AliId(id)])
+		if src then
+			rows[#rows + 1] = { LABEL .. "Source|r", LABEL .. src[1] .. "|r" }
+			if src[2] ~= "" then rows[#rows + 1] = { LABEL .. "Cost|r", LABEL .. src[2] .. "|r" } end
+		end
+		return
+	end
 	local bosses, places, seenB, seenP = {}, {}, {}, {}
 	for _, d in ipairs(drops) do
 		local bn = U.BossLabel(d.boss)
