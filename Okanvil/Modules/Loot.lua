@@ -2471,14 +2471,13 @@ function L.NoteExternalRoll(link, winners, mayMint, caller)
 	-- Not every ML announces a winner: some just call the next copy. So a copy whose
 	-- roll-off already has a clear top roll is finished when an unrolled twin is waiting;
 	-- treating the call as a re-roll wiped the first roll-off and left the twin unrolled.
-	-- A tie on top is still a re-roll of the same copy. So is a call while rolls are
-	-- still landing, or with a single roll in: that is the ML nudging stragglers, and
-	-- moving it would split one roll-off over two copies.
+	-- A tie on the deciding place stays on the same copy: the tied players roll it off.
+	-- So does a call while rolls are still landing, or with a single roll in: that is
+	-- the ML nudging stragglers, and moving it would split one roll-off over two copies.
 	local function settled(d)
-		local r = L.RollsRanked(d)
-		if #r < 2 then return false end
+		if not (d.rolls and #d.rolls >= 2) then return false end
 		if GetTime() - (d.lastRollAt or 0) < 5 then return false end
-		return not (r[2].kind == r[1].kind and (r[2].roll or 0) == (r[1].roll or 0))
+		return L.RollTieWaiting(d.rolls, d.winners or 1) == nil
 	end
 	-- Won on the game's own Need/Greed, never called since. A pug on group loot has its
 	-- own people Need everything so no stranger walks off with it, then rolls it for real
@@ -2573,8 +2572,17 @@ function L.NoteExternalRoll(link, winners, mayMint, caller)
 	end
 
 	-- Rolled already: this call repeats that roll-off, so it starts clean --
-	-- otherwise "first roll counts" would throw away every re-roll.
-	if dp and (bestRank == "open" or bestRank == 1.5) and (dp.rolls and #dp.rolls > 0 or dp.rollDone) then
+	-- otherwise "first roll counts" would throw away every re-roll. Not while a tie
+	-- is waiting on its tied players: the call is the ML asking them to roll it off,
+	-- and the other rolls stand.
+	local tieWait = dp and dp.rolls and L.RollTieWaiting(dp.rolls, dp.winners or 1)
+	if tieWait then
+		local names = {}
+		for n in pairs(tieWait) do names[#names + 1] = n end
+		table.sort(names)
+		rollTrace(("call %s: tie on %s, waiting for %s"):format(link, dropTag(dp), table.concat(names, ", ")))
+	end
+	if dp and not tieWait and (bestRank == "open" or bestRank == 1.5) and (dp.rolls and #dp.rolls > 0 or dp.rollDone) then
 		rollTrace(("call %s: re-roll, clearing %d old roll(s) on %s"):format(link,
 			dp.rolls and #dp.rolls or 0, dropTag(dp)))
 		dp.rolls = {}
@@ -2785,9 +2793,10 @@ function L.StopRoll(keepOpen)
 			for _, e in ipairs(activeRoll.list) do
 				if not have[e.player] then
 					dp.rolls[#dp.rolls + 1] = { player = e.player, roll = e.roll,
-						kind = (e.spec == "off") and "os" or "ms" }
+						kind = (e.spec == "off") and "os" or "ms", tb = e.tb }
 				end
 			end
+			L.WatchTie(dp)
 			if L.onLoot then L.onLoot() end
 		end
 	end
@@ -2905,21 +2914,42 @@ local function captureRoll(msg)
 			dp = L.HandRollDrop()     -- an item the ML explicitly opened for rolls
 			via = "hand"
 		end
+		-- A tie told by voice ("you two, roll again") comes with no call: the tied
+		-- players' rolls still land on that item, theirs only, until the tie is decided,
+		-- the item is given, or 60 seconds pass with no tie-break roll.
+		if not dp then
+			local t = L._tieDrop
+			if t and (GetTime() - (L._tieAt or 0)) <= 60 and unowned(t) then
+				local waiting = L.RollTieWaiting(t.rolls, t.winners or 1)
+				if waiting and waiting[key] then dp, via = t, "tie" end
+			end
+		end
 		local what = ("%s %d (1-%d)"):format(key, roll, hiN)
 		if not dp then rollTrace(what .. ": dropped, nothing open for rolls"); return end
 		if srRejects(dp.id, key, false, dp.item) then rollTrace(what .. ": dropped, SR on " .. dropTag(dp)); return end
 		if dp.carryPending and dp == externalRollDrop then L.OpenCarried(dp) end
 		dp.rolls = dp.rolls or {}
+		local mine
 		for _, e in ipairs(dp.rolls) do
-			if e.player == key then   -- first roll counts
-				rollTrace(what .. ": dropped, already rolled " .. e.roll .. " on " .. dropTag(dp))
+			if e.player == key then mine = e; break end
+		end
+		if mine then
+			-- first roll counts; a player tied on the deciding place rolls once more per round
+			local waiting = L.RollTieWaiting(dp.rolls, dp.winners or 1)
+			if not (waiting and waiting[key]) then
+				rollTrace(what .. ": dropped, already rolled " .. mine.roll .. " on " .. dropTag(dp))
 				return
 			end
+			mine.tb = mine.tb or {}
+			mine.tb[#mine.tb + 1] = roll
+			rollTrace(what .. " -> tie-break " .. #mine.tb .. " on " .. dropTag(dp))
+		else
+			rollTrace(what .. " -> " .. dropTag(dp) .. " via " .. via)
+			dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
 		end
-		rollTrace(what .. " -> " .. dropTag(dp) .. " via " .. via)
-		dp.rolls[#dp.rolls + 1] = { player = key, roll = roll, kind = (spec == "off") and "os" or "ms" }
 		dp.lastRollAt = GetTime()   -- keeps the roll-off "open" while people are rolling
 		if dp == externalRollDrop then externalRollLastAt = dp.lastRollAt end
+		L.WatchTie(dp)
 		L.AttributeByRoll(dp)
 		L.SpreadWinners(dp)
 		if L.onLoot then L.onLoot() end
@@ -2933,13 +2963,27 @@ local function captureRoll(msg)
 		return
 	end
 	if srRejects(activeRoll.id, key, not activeRoll.srOnly, activeRoll.link) then return end
-	if activeRoll.seen[key] then return end
-	rollTrace(what .. " -> our own roll on " .. tostring(activeRoll.link))
-	activeRoll.seen[key] = true
-	activeRoll.list[#activeRoll.list + 1] = { player = key, roll = roll, spec = spec }
-	local b = activeRoll.best
-	local better = (not b) or (spec == "main" and b.spec == "off") or (spec == b.spec and roll > b.roll)
-	if better then activeRoll.best = { player = key, roll = roll, spec = spec } end
+	if activeRoll.seen[key] then
+		-- first roll counts; a player tied on top rolls once more per round
+		local waiting = L.RollTieWaiting(activeRoll.list, 1)
+		if not (waiting and waiting[key]) then return end
+		for _, e in ipairs(activeRoll.list) do
+			if e.player == key then
+				e.tb = e.tb or {}
+				e.tb[#e.tb + 1] = roll
+				rollTrace(what .. " -> tie-break " .. #e.tb .. " on our own roll on " .. tostring(activeRoll.link))
+			end
+		end
+	else
+		rollTrace(what .. " -> our own roll on " .. tostring(activeRoll.link))
+		activeRoll.seen[key] = true
+		activeRoll.list[#activeRoll.list + 1] = { player = key, roll = roll, spec = spec }
+	end
+	local best
+	for _, e in ipairs(activeRoll.list) do
+		if not best or L.RollBefore(e, best) then best = e end
+	end
+	activeRoll.best = best and { player = best.player, roll = best.roll, spec = best.spec }
 	if L.onRoll then L.onRoll() end
 end
 
@@ -3326,40 +3370,96 @@ local function kindTier(kind)
 	return (kind == "os" or kind == "greed" or kind == "de") and 1 or 2
 end
 
+-- A roll entry's tier: dp.rolls carry a kind, our own roll-off's list a spec.
+function L.RollTier(e)
+	return kindTier(e.kind or ((e.spec == "off") and "os" or "ms"))
+end
+
+-- Is roll a better than roll b? Tier first (MS / Need beat OS / Greed / DE),
+-- then the number, then the tie-break rolls (e.tb, one per round, in order),
+-- then the name, so two rolls never compare equal.
+function L.RollBefore(a, b)
+	local ta, tb = L.RollTier(a), L.RollTier(b)
+	if ta ~= tb then return ta > tb end
+	if (a.roll or 0) ~= (b.roll or 0) then return (a.roll or 0) > (b.roll or 0) end
+	for i = 1, math.max(a.tb and #a.tb or 0, b.tb and #b.tb or 0) do
+		local x, y = a.tb and a.tb[i] or -1, b.tb and b.tb[i] or -1
+		if x ~= y then return x > y end
+	end
+	return tostring(a.player) < tostring(b.player)
+end
+
+-- A tie on the place that decides the item: place n (n winners) and place n + 1
+-- with the same tier and number. Only the tied players roll again, once each per
+-- round; a tie-break that ties again is another round among those still level.
+-- Returns { [player] = true } for the tied players whose roll this round is still
+-- missing, or nil when nothing is tied (or the tie is decided).
+function L.RollTieWaiting(list, n)
+	n = n or 1
+	if not list or #list <= n then return nil end
+	local ranked = {}
+	for _, e in ipairs(list) do ranked[#ranked + 1] = e end
+	table.sort(ranked, L.RollBefore)
+	local b, c = ranked[n], ranked[n + 1]
+	if L.RollTier(b) ~= L.RollTier(c) or (b.roll or 0) ~= (c.roll or 0) then return nil end
+	local level, need = {}, n
+	for _, e in ipairs(ranked) do
+		if L.RollTier(e) == L.RollTier(b) and (e.roll or 0) == (b.roll or 0) then
+			level[#level + 1] = e
+		elseif L.RollBefore(e, b) then
+			need = need - 1
+		end
+	end
+	local round = 1
+	while true do
+		local missing, any = {}, false
+		for _, e in ipairs(level) do
+			if not (e.tb and e.tb[round]) then missing[e.player] = true; any = true end
+		end
+		if any then return missing end
+		table.sort(level, function(x, y)
+			if x.tb[round] ~= y.tb[round] then return x.tb[round] > y.tb[round] end
+			return tostring(x.player) < tostring(y.player)
+		end)
+		local v = level[need].tb[round]
+		if not (level[need + 1] and level[need + 1].tb[round] == v) then return nil end
+		local still = {}
+		for _, e in ipairs(level) do
+			if e.tb[round] == v then still[#still + 1] = e
+			elseif e.tb[round] > v then need = need - 1 end
+		end
+		level, round = still, round + 1
+	end
+end
+
+-- The item whose tie is waiting on its tied players (captureRoll keeps taking
+-- their rolls with no call open), or none once it is decided.
+function L.WatchTie(dp)
+	if L.RollTieWaiting(dp.rolls, dp.winners or 1) then
+		if L._tieDrop ~= dp then rollTrace("tie on " .. dropTag(dp) .. ": the tied players roll again") end
+		L._tieDrop, L._tieAt = dp, GetTime()
+	elseif L._tieDrop == dp then
+		L._tieDrop = nil
+	end
+end
+
 function L.RollWinner(dp)
 	if not (dp and dp.rolls) then return nil end
 	local best
 	for _, e in ipairs(dp.rolls) do
-		local better
-		if not best then
-			better = true
-		elseif kindTier(e.kind) ~= kindTier(best.kind) then
-			better = kindTier(e.kind) > kindTier(best.kind)
-		elseif (e.roll or 0) ~= (best.roll or 0) then
-			better = (e.roll or 0) > (best.roll or 0)
-		else
-			-- a tie breaks on name, as the roll list does, so the row and the list agree
-			better = tostring(e.player) < tostring(best.player)
-		end
-		if better then best = e end
+		if not best or L.RollBefore(e, best) then best = e end
 	end
-
 	return best
 end
 
 -- Rolls ranked best-first, same order RollWinner picks by: MS outranks OS outright,
--- then the higher number. Returns a NEW array -- dp.rolls keeps its arrival order,
--- which is what the roll list on screen shows.
+-- then the higher number, then the tie-break rolls. Returns a NEW array -- dp.rolls
+-- keeps its arrival order, which is what the roll list on screen shows.
 function L.RollsRanked(dp)
 	if not (dp and dp.rolls) then return {} end
 	local out = {}
 	for _, e in ipairs(dp.rolls) do out[#out + 1] = e end
-	table.sort(out, function(a, b)
-		local ta, tb = kindTier(a.kind), kindTier(b.kind)
-		if ta ~= tb then return ta > tb end                   -- MS / Need first
-		if (a.roll or 0) ~= (b.roll or 0) then return (a.roll or 0) > (b.roll or 0) end
-		return tostring(a.player) < tostring(b.player)        -- stable: never compares equal
-	end)
+	table.sort(out, L.RollBefore)
 	return out
 end
 
@@ -3385,7 +3485,10 @@ end
 function L.SpreadWinners(dp)
 	if not (dp and dp.id and (dp.winners or 1) > 1) then return end
 	local list
-	for _, s in ipairs({ activeBucket(), sessions()[1] }) do
+	-- both looked at always: ipairs stops at a nil first entry (no active session)
+	local where = { activeBucket(), sessions()[1] }
+	for i = 1, 2 do
+		local s = where[i]
 		for _, d in ipairs(s and s.drops or {}) do
 			if d == dp then list = s.drops; break end
 		end
@@ -3678,7 +3781,7 @@ local function freezeManualRolls(id)
 	for _, e in ipairs(activeRoll.list) do
 		dp.rolls[#dp.rolls + 1] = {
 			player = e.player, roll = e.roll or 0,
-			kind = (e.spec == "off") and "os" or "ms", spec = e.spec,
+			kind = (e.spec == "off") and "os" or "ms", spec = e.spec, tb = e.tb,
 		}
 	end
 end

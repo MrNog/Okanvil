@@ -22,7 +22,12 @@
 --    WISHOFF   lockKey                       ML     -> group
 --    WISHPICK  lockKey, itemId               raider -> group
 --    WISHPASS  lockKey                       raider -> group (no wish this ID)
---    WISHLOCKED lockKey, itemId | "pass"     ML     -> raider (change refused)
+--    WISHLOCKED lockKey, itemId | "pass"     council -> raider (change refused)
+--    WISHACK   lockKey, itemId | "pass"      council -> raider (saved: now it counts)
+--    WISHSYNC  lockKey                       late joiner -> group
+--    WISHSTATE (big) lockKey;raid;size;locked;who=id,...   council -> late joiner
+--
+--  The council = the master looter and the assists who are officers.
 --
 --  /okwish test   your own wish window, solo
 -- ============================================================
@@ -106,15 +111,22 @@ local function mlName()
 	return ml and stripRealm(ml) or me() or "me"
 end
 
--- Who may open, ask, lock and clear it: the master looter and the assists.
-local function canTrigger(who) return isML(who) or isAssist(who) end
+-- A guild officer, or an officer's alt.
+local function isOfficer(who)
+	local U = Okanvil.U
+	who = stripRealm(who)
+	return U and U.isOfficer and (U.isOfficer(who) or (U.isOfficerAlt and U.isOfficerAlt(who))) and true or false
+end
+
+-- Who may open, ask, lock and clear it: the master looter, and an assist who is
+-- also an officer (so an officer can run it for an ML who doesn't, and a pug's
+-- assist can't wipe the list).
+local function canTrigger(who) return isML(who) or (isAssist(who) and isOfficer(who)) end
 Wi.CanTrigger = function() return canTrigger(me()) end
 
 -- Who sees the list: the master looter and the officers (the council).
 function Wi.CanSee()
-	if canTrigger(me()) then return true end
-	local U, who = Okanvil.U, me()
-	return U and U.isOfficer and (U.isOfficer(who) or (U.isOfficerAlt and U.isOfficerAlt(who))) and true or false
+	return canTrigger(me()) or isOfficer(me())
 end
 
 -- ---- Raid ID keys -----------------------------------------------------------------
@@ -216,10 +228,10 @@ local function prune()
 	end
 end
 
--- A change refused by the lock: the master looter tells that raider what stands,
--- so a client that missed the lock (offline when it came) shows the right wish.
+-- A change refused by the lock: the council tells that raider what stands, so a
+-- client that missed the lock (offline when it came) shows the right wish.
 local function refused(lockKey, who, w)
-	if who == me() or not isML(me()) then return end
+	if who == me() or not canTrigger(me()) then return end
 	local C = Okanvil.Comms
 	if C and C.Whisper then C.Whisper("WISHLOCKED", who, lockKey, w.pass and "pass" or tostring(w.id)) end
 end
@@ -227,6 +239,7 @@ end
 -- One wish per raider per raid ID; a new one replaces it until the list is locked.
 -- Locked, a raider who has a wish or a pass keeps it; one with neither (a late
 -- joiner on the second night) can still send theirs.
+-- Returns "ok" (saved, or already this wish), "refused" (locked) or nil (off).
 local function store(lockKey, who, id)
 	id = tonumber(id)
 	if not (who and id) then return end
@@ -236,16 +249,17 @@ local function store(lockKey, who, id)
 	d.list[lockKey] = d.list[lockKey] or {}
 	local l = d.list[lockKey]
 	local old = l[who]
-	if old and old.id == id then return end
-	if old and Wi.IsLocked() then refused(lockKey, who, old); return end
+	if old and old.id == id then return "ok" end
+	if old and Wi.IsLocked() then refused(lockKey, who, old); return "refused" end
 	l._at = time()
 	l[who] = { id = id, name = GetItemInfo(id) }
 	Okanvil:Trace("WISH", who .. (old and " changes wish to " or " wishes ") .. tostring(l[who].name or id))
 	if Wi.onChange then Wi.onChange() end
+	return "ok"
 end
 
 -- A raider who wants nothing this raid ID: kept as a pass, so Ask missing
--- leaves them alone. A wish sent later replaces it.
+-- leaves them alone. A wish sent later replaces it. Returns as store() does.
 local function storePass(lockKey, who)
 	if not who then return end
 	lockKey = norm(lockKey)
@@ -253,12 +267,13 @@ local function storePass(lockKey, who)
 	if not Wi.IsOn() then return end
 	d.list[lockKey] = d.list[lockKey] or {}
 	local l = d.list[lockKey]
-	if l[who] and l[who].pass then return end
-	if l[who] and Wi.IsLocked() then refused(lockKey, who, l[who]); return end
+	if l[who] and l[who].pass then return "ok" end
+	if l[who] and Wi.IsLocked() then refused(lockKey, who, l[who]); return "refused" end
 	l._at = time()
 	l[who] = { pass = true }
 	Okanvil:Trace("WISH", who .. " passes")
 	if Wi.onChange then Wi.onChange() end
+	return "ok"
 end
 
 -- The item this raider wished for on this raid's lockout, or nil.
@@ -428,7 +443,48 @@ function Wi.SetLocked(locked, quiet)
 end
 
 -- ---- Raider: send -------------------------------------------------------------
-function Wi.SendPick(lockKey, id)
+-- A wish (or a pass) is yours only once the council has it: it is saved as sent
+-- when a council member answers WISHACK. Locked meanwhile, the answer is
+-- WISHLOCKED with the wish that stands. No answer at all: nothing changed.
+local ACK_WAIT = 10
+local pendingSend          -- { lockKey, v = itemId | "pass", gen }
+
+local function confirmed(lockKey, v)
+	local p = pendingSend
+	if not (p and p.lockKey == lockKey and tostring(p.v) == tostring(v)) then return end
+	pendingSend = nil
+	if SR.PickWindow and SR.PickWindow.MarkSent then
+		SR.PickWindow.MarkSent("wish", lockKey, v == "pass" and "pass" or tonumber(v), p.gen)
+	end
+	if v == "pass" then
+		Okanvil:Print("Pass registered: no wish this raid ID.")
+	else
+		local _, link = GetItemInfo(tonumber(v) or 0)
+		Okanvil:Print("Wish registered: " .. (link or ("item " .. tostring(v))) .. ".")
+	end
+	if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
+	if Wi.onChange then Wi.onChange() end
+end
+
+local function sendAndWait(lockKey, v, gen, msgType, ...)
+	pendingSend = { lockKey = lockKey, v = v, gen = gen }
+	local C = Okanvil.Comms
+	local out = C and C.Send and C.Send(msgType, lockKey, ...)
+	-- your own list is the council's when you run it (or solo): no one else to ask
+	if not out or canTrigger(me()) then confirmed(lockKey, v); return end
+	Okanvil:Print("Sending to the council...")
+	local mine = pendingSend
+	if C.After then
+		C.After(ACK_WAIT, function()
+			if pendingSend ~= mine then return end
+			pendingSend = nil
+			Okanvil:Print("|cffff5555Not registered:|r no answer from the council. Nothing changed: send it again.")
+			if SR.PickWindow and SR.PickWindow.SendFailed then SR.PickWindow.SendFailed(mine.lockKey) end
+		end)
+	end
+end
+
+function Wi.SendPick(lockKey, id, gen)
 	if not id then return end
 	if not Wi.Live() then      -- the window checked the lock before saving the pick
 		Okanvil:Print("The wishlist is closed: wish not sent.")
@@ -436,25 +492,18 @@ function Wi.SendPick(lockKey, id)
 	end
 	lockKey = norm(lockKey)
 	store(lockKey, me(), id)
-	local C = Okanvil.Comms
-	if C and C.Send and C.Send("WISHPICK", lockKey, id) then
-		Okanvil:Print("Wish sent to the council.")
-	else
-		Okanvil:Print("Wish saved.")
-	end
+	sendAndWait(lockKey, tonumber(id), gen, "WISHPICK", id)
 end
 
 -- No wish this raid ID: the window never opens for you again on it.
-function Wi.SendPass(lockKey)
+function Wi.SendPass(lockKey, gen)
 	if not Wi.Live() then      -- the window checked the lock before saving the pass
 		Okanvil:Print("The wishlist is closed.")
 		return
 	end
 	lockKey = norm(lockKey)
 	storePass(lockKey, me())
-	local C = Okanvil.Comms
-	if C and C.Send then C.Send("WISHPASS", lockKey) end
-	Okanvil:Print("Pass sent: no wish this raid ID.")
+	sendAndWait(lockKey, "pass", gen, "WISHPASS")
 end
 
 -- The wish this character already sent on a lockout (the pick window keeps it),
@@ -466,6 +515,8 @@ mySent = function(lockKey)
 	if p.pass then return "pass" end
 	return p.list and p.list[1] or nil
 end
+-- Your sent wish on this raid ID: an item id, "pass", or nil.
+function Wi.Mine() return mySent(curKey()) end
 
 -- ---- Wire -----------------------------------------------------------------------
 local pending
@@ -536,15 +587,25 @@ do
 			local o = db().open[norm(lockKey)]
 			if o then o.locked = nil end
 		end)
+		-- the council answers each wish it saved, so the raider knows it is registered
 		C.On("WISHPICK", function(sender, lockKey, id)
-			store(lockKey, stripRealm(sender), id)
+			if store(lockKey, stripRealm(sender), id) == "ok" and canTrigger(me()) then
+				C.Whisper("WISHACK", stripRealm(sender), lockKey, id)
+			end
 		end)
 		C.On("WISHPASS", function(sender, lockKey)
-			storePass(lockKey, stripRealm(sender))
+			if storePass(lockKey, stripRealm(sender)) == "ok" and canTrigger(me()) then
+				C.Whisper("WISHACK", stripRealm(sender), lockKey, "pass")
+			end
+		end)
+		C.On("WISHACK", function(sender, lockKey, v)
+			if not canTrigger(sender) or not v then return end
+			confirmed(norm(lockKey), v == "pass" and "pass" or tonumber(v))
 		end)
 		-- our change was refused, the list is locked: this is the wish that stands
 		C.On("WISHLOCKED", function(sender, lockKey, v)
 			if not canTrigger(sender) or not v then return end
+			pendingSend = nil
 			lockKey = norm(lockKey)
 			local d = db()
 			d.open[lockKey] = d.open[lockKey] or { at = time() }
@@ -581,6 +642,79 @@ do
 			end
 		end)
 	end
+end
+
+-- ---- Sync: a client that joins late (or reloads) asks for the list -----------------
+-- On login or on joining a raid, a client asks the group (WISHSYNC). The council
+-- members running the list whisper back its state and every wish in one message
+-- (WISHSTATE): on, locked, who wished what. The raider's own sent wish goes out
+-- again if the list does not have it. Several answers are fine: wishes already
+-- known are kept.
+local SYNC_GAP = 30
+local lastSync = 0
+
+local function askSync()
+	if (GetNumRaidMembers() or 0) == 0 then return end
+	if GetTime() - lastSync < SYNC_GAP then return end
+	lastSync = GetTime()
+	local C = Okanvil.Comms
+	if C and C.Send then C.Send("WISHSYNC", curKey()) end
+end
+
+do
+	local C = Okanvil.Comms
+	if C and C.On and C.OnBig and C.SendBig then
+		C.On("WISHSYNC", function(sender, lockKey)
+			sender = stripRealm(sender)
+			if sender == me() or not canTrigger(me()) or not Wi.IsOn() then return end
+			if norm(lockKey) ~= curKey() then return end
+			local r, parts = SR.Raid(), {}
+			for who, w in pairs(db().list[curKey()] or {}) do
+				if who ~= "_at" and type(w) == "table" then
+					parts[#parts + 1] = who .. "=" .. (w.pass and "p" or tostring(w.id))
+				end
+			end
+			C.SendBig("WISHSTATE", table.concat({ curKey(), r.key or "", r.size or 25,
+				Wi.IsLocked() and "1" or "0", table.concat(parts, ",") }, ";"), "WHISPER", sender)
+		end)
+		C.OnBig("WISHSTATE", function(sender, text)
+			if not canTrigger(stripRealm(sender)) then return end
+			local lockKey, _, size, locked, list = text:match("^([^;]*);([^;]*);([^;]*);([^;]*);(.*)$")
+			if not lockKey or tonumber(size) ~= 25 then return end
+			lockKey = norm(lockKey)
+			local d = db()
+			d.open[lockKey] = d.open[lockKey] or { at = time() }
+			d.open[lockKey].off = nil
+			if locked == "1" then d.open[lockKey].locked = true end
+			d.list[lockKey] = d.list[lockKey] or {}
+			local l = d.list[lockKey]
+			for who, v in list:gmatch("([^,=]+)=([^,]+)") do
+				if not l[who] then
+					if v == "p" then l[who] = { pass = true }
+					elseif tonumber(v) then l[who] = { id = tonumber(v), name = GetItemInfo(tonumber(v)) } end
+					l._at = time()
+				end
+			end
+			-- ours missing from their list: send it again
+			local sent = mySent(lockKey)
+			if sent and not l[me()] then
+				if sent == "pass" then C.Send("WISHPASS", lockKey) else C.Send("WISHPICK", lockKey, sent) end
+			end
+			if Wi.onChange then Wi.onChange() end
+		end)
+	end
+	local f = CreateFrame("Frame")
+	f:RegisterEvent("PLAYER_ENTERING_WORLD")
+	f:RegisterEvent("RAID_ROSTER_UPDATE")
+	local wasInRaid = false
+	f:SetScript("OnEvent", function(_, event)
+		local inRaid = (GetNumRaidMembers() or 0) > 0
+		if inRaid and (event == "PLAYER_ENTERING_WORLD" or not wasInRaid) then
+			-- a moment after the event: the roster and the raid ID are not there yet
+			if C and C.After then C.After(5, askSync) else askSync() end
+		end
+		wasInRaid = inRaid
+	end)
 end
 
 -- ---- Whispers: "wh [item]" for raiders without Okanvil ----------------------------

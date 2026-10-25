@@ -873,10 +873,9 @@ function RM.Rebuild()
 				Okanvil:Print("|cffff5555No rolls on this item yet.|r")
 				return
 			end
-			-- A tie on top is no decided winner: the name order only picks who is listed
-			-- first, so that give goes through the confirm instead of one click.
-			local r = L.RollsRanked and L.RollsRanked(selected) or {}
-			local tied = r[2] and r[1].kind == r[2].kind and (r[1].roll or 0) == (r[2].roll or 0)
+			-- A tie on top not yet rolled off is no decided winner: the name order only
+			-- picks who is listed first, so that give goes through the confirm.
+			local tied = L.RollTieWaiting and L.RollTieWaiting(selected.rolls, 1) ~= nil
 			L.AwardWinner(selected.id, top.player, top.roll, top.spec or ((top.kind == "os") and "off" or nil),
 				nil, nil, not tied)
 		end)
@@ -1471,7 +1470,10 @@ function RM.Refresh()
 					de = "|cff8a5ad9DE|r", os = "|cff8a5ad9OS|r", ms = "|cff8a8d93MS|r" })[kind] or ""
 				local isBest = (e == best)
 				rr.txt:SetText((isBest and "|cffffd200> |r" or "") .. classColorCode(e.player) .. e.player .. "|r")
-				rr.num:SetText(tag .. "  |cffffd200" .. (e.roll or 0) .. "|r")
+				-- tie-break rolls after the roll: "57 > 82"
+				local tbs = ""
+				for _, v in ipairs(e.tb or {}) do tbs = tbs .. " |cff8a8d93>|r " .. v end
+				rr.num:SetText(tag .. "  |cffffd200" .. (e.roll or 0) .. tbs .. "|r")
 				if isBest then rr.hl:SetTexture(1, 0.82, 0, 0.12); rr.hl:Show() else rr.hl:Hide() end
 				rr:Show()
 			elseif i == 1 then

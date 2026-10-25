@@ -252,6 +252,14 @@ local function savePicks(sentGen)
 	local d = db()
 	d.myPicks = d.myPicks or {}
 	local old = d.myPicks[picksKey()]
+	-- A wish already sent stays the sent one until the council confirms a new one
+	-- (Wish.SendPick): what is picked in the meantime is only a draft.
+	if state.kind == "wish" and not sentGen and old and old.sentGen ~= nil then
+		local draft = {}
+		for i, id in ipairs(picks) do draft[i] = id end
+		old.draft = draft
+		return
+	end
 	-- a pass stands until a wish is actually sent
 	d.myPicks[picksKey()] = { at = time(), list = picks, sentGen = sentGen or (old and old.sentGen),
 		pass = (not sentGen and old and old.pass) or nil }
@@ -261,7 +269,7 @@ end
 local function loadPicks()
 	local saved = (db().myPicks or {})[picksKey()]
 	picks = {}
-	for _, id in ipairs(saved and saved.list or {}) do picks[#picks + 1] = id end
+	for _, id in ipairs(saved and (saved.draft or saved.list) or {}) do picks[#picks + 1] = id end
 	state.sent = saved ~= nil and saved.sentGen ~= nil
 	state.passed = state.sent and saved.pass or nil
 	-- a wish can change until the master looter locks the list; a soft reserve is final
@@ -594,7 +602,13 @@ paint = function()
 		end
 	end
 
-	if state.locked then
+	if state.sending then
+		win.status:SetText("|cffffd200Sending...|r")
+		win.send:Disable(); win.send:SetAlpha(0.4)
+	elseif state.notSent then
+		win.status:SetText("|cffff5555Not registered, send again|r")
+		win.send:Enable(); win.send:SetAlpha(1)
+	elseif state.locked then
 		win.status:SetText(state.kind == "wish" and "|cffffd200Locked|r"
 			or "|cffffd200Sent|r")
 		win.send:Disable(); win.send:SetAlpha(0.4)
@@ -612,7 +626,17 @@ paint = function()
 end
 
 function P.Open(raid, size, hc, limit, lockKey, from, g, kind)
+	-- locked with a wish or a pass already in: nothing to change, no window
+	local Wi = Okanvil.Wish
+	if kind == "wish" and Wi and Wi.Frozen() then
+		local mine = Wi.Mine and Wi.Mine()
+		local _, link = GetItemInfo(tonumber(mine) or 0)
+		Okanvil:Print("The wishlist is locked: " .. (mine == "pass" and "you passed on this raid ID."
+			or ("your wish stays " .. (link or "as sent") .. ".")))
+		return
+	end
 	state.kind = kind == "wish" and "wish" or "sr"
+	state.sending, state.notSent = nil, nil
 	state.raid, state.size, state.hc = raid, tonumber(size) or 25, hc and true or false
 	state.limit = math.max(1, math.min(3, tonumber(limit) or 1))
 	state.lockKey, state.from, state.gen = lockKey, from, tonumber(g) or 0
@@ -657,15 +681,19 @@ function P.DoSend()
 		win:Hide()
 		return
 	end
+	-- a wish counts as sent only when the council confirms it (Wish.SendPick saves it then)
+	if state.kind == "wish" then
+		savePicks()
+		-- open on "Sending..." until the council answers: registered closes it
+		state.sending = true
+		paint()
+		if Okanvil.Wish then Okanvil.Wish.SendPick(state.lockKey, picks[1], state.gen) end
+		return
+	end
 	local payload = table.concat(picks, ";")
 	savePicks(state.gen)
 	state.sent = true
-	if state.kind ~= "wish" then state.locked = true end
-	if state.kind == "wish" then
-		if Okanvil.Wish then Okanvil.Wish.SendPick(state.lockKey, picks[1]) end
-		win:Hide()
-		return
-	end
+	state.locked = true
 	local from = state.from
 	if not from or from == me() then
 		-- solo test, or you are the master looter yourself
@@ -690,13 +718,19 @@ function P.Pass()
 			win:Hide()
 			return
 		end
-		local d = db()
-		d.myPicks = d.myPicks or {}
-		picks = {}
-		d.myPicks[picksKey()] = { at = time(), list = {}, sentGen = state.gen, pass = true }
-		Wi.SendPass(state.lockKey)
-		win:Hide()
+		-- saved as a pass when the council confirms it (Wish.SendPass)
+		state.sending = true
+		paint()
+		Wi.SendPass(state.lockKey, state.gen)
 	end)
+end
+
+-- The council never answered the wish: the window, if still up, says so and
+-- lets it be sent again.
+function P.SendFailed(lockKey)
+	if not (win and win:IsShown() and state.kind == "wish" and state.lockKey == lockKey) then return end
+	state.sending, state.notSent = nil, true
+	paint()
 end
 
 -- Close the window if it is open on this kind of pick ("wish" / "sr").
@@ -706,13 +740,16 @@ end
 
 -- A pick sent some other way (a "wh [item]" whisper an officer saved) counts as
 -- sent from this window: the Loot page shows it and the window stops asking.
-function P.MarkSent(kind, lockKey, id)
+function P.MarkSent(kind, lockKey, id, sentGen)
 	local d = db()
 	d.myPicks = d.myPicks or {}
 	local key = SR.PickKey(kind, lockKey)
 	local old = d.myPicks[key]
 	local gen = (win and win:IsShown() and state.lockKey == lockKey and state.kind == kind) and state.gen
-	d.myPicks[key] = { at = time(), list = { id }, sentGen = gen or (old and old.sentGen) or 0 }
+	-- id "pass": no wish this raid ID
+	local pass = id == "pass"
+	d.myPicks[key] = { at = time(), list = pass and {} or { id }, pass = pass or nil,
+		sentGen = sentGen or gen or (old and old.sentGen) or 0 }
 	if gen then win:Hide() end
 	if Okanvil.Loot_PaintMine then pcall(Okanvil.Loot_PaintMine) end
 end

@@ -235,7 +235,10 @@ function G.Paint()
 		local inner = win:GetWidth() - PAD * 2
 		win.give:ClearAllPoints(); win.give:SetPoint("TOPLEFT", PAD, -y)
 		win.give:SetWidth(inner - 64 - 4)
-		win.give.text:SetText("Give to " .. G.pick.name)
+		-- the name in its class colour, as in the list
+		local cc = RAID_CLASS_COLORS and RAID_CLASS_COLORS[G.pick.class or ""]
+		local hex = cc and ("|cff%02x%02x%02x"):format(cc.r * 255, cc.g * 255, cc.b * 255) or "|cffffd200"
+		win.give.text:SetText("Give to " .. hex .. G.pick.name .. "|r")
 		win.cancel:ClearAllPoints(); win.cancel:SetPoint("LEFT", win.give, "RIGHT", 4, 0)
 		win.give:Show(); win.cancel:Show()
 		y = y + BTN_H + PAD

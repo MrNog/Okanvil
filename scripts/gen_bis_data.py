@@ -63,6 +63,35 @@ for (cls, spec, phase), rows_ in merged.items():
     lists.setdefault(cls, {}).setdefault(spec, {})[phase] = rows_
 phases = re.search(r'Bistooltip_wowtbc_phases = \{([^}]*)\}', src).group(1)
 
+# A list that names two copies of one raid item (25 normal and 25 heroic) must put the
+# higher one first: Bistooltip has the 25 normal Sindragosa's Cruel Claw as the Assassination
+# BiS and the heroic at #4. Copies are told apart by RaidLoot-Data's mode; a better copy
+# below a worse one swaps places with it.
+loot_src = open(os.path.join(okv_dir, "RaidLoot-Data.lua"), encoding="utf-8").read()
+copy_of = {int(i): (n, m) for i, n, m in
+           re.findall(r'id = (\d+), name = "((?:[^"\\]|\\.)*)",[^}]*?m = "(\w+)"', loot_src)}
+MODE_RANK = {"10n": 0, "25n": 1, "10h": 1, "25h": 2}
+
+def heroic_first(ids):
+    ids = list(ids)
+    for a in range(len(ids)):
+        for b in range(a + 1, len(ids)):
+            x, y = copy_of.get(ids[a]), copy_of.get(ids[b])
+            if x and y and x[0] == y[0] and MODE_RANK[x[1]] < MODE_RANK[y[1]]:
+                ids[a], ids[b] = ids[b], ids[a]
+    return ids
+
+swapped = 0
+for cls in lists:
+    for spec in lists[cls]:
+        for phase, rows_ in lists[cls][spec].items():
+            fixed = []
+            for idx, slot, ids, enhs in rows_:
+                new = heroic_first(ids)
+                swapped += new != ids
+                fixed.append((idx, slot, new, enhs))
+            lists[cls][spec][phase] = fixed
+
 h2a_src = open(os.path.join(bt_dir, "Bistooltip_horde_to_ali.lua"), encoding="utf-8-sig").read()
 h2a = re.findall(r'Bistooltip_horde_to_ali\[(\d+)\] = (\d+);', h2a_src)
 
@@ -92,7 +121,7 @@ out.append("ns.BIS_HORDE_TO_ALI = {")
 for h, a in h2a:
     out.append(f"\t[{h}] = {a},")
 out.append("}")
-print(rows, "rows,", len(h2a), "horde ids")
+print(rows, "rows,", len(h2a), "horde ids,", swapped, "rows with the heroic moved up")
 
 # the lists as globals, plus the spec icons the item tooltip and the BiS lists page draw
 # beside each list
