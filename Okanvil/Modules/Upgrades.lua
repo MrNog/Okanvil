@@ -864,11 +864,13 @@ local function judge(link, raid, spec)
 				return { rank = best, bis = t[3] and bis or nil, list = t[2], as = as and U.ModeLabel(as) or nil }
 			end
 		end
-		-- with a list for your spec, only the lists count: a higher item level
-		-- off them is how a tank mace and a healer trinket turned up for a Blood DPS
-		return nil
+		-- with a list for your spec, only the lists count in a raid: a higher item
+		-- level off them is how a tank mace and a healer trinket turned up for a
+		-- Blood DPS. A dungeon is catch-up gear the lists rarely name, so there a
+		-- higher item level your class and stats can use counts too.
+		if not U.IsDungeon(raid) then return nil end
 	end
-	-- no list for this spec: item level is all there is
+	-- no list for this spec, or a dungeon drop off the lists: item level is all there is
 	local gain, empty = IlvlGain(link)
 	if gain then return empty and { empty = true } or { ilvl = gain } end
 	return nil

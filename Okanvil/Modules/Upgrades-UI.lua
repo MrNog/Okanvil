@@ -73,7 +73,7 @@ function Okanvil:BuildUpgrades(host)
 	local dash = W.Dashboard(host, {
 		title = "Upgrades",
 		settingsTab = "general",
-		subtitle = "Raid drops that beat your gear, for the spec you are in",
+		subtitle = "Raid and dungeon drops that beat your gear, for the spec you are in",
 		icon = Okanvil.ICONS.upgrades,
 		drawerWidth = 0,
 		footerHeight = 0,
