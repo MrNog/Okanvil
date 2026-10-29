@@ -13,6 +13,7 @@ the `.blp` for editing; only the `.blp` is actually loaded in-game.)
 |------------|--------------------------------|------------------------------------------|
 | `setup-bg.blp` | faded wallpaper behind the first-run setup (optional) | `Interface\AddOns\Okanvil\Media\setup-bg` |
 | `window-bg.blp` | the wallpaper behind the main window (1024x512) | `Interface\AddOns\Okanvil\Media\window-bg` |
+| `XP/*.blp` | the XP / rep strip under the marks bar (1024x32 each; DragonUI art, MIT -- `XP/LICENSE.txt` ships with them) | `Interface\AddOns\Okanvil\Media\XP\<name>` |
 
 The code references them **without** the extension (`...\Media\window-bg`) -- that's
 correct, WoW appends `.blp` itself. A missing file just draws nothing, so the UI never

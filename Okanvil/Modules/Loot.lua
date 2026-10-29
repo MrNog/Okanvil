@@ -390,7 +390,7 @@ if OkanvilBosses then
 end
 
 -- A boss's DISPLAY name: multi-NPC fights collapse to one label (the three Iron
--- Council NPCs all read "Iron Council"), so their loot lands on one page.
+-- Council NPCs all read "Assembly of Iron"), so their loot lands on one page.
 --
 -- The id is authoritative. Only fall back to the NAME when we have no id, because
 -- names are ambiguous across instances: Utgarde Keep's Prince Keleseth (23953) and
@@ -1232,6 +1232,14 @@ local TOKEN_BOSSES = {
 	[52025] = ICC_TOKEN_BOSSES, [52026] = ICC_TOKEN_BOSSES, [52027] = ICC_TOKEN_BOSSES,
 	[52028] = ICC_TOKEN_BOSSES, [52029] = ICC_TOKEN_BOSSES, [52030] = ICC_TOKEN_BOSSES,
 }
+-- Raid-wide drops: every boss of the raid can drop them, so no one boss's table
+-- lists them. canDropHere still holds them to their raid and size.
+do
+	local anyBoss = setmetatable({}, { __index = function() return true end })
+	TOKEN_BOSSES[45038] = anyBoss   -- Fragment of Val'anyr (Ulduar 25)
+	TOKEN_BOSSES[50274] = anyBoss   -- Shadowfrost Shard (ICC 25)
+	TOKEN_BOSSES[49908] = anyBoss   -- Primordial Saronite
+end
 
 local function itemBossFix(boss, id, boe)
 	local droppers = id and TOKEN_BOSSES[id]
@@ -2017,7 +2025,7 @@ local function buildNeedGreedPatterns()
 end
 
 -- store one player's roll (need/greed/de) on the drop for that item.
-local function recordNeedGreed(msg)
+local function recordNeedGreed(msg, bucket)
 	local patterns = buildNeedGreedPatterns()
 	for i = 1, #patterns do
 		local a, b, c = msg:match(patterns[i][1])
@@ -2041,7 +2049,7 @@ local function recordNeedGreed(msg)
 			-- the "X won" may arrive amid the rolls and set receivedBy, but the rolls
 			-- that follow still belong to this same item. Prefer the most recent drop that
 			-- is/was rolling (has rollID or already has .rolls); else the most recent.
-			local s = activeBucket()
+			local s = bucket or activeBucket()
 			-- SEVERAL COPIES (five Trophies off one boss): the game rolls each copy
 			-- separately and the chat line carries no roll id. A player rolls once
 			-- per copy, so their roll goes on the oldest still-rolling copy they
@@ -2132,11 +2140,12 @@ local function wonByDisenchant(dp, player)
 end
 
 -- need/greed winner: fills receivedBy and CLOSES the rolling (clears rollID).
-local function recordRollWon(player, link)
+-- bucket: the last run's session, for a roll that ends after you left the dungeon
+local function recordRollWon(player, link, bucket)
 	local id = itemIDFromLink(link)
 	if id == 0 then return end
 	player = noRealm(player)
-	local s = activeBucket()
+	local s = bucket or activeBucket()
 	-- STRICT: a winner may only claim a copy nobody owns yet. "X won" carries no rollID
 	-- (it is plain chat text), so with several copies of one item the only thing keeping
 	-- them apart is that each winner takes a free one -- preferably the free copy
@@ -2181,15 +2190,17 @@ local function recordRollWon(player, link)
 	-- actually saw drop, so a winner never adds one: this is a repeat announcement of a
 	-- hand-out already on the list, and inventing a row here is what listed one player twice.
 	if dropExistsForID(s, id) then return end
+	-- Out of the dungeon there is no run to add a new row to.
+	if bucket then return end
 	-- Never saw this item drop at all: tagReceiver has the craft/trade/mail guards.
 	tagReceiver(player, link)
 end
 
 -- everyone passed: closes the rolling with no winner.
-local function recordAllPassed(link)
+local function recordAllPassed(link, bucket)
 	local id = itemIDFromLink(link)
 	if id == 0 then return end
-	local s = activeBucket()
+	local s = bucket or activeBucket()
 	local dp = findOpenDrop(s, id)
 	if dp then
 		dp.rollID = nil; dp.rollStart = nil
@@ -2224,12 +2235,33 @@ end
 -- Single CHAT_MSG_LOOT handler: 1) need/greed rolls, 2) winner/all-passed,
 -- 3) loot normal (quem recebeu). A ordem importa -- um "won" tambem casaria o
 -- padrao de loot generico, por isso testamos won ANTES.
+-- The last run's session while one of its need/greed rolls is still open. A roll
+-- keeps going after you port out of the dungeon, and its rolls and winner arrive
+-- in the open world, where there is no current session to file them under.
+-- (A field on L, not a local: this file is at Lua's limit.)
+function L._lingeringRollBucket()
+	local s = sessions()[1]
+	if not (s and s.drops) then return nil end
+	local now = time()
+	for i = #s.drops, 1, -1 do
+		local d = s.drops[i]
+		if d.rollID and (now - (d.t or 0)) <= DROP_MATCH_WINDOW then return s end
+	end
+	return nil
+end
+
 local function onChatLoot(msg)
 	if type(msg) ~= "string" or msg == "" then return end
-	if not shouldRecordHere() then return end
+	-- Outside a recorded place only the rolls of a roll still open are taken:
+	-- step 3 ("receives loot") stays off there, or world loot would join the run.
+	local lingering
+	if not shouldRecordHere() then
+		lingering = L._lingeringRollBucket()
+		if not lingering then return end
+	end
 
 	-- 1) someone's roll (need/greed/de) -> store on the drop
-	recordNeedGreed(msg)
+	recordNeedGreed(msg, lingering)
 
 	-- 2) winner or all-passed. Resolve who/link by inspection (the group with item:
 	-- e o link; o outro e o nome) -- robusto a ordem que varia por locale.
@@ -2239,16 +2271,17 @@ local function onChatLoot(msg)
 			local link = (a and a:find("item:") and a) or (b and b:find("item:") and b) or nil
 			local who = (link ~= a) and a or b
 			if w[2] == "passed" then
-				if link then recordAllPassed(link); return end
+				if link then recordAllPassed(link, lingering); return end
 			elseif w[2] == "won" then
 				-- "You won": only the link exists (who = me). else who is the other group.
 				if not who or who:find("item:") or who == (YOU or "You") or who == "You" then
 					who = UnitName("player")
 				end
-				if link then recordRollWon(who, link); return end
+				if link then recordRollWon(who, link, lingering); return end
 			end
 		end
 	end
+	if lingering then return end
 
 	-- 3) loot normal ("X receives loot: [item]") -> quem recebeu
 	local patterns = buildLootPatterns()

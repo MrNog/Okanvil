@@ -210,7 +210,7 @@ end
 --                       healerWait, damageWait, myWait, queuedTime
 -- ------------------------------------------------------------
 local LFG_ROLES = { "TANK", "HEALER", "DAMAGER", "DAMAGER", "DAMAGER" }
-local LFG_TIME_W = 50   -- room for "READY" and "1:00:00" clear of the bar's edge
+local LFG_TEXT_GAP = 4   -- between the last role icon and the clock
 
 local function lfgMode()
 	local mode = GetLFGMode and GetLFGMode()
@@ -253,22 +253,46 @@ local function lfgMissingText(t, h, d)
 	return #miss > 0 and table.concat(miss, ", ") or "nobody"
 end
 
+-- The slot is as wide as its text, so the bar ends right after the clock. The
+-- slot is the bar's last item: its left edge (leftX, set by layoutTail) plus its
+-- width is the whole bar, and resizing it needs no full relayout.
+-- Measured with every digit as an 8, the widest one, and never shrinking while
+-- queued: a clock sized to its exact digits made the bar's edge twitch each second.
+local function fitLfg(s)
+	local wide = (s.time:GetText() or ""):gsub("%d", "8")
+	s.measure:SetText(wide)
+	local w = #LFG_ROLES * (BTN + GAP) - GAP + LFG_TEXT_GAP
+		+ math.ceil(s.measure:GetStringWidth() or 0)
+	w = math.max(w, s.minW or 0)
+	s.minW = w
+	if math.abs(s:GetWidth() - w) < 1 then return end
+	s:SetWidth(w)
+	if s.leftX then s:GetParent():SetWidth(s.leftX + w + PAD) end
+end
+
 local function updateLfg(s)
 	local mode = lfgMode()
 	if not mode then return end
 	local C = Okanvil.Colors
 
 	if mode == "proposal" then
-		for i = 1, #LFG_ROLES do Okanvil.W.SetFramedIconUsable(s.roles[i], true) end
+		for i = 1, #LFG_ROLES do
+			Okanvil.W.SetFramedIconUsable(s.roles[i], true)
+			s.roles[i].on = true
+		end
 		s.time:SetText("READY")
 		s.time:SetTextColor(C.accentText[1], C.accentText[2], C.accentText[3])
 		s.pulseUntil = math.huge
+		fitLfg(s)
 		return
 	end
 
 	local _, _, t, h, d, _, _, _, _, _, _, _, queuedTime = GetLFGQueueStats()
 	local filled = lfgFilled(t, h, d)
-	for i = 1, #LFG_ROLES do Okanvil.W.SetFramedIconUsable(s.roles[i], filled[i]) end
+	for i = 1, #LFG_ROLES do
+		Okanvil.W.SetFramedIconUsable(s.roles[i], filled[i])
+		s.roles[i].on = filled[i]
+	end
 
 	-- The two roles a dungeon queue actually waits on: a short glow when one lands.
 	if (s.lastT and s.lastT > 0 and t == 0) or (s.lastH and s.lastH > 0 and h == 0) then
@@ -283,6 +307,7 @@ local function updateLfg(s)
 	s.startedAt = s.startedAt or GetTime()
 	s.time:SetText(fmtTime(GetTime() - (queuedTime or s.startedAt)))
 	s.time:SetTextColor(C.text[1], C.text[2], C.text[3])
+	fitLfg(s)
 end
 
 local function buildLfg(f)
@@ -290,21 +315,22 @@ local function buildLfg(f)
 	local C = Okanvil.Colors
 
 	local s = CreateFrame("Button", nil, f)
-	s:SetSize(#LFG_ROLES * (BTN + GAP) + LFG_TIME_W, BTN)
-
-	-- the glow behind the icons when a tank/healer lands or the group is ready
-	local glow = s:CreateTexture(nil, "BACKGROUND")
-	glow:SetPoint("TOPLEFT", -3, 3)
-	glow:SetPoint("BOTTOMRIGHT", 3, -3)
-	glow:SetTexture("Interface\\Buttons\\WHITE8X8")
-	glow:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0)
-	s.glow = glow
+	s:SetSize(#LFG_ROLES * (BTN + GAP), BTN)
 
 	s.roles = {}
 	for i, role in ipairs(LFG_ROLES) do
 		local r = W.FramedIcon(s, "Interface\\LFGFrame\\UI-LFG-ICON-ROLES", BTN)
 		r:SetPoint("LEFT", (i - 1) * (BTN + GAP), 0)
 		if GetTexCoordsForRole then r.icon:SetTexCoord(GetTexCoordsForRole(role)) end
+		-- the soft action-button glow round each filled role when a tank/healer
+		-- lands or the group is ready; it has no edges, so nothing squares the frame
+		local glow = r:CreateTexture(nil, "OVERLAY")
+		glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+		glow:SetBlendMode("ADD")
+		glow:SetSize(BTN * 1.9, BTN * 1.9)
+		glow:SetPoint("CENTER")
+		glow:SetAlpha(0)
+		r.glow = glow
 		s.roles[i] = r
 	end
 
@@ -312,6 +338,11 @@ local function buildLfg(f)
 	time:SetPoint("LEFT", s.roles[#LFG_ROLES], "RIGHT", 4, 0)
 	time:SetJustifyH("LEFT")
 	s.time = time
+
+	-- never shown: sizes the slot for fitLfg
+	local measure = s:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	measure:Hide()
+	s.measure = measure
 
 	-- Once a second: the clock, and the queue stats read again -- they change
 	-- without always firing an event. The glow runs every frame while it lasts.
@@ -322,13 +353,13 @@ local function buildLfg(f)
 			tick = 0
 			updateLfg(self)
 		end
+		local a = 0
 		if self.pulseUntil and GetTime() < self.pulseUntil then
-			local a = 0.15 + 0.25 * (0.5 + 0.5 * math.sin(GetTime() * 6))
-			self.glow:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], a)
+			a = 0.35 + 0.45 * (0.5 + 0.5 * math.sin(GetTime() * 6))
 		else
 			self.pulseUntil = nil
-			self.glow:SetVertexColor(C.accent[1], C.accent[2], C.accent[3], 0)
 		end
+		for _, r in ipairs(self.roles) do r.glow:SetAlpha(r.on and a or 0) end
 	end)
 
 	s:RegisterForClicks("LeftButtonUp")
@@ -362,6 +393,220 @@ local function buildLfg(f)
 
 	s:Hide()
 	return s
+end
+
+-- ------------------------------------------------------------
+-- XP / reputation strip under the bar.
+-- XP while there is XP to gain, else the watched faction, else nothing. It hangs
+-- off the bar's bottom edge at the bar's width, so it follows every relayout.
+--
+-- 3.3.5a API:
+--   UnitXP / UnitXPMax / GetXPExhaustion   current, needed, rested pool
+--   GetRestState()                         1 = rested, 2 = normal
+--   GetWatchedFactionInfo()                name, standing, min, max, value
+-- No level-cap test: custom servers report XP oddly at the cap, so "is there XP
+-- to gain" is read from the numbers themselves.
+-- ------------------------------------------------------------
+-- The art is DragonUI's XP bar (MIT, see Media\XP\LICENSE.txt): a background, the
+-- fill sheets and a framed overlay with the 10% marks drawn in.
+local XP_H   = 14
+local XP_ART = "Interface\\AddOns\\Okanvil\\Media\\XP\\"
+
+-- reputation fill by standing: hated/hostile, unfriendly, neutral, friendly and up
+local function repSheet(standing)
+	if standing <= 2 then return XP_ART .. "rep-red" end
+	if standing == 3 then return XP_ART .. "rep-orange" end
+	if standing == 4 then return XP_ART .. "rep-yellow" end
+	return XP_ART .. "rep-green"
+end
+
+local function xpToGain()
+	local maxXP = UnitXPMax("player")
+	if not maxXP or maxXP <= 0 then return false end
+	return (UnitXP("player") or 0) < maxXP
+end
+
+local function fmtNum(n)
+	n = math.floor(n or 0)
+	local s = tostring(n)
+	while true do
+		local k
+		s, k = s:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+		if k == 0 then return s end
+	end
+end
+
+-- What the strip shows now: "xp", "rep" or nil.
+local function xpKind()
+	if cfg().xp == false then return nil end
+	if xpToGain() then return "xp" end
+	if GetWatchedFactionInfo() then return "rep" end
+	return nil
+end
+
+-- 3.3.5a stretches the whole texture into the fill; crop it to the filled part
+-- so the sheet's capped end keeps its shape at any value.
+local function cropFill(bar)
+	local lo, hi = bar:GetMinMaxValues()
+	if not hi or hi <= lo then return end
+	local pct = (bar:GetValue() - lo) / (hi - lo)
+	bar:GetStatusBarTexture():SetTexCoord(0, math.max(0, math.min(pct, 1)), 0, 1)
+end
+
+local function newFill(parent, level, sheet)
+	local b = CreateFrame("StatusBar", nil, parent)
+	b:SetAllPoints(parent)
+	b:SetStatusBarTexture(sheet)
+	b.sheet = sheet
+	b:SetFrameLevel(level)
+	hooksecurefunc(b, "SetValue", cropFill)
+	return b
+end
+
+-- Swapping the sheet resets its crop, so this runs before SetValue.
+local function setSheet(b, sheet)
+	if b.sheet == sheet then return end
+	b:SetStatusBarTexture(sheet)
+	b.sheet = sheet
+end
+
+-- The longest of `texts` that fits inside the frame's ends; a short bar (a raider
+-- with few shortcuts) drops to a shorter line, down to the bare percentage.
+local function fitXpText(x, texts)
+	local room = (x:GetWidth() or 0) - 16
+	for i = 1, #texts do
+		x.text:SetText(texts[i])
+		if i == #texts or x.text:GetStringWidth() <= room then return end
+	end
+end
+
+local function updateXp(x)
+	local kind = xpKind()
+	if not kind then x:Hide(); return end
+	x.kind = kind
+	local fill, rested = x.fill, x.rested
+
+	if kind == "xp" then
+		local cur, max = UnitXP("player") or 0, UnitXPMax("player")
+		local pool = GetXPExhaustion() or 0
+		setSheet(fill, XP_ART .. ((GetRestState() == 1) and "rested" or "main"))
+		fill:SetMinMaxValues(0, max)
+		fill:SetValue(cur)
+		if pool > 0 then
+			rested:SetMinMaxValues(0, max)
+			rested:SetValue(math.min(cur + pool, max))
+			rested:Show()
+		else
+			rested:Hide()
+		end
+		x.value = cur / max
+		local lv, pct = UnitLevel("player"), ("%.1f%%"):format(100 * x.value)
+		local texts = {}
+		if pool > 0 then
+			texts[1] = ("Lv %d  %s  |cff8fb8ff+%.0f%% rested|r"):format(lv, pct, 100 * pool / max)
+		end
+		texts[#texts + 1] = ("Lv %d  %s"):format(lv, pct)
+		texts[#texts + 1] = pct
+		fitXpText(x, texts)
+	else
+		local name, standing, lo, hi, value = GetWatchedFactionInfo()
+		setSheet(fill, repSheet(standing))
+		local span = math.max(1, hi - lo)
+		fill:SetMinMaxValues(0, span)
+		fill:SetValue(value - lo)
+		rested:Hide()
+		x.value = (value - lo) / span
+		local label, pct = _G["FACTION_STANDING_LABEL" .. standing] or "", ("%.0f%%"):format(100 * x.value)
+		fitXpText(x, {
+			("%s  %s  %s"):format(name, label, pct),
+			("%s  %s"):format(name, pct),
+			("%s  %s"):format(label, pct),
+			pct,
+		})
+	end
+	x:Show()
+end
+
+local function showXpTooltip(x)
+	GameTooltip:SetOwner(x, "ANCHOR_NONE")
+	GameTooltip:ClearAllPoints()
+	GameTooltip:SetPoint("TOP", x, "BOTTOM", 0, -4)
+	if x.kind == "xp" then
+		local cur, max = UnitXP("player") or 0, UnitXPMax("player")
+		local pool = GetXPExhaustion() or 0
+		GameTooltip:SetText(("Level %d  -  %.1f%%"):format(UnitLevel("player"), 100 * cur / max), 1, 0.82, 0)
+		GameTooltip:AddDoubleLine("XP", fmtNum(cur) .. " / " .. fmtNum(max), 0.8, 0.8, 0.8, 1, 1, 1)
+		GameTooltip:AddDoubleLine("To level", fmtNum(max - cur), 0.8, 0.8, 0.8, 1, 1, 1)
+		if pool > 0 then
+			GameTooltip:AddDoubleLine("Rested", ("%s (%.0f%%)"):format(fmtNum(pool), 100 * pool / max),
+				0.8, 0.8, 0.8, 0.56, 0.72, 1)
+		end
+	else
+		local name, standing, lo, hi, value = GetWatchedFactionInfo()
+		if not name then return end
+		local label = _G["FACTION_STANDING_LABEL" .. standing] or ""
+		local c = FACTION_BAR_COLORS and FACTION_BAR_COLORS[standing] or { r = 1, g = 1, b = 1 }
+		GameTooltip:SetText(name, 1, 0.82, 0)
+		GameTooltip:AddDoubleLine(label, fmtNum(value - lo) .. " / " .. fmtNum(hi - lo),
+			c.r, c.g, c.b, 1, 1, 1)
+		GameTooltip:AddDoubleLine("To next", fmtNum(hi - value), 0.8, 0.8, 0.8, 1, 1, 1)
+		GameTooltip:AddLine("Click: Reputation", 0.6, 0.6, 0.6)
+	end
+	GameTooltip:Show()
+end
+
+local function buildXp(f)
+	local x = CreateFrame("Button", nil, f)
+	x:SetHeight(XP_H)
+	x:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 0, -3)
+	x:SetPoint("TOPRIGHT", f, "BOTTOMRIGHT", 0, -3)
+
+	local bg = x:CreateTexture(nil, "BACKGROUND")
+	bg:SetAllPoints()
+	bg:SetTexture(XP_ART .. "bg")
+
+	-- the rested pool, faint behind the fill
+	x.rested = newFill(x, x:GetFrameLevel() + 1, XP_ART .. "restedbg")
+	x.rested:SetAlpha(0.69)
+	x.fill = newFill(x, x:GetFrameLevel() + 2, XP_ART .. "main")
+
+	-- the frame and its 10% marks, a pixel taller than the bar so it caps the fill
+	local over = CreateFrame("Frame", nil, x)
+	over:SetAllPoints()
+	over:SetFrameLevel(x:GetFrameLevel() + 3)
+	local frame = over:CreateTexture(nil, "ARTWORK")
+	frame:SetTexture(XP_ART .. "overlay")
+	frame:SetPoint("TOPLEFT", 0, 1)
+	frame:SetPoint("BOTTOMRIGHT", 0, -1)
+
+	local text = over:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	text:SetPoint("CENTER", 0, 1)
+	local font, size = text:GetFont()
+	text:SetFont(font, (size or 10) - 1, "OUTLINE")
+	x.text = text
+	-- the bar's width moves with its shortcuts and the LFG slot: re-fit the text
+	x:SetScript("OnSizeChanged", function(self) if self:IsShown() then updateXp(self) end end)
+
+	-- drags the bar like the bar itself does
+	x:RegisterForDrag("LeftButton")
+	x:SetScript("OnDragStart", function() if f:IsMovable() then f:StartMoving() end end)
+	x:SetScript("OnDragStop", function() f:GetScript("OnDragStop")(f) end)
+
+	x:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	x:SetScript("OnClick", function(self, button)
+		if self.kind == "rep" and button == "LeftButton" then
+			ToggleCharacter("ReputationFrame")
+		elseif button == "RightButton" and MainMenuExpBar then
+			-- server-side XP rate menus hang off the stock bar's right-click
+			local h = MainMenuExpBar:GetScript("OnMouseDown")
+			if h then h(MainMenuExpBar, button) end
+		end
+	end)
+	x:SetScript("OnEnter", showXpTooltip)
+	x:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+	x:Hide()
+	return x
 end
 
 -- A hairline at a group boundary, one texture per boundary, reused.
@@ -527,12 +772,15 @@ local function layoutTail(f)
 			end
 			f.lfg:ClearAllPoints()
 			f.lfg:SetPoint("LEFT", x, 0)
+			f.lfg.leftX = x
 			updateLfg(f.lfg)
 			f.lfg:Show()
 			x = x + f.lfg:GetWidth() + GAP
 		else
 			f.lfg:Hide()
 			f.lfg.startedAt = nil
+			f.lfg.leftX = nil
+			f.lfg.minW = nil
 		end
 		f.lfgShown = f.lfg:IsShown()
 	end
@@ -678,6 +926,7 @@ local function build()
 	end
 
 	f.lfg = buildLfg(f)
+	f.xp = buildXp(f)
 
 	f:SetHeight(BTN + PAD * 2)
 	layoutTail(f)
@@ -766,6 +1015,7 @@ function MB:Refresh()
 	-- hiding the lot took them away in the middle of a raid.
 	if d.enabled then bar:Show() else bar:Hide() end
 	bar:SetScale((d.scale or 100) / 100)
+	if bar.xp then updateXp(bar.xp) end
 end
 
 
@@ -799,6 +1049,19 @@ end))
 -- The LFG slot. Its contents update on every queue event; the bar is only laid
 -- out again when the slot comes or goes, and that waits out combat like the
 -- roster relayout above.
+-- The XP / reputation strip: a redraw per event, no relayout (it hangs off the
+-- bar's edge, so the bar's width is all it needs).
+local xpEv = CreateFrame("Frame")
+xpEv:RegisterEvent("PLAYER_XP_UPDATE")
+xpEv:RegisterEvent("PLAYER_LEVEL_UP")
+xpEv:RegisterEvent("UPDATE_EXHAUSTION")
+xpEv:RegisterEvent("PLAYER_UPDATE_RESTING")
+xpEv:RegisterEvent("UPDATE_FACTION")
+xpEv:RegisterEvent("PLAYER_ENTERING_WORLD")
+xpEv:SetScript("OnEvent", function()
+	if bar and bar.xp then updateXp(bar.xp) end
+end)
+
 local lfgEv = CreateFrame("Frame")
 lfgEv:RegisterEvent("LFG_UPDATE")
 lfgEv:RegisterEvent("LFG_QUEUE_STATUS_UPDATE")

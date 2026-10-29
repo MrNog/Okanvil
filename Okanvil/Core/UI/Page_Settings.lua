@@ -315,6 +315,8 @@ function Okanvil:Settings_RaidTools(p)
 			function(v) if MB.Toggle then MB:Toggle(v and true or false) end end)
 		L:Check("Show the dungeon queue", function() return mb().lfg ~= false end,
 			function(v) mb().lfg = v and true or false; if MB.Refresh then MB:Refresh() end end)
+		L:Check("Show the XP / reputation bar", function() return mb().xp ~= false end,
+			function(v) mb().xp = v and true or false; if MB.Refresh then MB:Refresh() end end)
 		L:Stepper("Size", 70, 160, 5, function() return mb().scale or 100 end,
 			function(v) mb().scale = v; if MB.Refresh then MB:Refresh() end end)
 		L:Stepper("Pull timer (seconds)", 3, 30, 1, function() return mb().pullTime or 10 end,

@@ -60,9 +60,9 @@ OkanvilBosses = {
 
 	-- ULDUAR  (raid)
 	[33113] = "Flame Leviathan",
-	[33118] = "Ignis",
+	[33118] = "Ignis the Furnace Master",
 	[33186] = "Razorscale",
-	[33293] = "XT-002",
+	[33293] = "XT-002 Deconstructor",
 	[32867] = "Steelbreaker",
 	[32930] = "Kologarn",
 	[33515] = "Auriaya",
@@ -74,7 +74,7 @@ OkanvilBosses = {
 	[33670] = "Aerial Command Unit",
 	[33271] = "General Vezax",
 	[33288] = "Yogg-Saron",
-	[32871] = "Algalon",
+	[32871] = "Algalon the Observer",
 	[32927] = "Runemaster Molgeim",
 	[32857] = "Stormcaller Brundir",
 	[33350] = "Mimiron",
@@ -256,10 +256,10 @@ OkanvilBosses = {
 -- path knows the id, the loot path may only have a name.
 OkanvilBossGroups = {
 	-- Assembly of Iron (Ulduar)
-	[32867] = "Iron Council", [32927] = "Iron Council", [32857] = "Iron Council",
-	["Steelbreaker"] = "Iron Council",
-	["Runemaster Molgeim"] = "Iron Council",
-	["Stormcaller Brundir"] = "Iron Council",
+	[32867] = "Assembly of Iron", [32927] = "Assembly of Iron", [32857] = "Assembly of Iron",
+	["Steelbreaker"] = "Assembly of Iron",
+	["Runemaster Molgeim"] = "Assembly of Iron",
+	["Stormcaller Brundir"] = "Assembly of Iron",
 
 	-- Blood Prince Council (ICC): 37970 Valanar, 37972 Keleseth, 37973 Taldaram.
 	-- Lana'thel (37955) is her own encounter and is NOT part of the council.
