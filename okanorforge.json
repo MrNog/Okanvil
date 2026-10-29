@@ -1,0 +1,22 @@
+{
+  "game": "wotlk",
+  "addons": [
+    {
+      "name": "Okanvil",
+      "desc": "Raid & guild toolkit",
+      "folders": [
+        "Okanvil"
+      ],
+      "asset": "Okanvil.zip"
+    },
+    {
+      "name": "Okanvil-Art",
+      "desc": "Guild portraits",
+      "folders": [
+        "Okanvil-Art"
+      ],
+      "release": "art",
+      "asset": "Okanvil-Art.zip"
+    }
+  ]
+}
