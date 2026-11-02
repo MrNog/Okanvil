@@ -401,8 +401,10 @@ Okanvil.WG = WG
 local ESSENCE = { 57940, 58045 }   -- Essence of Wintergrasp (Northrend / the zone)
 local NORTHREND = 4                -- GetCurrentMapContinent()
 local BATTLE_LEN = 30 * 60
+local MISS_CONFIRM = 10            -- seconds the buff must stay missing
 
 local inNorthrend = false
+local missSince                    -- GetTime() the buff was first seen missing
 
 local function hasEssence()
 	for _, id in ipairs(ESSENCE) do
@@ -437,15 +439,27 @@ function WG.Read()
 		if d.nextAt and d.nextAt <= time() then d.lastBattle = d.nextAt end
 		d.nextAt = time() + wait
 	end
-	-- nil wait = the battle is on: nobody holds it until it ends
+	-- nil wait = the battle is on: nobody holds it until it ends, and a missing
+	-- buff seen during it says nothing about who wins
+	if not (wait and wait > 0) then missSince = nil end
 	if inNorthrend and wait and wait > 0 then
 		local mine = UnitFactionGroup("player")
 		local other = (mine == "Horde") and "Alliance" or "Horde"
-		local holder = hasEssence() and mine or other
-		-- The buff drops for a moment when crossing zones (leaving Dalaran), so its
-		-- absence is weak evidence. Only a battle changes the holder: with a reading
-		-- taken since the last battle, a missing buff does not overturn it.
-		if holder == other and d.faction == mine and (d.at or 0) >= (d.lastBattle or 0) then
+		local holder
+		if hasEssence() then
+			holder, missSince = mine, nil
+		else
+			-- The buff drops for a moment when crossing zones (leaving Dalaran), so a
+			-- missing buff only counts once it is still missing MISS_CONFIRM later.
+			local now = GetTime()
+			if not missSince then
+				missSince = now
+				local After = Okanvil.Comms and Okanvil.Comms.After
+				if After then After(MISS_CONFIRM + 1, WG.Read) end
+			end
+			if now - missSince >= MISS_CONFIRM then holder = other end
+		end
+		if not holder then
 			if WG.onChange then pcall(WG.onChange) end
 			return
 		end
@@ -490,6 +504,7 @@ wgEv:SetScript("OnEvent", function(_, event, unit)
 	end
 	-- the buff lands a moment after the zone-in
 	local After = Okanvil.Comms and Okanvil.Comms.After
+	missSince = nil
 	local function go() checkZone(); WG.Read() end
 	if After then After(3, go) else go() end
 end)
