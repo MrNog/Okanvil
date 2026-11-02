@@ -127,7 +127,8 @@ end
 -- ------------------------------------------------------------
 function Okanvil.RaidFinderMini_Render()
 	if not (win and win:IsShown() and S) then return end
-	local view = S.get_view()
+	local view = S.hold_order(S.get_view(), win.order, win.child:GetParent())
+	win.order = view
 	win.count:SetText((#view) .. " listing" .. (#view == 1 and "" or "s")
 		.. "  |cff8a8d93-- hover = saved status + full msg|r")
 

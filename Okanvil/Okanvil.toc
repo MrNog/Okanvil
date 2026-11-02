@@ -62,7 +62,9 @@ Modules\RaidFinder.lua
 Modules\RaidFinder-Mini.lua
 Modules\Raids-Data.lua
 Modules\RaidLoot-Data.lua
+Modules\DungeonLoot-Data.lua
 Modules\Upgrades-Bis-Data.lua
+Modules\ItemSource-Data.lua
 Modules\Upgrades.lua
 Modules\Upgrades-UI.lua
 Modules\PuG.lua

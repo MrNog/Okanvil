@@ -1608,11 +1608,28 @@ local function haveCurrentDrops()
 	local g = Okanvil.Loot and Okanvil.Loot.DropsByBoss and Okanvil.Loot.DropsByBoss()
 	return g and #g > 0
 end
+-- Loot that dropped in the last two minutes. On login, a /reload or joining a
+-- group the run's older drops are counted as unseen and any refresh would pop
+-- the window for them; those load quietly and wait for the next open.
+local FRESH_SECS = 120
+local function haveFreshDrop()
+	local now = time()
+	for _, b in ipairs(Okanvil.Loot and Okanvil.Loot.DropsByBoss and Okanvil.Loot.DropsByBoss() or {}) do
+		for _, d in ipairs(b.items) do
+			if d.t and now - d.t <= FRESH_SECS then return true end
+		end
+	end
+	return false
+end
 local function canAutoShow()
 	if not db().autoShow then return false end
 	local n = dropCount()
 	if n < shownDrops then shownDrops = n end   -- list cleared, or a new run
 	if n == shownDrops then return false end
+	if not haveFreshDrop() then
+		shownDrops = n
+		return false
+	end
 	if Okanvil.Loot and Okanvil.Loot.InLiveRun and Okanvil.Loot.InLiveRun() then return true end
 	return haveCurrentDrops()
 end

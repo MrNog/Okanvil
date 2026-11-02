@@ -260,10 +260,34 @@ local function get_view()
 		else -- "seen"
 			av, bv = a.firstSeen or 0, b.firstSeen or 0
 		end
-		if av == bv then return (a.firstSeen or 0) < (b.firstSeen or 0) end
-		if asc then return av < bv else return av > bv end
+		if av ~= bv then
+			if asc then return av < bv else return av > bv end
+		end
+		-- firstSeen is whole seconds, so two leaders spamming in the same second
+		-- tie; the name settles it, or table.sort swaps them between repaints.
+		local fa, fb = a.firstSeen or 0, b.firstSeen or 0
+		if fa ~= fb then return fa < fb end
+		return (a.sender or "") < (b.sender or "")
 	end
 	table.sort(out, cmp)
+	return out
+end
+
+-- While the mouse is over the list, keep the rows where they were (new listings
+-- go at the bottom) so a repaint never slides another leader under the cursor
+-- between two Join clicks. The real order comes back on the next repaint after
+-- the mouse leaves.
+local function hold_order(view, prev, area)
+	if not (prev and area and MouseIsOver and MouseIsOver(area)) then return view end
+	local inView = {}
+	for _, info in ipairs(view) do inView[info] = true end
+	local out, placed = {}, {}
+	for _, info in ipairs(prev) do
+		if inView[info] then out[#out + 1] = info; placed[info] = true end
+	end
+	for _, info in ipairs(view) do
+		if not placed[info] then out[#out + 1] = info end
+	end
 	return out
 end
 
@@ -1105,7 +1129,8 @@ end
 
 function Okanvil.RaidFinder_Render()
 	if not ui.count then return end
-	local view = get_view()
+	local view = hold_order(get_view(), ui.order, ui.child and ui.child:GetParent())
+	ui.order = view
 	ui.count:SetText((#view) .. " active listing" .. (#view == 1 and "" or "s"))
 
 	if not ui.child then return end
@@ -1544,6 +1569,7 @@ end)
 Okanvil.RaidFinder_Shared = {
 	leader_text      = leader_text,       -- (name, plainColor) -> guildmates highlighted
 	get_view         = get_view,          -- () -> filtered+sorted listings (respects filters)
+	hold_order       = hold_order,        -- (view, prevView, area) -> view, frozen while hovered
 	raid_label       = raid_label,        -- (info) -> "ICC25 HC"
 	roles_text       = roles_text,        -- (roles) -> colored "Tank DPS Heal"
 	roles_tooltip    = roles_tooltip,     -- (info) -> multiline or nil
