@@ -3061,13 +3061,10 @@ function C_.BuildRunTab(body)
 		wrow.btn:SetScript("OnMouseUp", function(s, button)
 			if button == "LeftButton" and s:IsMouseOver() and toggle then toggle(wrow) end
 		end)
-		-- Clear beside the switch, the same as the WH panel's
+		-- Clear beside the switch, the same as the WH panel's (Undo right after a Clear)
 		local clr = W.Button(wrow, "Clear"); clr:SetSize(52, 22)
 		clr:SetPoint("RIGHT", wrow.btn, "LEFT", -6, 0)
-		clr:Tooltip("Clear every wish on this raid ID and unlock it.\nThe window opens again only when you press Ask.")
-		clr:SetScript("OnClick", function()
-			Okanvil:Confirm("Clear every wish on this raid ID?\n|cff8a8d93Press Ask after to send the wish window.|r", "Clear", Wi.Clear)
-		end)
+		clr:SetScript("OnClick", function() Wi.ClickClear() end)
 		-- Lock: keep the wishes in, take no new ones
 		local lock = W.Button(wrow, "Lock"); lock:SetSize(62, 22)
 		lock:SetPoint("RIGHT", clr, "LEFT", -6, 0)
@@ -3104,6 +3101,7 @@ function C_.BuildRunTab(body)
 			local on, boss = Wi.IsOn(), Wi.CanTrigger()
 			if boss then wrow.btn:Show() else wrow.btn:Hide() end
 			for _, b in ipairs({ ask, lock, clr }) do if on and boss then b:Show() else b:Hide() end end
+			Wi.PaintClear(clr)
 			if on then open:Show() else open:Hide() end
 			open:ClearAllPoints()
 			if boss then open:SetPoint("RIGHT", ask, "LEFT", -6, 0) else open:SetPoint("RIGHT", wrow, "RIGHT", -4, 0) end
