@@ -751,6 +751,16 @@ end
 local SYNC_GAP = 30
 local lastSync = 0
 
+-- Whether a list sent under key `a` belongs to the run under key `b`. Unlike
+-- norm(), a different raid ID of the same raid is another run (an officer's
+-- PuG on another lockout). A date key, from before the first kill, matches the
+-- same raid and size, but only when `trusted`: the council of this raid.
+local function sameRun(a, b, trusted)
+	if a == b then return true end
+	if not (a and b) or split(a) ~= split(b) then return false end
+	return trusted and (isDateKey(a) or isDateKey(b)) or false
+end
+
 -- This character's sent wish, to whoever keeps the list.
 local lastResend = 0
 local function resendMine(lockKey)
@@ -776,10 +786,13 @@ do
 		C.On("WISHSYNC", function(sender, lockKey)
 			sender = stripRealm(sender)
 			if sender == me() then return end
-			-- a council member asking: our own wish goes to them, whatever we hold
-			if canTrigger(sender) then resendMine(norm(lockKey)) end
+			local cur = curKey()
+			-- a council member asking on this run: our own wish goes to them
+			if canTrigger(sender) and sameRun(lockKey, cur, true) then resendMine(cur) end
 			if not (canTrigger(me()) or isOfficer(me())) then return end
-			if norm(lockKey) ~= curKey() then return end
+			-- an officer's copy answers only the same raid ID; the council also
+			-- answers a raider who has no ID yet
+			if not sameRun(lockKey, cur, canTrigger(me())) then return end
 			local l, on = db().list[curKey()], Wi.IsOn()
 			if not on and not hasWishes(l) then return end
 			local r, parts = SR.Raid(), {}
@@ -797,7 +810,9 @@ do
 			if not (council or isOfficer(sender)) then return end
 			local lockKey, state, size, locked, list = text:match("^([^;]*);([^;]*);([^;]*);([^;]*);(.*)$")
 			if not lockKey or tonumber(size) ~= 25 then return end
-			lockKey = norm(lockKey)
+			-- another raid ID's list (an officer's PuG) is not this run's
+			if not sameRun(lockKey, curKey(), council) then return end
+			lockKey = curKey()
 			local d = db()
 			if council and state ~= "off" then
 				d.open[lockKey] = d.open[lockKey] or { at = time() }
