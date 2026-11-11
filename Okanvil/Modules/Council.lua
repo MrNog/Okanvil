@@ -580,7 +580,10 @@ local function ensureFrame()
 	f.foot = foot
 	passAll:SetScript("OnClick", function()
 		if not current then return end
-		for _, it in ipairs(current.items) do it.answer = "pass" end
+		-- Only the items still open: an item already answered keeps its answer.
+		for _, it in ipairs(current.items) do
+			if not it.answer then it.answer = "pass" end
+		end
 		sendReply()
 		C_.Repaint()
 		closeFrame()
